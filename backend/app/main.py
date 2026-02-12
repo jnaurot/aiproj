@@ -1,0 +1,18 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .routes.runs import router as runs_router
+
+app = FastAPI(title="Flow Runner")
+
+# If you proxy through SvelteKit, you can keep this strict.
+# If you hit FastAPI directly in dev, allow your dev origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:4173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(runs_router, prefix="/runs")

@@ -1,0 +1,490 @@
+Cool — if edge animation is already working and you don’t care about node pulse yet, the Phase 2 “next steps” that actually move you forward are:
+
+## 1) Lock the Phase-2 contract between UI ↔ backend
+
+You want one *stable* set of payloads/events so you stop thrashing types.
+
+**Frontend sends (RunRequest):**
+
+* `graph: PipelineGraphDTO` (nodes, edges, viewport optional)
+* `runFrom: string | null`
+* `options?: { dryRun?: boolean }` (optional)
+
+**Backend replies:**
+
+* `POST /api/runs` → `{ runId }`
+
+**Streaming events (SSE):**
+
+* `GET /api/runs/{runId}/events` emits `RunEvent` exactly like your union in `types/run.ts`:
+
+  * `run_started`
+  * `node_started`
+  * `edge_exec`  ✅ (this is what drives your edge exec animation)
+  * `log`
+  * `node_finished`
+  * `run_finished`
+
+If you’re still using `edge_active` in the UI, switch to `edge_exec` everywhere so there’s only **one** edge event type.
+
+---
+
+## 2) Implement the execution DAG compiler (backend)
+
+You already have `compile.ts`—Phase 2 means it must produce a **deterministic plan**:
+
+**Inputs**
+
+* `nodes[]`, `edges[]`
+* `runFrom` id or null
+
+**Outputs**
+
+* `order: string[]` (topological order)
+* `incomingByNode: Record<nodeId, edgeId[]>`
+* `subgraphNodes: Set<string>` (only nodes to run)
+* `subgraphEdges: Set<string>` (only edges to animate)
+* `cycleDetected?: boolean` (fail closed)
+
+This is your “single source of truth” for the runner.
+
+---
+
+## 3) Build the runner loop + event bus (backend)
+
+In `run.ts` you want a single async runner that:
+
+1. emits `run_started`
+2. for each node in plan order:
+
+   * emits `edge_exec(active)` for its incoming edges
+   * emits `node_started`
+   * executes node
+   * emits `node_finished`
+   * emits `edge_exec(done)` for incoming edges
+3. emits `run_finished`
+
+Also: store run state in memory by `runId` so the events endpoint can stream even if the POST returns immediately.
+
+---
+
+## 4) Implement the 4 executors with real IO contracts
+
+You already have stubs:
+
+* `executors/source.ts`
+* `executors/transform.ts`
+* `executors/llm.ts`
+* `executors/tool.ts`
+
+Phase-2 minimum is:
+
+### Source executor
+
+Return a typed “artifact”:
+
+* `table` → rows/columns (or file ref if large)
+* `text/json/binary` → content or reference
+
+### Transform executor
+
+Consumes one upstream artifact, returns another.
+
+### LLM executor
+
+Takes prompt + mapped inputs, returns output.
+
+### Tool executor (MCP)
+
+Calls tool, returns output.
+
+Important: define one internal runtime type:
+
+```ts
+type Artifact = { type: PortType; value: unknown; meta?: Record<string, unknown> };
+type RuntimeState = { outputsByNode: Map<string, Artifact> };
+```
+
+This stops the “where is the data?” confusion later.
+
+---
+
+## 5) Wire MCP provider (backend)
+
+Your `mcp.ts` should:
+
+* resolve server config (local dev first)
+* call FastMCP endpoint
+* map response to an `Artifact`
+
+If you’re using Python FastMCP as the real MCP server, the Node backend can either:
+
+* call it over HTTP
+* or you skip Node entirely and have SvelteKit proxy to Python
+
+Either way: **the runner is the only thing that talks to MCP** (not the UI).
+
+---
+
+## 6) Frontend: one RunController that owns streaming
+
+Stop mixing edge/node runtime mutation in random places.
+
+Create one module:
+`src/lib/flow/run/runClient.ts`
+
+Responsibilities:
+
+* `startRun(graph, runFrom) -> runId`
+* `streamEvents(runId, onEvent)`
+* apply events by calling your `applyRunEvent(ev)` in stores
+
+Key rule:
+
+* runtime events update **only** `data.status` and `edge.data.exec`
+* graph edits update **only** graph (nodes/edges)
+
+No cross-contamination.
+
+---
+
+## 7) Persistence + reconciliation
+
+You’ll hit this quickly:
+
+When a run starts, you must ensure the UI’s current graph matches what the backend is running.
+
+**Minimal fix:** include `graphHash` in `POST /runs`:
+
+* backend stores it with runId
+* events include it in `run_started`
+* frontend compares and if mismatch, warns and stops streaming
+
+---
+
+# What I’d do next (order)
+
+1. Standardize events to **edge_exec** only (kill edge_active).
+2. Make backend compile → run emit events with fake “sleep” first (like your old simulator) but via SSE.
+3. Hook frontend RunController to SSE and verify edge animation works end-to-end.
+4. Replace fake exec per node with real `source → transform` first.
+5. Add MCP tool invocation last.
+
+# WHAT YOU NEED TO DEFINE
+
+class DataBuffer:
+    """Manages streaming data between nodes"""
+    
+    def __init__(self, metadata: FileMetadata, buffer_size_mb: int = 100):
+        self.metadata = metadata
+        self.buffer_size = buffer_size_mb * 1024 * 1024
+        self.current_position = 0
+        self._buffer: Optional[bytes] = None
+    
+    async def read_chunk(self, size: int) -> bytes:
+        """Read next chunk, refilling buffer if needed"""
+        if self._needs_refill():
+            await self._refill_buffer()
+        
+        chunk = self._buffer[self.current_position:self.current_position + size]
+        self.current_position += len(chunk)
+        return chunk
+    
+    async def _refill_buffer(self):
+        """Strategy depends on file type & access method"""
+        match self.metadata.access_method:
+            case "local":
+                self._buffer = await self._read_local_file()
+            case "s3":
+                self._buffer = await self._read_s3_chunk()
+            case "postgres":
+                self._buffer = await self._read_db_batch()
+
+--------------------------------------
+
+class PipelineExecutor:
+    async def execute_pipeline(self, graph: PipelineGraphDTO, run_from: str | None):
+        # PHASE 1: Validation (FAIL FAST)
+        validation = await self.validator.validate_pre_execution(graph)
+        if not validation.valid:
+            await self.emit_event(RunFinished(status="failed", errors=validation.errors))
+            return
+        
+        # Emit warnings but continue
+        for warning in validation.warnings:
+            await self.emit_event(Log(level="warn", message=warning))
+        
+        # PHASE 2: Execution
+        topo_order = self._topological_sort(graph, run_from)
+        
+        for node_id in topo_order:
+            try:
+                # Per-node validation BEFORE execution
+                await self._validate_node_ready(node_id, context)
+                
+                # Execute
+                result = await self.execute_node(node_id, context)
+                
+                # Per-node validation AFTER execution
+                await self._validate_node_output(node_id, result)
+                
+                # Update context for downstream nodes
+                context.outputs[node_id] = result
+                
+            except Exception as e:
+                await self._handle_node_failure(node_id, e)
+                return  # or continue based on error handling policy
+
+--------------------------------------
+
+class StalenessTracker:
+    def calculate_staleness(
+        self, 
+        node: Node, 
+        current_params: dict,
+        input_metadata: FileMetadata
+    ) -> StalenessResult:
+        """Determine if node output is stale"""
+        
+        # 1. Check if params changed
+        stored_hash = self._get_stored_params_hash(node.id)
+        current_hash = self._hash_params(current_params)
+        
+        if stored_hash != current_hash:
+            return StalenessResult(
+                is_stale=True,
+                reason=f"Params changed: {self._diff_params(stored_hash, current_hash)}"
+            )
+        
+        # 2. Check if input changed (recursive check upstream)
+        stored_input_hash = self._get_stored_input_hash(node.id)
+        current_input_hash = input_metadata.hash
+        
+        if stored_input_hash != current_input_hash:
+            return StalenessResult(
+                is_stale=True,
+                reason=f"Input data changed (upstream node re-executed)"
+            )
+        
+        # 3. Check if node code/logic changed (version tracking)
+        if self._node_version_changed(node):
+            return StalenessResult(
+                is_stale=True,
+                reason="Node implementation updated"
+            )
+        
+        return StalenessResult(is_stale=False)
+    
+    def propagate_staleness(self, node_id: str, graph: PipelineGraphDTO):
+        """Mark all downstream nodes as stale"""
+        downstream = self._get_downstream_nodes(node_id, graph)
+        
+        for downstream_id in downstream:
+            self._mark_stale(downstream_id, reason=f"Upstream node {node_id} changed")
+
+--------------------------------------
+
+# ADD MEMORY TRACKING
+class ResourceMonitor:
+    def __init__(self, max_memory_mb: int = 4096):
+        self.max_memory = max_memory_mb
+        self.current_usage = 0
+    
+    async def execute_with_limit(self, node_id: str, executor: Callable):
+        estimated = self._estimate_node_memory(node_id)
+        
+        if self.current_usage + estimated > self.max_memory:
+            # Wait for memory or fail
+            await self._wait_for_memory(estimated)
+        
+        try:
+            self.current_usage += estimated
+            result = await executor()
+            return result
+        finally:
+            self.current_usage -= estimated
+            self._cleanup_buffers()
+
+--------------------------------------
+
+async def execute_pipeline_parallel(self, graph: PipelineGraphDTO):
+    """Execute independent nodes in parallel"""
+    
+    topo_levels = self._get_execution_levels(graph)  # [[level0_nodes], [level1_nodes], ...]
+    
+    for level in topo_levels:
+        # All nodes in a level can execute in parallel
+        tasks = [self.execute_node(node_id, context) for node_id in level]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Check for failures
+        for node_id, result in zip(level, results):
+            if isinstance(result, Exception):
+                await self._handle_failure(node_id, result)
+                return
+```
+
+---
+
+## 🎯 **Recommended Architecture**
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         FRONTEND                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │ Graph Editor │  │ Param Editor │  │ Status View  │     │
+│  └──────────────┘  └──────────────┘  └──────────────┘     │
+│         │                 │                  ▲              │
+│         └─────────────────┴──────────────────┘              │
+│                          │                                  │
+└──────────────────────────┼──────────────────────────────────┘
+                           │ HTTP/SSE
+┌──────────────────────────┼──────────────────────────────────┐
+│                     BACKEND (FastAPI)                        │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              Graph Validation Layer                    │ │
+│  │  • Schema validation  • Type checking                  │ │
+│  │  • Cycle detection    • Resource validation            │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                          │                                  │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │           Execution Engine (with caching)              │ │
+│  │  • Staleness tracking  • Parallel execution            │ │
+│  │  • Memory management   • Error recovery                │ │
+│  └────────────────────────────────────────────────────────┘ │
+│                          │                                  │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              Data Layer                                │ │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │ │
+│  │  │ File Store  │  │  Metadata   │  │   Cache     │   │ │
+│  │  │ (S3/local)  │  │  (Postgres) │  │  (Redis)    │   │ │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘   │ │
+│  └────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+
+--------------------------------------
+Critical Questions:
+
+How do you handle random access (e.g., for pandas operations)?
+What if a node needs to read the entire dataset (e.g., for sorting)?
+How do you handle multi-pass algorithms (e.g., two-stage ML training)?
+What's your memory budget per node?
+
+---
+
+✅ Final Recommendations
+Must Implement:
+
+Comprehensive pre-execution validation (fail fast)
+Per-node input/output validation (contract enforcement)
+Well-defined metadata schema (with Pydantic models)
+Staleness propagation algorithm (with caching)
+Memory limits and monitoring (prevent OOM)
+Parallel execution for independent nodes (performance)
+
+Should Implement:
+
+Execution replay/resume (after failures)
+Incremental execution (only run stale nodes)
+Data lineage tracking (for debugging)
+Cost estimation (before execution)
+
+Nice to Have:
+
+Visual diff of graph changes (for debugging staleness)
+Execution time prediction (based on historical data)
+Auto-optimization (reorder nodes, suggest parallelism)
+
+Will it work? Yes, with the improvements above.
+Is it robust? Not yet - needs validation layers.
+Is it efficient? Can be, with caching + parallelism.
+Your metadata-passing approach is solid. Focus on validation and staleness tracking next.
+
+---
+
+File Placement Recommendations
+✅ Already Correctly Placed
+
+routes/runs.py - The SSE streaming endpoint code
+
+Location: backend/app/routes/runs.py
+Status: ✅ Correct
+
+
+runner/compile.py - Graph compilation and topological sort
+
+Location: backend/app/runner/compile.py
+Status: ✅ Correct
+
+
+runner/run.py - Main execution orchestrator
+
+Location: backend/app/runner/run.py
+Status: ✅ Correct
+
+
+runner/events.py - Event bus for SSE
+
+Location: backend/app/runner/events.py
+Status: ✅ Correct
+
+## 📁 **Final Directory Structure**
+```
+backend/app/
+├── executors/
+│   ├── __init__.py
+│   ├── source.py      ← Update to return NodeOutput
+│   ├── transform.py   ← Update to return NodeOutput
+│   ├── llm.py         ← Update to return NodeOutput
+│   └── tool.py        ← Update to return NodeOutput
+├── routes/
+│   ├── __init__.py
+│   └── runs.py        ✅ Already correct
+├── runner/
+│   ├── __init__.py
+│   ├── compile.py     ✅ Already correct
+│   ├── events.py      ✅ Already correct
+│   ├── run.py         ⚠️ Update with validation
+│   ├── validator.py   🆕 CREATE THIS (critical)
+│   ├── metadata.py    🆕 CREATE THIS (critical)
+│   └── cache.py       🆕 CREATE THIS (important)
+└── main.py
+
+----------------------
+
+🚀 Usage Example Schemas
+python# Frontend sends this:
+{
+    "nodes": [{
+        "id": "n1",
+        "type": "llm",
+        "data": {
+            "kind": "llm",
+            "params": {
+                "provider": "anthropic",
+                "model": "claude-3-5-sonnet-20241022",
+                "user_prompt": "Summarize: {text}",
+                "temperature": 0.7,
+                "max_tokens": 500
+            }
+        }
+    }]
+}
+
+# Backend validates:
+# ✅ Required fields present (model, user_prompt)
+# ✅ Types correct (temperature is float, max_tokens is int)
+# ✅ Ranges valid (temperature 0.0-2.0, max_tokens > 0)
+# ✅ Conditional logic (anthropic needs api_key_ref)
+
+
+✅ Key Takeaways
+
+Metadata is the data contract - it tells downstream nodes where/how to read data
+Always validate inputs - fail fast if required metadata is missing
+Propagate status correctly - don't hardcode "succeeded"
+Source nodes are special - they don't need input metadata (they CREATE it)
+All other nodes - need input metadata to know what to process
+
+This creates a proper data flow pipeline where each node knows exactly what it's working with!
+
+pip install pandas pyarrow PyPDF2 pdfplumber sqlalchemy httpx

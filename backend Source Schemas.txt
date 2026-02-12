@@ -1,0 +1,34 @@
+backend Source Schemas
+File
+{
+  "source_type": "file",
+  "file_path": "file:///data.csv",
+  "file_format": "csv",
+  "delimiter": ",",
+  "encoding": "utf-8",
+  "sheet_name": null,
+  "sample_size": null,
+  "cache_enabled": true
+}
+
+----------------------------------------
+Database
+{
+  "source_type": "database",
+  "connection_ref": "my_conn",
+  "query": "select * from foo",
+  "limit": 1000
+}
+
+--------------------
+API
+{
+  "source_type": "api",
+  "url": "https://example.com",
+  "method": "GET",
+  "headers": {},
+  "body": null,
+  "auth_type": "none",
+  "auth_token_ref": null,
+  "timeout_seconds": 30
+}
