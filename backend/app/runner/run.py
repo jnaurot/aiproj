@@ -1,4 +1,5 @@
 import asyncio
+import json
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -32,9 +33,16 @@ def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[st
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
 
-async def run_graph(run_id: str, graph: Dict[str, Any], run_from: Optional[str], bus: RunEventBus):
+async def run_graph(
+    run_id: str, 
+    graph: Dict[str, Any], 
+    run_from: Optional[str], 
+    bus: RunEventBus, 
+    artifact_store=None, 
+    cache=None
+    ):
     # ---- Create execution context ONCE (do not recreate later) ----
-    artifact_store = MemoryArtifactStore()
+    artifact_store = artifact_store or MemoryArtifactStore()
     bindings = RunBindings(run_id)
 
     context = ExecutionContext(
@@ -47,7 +55,7 @@ async def run_graph(run_id: str, graph: Dict[str, Any], run_from: Optional[str],
     print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
 
     node_to_artifact: dict[str, str] = {}
-    cache = ExecutionCache()
+    cache = cache or ExecutionCache()
 
     # ===== PHASE 1: PRE-EXECUTION VALIDATION =====
     validator = GraphValidator()
@@ -316,7 +324,14 @@ async def run_graph(run_id: str, graph: Dict[str, Any], run_from: Optional[str],
             "at": iso_now(),
             "status": "succeeded"
         })
-
+    except asyncio.CancelledError:
+        await context.bus.emit({
+            "type": "run_finished",
+            "runId": run_id,
+            "at": iso_now(),
+            "status": "run_canceled"
+        })
+        raise  # ✅ important: propagate cancellation
     except Exception as ex:
         traceback.print_exc()
         await context.bus.emit({

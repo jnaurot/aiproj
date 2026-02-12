@@ -527,12 +527,6 @@
 		border-color: #ff7b72;
 	}
 
-	label {
-		display: block;
-		margin-top: 10px;
-		opacity: 0.85;
-	}
-
 	.hint {
 		font-size: 12px;
 		opacity: 0.75;
@@ -582,16 +576,7 @@
 		min-height: 0;
 	}
 
-	.editorCard > input,
-	.editorCard > label + input {
-		width: 100%;
-		margin-top: 6px;
-		border-radius: 8px;
-		padding: 6px 8px;
-		background: #0b0c10;
-		color: #e6e6e6;
-		border: 1px solid #283044;
-	}
+
 
 	.title {
 		font-size: 14px;
@@ -712,3 +697,22 @@
 		margin: 5px;
 	}
 </style>
+	<!-- .editorCard > input,
+	.editorCard > label + input {
+		width: 100%;
+		margin-top: 6px;
+		border-radius: 8px;
+		padding: 6px 8px;
+		background: #0b0c10;
+		color: #e6e6e6;
+		border: 1px solid #283044;
+	}
+		label {
+		display: block;
+		margin-top: 10px;
+		opacity: 0.85;
+	}	
+	
+	
+	
+	-->
