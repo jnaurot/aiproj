@@ -28,7 +28,6 @@ class RuntimeManager:
         print("RuntimeManager init from:", __file__)
 
         self.runs: Dict[str, RunHandle] = {}
-        # self._artifact_lock = asyncio.Lock()
         self._artifact_owner: dict[str, str] = {}
 
     # ---------- creation ----------
@@ -116,17 +115,16 @@ class RuntimeManager:
             # you can store per-edge exec if you want (optional)
             return
 
+        if t == "node_blocked":
+            handle.node_status[nid] = "blocked"
+            return
 
-        # if t == "node_blocked":
-        #     handle.node_status[nid] = "blocked"
-        #     return
+        if t == "node_paused":
+            handle.node_status[nid] = "paused"
+            return
 
-        # if t == "node_paused":
-        #     handle.node_status[nid] = "paused"
-        #     return
-
-        # if t == "node_resumed":
-        #     handle.node_status[nid] = "active"
-        #     return
+        if t == "node_resumed":
+            handle.node_status[nid] = "active"
+            return
 
 

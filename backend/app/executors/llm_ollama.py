@@ -1,6 +1,3 @@
-
-
-
 # executors/llm_ollama.py
 from __future__ import annotations
 
@@ -116,6 +113,7 @@ async def exec_llm_ollama(
             )
     
     text = await materialize_text(context, upstream_artifact_ids[0])
+    print("TEXT: ",text)
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
 
     base_url = (params.base_url or "").rstrip("/")
@@ -231,13 +229,11 @@ async def exec_llm_ollama(
                         if obj.get("done") is True:
                             break
 
-            full_text = "".join(chunks).strip()
-
-            # JSON mode: parse
-            output_value: Any = full_text
+            data = "".join(chunks).strip()
+            mime_type = "text/plain"
             if params.output_mode == "json":
                 try:
-                    output_value = json.loads(full_text) if full_text else None
+                    json_data = json.loads(data) if data else None
                 except json.JSONDecodeError as e:
                     await context.bus.emit(
                         {
@@ -255,47 +251,44 @@ async def exec_llm_ollama(
                         execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
                         error="LLM output_mode=json but response was not valid JSON",
                     )
-
-            # Store output in your execution context if you do that here (optional)
-            # context.outputs[node_id] = output_value  # only if your context supports it
-
-            full_text = "".join(chunks).strip()
-            b = (full_text or "").encode("utf-8")
-
-
+                data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
+                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
+                file_type = "json"
+                mime_type = "application/json"
+            else: #text
+                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
+                file_type = "txt"
+                
+            content_hash = _sha256_text(data or "")
+            payload_bytes = (data or "").encode("utf-8")
+            data_size = len(payload_bytes)    
             # pick a string path that your system accepts (it can be "memory://" or "inline://")
-            file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
-
             # determine file_type consistent with your app's expectations
             # if your enum is something like "text" / "table" / "file", use the correct one.
-            file_type = "txt"
-
             # hash output content
-            content_hash = _sha256_text(full_text)
-
             # hash params (so cache/invalidation works)
             try:
                 params_payload = params.model_dump()
             except Exception:
                 params_payload = dict(params)
-            source_params_hash = _sha256_json(params_payload)
+            params_hash = _sha256_json(params_payload)
 
             meta = FileMetadata(
                 file_path=file_path,
                 file_type=file_type,                 # must match your enum/literal
-                mime_type="text/plain",
-                size_bytes=len(b),
+                mime_type=mime_type,
+                size_bytes=data_size,
 
                 content_hash=content_hash,
-                source_node_id=node_id,
-                source_params_hash= source_params_hash 
+                node_id=node_id,
+                params_hash=params_hash 
                 )
             
             return NodeOutput(
                 status="succeeded",
+                data=data,
                 metadata=meta,
                 execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                value=full_text,
                 error=None,
             )
 

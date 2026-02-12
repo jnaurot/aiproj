@@ -181,8 +181,8 @@ async def _handle_file_source(
         row_count=row_count,
         access_method="local",
         content_hash=content_hash,
-        source_node_id=node_id,
-        source_params_hash=params_hash,
+        node_id=node_id,
+        params_hash=params_hash,
         estimated_memory_mb=file_size / (1024 * 1024)
     )
     
@@ -465,8 +465,8 @@ async def _handle_database_source(
             row_count=len(df),
             access_method="local",
             content_hash=content_hash,
-            source_node_id=node_id,
-            source_params_hash=params_hash,
+            node_id=node_id,
+            params_hash=params_hash,
             estimated_memory_mb=df.memory_usage(deep=True).sum() / (1024 * 1024)
         )
         
@@ -575,8 +575,8 @@ async def _handle_api_source(
         row_count=row_count,
         access_method="local",
         content_hash=content_hash,
-        source_node_id=node_id,
-        source_params_hash=params_hash
+        node_id=node_id,
+        params_hash=params_hash
     )
     
     return NodeOutput(

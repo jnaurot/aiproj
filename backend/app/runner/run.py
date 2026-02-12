@@ -219,18 +219,13 @@ async def run_graph(
                 elif kind == "llm":
                     # Store the model output text/JSON
                     # Prefer output.value if you set it; fallback to NodeOutput JSON
-                    v = getattr(output, "value", None)
+                    v = getattr(output, "data", None)
                     if v is None:
-                        payload_bytes = output.model_dump_json().encode("utf-8")
-                        mime_type = "application/json"
+                        payload_bytes = b""
                     else:
-                        if isinstance(v, (dict, list)):
-                            payload_bytes = json.dumps(v, ensure_ascii=False).encode("utf-8")
-                            mime_type = "application/json"
-                        else:
-                            payload_bytes = str(v).encode("utf-8")
-                            mime_type = "text/plain"
-
+                        # v should be a string (your NodeOutput schema)
+                        payload_bytes = str(v).encode("utf-8")
+                    mime_type = getattr(output.metadata, "mime_type", None) or "text/plain"
                 else:
                     # Default fallback (until you convert other nodes)
                     payload_bytes = output.model_dump_json().encode("utf-8")
@@ -253,7 +248,6 @@ async def run_graph(
                 context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
                 node_to_artifact[node_id] = artifact_id
                 #TODO UI FIX
-                preview_text=""
                 await context.bus.emit({
                     "type": "node_output",
                     "runId": run_id,
@@ -261,16 +255,13 @@ async def run_graph(
                     "at": iso_now(),
                     "artifactId": artifact_id,
                     "mimeType": artifact.mime_type,
-                    "preview": preview_text,
                 })
-
-
 
                 # Update cache index
                 await cache.store_artifact_id(exec_key, artifact_id)
 
                 # Verification print
-                print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} id={artifact_id[:10]}...")
+                print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
 
                 await context.bus.emit({
                     "type": "node_finished",

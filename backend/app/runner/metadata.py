@@ -31,8 +31,8 @@ class FileMetadata(BaseModel):
 
     
     # Lineage
-    source_node_id: str
-    source_params_hash: str
+    node_id: str
+    params_hash: str
     input_metadata_hash: Optional[str] = None  # Hash of upstream metadata
     
     # Performance
@@ -44,6 +44,7 @@ class NodeOutput(BaseModel):
     """What each node produces"""
     status: Literal["succeeded", "failed", "skipped"]
     metadata: Optional[FileMetadata] = None
+    data: Optional[str] = None
     execution_time_ms: float
     error: Optional[str] = None
     

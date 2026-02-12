@@ -99,11 +99,11 @@ async def get_artifact(artifact_id: str, request: Request):
     if not await store.exists(artifact_id):
         raise HTTPException(404, "Artifact not found")
 
-    meta = await store.get_meta(artifact_id)  # or store.get(...)
-    data = await store.read(artifact_id)
-
-    mime = (meta.get("mime_type") if isinstance(meta, dict) else None) or "application/octet-stream"
+    art = await store.get(artifact_id)          # metadata object
+    data = await store.read(artifact_id)        # bytes
+    mime = getattr(art, "mime_type", None) or "application/octet-stream"
     return Response(content=data, media_type=mime)
+
 
 @router.get("/{run_id}")
 async def get_run(run_id: str, request: Request):

@@ -258,7 +258,7 @@
 		const info = s.nodeOutputs[nodeId];
 		if (!info) return { kind: 'empty' as const };
 
-		const res = await fetch(`/api/artifacts/${info.artifactId}`);
+		const res = await fetch(`/runs/artifacts/${info.artifactId}`);
 		const mime = info.mimeType;
 
 		if (!res.ok) return { kind: 'error' as const, status: res.status, text: await res.text() };
