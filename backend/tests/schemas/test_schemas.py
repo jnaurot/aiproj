@@ -1,0 +1,607 @@
+"""
+Unit tests for schema validation and normalization
+"""
+import pytest
+from typing import Dict, Any
+from app.runner.schemas import (
+    normalize_llm_params_frontend,
+    LLMParams,
+    SourceFileParams,
+    SourceDatabaseParams,
+    SourceAPIParams,
+    FilterTransformParams,
+    MapTransformParams,
+    AggregateTransformParams,
+    CustomTransformParams,
+    get_schema_for_node,
+    SCHEMA_REGISTRY
+)
+
+
+class TestLLMParams:
+    """Test LLM parameter validation and normalization"""
+    
+    def test_normalize_camelcase_to_snake_case(self):
+        """Test camelCase conversion to snake_case"""
+        input_params = {
+            "baseUrl": "http://api.example.com",
+            "apiKeyRef": "sk-test123",
+            "connectionRef": "conn-123"
+        }
+        
+        result = normalize_llm_params_frontend(input_params)
+        
+        assert result["base_url"] == "http://api.example.com"
+        assert result["api_key_ref"] == "sk-test123"
+        assert result["connection_ref"] == "conn-123"
+    
+    def test_normalize_frontend_output_object(self):
+        """Test frontend output object to output_mode/output_schema transformation"""
+        input_params = {
+            "model": "gpt-4",
+            "user_prompt": "Hello",
+            "output": {
+                "mode": "json",
+                "jsonSchema": {"type": "object"}
+            }
+        }
+        
+        result = normalize_llm_params_frontend(input_params)
+        
+        assert result["output_mode"] == "json"
+        assert result["output_schema"] == {"type": "object"}
+    
+    def test_normalize_stop_sequences(self):
+        """Test stop_sequences normalization"""
+        input_params = {
+            "stopSequences": ["\n", "END"]
+        }
+        
+        result = normalize_llm_params_frontend(input_params)
+        
+        assert result["stop_sequences"] == ["\n", "END"]
+    
+    def test_success_with_base_url(self):
+        """Test successful validation with base_url"""
+        params = {
+            "model": "gpt-4",
+            "user_prompt": "Test prompt",
+            "base_url": "http://api.example.com"
+        }
+        
+        llm_params = LLMParams.model_validate(params)
+        assert llm_params.model == "gpt-4"
+        assert llm_params.user_prompt == "Test prompt"
+        assert llm_params.base_url == "http://api.example.com"
+    
+    def test_success_with_connection_ref(self):
+        """Test successful validation with connection_ref"""
+        params = {
+            "model": "llama2",
+            "user_prompt": "Test",
+            "connection_ref": "my-ollama"
+        }
+        
+        llm_params = LLMParams.model_validate(params)
+        assert llm_params.model == "llama2"
+        assert llm_params.connection_ref == "my-ollama"
+    
+    def test_requires_base_url_or_connection_ref(self):
+        """Test validation error when neither base_url nor connection_ref provided"""
+        with pytest.raises(ValueError, match="Either base_url or connection_ref"):
+            LLMParams.model_validate({
+                "model": "gpt-4",
+                "user_prompt": "Test"
+            })
+    
+    def test_requires_output_schema_for_json_mode(self):
+        """Test validation error when output_mode=json but no output_schema"""
+        with pytest.raises(ValueError, match="output_schema required when output_mode='json'"):
+            LLMParams.model_validate({
+                "model": "gpt-4",
+                "user_prompt": "Test",
+                "base_url": "http://api.example.com",
+                "output_mode": "json"
+            })
+    
+    def test_temperature_validation(self):
+        """Test temperature is constrained to [0, 2]"""
+        # Should succeed
+        LLMParams.model_validate({
+            "model": "test",
+            "user_prompt": "Test",
+            "base_url": "http://test.com",
+            "temperature": 1.0
+        })
+        
+        # Too low
+        with pytest.raises(ValueError):
+            LLMParams.model_validate({
+                "model": "test",
+                "user_prompt": "Test",
+                "base_url": "http://test.com",
+                "temperature": -0.1
+            })
+        
+        # Too high
+        with pytest.raises(ValueError):
+            LLMParams.model_validate({
+                "model": "test",
+                "user_prompt": "Test",
+                "base_url": "http://test.com",
+                "temperature": 2.1
+            })
+    
+    def test_max_tokens_validation(self):
+        """Test max_tokens is constrained to [1, 100000]"""
+        with pytest.raises(ValueError):
+            LLMParams.model_validate({
+                "model": "test",
+                "user_prompt": "Test",
+                "base_url": "http://test.com",
+                "max_tokens": 0
+            })
+    
+    def test_stop_sequences_default(self):
+        """Test stop_sequences has default empty list"""
+        llm_params = LLMParams.model_validate({
+            "model": "test",
+            "user_prompt": "Test",
+            "base_url": "http://test.com"
+        })
+        
+        assert llm_params.stop_sequences == []
+    
+    def test_input_mapping(self):
+        """Test input_mapping is preserved"""
+        params = {
+            "model": "test",
+            "user_prompt": "Test {input_value}",
+            "base_url": "http://test.com",
+            "input_mapping": {
+                "input_value": "{{node_input.port_name}}"
+            }
+        }
+        
+        llm_params = LLMParams.model_validate(params)
+        assert llm_params.input_mapping == {
+            "input_value": "{{node_input.port_name}}"
+        }
+
+
+class TestSourceFileParams:
+    """Test source file parameter validation"""
+    
+    def test_success_with_defaults(self):
+        """Test successful validation with defaults"""
+        params = {
+            "file_path": "/path/to/file.csv"
+        }
+        
+        source_params = SourceFileParams.model_validate(params)
+        assert source_params.file_path == "/path/to/file.csv"
+        assert source_params.file_format == "csv"
+        assert source_params.encoding == "utf-8"
+        assert source_params.cache_enabled is True
+    
+    def test_custom_file_format(self):
+        """Test custom file format selection"""
+        params = {
+            "file_path": "/data/data.parquet",
+            "file_format": "parquet"
+        }
+        
+        source_params = SourceFileParams.model_validate(params)
+        assert source_params.file_format == "parquet"
+    
+    def test_custom_delimiter(self):
+        """Test custom CSV delimiter"""
+        params = {
+            "file_path": "/data/data.csv",
+            "file_format": "csv",
+            "delimiter": "|"
+        }
+        
+        source_params = SourceFileParams.model_validate(params)
+        assert source_params.delimiter == "|"
+    
+    def test_valid_file_formats(self):
+        """Test all valid file formats"""
+        formats = ["csv", "parquet", "json", "excel", "txt"]
+        for fmt in formats:
+            params = {
+                "file_path": f"/data/test.{fmt}",
+                "file_format": fmt
+            }
+            SourceFileParams.model_validate(params)
+            assert SourceFileParams.model_validate(params).file_format == fmt
+    
+    def test_missing_file_path(self):
+        """Test validation error when file_path is missing"""
+        with pytest.raises(ValueError, match="file_path is required"):
+            SourceFileParams.model_validate({})
+    
+    def test_validate_required_method(self):
+        """Test custom validation_required method"""
+        params = {
+            "file_path": "/test.csv"
+        }
+        
+        source_params = SourceFileParams.model_validate(params)
+        errors = source_params.validate_required()
+        
+        assert errors == []  # No errors with valid input
+
+
+class TestSourceDatabaseParams:
+    """Test source database parameter validation"""
+    
+    def test_success_with_connection_string(self):
+        """Test successful validation with connection_string"""
+        params = {
+            "connection_string": "postgres://user:pass@localhost/db",
+            "query": "SELECT * FROM users"
+        }
+        
+        db_params = SourceDatabaseParams.model_validate(params)
+        assert db_params.connection_string == "postgres://user:pass@localhost/db"
+        assert db_params.query == "SELECT * FROM users"
+    
+    def test_success_with_connection_ref(self):
+        """Test successful validation with connection_ref"""
+        params = {
+            "connection_ref": "production-db",
+            "table_name": "users"
+        }
+        
+        db_params = SourceDatabaseParams.model_validate(params)
+        assert db_params.connection_ref == "production-db"
+        assert db_params.table_name == "users"
+    
+    def test_requires_connection_string_or_ref(self):
+        """Test validation error when neither connection_string nor connection_ref provided"""
+        with pytest.raises(ValueError, match="Either connection_string or connection_ref required"):
+            SourceDatabaseParams.model_validate({})
+    
+    def test_requires_query_or_table_name(self):
+        """Test validation error when neither query nor table_name provided"""
+        with pytest.raises(ValueError, match="Either query or table_name required"):
+            SourceDatabaseParams.model_validate({
+                "connection_string": "postgresql://test"
+            })
+    
+    def test_query_overrides_table_name(self):
+        """Test query parameter works independently"""
+        params = {
+            "connection_string": "postgresql://test",
+            "table_name": "users",
+            "query": "SELECT * FROM active_users"
+        }
+        
+        db_params = SourceDatabaseParams.model_validate(params)
+        assert db_params.query == "SELECT * FROM active_users"
+        assert db_params.table_name == "users"  # Still stored
+
+
+class TestSourceAPIParams:
+    """Test source API parameter validation"""
+    
+    def test_success_with_minimum_fields(self):
+        """Test successful validation with minimum required fields"""
+        params = {
+            "url": "https://api.example.com/data"
+        }
+        
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.url == "https://api.example.com/data"
+        assert api_params.method == "GET"
+        assert api_params.headers == {}
+    
+    def test_custom_method(self):
+        """Test custom HTTP method"""
+        params = {
+            "url": "https://api.example.com/data",
+            "method": "POST"
+        }
+        
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.method == "POST"
+    
+    def test_custom_headers(self):
+        """Test custom headers"""
+        params = {
+            "url": "https://api.example.com/data",
+            "headers": {
+                "Authorization": "Bearer token123",
+                "Content-Type": "application/json"
+            }
+        }
+        
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.headers["Authorization"] == "Bearer token123"
+        assert api_params.headers["Content-Type"] == "application/json"
+    
+    def test_body_parameter(self):
+        """Test request body parameter"""
+        params = {
+            "url": "https://api.example.com/data",
+            "method": "POST",
+            "body": {"key": "value"}
+        }
+        
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.body == {"key": "value"}
+    
+    def test_auth_types(self):
+        """Test different authentication types"""
+        # None
+        api_params = SourceAPIParams.model_validate({
+            "url": "https://api.example.com/data",
+            "auth_type": "none"
+        })
+        assert api_params.auth_type == "none"
+        
+        # Bearer
+        api_params = SourceAPIParams.model_validate({
+            "url": "https://api.example.com/data",
+            "auth_type": "bearer",
+            "auth_token_ref": "token123"
+        })
+        assert api_params.auth_type == "bearer"
+        assert api_params.auth_token_ref == "token123"
+    
+    def test_requires_url(self):
+        """Test validation error when url is missing"""
+        with pytest.raises(ValueError, match="url is required"):
+            SourceAPIParams.model_validate({})
+    
+    def test_requires_auth_token_for_bearer(self):
+        """Test validation error when auth_type is bearer but no auth_token_ref"""
+        with pytest.raises(ValueError, match="auth_token_ref required when using authentication"):
+            SourceAPIParams.model_validate({
+                "url": "https://api.example.com/data",
+                "auth_type": "bearer"
+            })
+    
+    def test_timeout_validation(self):
+        """Test timeout_seconds is valid"""
+        params = {
+            "url": "https://api.example.com/data",
+            "timeout_seconds": 10
+        }
+        
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.timeout_seconds == 10
+
+
+class TestFilterTransformParams:
+    """Test filter transform parameter validation"""
+    
+    def test_success(self):
+        """Test successful validation"""
+        params = {
+            "filter_expression": "age > 18",
+            "columns": ["age"]
+        }
+        
+        filter_params = FilterTransformParams.model_validate(params)
+        assert filter_params.filter_expression == "age > 18"
+        assert filter_params.columns == ["age"]
+    
+    def test_missing_filter_expression(self):
+        """Test validation error when filter_expression is missing"""
+        with pytest.raises(ValueError, match="filter_expression is required"):
+            FilterTransformParams.model_validate({})
+    
+    def test_optional_columns(self):
+        """Test columns are optional"""
+        filter_params = FilterTransformParams.model_validate({
+            "filter_expression": "age > 18"
+        })
+        assert filter_params.columns is None
+
+
+class TestMapTransformParams:
+    """Test map transform parameter validation"""
+    
+    def test_success_with_defaults(self):
+        """Test successful validation with defaults"""
+        params = {
+            "function": "upper",
+            "target_columns": ["name"]
+        }
+        
+        map_params = MapTransformParams.model_validate(params)
+        assert map_params.function == "upper"
+        assert map_params.target_columns == ["name"]
+    
+    def test_requires_function(self):
+        """Test validation error when function is missing"""
+        with pytest.raises(ValueError, match="function is required"):
+            MapTransformParams.model_validate({
+                "target_columns": ["name"]
+            })
+    
+    def test_requires_target_columns(self):
+        """Test validation error when target_columns is missing"""
+        with pytest.raises(ValueError, match="target_columns is required"):
+            MapTransformParams.model_validate({
+                "function": "upper"
+            })
+    
+    def test_function_types(self):
+        """Test different function types"""
+        # builtin
+        MapTransformParams.model_validate({
+            "function": "upper",
+            "target_columns": ["name"]
+        })
+        
+        # lambda
+        MapTransformParams.model_validate({
+            "function": "lambda x: x.strip()",
+            "target_columns": ["name"]
+        })
+        
+        # custom
+        MapTransformParams.model_validate({
+            "function": "my_custom_function",
+            "target_columns": ["name"],
+            "function_type": "custom"
+        })
+
+
+class TestAggregateTransformParams:
+    """Test aggregate transform parameter validation"""
+    
+    def test_success(self):
+        """Test successful validation"""
+        params = {
+            "group_by": ["department"],
+            "aggregations": {
+                "salary": "sum",
+                "count": "avg"
+            }
+        }
+        
+        aggregate_params = AggregateTransformParams.model_validate(params)
+        assert aggregate_params.group_by == ["department"]
+        assert aggregate_params.aggregations == {
+            "salary": "sum",
+            "count": "avg"
+        }
+    
+    def test_requires_aggregations(self):
+        """Test validation error when aggregations is missing"""
+        with pytest.raises(ValueError, match="aggregations is required"):
+            AggregateTransformParams.model_validate({})
+    
+    def test_optional_group_by(self):
+        """Test group_by is optional"""
+        aggregate_params = AggregateTransformParams.model_validate({
+            "aggregations": {
+                "total": "sum"
+            }
+        })
+        assert aggregate_params.group_by == []
+
+
+class TestCustomTransformParams:
+    """Test custom transform parameter validation"""
+    
+    def test_success(self):
+        """Test successful validation"""
+        params = {
+            "code": "import pandas as pd\ndf['new_col'] = df['old_col'] * 2",
+            "input_var": "df",
+            "output_var": "result"
+        }
+        
+        custom_params = CustomTransformParams.model_validate(params)
+        assert custom_params.code == "import pandas as pd\ndf['new_col'] = df['old_col'] * 2"
+        assert custom_params.input_var == "df"
+        assert custom_params.output_var == "result"
+    
+    def test_requires_code(self):
+        """Test validation error when code is missing"""
+        with pytest.raises(ValueError, match="code is required"):
+            CustomTransformParams.model_validate({})
+
+
+class TestGetSchemaForNode:
+    """Test schema retrieval for nodes"""
+    
+    def test_llm_node_schema(self):
+        """Test schema retrieval for LLM node"""
+        node = {
+            "data": {
+                "kind": "llm",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema == LLMParams
+    
+    def test_source_file_node_schema(self):
+        """Test schema retrieval for file source node"""
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "file",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema == SourceFileParams
+    
+    def test_source_database_node_schema(self):
+        """Test schema retrieval for database source node"""
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "database",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema == SourceDatabaseParams
+    
+    def test_source_api_node_schema(self):
+        """Test schema retrieval for API source node"""
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "api",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema == SourceAPIParams
+    
+    def test_invalid_kind(self):
+        """Test None returned for invalid node kind"""
+        node = {
+            "data": {
+                "kind": "invalid",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema is None
+    
+    def test_transform_no_schema(self):
+        """Test None returned for transform node"""
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {}
+            }
+        }
+        
+        schema = get_schema_for_node(node)
+        assert schema is None
+
+
+class TestSCHEMA_REGISTRY:
+    """Test schema registry"""
+    
+    def test_registry_has_all_schemas(self):
+        """Test all expected schemas are registered"""
+        assert "source:file" in SCHEMA_REGISTRY
+        assert "source:database" in SCHEMA_REGISTRY
+        assert "source:api" in SCHEMA_REGISTRY
+        assert "llm" in SCHEMA_REGISTRY
+        assert "transform:filter" in SCHEMA_REGISTRY
+        assert "transform:map" in SCHEMA_REGISTRY
+        assert "mcp" in SCHEMA_REGISTRY  # Assuming tool:mcp
+    
+    def test_schema_types(self):
+        """Test correct schema types in registry"""
+        assert SCHEMA_REGISTRY["source:file"] == SourceFileParams
+        assert SCHEMA_REGISTRY["llm"] == LLMParams
+        assert SCHEMA_REGISTRY["mcp"] is not None  # Tool params type
