@@ -26,3 +26,46 @@ export type LlmParamsByKind = {
 };
 
 
+import type {
+    TransformFilterParams,
+    TransformSelectParams,
+    TransformRenameParams,
+    TransformDeriveParams,
+    TransformAggregateParams,
+    TransformJoinParams,
+    TransformSortParams,
+    TransformLimitParams,
+    TransformDedupeParams,
+    TransformSqlParams,
+    TransformPythonParams,
+    TransformJsParams
+} from "$lib/flow/schema/transform";
+export type TransformKind = 
+    "filter" | 
+    'select' | 
+    'rename' | 
+    'derive' | 
+    'aggregate' | 
+    'join' | 
+    'sort' | 
+    'limit' | 
+    'dedupe' | 
+    'sql' | 
+    'python' | 
+    'js'
+
+export type TransformParamsByKind = {
+    filter: TransformFilterParams
+    select: TransformSelectParams
+    rename: TransformRenameParams
+    derive: TransformDeriveParams
+    aggregate: TransformAggregateParams
+    join: TransformJoinParams
+    sort: TransformSortParams
+    limit: TransformLimitParams
+    dedupe: TransformDedupeParams
+    sql: TransformSqlParams
+    python: TransformPythonParams
+    js: TransformJsParams
+}
+

@@ -4,6 +4,16 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from app.runner.nodes.transform import (
+    normalize_transform_params,
+    canonical_json,
+    inputs_fingerprint,
+    load_table_from_artifact_bytes,
+    run_transform,
+    sha256_hex,
+)
+
+
 from .compile import compile_plan
 from .events import RunEventBus
 from .validator import GraphValidator
@@ -31,6 +41,26 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
+
+def resolve_input_refs(edges: Dict[str, Dict[str, Any]], node_id: str, node_to_artifact: Dict[str, str]) -> list[tuple[str, str]]:
+    """
+    Returns stable (port, upstream_artifact_id) pairs for edges targeting node_id.
+    Port name is taken from edge.targetHandle if present; else 'in'.
+    Only includes edges whose source node has produced an artifact.
+    """
+    refs: list[tuple[str, str]] = []
+    for e in edges.values():
+        if e.get("target") != node_id:
+            continue
+        src = e.get("source")
+        if not src or src not in node_to_artifact:
+            continue
+        port = e.get("targetHandle") or "in"
+        refs.append((port, node_to_artifact[src]))
+    # stable order
+    refs.sort(key=lambda x: x[0])
+    return refs
+
 
 
 async def run_graph(
@@ -125,8 +155,9 @@ async def run_graph(
             params = n["data"].get("params", {}) or {}
 
             # Upstream resolution
-            up_nodes = upstream_node_ids(edges, node_id)
-            upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact] or []
+            up_nodes = sorted(upstream_node_ids(edges, node_id))
+            upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
+
 
             # Compatibility path: existing metadata flow
             upstream_outputs = [context.outputs[nid] for nid in up_nodes if nid in context.outputs]
@@ -177,9 +208,166 @@ async def run_graph(
                 if kind == "source":
                     output = await exec_source(run_id, n, context, upstream_artifact_ids=upstream_ids)
                     print("[run_graph] bound artifact", artifact_id[:10], "to node", node_id)
-
+###
                 elif kind == "transform":
-                    output = await exec_transform(run_id, n, context, input_metadata, upstream_artifact_ids=upstream_ids)
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "info",
+                        "message": "transform: start",
+                        "nodeId": node_id,
+                    })
+
+                    if not params.get("enabled", True):
+                        await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": "transform: disabled; skipping",
+                            "nodeId": node_id,
+                        })
+                        # Create a no-op NodeOutput (or mark succeeded with no artifact).
+                        # Here: succeed but emit node_finished; keep artifact binding unchanged.
+                        output = NodeOutput(status="succeeded", data=None, metadata=None, execution_time_ms=0.0)
+                    else:
+                        # 1) collect upstream artifacts (port -> artifact_id)
+                        input_refs = resolve_input_refs(edges, node_id, node_to_artifact)  # [(port, artifact_id), ...]
+                        input_tables = {}  # port -> DataFrame
+
+                        for port, upstream_artifact_id in input_refs:
+                            art = await context.artifact_store.get(upstream_artifact_id)
+                            b = await context.artifact_store.read(upstream_artifact_id)
+                            df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
+                            input_tables[port] = df
+
+                        # join lookup (node_id -> DataFrame), best-effort
+                        join_lookup: dict[str, Any] = {}
+                        for upstream_node_id, upstream_artifact_id in node_to_artifact.items():
+                            art = await context.artifact_store.get(upstream_artifact_id)
+                            b = await context.artifact_store.read(upstream_artifact_id)
+                            try:
+                                join_lookup[upstream_node_id] = load_table_from_artifact_bytes(art.mime_type or "", b)
+                            except Exception:
+                                pass
+
+                        # 2) exec_key (transform-specific)
+                        # NOTE: you currently use context.execution_version; keep that as build/version here too.
+                        build_version = context.execution_version
+
+                        norm = normalize_transform_params(params)
+                        fp = {
+                            "build": build_version,
+                            "kind": "transform",
+                            "params": norm,
+                            "inputs": inputs_fingerprint(input_refs),
+                        }
+                        exec_key = sha256_hex(canonical_json(fp).encode("utf-8"))
+
+                        # 3) cache hit?
+                        cached_artifact_id = await cache.get_artifact_id(exec_key)
+                        if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
+                            context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
+                            node_to_artifact[node_id] = cached_artifact_id
+
+                            print(f"[cache-hit] transform node={node_id} artifact={cached_artifact_id[:10]}...")
+
+                            # Emit node_output so UI can fetch bytes by artifactId
+                            cached_art = await context.artifact_store.get(cached_artifact_id)
+                            await context.bus.emit({
+                                "type": "node_output",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "artifactId": cached_artifact_id,
+                                "mimeType": cached_art.mime_type,
+                            })
+
+                            # finish the node (skip compute)
+                            await context.bus.emit({
+                                "type": "node_finished",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "nodeId": node_id,
+                                "status": "succeeded",
+                                "cached": True
+                            })
+
+                            # Mark incoming edges as done
+                            for edge_id in plan.incoming_edges.get(node_id, []):
+                                await context.bus.emit({
+                                    "type": "edge_exec",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "edgeId": edge_id,
+                                    "exec": "done"
+                                })
+                            continue
+
+                        # 4) execute
+                        res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
+
+                        await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": f"transform: produced {len(res.payload_bytes)} bytes, content_hash={res.meta.get('content_hash')}",
+                            "nodeId": node_id,
+                        })
+
+                        # 5) store artifact bytes + cache
+                        artifact_id = exec_key  # keep your convention
+
+                        artifact = Artifact(
+                            artifact_id=artifact_id,
+                            node_kind=kind,
+                            # params_hash=cache.params_hash(params),
+                            params_hash = sha256_hex(canonical_json(norm).encode("utf-8")),
+                            upstream_ids=sorted([aid for _, aid in input_refs]),
+                            created_at=datetime.now(timezone.utc),
+                            execution_version=context.execution_version,
+                            mime_type=res.mime_type,
+                            size_bytes=len(res.payload_bytes),
+                            storage_uri=f"memory://{artifact_id}",
+                            schema=None,
+                        )
+
+                        await context.artifact_store.write(artifact, res.payload_bytes)
+
+                        # bind + node_to_artifact
+                        context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
+                        node_to_artifact[node_id] = artifact_id
+
+                        # cache index
+                        await cache.store_artifact_id(exec_key, artifact_id)
+
+                        print(f"[artifact] transform node={node_id} bytes={len(res.payload_bytes)} id={artifact_id[:10]}...")
+
+                        # emit node_output (UI fetches by artifactId)
+                        await context.bus.emit({
+                            "type": "node_output",
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "at": iso_now(),
+                            "artifactId": artifact_id,
+                            "mimeType": res.mime_type,
+                        })
+
+                        # return a NodeOutput for legacy metadata flow
+                        output = NodeOutput(
+                            status="succeeded",
+                            data=None,
+                            metadata=None,
+                            # metadata={
+                            #     **(res.meta or {}),
+                            #     "artifact_id": artifact_id,
+                            #     "mime_type": res.mime_type,
+                            #     "exec_key": exec_key,
+                            # },
+                            execution_time_ms=0.0
+                        )
                 elif kind == "llm":
                     print("[run_graph] LLM up_nodes:", up_nodes)
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
@@ -193,28 +381,83 @@ async def run_graph(
                 # Validate output
                 if output.status == "failed":
                     raise RuntimeError(output.error or "Node execution failed")
-                if output.status == "succeeded" and not output.metadata:
+                
+                if kind != "transform" and output.status == "succeeded" and not output.metadata:
                     raise RuntimeError("Node succeeded but produced no metadata")
 
                 # Store output for legacy flow / UI
                 context.outputs[node_id] = output
+
+                # Transform now writes its own artifact payload (table bytes). Skip generic writer.
+                if kind == "transform":
+                    await context.bus.emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": output.status
+                    })
+                    # Mark incoming edges as done (existing code below already does this)
+                    # continue????
 
                 # ---- Artifact write + binding ----
                 mime_type = "application/json"
                 payload_bytes: bytes
 
                 if kind == "source":
-                    # Store actual source content (not NodeOutput JSON)
-                    if not output.metadata or not getattr(output.metadata, "file_path", None):
-                        raise RuntimeError("Source succeeded but missing metadata.file_path")
+                    ports = (n.get("data", {}).get("ports", {}) or {})
+                    out_contract = ports.get("out")  # "table" or "text"/"binary"/etc
 
-                    fp = output.metadata.file_path
+                    # Try to get parsed rows (list[dict]) from NodeOutput
+                    rows = getattr(output, "data", None)
 
-                    # Best-effort read; for now cap size so we don't blow memory
-                    with open(fp, "rb") as f:
-                        payload_bytes = f.read()
+                    md = getattr(output, "metadata", None)
+                    if rows is None and md is not None:
+                        # metadata might be pydantic
+                        if hasattr(md, "rows"):
+                            rows = md.rows
+                        elif isinstance(md, dict):
+                            rows = md.get("rows")
+                        else:
+                            try:
+                                rows = md.model_dump().get("rows")
+                            except Exception:
+                                rows = None
 
-                    mime_type = getattr(output.metadata, "mime_type", None) or "application/octet-stream"
+                    if out_contract == "table":
+                        if rows is None:
+                            raise RuntimeError("Source declares ports.out='table' but produced no rows in output.data/metadata.rows")
+
+                        import pandas as pd
+                        import io
+
+                        if not isinstance(rows, list):
+                            raise RuntimeError(f"Source table expected rows=list[dict], got {type(rows)}: {repr(rows)[:120]}")
+
+
+                        df = pd.DataFrame(rows)
+
+                        buf = io.StringIO()
+                        df.to_csv(buf, index=False, lineterminator="\n")
+                        payload_bytes = buf.getvalue().encode("utf-8")
+                        mime_type = "text/csv; charset=utf-8"
+
+                        # verification print (per your preference)
+                        print(f"[source->table] node={node_id} rows={len(df)} cols={len(df.columns)} bytes={len(payload_bytes)} mime={mime_type}")
+
+                    else:
+                        # fallback: store raw file bytes (text/binary contract)
+                        if not md or not getattr(md, "file_path", None):
+                            raise RuntimeError("Source succeeded but missing metadata.file_path")
+
+                        fp = md.file_path
+                        with open(fp, "rb") as f:
+                            payload_bytes = f.read()
+
+                        mime_type = getattr(md, "mime_type", None) or "application/octet-stream"
+                        print(f"[source->raw] node={node_id} bytes={len(payload_bytes)} mime={mime_type}")
+
+
 
                 elif kind == "llm":
                     # Store the model output text/JSON
@@ -225,7 +468,11 @@ async def run_graph(
                     else:
                         # v should be a string (your NodeOutput schema)
                         payload_bytes = str(v).encode("utf-8")
-                    mime_type = getattr(output.metadata, "mime_type", None) or "text/plain"
+                    # mime_type = getattr(output.metadata, "mime_type", None) or "text/plain"
+                    md = getattr(output, "metadata", None)
+                    mime_type = getattr(md, "mime_type", None) or "text/plain"
+
+
                 else:
                     # Default fallback (until you convert other nodes)
                     payload_bytes = output.model_dump_json().encode("utf-8")
@@ -234,7 +481,7 @@ async def run_graph(
                 artifact = Artifact(
                     artifact_id=artifact_id,
                     node_kind=kind,
-                    params_hash=cache.params_hash(params),
+                    params_hash = cache.params_hash(params),
                     upstream_ids=sorted(upstream_ids),
                     created_at=datetime.now(timezone.utc),
                     execution_version=context.execution_version,

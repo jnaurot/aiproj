@@ -50,6 +50,7 @@ async def exec_source(
     - Database sources: PostgreSQL, MySQL, SQLite
     - API sources: REST APIs with various auth methods
     """
+    
     upstream_artifact_ids = upstream_artifact_ids or []
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
@@ -59,14 +60,17 @@ async def exec_source(
     params = node["data"].get("params", {})
     source_type = params.get("source_type", "file")
     
+    ports = (node.get("data", {}).get("ports", {}) or {})
+    ports_out = ports.get("out")  # "table" | "text" | "binary" | ...
+
     try:
         # Route to appropriate handler based on source type
         if source_type == "file":
-            output = await _handle_file_source(node_id, params, context.bus, run_id)
+            output = await _handle_file_source(node_id, params, context.bus, run_id, ports_out=ports_out)
         elif source_type == "database":
-            output = await _handle_database_source(node_id, params, context.bus, run_id)
+            output = await _handle_database_source(node_id, params, context.bus, run_id, ports_out=ports_out)
         elif source_type == "api":
-            output = await _handle_api_source(node_id, params, context.bus, run_id)
+            output = await _handle_api_source(node_id, params, context.bus, run_id, ports_out=ports_out)
         else:
             raise ValueError(f"Unknown source_type: {source_type}")
         
@@ -112,10 +116,11 @@ async def _handle_file_source(
     node_id: str,
     params: Dict[str, Any],
     bus: RunEventBus,
-    run_id: str
+    run_id: str,
+    ports_out: str | None = None,
 ) -> NodeOutput:
     """Handle file-based data sources"""
-    
+
     # Validate params using schema
     schema = SourceFileParams(**params)
     
@@ -159,6 +164,26 @@ async def _handle_file_source(
     else:
         raise ValueError(f"Unsupported file format: {file_format}")
     
+    data_out = None
+
+    if ports_out == "table":
+        # Produce a list[dict] for the runner to serialize to CSV
+        if isinstance(data, str):
+            # interpret as raw text content -> one row per line
+            lines = [ln for ln in data.splitlines() if ln.strip() != ""]
+            rows = [{"text": ln} for ln in lines]
+            data_out = rows
+            row_count = len(rows)
+        elif isinstance(data, list):
+            # already parsed rows
+            data_out = data
+            row_count = len(data)
+        else:
+            raise RuntimeError(f"Unsupported source table payload type: {type(data)}")
+    else:
+        # Non-table mode: keep original behavior
+        data_out = data  # could be str/binary/etc
+    
     # Write processed data to temporary output file
     output_path = _get_output_path(node_id, file_format)
     await _write_output(data, output_path, file_format)
@@ -186,8 +211,16 @@ async def _handle_file_source(
         estimated_memory_mb=file_size / (1024 * 1024)
     )
     
+    print(
+        "[exec_source] rows type:", type(data_out),
+        "len:", (len(data_out) if isinstance(data_out, list) else None),
+        "row0 keys:", (list(data_out[0].keys()) if isinstance(data_out, list) and data_out else None),
+        "row_count:", row_count
+    )
+
     return NodeOutput(
         status="succeeded",
+        data=rows,          # <-- THIS is the key change
         metadata=metadata,
         execution_time_ms=0.0  # Will be set by caller
     )

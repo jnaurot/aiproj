@@ -5,6 +5,8 @@ import { defaultSourceParamsByKind } from "$lib/flow/schema/sourceDefaults";
 import { SourceParamsSchemaByKind } from "$lib/flow/schema/source";
 import { defaultLlmParamsByKind } from "$lib/flow/schema/llmDefaults";
 import { LlmParamsSchemaByKind } from "$lib/flow/schema/llm";
+import { defaultTransformParamsByKind } from "$lib/flow/schema/transformDefaults"
+import { TransformParamsSchemaByKind } from "$lib/flow/schema/transform"
 
 // pick schema + defaults by kind
 type Pick = {
@@ -26,8 +28,12 @@ export function pickValidation(
       };
     }
 
-    // case "transform":
-    //   return { schema: TransformParamsSchema, defaults: defaultTransformParamsByKind };
+    case "transform": {
+      const tk = data.transformKind ?? "filter"
+      return { 
+        schema: TransformParamsSchemaByKind[tk], 
+        defaults: defaultTransformParamsByKind[tk] };
+    }
 
     case "llm": {
       const lk = data.llmKind ?? "ollama"

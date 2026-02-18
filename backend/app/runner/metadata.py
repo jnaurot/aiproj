@@ -44,7 +44,7 @@ class NodeOutput(BaseModel):
     """What each node produces"""
     status: Literal["succeeded", "failed", "skipped"]
     metadata: Optional[FileMetadata] = None
-    data: Optional[str] = None
+    data: Optional[Any] = None
     execution_time_ms: float
     error: Optional[str] = None
     

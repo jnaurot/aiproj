@@ -6,12 +6,14 @@ import type { NodeStatus, NodeKind, PipelineNodeData, PipelineEdgeData, Pipeline
 import { isPortType } from "$lib/flow/types/base";
 import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from "$lib/flow/schema/llmDefaults";
+import { defaultTransformParamsByKind } from "$lib/flow/schema/transformDefaults";
+// import { defaultToolParamsByKind } from "$lib/flow/schema/toolDefaults";
 import { defaultNodeData } from "$lib/flow/schema/defaults";
 import { updateNodeParamsValidated } from "./graph";
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from "./persist";
 import { createRun, streamRunEvents } from "$lib/flow/client/runs";
 import type { KnownRunEvent } from "$lib/flow/types/run";
-import type { SourceKind, LlmKind } from "$lib/flow/types/paramsMap";
+import type { SourceKind, LlmKind, TransformKind } from "$lib/flow/types/paramsMap";
 
 type NodeOutputInfo = { artifactId: string; mimeType: string; preview?: string }
 type EdgeExec = "idle" | "active" | "done";
@@ -488,6 +490,102 @@ export const graphStore = (() => {
 
         // graphStore.ts (inside your graphStore object)
         setLlmKind(nodeId: string, nextKind: LlmKind) {
+            const nextParams = structuredClone(defaultLlmParamsByKind[nextKind]);
+
+            // 1) update structural subtype on the node
+            update((s) => {
+                const node = s.nodes.find(n => n.id === nodeId);
+                if (!node) return logPush(s, "warn", "Node not found", nodeId);
+
+                const nodes = s.nodes.map(n =>
+                    n.id === nodeId
+                        ? {
+                            ...n,
+                            data: {
+                                ...n.data,
+                                llmKind: nextKind, // ✅ structural
+                                meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+                            }
+                        }
+                        : n
+                );
+
+                const next = { ...s, nodes };
+                persist(next);
+                return next;
+            });
+
+            // 2) replace params via your validated path (schema stripping happens here)
+            const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+
+            // 3) ensure inspector draft matches immediately after type switch
+            if (r.ok) {
+                update((s) => {
+                    const n = s.nodes.find(x => x.id === nodeId);
+                    return {
+                        ...s,
+                        inspector: {
+                            nodeId,
+                            draftParams: structuredClone((n?.data.params ?? {}) as any),
+                            dirty: false
+                        }
+                    };
+                });
+            }
+
+            return r;
+        },
+
+                // graphStore.ts (inside your graphStore object)
+        setTransformKind(nodeId: string, nextKind: TransformKind) {
+            const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
+
+            // 1) update structural subtype on the node
+            update((s) => {
+                const node = s.nodes.find(n => n.id === nodeId);
+                if (!node) return logPush(s, "warn", "Node not found", nodeId);
+
+                const nodes = s.nodes.map(n =>
+                    n.id === nodeId
+                        ? {
+                            ...n,
+                            data: {
+                                ...n.data,
+                                transformKind: nextKind, // ✅ structural
+                                meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+                            }
+                        }
+                        : n
+                );
+
+                const next = { ...s, nodes };
+                persist(next);
+                return next;
+            });
+
+            // 2) replace params via your validated path (schema stripping happens here)
+            const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+
+            // 3) ensure inspector draft matches immediately after type switch
+            if (r.ok) {
+                update((s) => {
+                    const n = s.nodes.find(x => x.id === nodeId);
+                    return {
+                        ...s,
+                        inspector: {
+                            nodeId,
+                            draftParams: structuredClone((n?.data.params ?? {}) as any),
+                            dirty: false
+                        }
+                    };
+                });
+            }
+
+            return r;
+        },
+
+                // graphStore.ts (inside your graphStore object) TODO review
+        setToolKind(nodeId: string, nextKind: LlmKind) {
             const nextParams = structuredClone(defaultLlmParamsByKind[nextKind]);
 
             // 1) update structural subtype on the node

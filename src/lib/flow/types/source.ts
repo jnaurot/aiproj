@@ -10,3 +10,4 @@ export type SourceNodeData<K extends SourceKind = SourceKind> =
 // Later:
 // export type ToolNodeData<T extends ToolKind = ToolKind> =
 //   BaseNodeData<"tool", ToolParamsByKind[T]> & { ToolKind: T };
+

@@ -1,6 +1,5 @@
 // src/lib/flow/schema/source.ts
 import { z } from "zod";
-import { BaseNodeDataSchema } from "./base";
 
 // ---- shared enums ----
 const SourceKindSchema = z.enum(["file", "database", "api"]);

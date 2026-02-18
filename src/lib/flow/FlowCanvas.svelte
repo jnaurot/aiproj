@@ -12,6 +12,7 @@
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import { PortTypeSchema } from './schema';
 	import { get } from 'svelte/store';
+	import ArtifactViewer from './components/ArtifactViewer.svelte';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -78,6 +79,17 @@
 			2
 		);
 	}
+	//ViewArtifact
+	type InspectorMode = 'edit' | 'output';
+	let inspectorMode: InspectorMode = 'edit';
+
+	$: selectedId = $selectedNode?.id;
+	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
+	$: hasOutput = !!nodeOut?.artifactId;
+
+	// auto-fallback if you select a node without output
+	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
+	//ViewArtifact
 
 	async function scrollToBottom() {
 		// Wait for Svelte to finish updating the DOM
@@ -340,28 +352,57 @@
 							/>
 						</div>
 					</div>
+					<div class="inspectorTabs">
+						<button
+								class="tabBtn"
+							class:active={inspectorMode === 'edit'}
+							on:click={() => (inspectorMode = 'edit')}
+						>
+							Edit
+						</button>
+
+						<button
+								class="tabBtn"
+							class:active={inspectorMode === 'output'}
+							disabled={!hasOutput}
+							on:click={() => (inspectorMode = 'output')}
+						>
+							Output
+						</button>
+					</div>
 
 					<!-- Source editor lives here (and will be scrollable) -->
 					<div class="editorScroll">
-						<NodeInspector />
+						{#if inspectorMode === 'edit'}
+							<NodeInspector />
+						{:else}
+							<ArtifactViewer
+								artifactId={nodeOut.artifactId}
+								mimeType={nodeOut.mimeType}
+								preview={nodeOut.preview}
+							/>
+						{/if}
 					</div>
-					<!-- Apply row (applies to any draft-only fields in editors) -->
-					<div class="inspectorActions">
-						<button
-							class="primary"
-							disabled={!$graphStore.inspector.dirty}
-							on:click={() => graphStore.applyInspectorDraft()}
-						>
-							Accept
-						</button>
 
-						<button
-							disabled={!$graphStore.inspector.dirty}
-							on:click={() => graphStore.revertInspectorDraft()}
-						>
-							Revert
-						</button>
-					</div>
+					{#if inspectorMode === 'edit'}
+						<!-- Apply row (applies to any draft-only fields in editors) -->
+						<div class="inspectorActions">
+							<button
+								class="primary"
+								disabled={!$graphStore.inspector.dirty}
+								on:click={() => graphStore.applyInspectorDraft()}
+							>
+								Accept
+							</button>
+
+							<button
+								disabled={!$graphStore.inspector.dirty}
+								on:click={() => graphStore.revertInspectorDraft()}
+							>
+								Revert
+							</button>
+						</div>
+					{/if}
 				</div>
 			{:else}
 				<p>Click a node to edit it.</p>
@@ -576,8 +617,6 @@
 		min-height: 0;
 	}
 
-
-
 	.title {
 		font-size: 14px;
 	}
@@ -696,23 +735,40 @@
 		gap: 20px;
 		margin: 5px;
 	}
-</style>
-	<!-- .editorCard > input,
-	.editorCard > label + input {
-		width: 100%;
-		margin-top: 6px;
-		border-radius: 8px;
-		padding: 6px 8px;
-		background: #0b0c10;
-		color: #e6e6e6;
-		border: 1px solid #283044;
+
+	.inspectorTabs {
+		display: flex;
+		gap: 6px;
+		margin-bottom: 8px;
 	}
-		label {
-		display: block;
-		margin-top: 10px;
-		opacity: 0.85;
-	}	
-	
-	
-	
-	-->
+
+	.tabBtn {
+	font-size: 12px;          /* ← same scale as Ports label */
+	padding: 4px 10px;        /* ← small like section controls */
+	border-radius: 6px;
+	border: 1px solid #2c3444;
+	background: #111622;
+	color: #9aa3b2;
+	cursor: pointer;
+	line-height: 1.2;
+}
+
+	.inspectorTabs button {
+		padding: 6px 10px;
+		border-radius: 8px;
+		border: 1px solid #283044;
+		background: transparent;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.inspectorTabs button.active {
+		background: #283044;
+		font-weight: 700;
+	}
+
+	.inspectorTabs button:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+</style>
