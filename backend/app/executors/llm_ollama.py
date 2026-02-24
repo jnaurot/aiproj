@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import asyncio
 import json
 import hashlib
+import re
 
 import httpx
 
@@ -35,6 +36,120 @@ def _build_messages(params: LLMParams, user_content: str) -> List[Dict[str, str]
         msgs.append({"role": "system", "content": params.system_prompt})
     msgs.append({"role": "user", "content": user_content})
     return msgs
+
+def _content_to_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                txt = item.get("text")
+                if isinstance(txt, str):
+                    parts.append(txt)
+        return "".join(parts)
+    return ""
+
+def _extract_ollama_text(obj: Dict[str, Any]) -> str:
+    if not isinstance(obj, dict):
+        return ""
+
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        content = _content_to_text(msg.get("content"))
+        if content:
+            return content
+
+    response = _content_to_text(obj.get("response"))
+    if response:
+        return response
+
+    output = _content_to_text(obj.get("output"))
+    if output:
+        return output
+
+    return ""
+
+def _extract_stream_delta(obj: Dict[str, Any]) -> str:
+    """
+    Accept multiple stream shapes:
+    - Ollama chat: {"message":{"content":"..."}}
+    - Ollama generate-style: {"response":"..."}
+    - OpenAI-like proxies: {"choices":[{"delta":{"content":"..."}}]}
+    NOTE: intentionally ignores any thinking/reasoning fields.
+    """
+    if not isinstance(obj, dict):
+        return ""
+
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        c = _content_to_text(msg.get("content"))
+        if c:
+            return c
+
+    resp = _content_to_text(obj.get("response"))
+    if resp:
+        return resp
+
+    choices = obj.get("choices")
+    if isinstance(choices, list) and choices:
+        c0 = choices[0] if isinstance(choices[0], dict) else {}
+        delta = c0.get("delta")
+        if isinstance(delta, dict):
+            d = _content_to_text(delta.get("content"))
+            if d:
+                return d
+            d_reason = _content_to_text(delta.get("reasoning_content"))
+            if d_reason:
+                return d_reason
+
+        msg2 = c0.get("message")
+        if isinstance(msg2, dict):
+            m = _content_to_text(msg2.get("content"))
+            if m:
+                return m
+
+        txt = _content_to_text(c0.get("text"))
+        if txt:
+            return txt
+
+    return ""
+
+def _extract_stream_thinking(obj: Dict[str, Any]) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        return _content_to_text(msg.get("thinking"))
+    return _content_to_text(obj.get("thinking"))
+
+def _extract_ollama_thinking(obj: Dict[str, Any]) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    msg = obj.get("message")
+    if isinstance(msg, dict):
+        t = _content_to_text(msg.get("thinking"))
+        if t:
+            return t
+        t2 = _content_to_text(msg.get("reasoning"))
+        if t2:
+            return t2
+        t3 = _content_to_text(msg.get("reasoning_content"))
+        if t3:
+            return t3
+    top = _content_to_text(obj.get("thinking"))
+    if top:
+        return top
+    top2 = _content_to_text(obj.get("reasoning"))
+    if top2:
+        return top2
+    return ""
+
+def _strip_think_tags(text: str) -> str:
+    # Some models emit reasoning inline as <think>...</think> inside content.
+    return re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE).strip()
 
 
 def _best_effort_input_text(input_metadata: Optional[FileMetadata]) -> str:
@@ -143,6 +258,7 @@ async def exec_llm_ollama(
         "model": params.model,
         "messages": messages,
         "stream": True,
+        "think": False,
         "options": {
             "temperature": params.temperature,
             "num_predict": params.max_tokens,
@@ -190,9 +306,13 @@ async def exec_llm_ollama(
                     resp.raise_for_status()
 
                     chunks: List[str] = []
+                    thinking_chunks: List[str] = []
+                    sample_lines: List[str] = []
                     async for line in resp.aiter_lines():
                         if not line:
                             continue
+                        if len(sample_lines) < 3:
+                            sample_lines.append(line[:300])
 
                         # Ollama streams newline-delimited JSON objects
                         try:
@@ -211,9 +331,8 @@ async def exec_llm_ollama(
                             )
                             continue
 
-                        # Typical shape: {"message":{"role":"assistant","content":"..."}, "done":false, ...}
-                        msg = obj.get("message") or {}
-                        delta = msg.get("content") or ""
+                        delta = _extract_stream_delta(obj)
+                        thinking_delta = _extract_stream_thinking(obj)
 
                         if delta:
                             chunks.append(delta)
@@ -225,6 +344,8 @@ async def exec_llm_ollama(
                                 "at": iso_now(),
                                 "delta": delta,
                             })
+                        if thinking_delta:
+                            thinking_chunks.append(thinking_delta)
 
                         if obj.get("done") is True:
                             break
@@ -251,15 +372,71 @@ async def exec_llm_ollama(
                     resp.raise_for_status()
                     obj = resp.json()
 
-                fallback_text = ""
-                if isinstance(obj, dict):
-                    msg = obj.get("message")
-                    if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-                        fallback_text = msg["content"]
-                    elif isinstance(obj.get("response"), str):
-                        fallback_text = obj["response"]
+                data = _extract_ollama_text(obj).strip()
 
-                data = fallback_text.strip()
+            data = _strip_think_tags(data)
+
+            if not data:
+                # Last-resort fallback for models that emit only thinking tokens.
+                thinking_text = "".join(thinking_chunks).strip()
+                if not thinking_text:
+                    thinking_text = _extract_ollama_thinking(obj).strip()
+                thinking_text = _strip_think_tags(thinking_text)
+                if thinking_text:
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "at": iso_now(),
+                            "level": "warn",
+                            "message": "Ollama returned no content; using thinking text as fallback output",
+                        }
+                    )
+                    data = thinking_text
+
+            if not data:
+                await context.bus.emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": "Ollama returned empty output content after stream and fallback",
+                    }
+                )
+                try:
+                    # best-effort diagnostics to help identify provider payload shape
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "at": iso_now(),
+                            "level": "warn",
+                            "message": f"Ollama empty-output diagnostics: fallback keys={list(obj.keys()) if isinstance(obj, dict) else type(obj)}",
+                        }
+                    )
+                    if sample_lines:
+                        await context.bus.emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": f"Ollama empty-output stream samples: {sample_lines}",
+                            }
+                        )
+                except Exception:
+                    pass
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                    error="Ollama returned empty output content",
+                )
 
             mime_type = "text/plain"
             if params.output_mode == "json":
