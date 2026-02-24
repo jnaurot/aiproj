@@ -3,8 +3,26 @@ import { BaseNodeDataSchema } from "./base";
 
 const ToolCommonSchema = z.object({
   name: z.string().min(1),
+  toolVersion: z.string().optional().default("v1"),
+  side_effect_mode: z.enum(["pure", "idempotent", "effectful"]).default("pure"),
+  armed: z.boolean().optional().default(false),
+  connectionRef: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
-  retries: z.object({ max: z.number().int().nonnegative(), backoffMs: z.number().int().nonnegative().optional() }).optional(),
+  retry: z
+    .object({
+      max_attempts: z.number().int().positive().default(1),
+      backoff_ms: z.number().int().nonnegative().optional().default(0),
+      on: z.array(z.enum(["timeout", "429", "5xx"])).optional().default(["timeout", "429", "5xx"])
+    })
+    .optional(),
+  permissions: z
+    .object({
+      net: z.boolean().optional().default(false),
+      fs: z.boolean().optional().default(false),
+      env: z.boolean().optional().default(false),
+      subprocess: z.boolean().optional().default(false),
+    })
+    .optional(),
 
   input: z.object({
     schema: z.unknown().optional(),
@@ -49,6 +67,11 @@ const PythonSchema = ToolCommonSchema.extend({
   python: z.object({ code: z.string().min(1) })
 });
 
+const JsSchema = ToolCommonSchema.extend({
+  provider: z.literal("js"),
+  js: z.object({ code: z.string().min(1) })
+});
+
 const ShellSchema = ToolCommonSchema.extend({
   provider: z.literal("shell"),
   shell: z.object({ command: z.string().min(1) })
@@ -78,12 +101,17 @@ export const ToolParamsSchema = z.discriminatedUnion("provider", [
   HttpSchema,
   FunctionSchema,
   PythonSchema,
+  JsSchema,
   ShellSchema,
   DbSchema,
   BuiltinSchema
 ]);
 
 export const ToolNodeDataSchema = BaseNodeDataSchema("tool", ToolParamsSchema);
+
+export type ToolParams = z.infer<typeof ToolParamsSchema>;
+export type ToolProvider = ToolParams["provider"];
+export type ToolNodeData = z.infer<typeof ToolNodeDataSchema>;
 
 export const defaultToolParams = {
   provider: "mcp" as const,

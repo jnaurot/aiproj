@@ -40,8 +40,6 @@ export function normalizeWithDefaults<T>(
   existing: unknown,
   patch: unknown
 ): NormalizeResult<T> {
-  console.log("schema: "+JSON.stringify(schema))
-  console.log("patch: "+JSON.stringify(patch))
   const merged = deepMerge(deepMerge(defaults, existing ?? {}), patch ?? {});
 
   const res = schema.safeParse(merged);

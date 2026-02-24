@@ -35,6 +35,7 @@ export const LlmParamsSchema = z
   .strip();
 
 export type LlmParams = z.infer<typeof LlmParamsSchema>;
+export type LlmOutputMode = z.infer<typeof LlmOutputModeSchema>;
 
 export const LlmOllamaParamsSchema = LlmParamsSchema
 

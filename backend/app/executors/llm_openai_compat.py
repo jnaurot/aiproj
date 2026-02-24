@@ -51,7 +51,10 @@ def _resolve_api_key(params: LLMParams) -> Optional[str]:
 
 def _build_messages(params: LLMParams, upstream_text: str) -> List[Dict[str, str]]:
     user_prompt = params.user_prompt or "Summarize the input data."
-    user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
+    if "{input}" in user_prompt:
+        user_content = user_prompt.replace("{input}", upstream_text)
+    else:
+        user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
 
     messages: List[Dict[str, str]] = []
     if params.system_prompt:
@@ -270,6 +273,10 @@ async def exec_llm_openai_compat(
                 mime_type = "application/json"
                 file_type = "json"
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
+            elif params.output_mode == "markdown":
+                mime_type = "text/markdown; charset=utf-8"
+                file_type = "txt"
+                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.md"
 
             payload_bytes = (data or "").encode("utf-8")
             content_hash = _sha256_text(data or "")

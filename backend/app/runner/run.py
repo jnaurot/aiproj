@@ -61,6 +61,196 @@ def resolve_input_refs(edges: Dict[str, Dict[str, Any]], node_id: str, node_to_a
     return refs
 
 
+SENSITIVE_PARAM_KEYS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "token",
+    "password",
+    "secret",
+    "access_token",
+    "refresh_token",
+    "credentials",
+}
+
+
+def _is_sensitive_key(key: str) -> bool:
+    k = (key or "").lower()
+    return any(s in k for s in SENSITIVE_PARAM_KEYS)
+
+
+def _sanitize_for_fingerprint(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for k, v in obj.items():
+            if str(k).startswith("_"):
+                continue
+            if _is_sensitive_key(str(k)):
+                continue
+            out[k] = _sanitize_for_fingerprint(v)
+        return out
+    if isinstance(obj, list):
+        return [_sanitize_for_fingerprint(x) for x in obj]
+    return obj
+
+
+def _tool_side_effect_mode(params: Dict[str, Any]) -> str:
+    mode = (params.get("side_effect_mode") or "pure").lower()
+    if mode not in ("pure", "idempotent", "effectful"):
+        return "pure"
+    return mode
+
+
+def _tool_name(params: Dict[str, Any]) -> str:
+    provider = params.get("provider") or "tool"
+    return params.get("name") or f"{provider}.invoke"
+
+
+def _tool_version(params: Dict[str, Any]) -> str:
+    return str(params.get("toolVersion") or params.get("tool_version") or "v1")
+
+
+def _tool_environment_fingerprint(params: Dict[str, Any]) -> Dict[str, Any]:
+    provider = params.get("provider")
+    env: Dict[str, Any] = {
+        "provider": provider,
+        "connection_ref": params.get("connection_ref") or params.get("connectionRef"),
+        "region": params.get("region"),
+        "tenant": params.get("tenant"),
+    }
+    if provider in ("http", "api"):
+        http_cfg = params.get("http") if isinstance(params.get("http"), dict) else {}
+        url = http_cfg.get("url") or params.get("url")
+        if isinstance(url, str):
+            env["base_url"] = url
+    return _sanitize_for_fingerprint(env)
+
+
+def _tool_exec_key(
+    *,
+    params: Dict[str, Any],
+    input_refs: list[tuple[str, str]],
+    execution_version: str,
+) -> str:
+    fp = {
+        "build": execution_version,
+        "kind": "tool",
+        "tool_name": _tool_name(params),
+        "tool_version": _tool_version(params),
+        "side_effect_mode": _tool_side_effect_mode(params),
+        "params": _sanitize_for_fingerprint(params),
+        "inputs": inputs_fingerprint(input_refs),
+        "environment": _tool_environment_fingerprint(params),
+    }
+    return sha256_hex(canonical_json(fp).encode("utf-8"))
+
+
+def _tool_is_armed(params: Dict[str, Any]) -> bool:
+    return bool(params.get("armed", False))
+
+
+def _table_payload_schema_from_rows(rows: list[dict[str, Any]]) -> Dict[str, Any]:
+    columns: list[Dict[str, Any]] = []
+    if rows:
+        sample = rows[0]
+        for k, v in sample.items():
+            columns.append({"name": str(k), "type": type(v).__name__ if v is not None else "unknown"})
+    return {"type": "table", "columns": columns}
+
+
+def _source_payload_schema(out_contract: Optional[str], data_value: Any) -> Optional[Dict[str, Any]]:
+    if out_contract == "table" and isinstance(data_value, list):
+        return _table_payload_schema_from_rows(data_value)
+    if out_contract == "json":
+        return {"type": "json", "shape": "array" if isinstance(data_value, list) else "object"}
+    if out_contract == "text":
+        return {"type": "string"}
+    if out_contract == "binary":
+        return {"type": "binary"}
+    return None
+
+
+def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, Any]]:
+    mt = (mime_type or "").lower()
+    if "application/json" in mt:
+        parsed = data_value
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                return {"type": "json", "shape": "unknown"}
+        if isinstance(parsed, dict):
+            return {"type": "json", "shape": "object", "keys": sorted(list(parsed.keys()))}
+        if isinstance(parsed, list):
+            return {"type": "json", "shape": "array"}
+        return {"type": "json", "shape": "unknown"}
+    if "text/markdown" in mt:
+        return {"type": "string", "format": "markdown"}
+    if "text/plain" in mt:
+        return {"type": "string"}
+    return None
+
+
+def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str, Any]]:
+    if envelope_kind == "json":
+        if isinstance(payload, dict):
+            return {"type": "json", "shape": "object", "keys": sorted(list(payload.keys()))}
+        if isinstance(payload, list):
+            return {"type": "json", "shape": "array"}
+        return {"type": "json", "shape": "unknown"}
+    if envelope_kind == "text":
+        return {"type": "string"}
+    if envelope_kind == "binary":
+        return {"type": "binary"}
+    return None
+
+
+def _is_contract_mismatch_error(message: str) -> bool:
+    m = (message or "").lower()
+    return ("contract mismatch" in m) or ("payload schema mismatch" in m)
+
+
+async def _emit_error_artifact(
+    *,
+    context: ExecutionContext,
+    node_id: str,
+    node_kind: str,
+    params_hash: str,
+    upstream_ids: list[str],
+    message: str,
+    code: str,
+) -> str:
+    at = iso_now()
+    body = {
+        "type": "error",
+        "code": code,
+        "message": message,
+        "nodeId": node_id,
+        "nodeKind": node_kind,
+        "runId": context.run_id,
+        "at": at,
+    }
+    payload_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    artifact_id = sha256_hex(payload_bytes)
+    artifact = Artifact(
+        artifact_id=artifact_id,
+        node_kind=node_kind,
+        params_hash=params_hash,
+        upstream_ids=sorted(upstream_ids),
+        created_at=datetime.now(timezone.utc),
+        execution_version=context.execution_version,
+        mime_type="application/json",
+        size_bytes=len(payload_bytes),
+        storage_uri=f"artifact://{artifact_id}",
+        payload_schema={"type": "error"},
+        run_id=context.run_id,
+        node_id=node_id,
+    )
+    await context.artifact_store.write(artifact, payload_bytes)
+    context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="failed")
+    return artifact_id
+
+
 
 async def run_graph(
     run_id: str, 
@@ -158,16 +348,28 @@ async def run_graph(
             upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
 
 
-            exec_key = cache.execution_key(
-                node_kind=kind,
-                params=params,
-                upstream_artifact_ids=upstream_ids,
-                execution_version=context.execution_version,
-            )
+            tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
+            tool_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "tool" else []
+
+            if kind == "tool":
+                exec_key = _tool_exec_key(
+                    params=params,
+                    input_refs=tool_input_refs,
+                    execution_version=context.execution_version,
+                )
+            else:
+                exec_key = cache.execution_key(
+                    node_kind=kind,
+                    params=params,
+                    upstream_artifact_ids=upstream_ids,
+                    execution_version=context.execution_version,
+                )
             artifact_id = exec_key
 
+            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
+
             # ---- Cache check goes HERE (before execution) ----
-            cached_artifact_id = await cache.get_artifact_id(exec_key)
+            cached_artifact_id = await cache.get_artifact_id(exec_key) if use_cache_for_node else None
             if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
                 context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                 node_to_artifact[node_id] = cached_artifact_id
@@ -214,6 +416,18 @@ async def run_graph(
                     print("[run_graph] bound artifact", artifact_id[:10], "to node", node_id)
 ###
                 elif kind == "transform":
+                    ports = (n.get("data", {}).get("ports", {}) or {})
+                    in_contract = ports.get("in") or "table"
+                    out_contract = ports.get("out") or "table"
+                    if in_contract != "table":
+                        raise RuntimeError(
+                            f"Transform output contract mismatch: in must be 'table', got '{in_contract}'"
+                        )
+                    if out_contract != "table":
+                        raise RuntimeError(
+                            f"Transform output contract mismatch: out must be 'table', got '{out_contract}'"
+                        )
+
                     await context.bus.emit({
                         "type": "log",
                         "runId": run_id,
@@ -239,9 +453,38 @@ async def run_graph(
                         # 1) collect upstream artifacts (port -> artifact_id)
                         input_refs = resolve_input_refs(edges, node_id, node_to_artifact)  # [(port, artifact_id), ...]
                         input_tables = {}  # port -> DataFrame
+                        required_cols_by_artifact: dict[str, list[str]] = {}
+
+                        for e in edges.values():
+                            if e.get("target") != node_id:
+                                continue
+                            src = e.get("source")
+                            if not src or src not in node_to_artifact:
+                                continue
+                            contract = (e.get("data", {}) or {}).get("contract", {}) or {}
+                            payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
+                            target_hint = payload.get("target", {}) if isinstance(payload, dict) else {}
+                            req_cols = target_hint.get("required_columns") if isinstance(target_hint, dict) else None
+                            if isinstance(req_cols, list) and req_cols:
+                                required_cols_by_artifact[node_to_artifact[src]] = req_cols
 
                         for port, upstream_artifact_id in input_refs:
                             art = await context.artifact_store.get(upstream_artifact_id)
+                            req_cols = required_cols_by_artifact.get(upstream_artifact_id)
+                            if req_cols:
+                                payload_schema = getattr(art, "payload_schema", None) or {}
+                                src_cols = payload_schema.get("columns") if isinstance(payload_schema, dict) else None
+                                src_col_names = []
+                                if isinstance(src_cols, list):
+                                    src_col_names = [
+                                        c.get("name") if isinstance(c, dict) else c for c in src_cols
+                                    ]
+                                if src_col_names:
+                                    missing = [c for c in req_cols if c not in src_col_names]
+                                    if missing:
+                                        raise RuntimeError(
+                                            f"Edge payload schema mismatch: missing required columns {missing}"
+                                        )
                             b = await context.artifact_store.read(upstream_artifact_id)
                             df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
                             input_tables[port] = df
@@ -260,7 +503,10 @@ async def run_graph(
                         # NOTE: you currently use context.execution_version; keep that as build/version here too.
                         build_version = context.execution_version
 
-                        norm = normalize_transform_params(params)
+                        norm = normalize_transform_params(
+                            params,
+                            default_op=(n.get("data", {}) or {}).get("transformKind"),
+                        )
                         fp = {
                             "build": build_version,
                             "kind": "transform",
@@ -334,8 +580,14 @@ async def run_graph(
                             execution_version=context.execution_version,
                             mime_type=res.mime_type,
                             size_bytes=len(res.payload_bytes),
-                            storage_uri=f"memory://{artifact_id}",
-                            schema=None,
+                            storage_uri=f"artifact://{artifact_id}",
+                            payload_schema={
+                                "type": "table",
+                                "columns": [{"name": c, "type": "unknown"} for c in (res.meta.get("columns") or [])],
+                            },
+                            run_id=run_id,
+                            node_id=node_id,
+                            exec_key=exec_key,
                         )
 
                         await context.artifact_store.write(artifact, res.payload_bytes)
@@ -378,7 +630,25 @@ async def run_graph(
                     print("[run_graph] node_to_artifact keys:", list(node_to_artifact.keys()))
                     output = await exec_llm(run_id, n, context, upstream_artifact_ids=upstream_ids)
                 elif kind == "tool":
-                    output = await exec_tool(run_id, n, context, upstream_artifact_ids=upstream_ids)
+                    if tool_mode == "effectful" and not _tool_is_armed(params):
+                        raise RuntimeError("Effectful tool requires armed=true")
+
+                    tool_params_runtime = dict(params)
+                    tool_params_runtime["_request_fingerprint"] = exec_key
+                    if tool_mode == "idempotent":
+                        tool_params_runtime["_idempotency_key"] = exec_key
+
+                    tool_node = dict(n)
+                    tool_data = dict(n.get("data", {}))
+                    tool_data["params"] = tool_params_runtime
+                    tool_node["data"] = tool_data
+
+                    output = await exec_tool(
+                        run_id,
+                        tool_node,
+                        context,
+                        upstream_artifact_ids=upstream_ids,
+                    )
                 else:
                     raise RuntimeError(f"Unknown node kind: {kind}")
 
@@ -409,9 +679,9 @@ async def run_graph(
 
                         if out_contract == "table":
                             rows = data_value
-                            if not isinstance(rows, list):
+                            if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
                                 raise RuntimeError(
-                                    f"Source table output must be list[dict], got {type(rows)}"
+                                    f"Source output contract mismatch: out=table expects list[dict], got {type(rows)}"
                                 )
 
                             import io
@@ -422,32 +692,126 @@ async def run_graph(
                             df.to_csv(buf, index=False, lineterminator="\n")
                             payload_bytes = buf.getvalue().encode("utf-8")
                             mime_type = "text/csv; charset=utf-8"
-                        elif isinstance(data_value, bytes):
-                            payload_bytes = data_value
-                            mime_type = "application/octet-stream"
-                        elif isinstance(data_value, str):
-                            payload_bytes = data_value.encode("utf-8")
-                            mime_type = "text/plain; charset=utf-8"
-                        elif data_value is None:
-                            payload_bytes = b""
-                            mime_type = "text/plain; charset=utf-8"
-                        else:
+                        elif out_contract == "json":
+                            if not isinstance(data_value, (dict, list)):
+                                raise RuntimeError(
+                                    f"Source output contract mismatch: out=json expects object/array, got {type(data_value)}"
+                                )
                             payload_bytes = json.dumps(data_value, ensure_ascii=False).encode("utf-8")
                             mime_type = "application/json"
+                        elif out_contract == "text":
+                            if not isinstance(data_value, str):
+                                raise RuntimeError(
+                                    f"Source output contract mismatch: out=text expects str, got {type(data_value)}"
+                                )
+                            payload_bytes = data_value.encode("utf-8")
+                            mime_type = "text/plain; charset=utf-8"
+                        elif out_contract == "binary":
+                            if not isinstance(data_value, (bytes, bytearray)):
+                                raise RuntimeError(
+                                    f"Source output contract mismatch: out=binary expects bytes, got {type(data_value)}"
+                                )
+                            payload_bytes = bytes(data_value)
+                            mime_type = "application/octet-stream"
+                        else:
+                            raise RuntimeError(
+                                f"Source output contract mismatch: unsupported out port '{out_contract}'"
+                            )
 
                     elif kind == "llm":
-                        md = getattr(output, "metadata", None)
-                        md_mime = getattr(md, "mime_type", None) if md is not None else None
+                        ports = (n.get("data", {}).get("ports", {}) or {})
+                        out_contract = ports.get("out") or "text"
+                        output_cfg = params.get("output") if isinstance(params, dict) else {}
+                        output_mode = output_cfg.get("mode") if isinstance(output_cfg, dict) else None
 
-                        if isinstance(data_value, bytes):
-                            payload_bytes = data_value
-                            mime_type = md_mime or "application/octet-stream"
-                        elif data_value is None:
-                            payload_bytes = b""
-                            mime_type = md_mime or "text/plain; charset=utf-8"
+                        if out_contract == "json":
+                            if data_value is None:
+                                raise RuntimeError("LLM output contract mismatch: out=json expects non-empty JSON content")
+                            if isinstance(data_value, bytes):
+                                try:
+                                    raw_json = data_value.decode("utf-8")
+                                except Exception:
+                                    raise RuntimeError("LLM output contract mismatch: out=json requires utf-8 decodable bytes")
+                            else:
+                                raw_json = data_value if isinstance(data_value, str) else json.dumps(data_value, ensure_ascii=False)
+                            try:
+                                parsed_json = json.loads(raw_json)
+                            except Exception:
+                                raise RuntimeError("LLM output contract mismatch: out=json expects valid JSON")
+                            payload_bytes = json.dumps(parsed_json, ensure_ascii=False).encode("utf-8")
+                            mime_type = "application/json"
+                            data_value = parsed_json
+                        elif out_contract == "text":
+                            if data_value is None:
+                                raise RuntimeError("LLM output contract mismatch: out=text expects str content")
+                            if isinstance(data_value, bytes):
+                                try:
+                                    text_value = data_value.decode("utf-8")
+                                except Exception:
+                                    raise RuntimeError("LLM output contract mismatch: out=text requires utf-8 decodable bytes")
+                            elif isinstance(data_value, str):
+                                text_value = data_value
+                            else:
+                                raise RuntimeError(f"LLM output contract mismatch: out=text expects str, got {type(data_value)}")
+                            payload_bytes = text_value.encode("utf-8")
+                            mime_type = (
+                                "text/markdown; charset=utf-8"
+                                if output_mode == "markdown"
+                                else "text/plain; charset=utf-8"
+                            )
+                            data_value = text_value
                         else:
-                            payload_bytes = str(data_value).encode("utf-8")
-                            mime_type = md_mime or "text/plain; charset=utf-8"
+                            raise RuntimeError(
+                                f"LLM output contract mismatch: unsupported out port '{out_contract}'"
+                            )
+
+                    elif kind == "tool":
+                        ports = (n.get("data", {}).get("ports", {}) or {})
+                        out_contract = ports.get("out") or "json"
+                        envelope = data_value if isinstance(data_value, dict) else {
+                            "kind": "json",
+                            "payload": data_value,
+                            "meta": {"status": "ok"},
+                        }
+                        envelope_kind = str(envelope.get("kind") or "json")
+                        payload = envelope.get("payload")
+                        envelope_mime = envelope.get("mime") or envelope.get("content_type")
+                        envelope_mime = (
+                            str(envelope_mime).strip()
+                            if isinstance(envelope_mime, str) and str(envelope_mime).strip()
+                            else None
+                        )
+
+                        if out_contract == "json" and envelope_kind != "json":
+                            raise RuntimeError(
+                                f"Tool output contract mismatch: out=json expects envelope kind json, got {envelope_kind}"
+                            )
+                        if out_contract == "text" and envelope_kind != "text":
+                            raise RuntimeError(
+                                f"Tool output contract mismatch: out=text expects envelope kind text, got {envelope_kind}"
+                            )
+                        if out_contract == "binary" and envelope_kind != "binary":
+                            raise RuntimeError(
+                                f"Tool output contract mismatch: out=binary expects envelope kind binary, got {envelope_kind}"
+                            )
+
+                        if envelope_kind == "binary":
+                            if isinstance(payload, bytes):
+                                payload_bytes = payload
+                            elif isinstance(payload, str):
+                                payload_bytes = payload.encode("utf-8")
+                            else:
+                                payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                            mime_type = envelope_mime or "application/octet-stream"
+                        elif envelope_kind == "text":
+                            if isinstance(payload, str):
+                                payload_bytes = payload.encode("utf-8")
+                            else:
+                                payload_bytes = str(payload).encode("utf-8")
+                            mime_type = envelope_mime or "text/plain; charset=utf-8"
+                        else:
+                            payload_bytes = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
+                            mime_type = "application/json"
 
                     else:
                         if isinstance(data_value, bytes):
@@ -463,17 +827,40 @@ async def run_graph(
                             payload_bytes = json.dumps(data_value, ensure_ascii=False).encode("utf-8")
                             mime_type = "application/json"
 
+                    artifact_params_hash = (
+                        sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
+                        if kind == "tool"
+                        else cache.params_hash(params)
+                    )
+
                     artifact = Artifact(
                         artifact_id=artifact_id,
                         node_kind=kind,
-                        params_hash=cache.params_hash(params),
+                        params_hash=artifact_params_hash,
                         upstream_ids=sorted(upstream_ids),
                         created_at=datetime.now(timezone.utc),
                         execution_version=context.execution_version,
                         mime_type=mime_type,
                         size_bytes=len(payload_bytes),
-                        storage_uri=f"memory://{artifact_id}",
-                        schema=None,
+                        storage_uri=f"artifact://{artifact_id}",
+                        payload_schema=(
+                            _source_payload_schema(
+                                (n.get("data", {}).get("ports", {}) or {}).get("out"),
+                                data_value,
+                            )
+                            if kind == "source"
+                            else _llm_payload_schema(mime_type, data_value)
+                            if kind == "llm"
+                            else _tool_payload_schema(
+                                str(data_value.get("kind") or "json") if isinstance(data_value, dict) else "json",
+                                data_value.get("payload") if isinstance(data_value, dict) else data_value,
+                            )
+                            if kind == "tool"
+                            else None
+                        ),
+                        run_id=run_id,
+                        node_id=node_id,
+                        exec_key=exec_key,
                     )
 
                     await context.artifact_store.write(artifact, payload_bytes)
@@ -489,7 +876,8 @@ async def run_graph(
                     })
 
                     # Update cache index
-                    await cache.store_artifact_id(exec_key, artifact_id)
+                    if use_cache_for_node:
+                        await cache.store_artifact_id(exec_key, artifact_id)
 
                     # Verification print
                     print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
@@ -504,12 +892,42 @@ async def run_graph(
 
             except Exception as ex:
                 traceback.print_exc()
+                error_message = str(ex)
+                if _is_contract_mismatch_error(error_message):
+                    error_code = (
+                        "PAYLOAD_SCHEMA_MISMATCH"
+                        if "payload schema mismatch" in error_message.lower()
+                        else "CONTRACT_MISMATCH"
+                    )
+                    error_params_hash = (
+                        sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
+                        if kind == "tool"
+                        else cache.params_hash(params)
+                    )
+                    error_artifact_id = await _emit_error_artifact(
+                        context=context,
+                        node_id=node_id,
+                        node_kind=kind,
+                        params_hash=error_params_hash,
+                        upstream_ids=upstream_ids,
+                        message=error_message,
+                        code=error_code,
+                    )
+                    node_to_artifact[node_id] = error_artifact_id
+                    await context.bus.emit({
+                        "type": "node_output",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "artifactId": error_artifact_id,
+                        "mimeType": "application/json",
+                    })
                 await context.bus.emit({
                     "type": "log",
                     "runId": run_id,
                     "at": iso_now(),
                     "level": "error",
-                    "message": str(ex),
+                    "message": error_message,
                     "nodeId": node_id
                 })
                 await context.bus.emit({
@@ -518,7 +936,7 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "failed",
-                    "error": str(ex)
+                    "error": error_message
                 })
                 await context.bus.emit({
                     "type": "run_finished",

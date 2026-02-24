@@ -31,6 +31,7 @@ class GraphValidator:
         
         # 2. Type validation
         errors.extend(self._validate_port_types(graph))
+        errors.extend(self._validate_llm_input_arity(graph))
         
         # 3. Schema validation
         errors.extend(self._validate_node_params_schema(graph))
@@ -218,7 +219,53 @@ class GraphValidator:
                     message=f"Incompatible types: {source_type} -> {target_type} (from '{source_node['data'].get('label')}' to '{target_node['data'].get('label')}')",
                     edge_id=edge_id
                 ))
+                continue
+
+            # Optional payload schema compatibility (forward path)
+            contract = (edge.get("data", {}) or {}).get("contract", {}) or {}
+            payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
+            src_payload = payload.get("source", {}) if isinstance(payload, dict) else {}
+            tgt_payload = payload.get("target", {}) if isinstance(payload, dict) else {}
+
+            src_cols = src_payload.get("columns") if isinstance(src_payload, dict) else None
+            req_cols = tgt_payload.get("required_columns") if isinstance(tgt_payload, dict) else None
+            if isinstance(src_cols, list) and isinstance(req_cols, list) and req_cols:
+                missing = [c for c in req_cols if c not in src_cols]
+                if missing:
+                    errors.append(ValidationError(
+                        code="PAYLOAD_SCHEMA_MISMATCH",
+                        message=f"Missing required columns on edge: {missing}",
+                        edge_id=edge_id
+                    ))
         
+        return errors
+
+    def _validate_llm_input_arity(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        """Current runtime supports exactly one upstream artifact for each LLM node."""
+        errors: List[ValidationError] = []
+        nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        edges = graph.get("edges", [])
+
+        incoming_counts: Dict[str, int] = {}
+        for e in edges:
+            tgt = e.get("target")
+            if not tgt:
+                continue
+            incoming_counts[tgt] = incoming_counts.get(tgt, 0) + 1
+
+        for node_id, node in nodes.items():
+            if node.get("data", {}).get("kind") != "llm":
+                continue
+            count = incoming_counts.get(node_id, 0)
+            if count > 1:
+                errors.append(
+                    ValidationError(
+                        code="LLM_MULTI_INPUT_UNSUPPORTED",
+                        message=f"LLM node '{node['data'].get('label', node_id)}' has {count} inputs; only one is supported",
+                        node_id=node_id,
+                    )
+                )
+
         return errors
     
     def _validate_node_params(self, graph: Dict[str, Any]) -> List[ValidationError]:

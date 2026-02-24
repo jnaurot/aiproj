@@ -13,7 +13,7 @@ class FileMetadata(BaseModel):
     
     # File identification
     file_path: str
-    file_type: Literal["csv", "parquet", "json", "txt", "binary", "image"]
+    file_type: Literal["csv", "tsv", "parquet", "json", "txt", "excel", "pdf", "binary", "image"]
     mime_type: str
     size_bytes: int
     

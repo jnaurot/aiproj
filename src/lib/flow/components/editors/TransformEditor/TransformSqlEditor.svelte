@@ -1,4 +1,4 @@
-<script lang="ts">
+﻿<script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { TransformNodeData } from '$lib/flow/types/transform';
 	import type { TransformSqlParams } from '$lib/flow/schema/transform';
@@ -103,65 +103,158 @@
 
 <style>
 	.section {
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 12px;
+		padding: 12px;
+		background: rgba(255, 255, 255, 0.03);
 		margin-top: 8px;
 	}
 
 	.sectionTitle {
+		font-weight: 650;
+		font-size: 14px;
+		margin-bottom: 10px;
+		opacity: 0.9;
+	}
+
+	.subTitle {
+		margin-top: 10px;
 		font-weight: 600;
-		margin-bottom: 6px;
+		font-size: 13px;
+		opacity: 0.95;
 	}
 
 	.hint {
 		font-size: 12px;
-		opacity: 0.8;
+		opacity: 0.75;
 		margin-bottom: 10px;
+		line-height: 1.35;
+	}
+
+	.row {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+		margin-bottom: 8px;
+	}
+
+	.line {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		margin-bottom: 8px;
 	}
 
 	.field {
 		display: grid;
-		grid-template-columns: 110px 1fr;
-		gap: 10px;
+		grid-template-columns: 100px minmax(0, 1fr);
 		align-items: start;
+		gap: 8px;
 		margin-bottom: 10px;
 	}
 
-	.k {
-		font-size: 12px;
+	.field.grow {
+		flex: 1;
+	}
+
+	.field.dir {
+		grid-template-columns: 70px minmax(0, 1fr);
+	}
+
+	.k,
+	.label {
+		font-size: 14px;
 		opacity: 0.85;
+		padding-top: 8px;
+		font-weight: 400;
 	}
 
-	.v select {
+	.v {
+		min-width: 0;
 		width: 100%;
-		padding: 4px 6px;
-		border-radius: 4px;
-		border: 1px solid #ccc;
-		box-sizing: border-box;
 	}
 
+	.colInput {
+		flex: 1;
+	}
+
+	.arrow {
+		opacity: 0.75;
+		padding-top: 8px;
+	}
+
+	.toggle {
+		display: inline-flex;
+		gap: 8px;
+		align-items: center;
+	}
+
+	input,
+	select,
+	textarea,
+	.readonly,
 	.code {
 		width: 100%;
-		padding: 8px;
-		border-radius: 6px;
-		border: 1px solid #ccc;
-		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-			monospace;
-		font-size: 12px;
 		box-sizing: border-box;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(0, 0, 0, 0.2);
+		color: inherit;
+		padding: 8px 10px;
+		font-size: 14px;
+		outline: none;
+		min-height: 40px;
 	}
 
-	.actions {
-		margin-top: 6px;
+	textarea,
+	.code {
+		resize: vertical;
+		line-height: 1.35;
+		min-height: 96px;
+	}
+
+	input[type='checkbox'] {
+		width: auto;
+		min-height: 0;
+		padding: 0;
+	}
+
+	input:focus,
+	select:focus,
+	textarea:focus,
+	.code:focus,
+	.readonly:focus {
+		border-color: rgba(255, 255, 255, 0.25);
+	}
+
+	.actions,
+	.snips {
+		margin-top: 8px;
 		display: flex;
 		gap: 8px;
 		justify-content: flex-end;
+		flex-wrap: wrap;
+	}
+
+	.snipsTitle {
+		font-size: 12px;
+		opacity: 0.8;
+		align-self: center;
+	}
+
+	.snipRow {
+		display: flex;
+		gap: 8px;
+		width: 100%;
 	}
 
 	button.small {
-		padding: 4px 8px;
+		padding: 6px 10px;
 		font-size: 12px;
-		border-radius: 4px;
-		border: 1px solid #ccc;
-		background: #fff;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.16);
+		background: rgba(255, 255, 255, 0.06);
+		color: inherit;
 		cursor: pointer;
 	}
 
@@ -169,41 +262,41 @@
 		background: transparent;
 	}
 
-	.snips {
-		margin-top: 10px;
-		padding-top: 8px;
-		border-top: 1px solid #ddd;
+	button.danger {
+		border-color: rgba(239, 68, 68, 0.5);
+		background: rgba(239, 68, 68, 0.14);
+		color: #fecaca;
 	}
 
-	.snipsTitle {
-		font-weight: 600;
+	.warn {
+		margin-top: 8px;
 		font-size: 12px;
-		margin-bottom: 6px;
-		opacity: 0.9;
+		color: #fca5a5;
+		white-space: pre-wrap;
 	}
 
-	.snipRow {
-		display: flex;
-		gap: 8px;
-		flex-wrap: wrap;
+	.warn ul {
+		margin: 6px 0 0 16px;
+		padding: 0;
 	}
 
 	.preview {
 		margin-top: 12px;
 	}
 
-	.label {
-		font-weight: 700;
-		margin-bottom: 6px;
-	}
-
 	pre {
 		white-space: pre-wrap;
 		word-break: break-word;
-		padding: 8px;
-		border: 1px solid #ddd;
-		border-radius: 6px;
+		padding: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 10px;
 		font-size: 12px;
 		opacity: 0.95;
 	}
+
+	code {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+		font-size: 12px;
+	}
 </style>
+

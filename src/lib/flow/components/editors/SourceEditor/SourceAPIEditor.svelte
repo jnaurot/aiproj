@@ -3,18 +3,19 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import NumberInput from '$lib/flow/components/NumberInput.svelte';
 	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
-	import { graphStore } from '$lib/flow/store/graphStore';
 
 	export let selectedNode: Node<PipelineNodeData> | null;
+	export let params: Record<string, any>;
+	export let onDraft: (patch: Record<string, any>) => void;
+	export let onCommit: (patch: Record<string, any>) => void;
 
-	function patchParams(patch: Record<string, any>) {
-		if (!selectedNode) return;
-		const cur = { ...selectedNode.data.params, ...patch };
-		const newPorts = { ...selectedNode.data.ports };
-		graphStore.updateNodeConfig(selectedNode.id, { params: cur, ports: newPorts });
+	function draft(patch: Record<string, any>) {
+		onDraft?.(patch);
 	}
 
-	$: params = (selectedNode?.data?.params ?? {}) as any;
+	function commit(patch: Record<string, any>) {
+		onCommit?.(patch);
+	}
 </script>
 
 {#if selectedNode}
@@ -27,7 +28,8 @@
 					<input
 						value={params.url ?? ''}
 						placeholder="https://api.example.com/data"
-						on:input={(e) => patchParams({ url: (e.currentTarget as HTMLInputElement).value })}
+						on:input={(e) => draft({ url: (e.currentTarget as HTMLInputElement).value })}
+						on:blur={(e) => commit({ url: (e.currentTarget as HTMLInputElement).value })}
 					/>
 				</div>
 			</div>
@@ -37,11 +39,16 @@
 				<div class="v">
 					<select
 						value={params.method ?? 'GET'}
-						on:change={(e) => patchParams({ method: (e.currentTarget as HTMLSelectElement).value })}
+						on:change={(e) => {
+							const v = (e.currentTarget as HTMLSelectElement).value;
+							draft({ method: v });
+							commit({ method: v });
+						}}
 					>
 						<option value="GET">GET</option>
 						<option value="POST">POST</option>
 						<option value="PUT">PUT</option>
+						<option value="PATCH">PATCH</option>
 						<option value="DELETE">DELETE</option>
 					</select>
 				</div>
@@ -52,8 +59,11 @@
 				<div class="v">
 					<select
 						value={params.auth_type ?? 'none'}
-						on:change={(e) =>
-							patchParams({ auth_type: (e.currentTarget as HTMLSelectElement).value })}
+						on:change={(e) => {
+							const v = (e.currentTarget as HTMLSelectElement).value;
+							draft({ auth_type: v });
+							commit({ auth_type: v });
+						}}
 					>
 						<option value="none">none</option>
 						<option value="bearer">bearer</option>
@@ -71,7 +81,11 @@
 						placeholder="ENV_VAR_NAME (required if auth_type != none)"
 						on:input={(e) => {
 							const v = (e.currentTarget as HTMLInputElement).value.trim();
-							patchParams({ auth_token_ref: v === '' ? undefined : v });
+							draft({ auth_token_ref: v === '' ? undefined : v });
+						}}
+						on:blur={(e) => {
+							const v = (e.currentTarget as HTMLInputElement).value.trim();
+							commit({ auth_token_ref: v === '' ? undefined : v });
 						}}
 					/>
 				</div>
@@ -82,7 +96,7 @@
 					<NumberInput
 						value={params.timeout_seconds ?? 30}
 						min={1}
-						onChange={(v) => patchParams({ timeout_seconds: v ?? 30 })}
+						onChange={(v) => draft({ timeout_seconds: v ?? 30 })}
 					/>
 				</div>
 			</div>
@@ -94,7 +108,7 @@
 					label=""
 					value={params.headers ?? {}}
 					allowTypes={false}
-					onChange={(next) => patchParams({ headers: next as any })}
+					onChange={(next) => draft({ headers: next as any })}
 				/>
 			</div>
 		</div>
@@ -109,7 +123,7 @@
 					defaultType="string"
 					onChange={(next) => {
 						const keys = next ? Object.keys(next) : [];
-						patchParams({ body: keys.length ? (next as any) : undefined });
+						draft({ body: keys.length ? (next as any) : undefined });
 					}}
 				/>
 			</div>

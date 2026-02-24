@@ -3,13 +3,14 @@
 	import { SourceEditorByKind } from '$lib/flow/components/editors/SourceEditor/SourceEditor';
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
+	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
-	import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
+	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 	// import type { LlmKind } from '$lib/flow/types/paramsMap'; // adjust path if yours differs
 	// import type { TransformKind } from '$lib/flow/types/paramsMap';
 
@@ -28,14 +29,14 @@
 	// sub-kinds / kinds
 	$: sourceKind = (selectedNode?.data as any)?.sourceKind ?? 'file';
 
-	// LLM kind: prefer params.kind (because your FE schema stores it there)
-	// fallback if you later promote it to node.data.llmKind
-	$: llmKind = ((params as any)?.kind ??
-		(selectedNode?.data as any)?.kind ??
-		(selectedNode?.data as any)?.llmKind ??
-		'ollama') as LlmKind;
+	// LLM kind source of truth: node discriminator (optionally draft override), never node.data.kind.
+	$: llmKind = (((params as any)?.llmKind ?? (selectedNode?.data as any)?.llmKind ?? 'ollama') as LlmKind);
 
 	$: transformKind = (selectedNode?.data as any)?.transformKind ?? 'select';
+	$: toolProvider = ((params as any)?.provider ??
+		(selectedNode?.data as any)?.params?.provider ??
+		'mcp') as ToolProvider;
+	let configError: string | null = null;
 
 	function onDraft(patch: Record<string, any>) {
 		graphStore.patchInspectorDraft(patch);
@@ -44,7 +45,6 @@
 	function onCommit(patch: Record<string, any>) {
 		graphStore.commitInspectorImmediate(patch);
 	}
-
 </script>
 
 {#if selectedNode}
@@ -107,14 +107,32 @@
 			{onCommit}
 		/>
 	{:else if isTool}
-		<!-- TOOL (placeholder) -->
+		<!-- TOOL -->
 		<div class="section">
 			<div class="sectionTitle">Tool</div>
 			<div class="field">
-				<div class="k">status</div>
-				<div class="v">Tool editor not wired yet.</div>
+				<div class="k">provider</div>
+				<div class="v">
+					<select
+						value={toolProvider}
+						on:change={(e) => {
+							const nextProvider = (e.currentTarget as HTMLSelectElement).value as ToolProvider;
+							graphStore.setToolProvider(selectedNode.id, nextProvider);
+						}}
+					>
+						<option value="mcp">mcp</option>
+						<option value="http">http</option>
+						<option value="function">function</option>
+						<option value="python">python</option>
+						<option value="js">js</option>
+						<option value="shell">shell</option>
+						<option value="db">db</option>
+						<option value="builtin">builtin</option>
+					</select>
+				</div>
 			</div>
 		</div>
+		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
 	{:else if isTransform}
 		<div class="section">
 			<div class="field">
@@ -124,7 +142,12 @@
 						value={transformKind}
 						on:change={(e) => {
 							const nextKind = (e.currentTarget as HTMLSelectElement).value as TransformKind;
-							graphStore.setTransformKind(selectedNode.id, nextKind);
+							const result = graphStore.setTransformKind(selectedNode.id, nextKind);
+							if (!result.ok) {
+								configError = result.error ?? 'Failed to update transform op';
+							} else {
+								configError = null;
+							}
 						}}
 					>
 						<option value="filter">filter</option>
@@ -137,8 +160,6 @@
 						<option value="limit">limit</option>
 						<option value="dedupe">dedupe</option>
 						<option value="sql">sql</option>
-						<option value="python">python</option>
-						<option value="js">js</option>
 					</select>
 				</div>
 			</div>
@@ -151,4 +172,20 @@
 			{onCommit}
 		/>
 	{/if}
+
+	{#if configError}
+		<div class="configError">{configError}</div>
+	{/if}
 {/if}
+
+<style>
+	.configError {
+		margin-top: 8px;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid rgba(239, 68, 68, 0.45);
+		background: rgba(239, 68, 68, 0.12);
+		color: #fecaca;
+		font-size: 12px;
+	}
+</style>

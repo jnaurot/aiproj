@@ -4,6 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
+import base64
 from typing import Any, Dict, Optional
 import mimetypes
 
@@ -57,8 +58,9 @@ async def exec_source(
 
     start_time = time.time()
     node_id = node["id"]
-    params = node["data"].get("params", {})
-    source_type = params.get("source_type", "file")
+    params = dict(node["data"].get("params", {}) or {})
+    source_type = (node.get("data", {}).get("sourceKind") or params.get("source_type") or "file")
+    params["source_type"] = source_type
     
     ports = (node.get("data", {}).get("ports", {}) or {})
     ports_out = ports.get("out")  # "table" | "text" | "binary" | ...
@@ -149,7 +151,7 @@ async def _handle_file_source(
     })
     
     # Read file based on format
-    if file_format == "csv":
+    if file_format in ("csv", "tsv"):
         data, row_count, schema_info = await _read_csv(file_path, schema)
     elif file_format == "parquet":
         data, row_count, schema_info = await _read_parquet(file_path, schema)
@@ -207,7 +209,7 @@ async def _handle_file_source(
         file_type=file_format,
         mime_type=mime_type,
         size_bytes=output_path.stat().st_size,
-        schema=schema_info,
+        data_schema=schema_info,
         row_count=row_count,
         access_method="local",
         content_hash=content_hash,
@@ -243,7 +245,7 @@ async def _read_csv(
     
     df = pd.read_csv(
         file_path,
-        delimiter=schema.delimiter or ",",
+        delimiter=schema.delimiter or ("\t" if schema.file_format == "tsv" else ","),
         encoding=schema.encoding,
         nrows=schema.sample_size
     )
@@ -431,7 +433,8 @@ async def _handle_database_source(
     node_id: str,
     params: Dict[str, Any],
     bus: RunEventBus,
-    run_id: str
+    run_id: str,
+    ports_out: str | None = None,
 ) -> NodeOutput:
     """Handle database sources"""
     
@@ -467,15 +470,24 @@ async def _handle_database_source(
                 query = f"{query.rstrip(';')} LIMIT {schema.limit}"
             df = pd.read_sql(query, engine)
         elif schema.table_name:
-            df = pd.read_sql_table(
-                schema.table_name,
-                engine,
-                chunksize=schema.limit
-            )
+            q = f"SELECT * FROM {schema.table_name}"
             if schema.limit:
-                df = df.head(schema.limit)
+                q += f" LIMIT {schema.limit}"
+            df = pd.read_sql(q, engine)
         else:
             raise ValueError("Either query or table_name must be specified")
+
+        data_out: Any
+        if ports_out == "table":
+            data_out = df.to_dict(orient="records")
+        elif ports_out == "json":
+            data_out = df.to_dict(orient="records")
+        elif ports_out == "text":
+            data_out = df.to_csv(index=False, lineterminator="\n")
+        elif ports_out == "binary":
+            data_out = df.to_parquet(index=False)
+        else:
+            data_out = df.to_dict(orient="records")
         
         # Write to output file
         output_path = _get_output_path(node_id, "parquet")
@@ -499,7 +511,7 @@ async def _handle_database_source(
             file_type="parquet",
             mime_type="application/vnd.apache.parquet",
             size_bytes=output_path.stat().st_size,
-            schema=schema_info,
+            data_schema=schema_info,
             row_count=len(df),
             access_method="local",
             content_hash=content_hash,
@@ -510,6 +522,7 @@ async def _handle_database_source(
         
         return NodeOutput(
             status="succeeded",
+            data=data_out,
             metadata=metadata,
             execution_time_ms=0.0
         )
@@ -526,7 +539,8 @@ async def _handle_api_source(
     node_id: str,
     params: Dict[str, Any],
     bus: RunEventBus,
-    run_id: str
+    run_id: str,
+    ports_out: str | None = None,
 ) -> NodeOutput:
     """Handle API sources"""
     
@@ -549,6 +563,10 @@ async def _handle_api_source(
         # TODO: Lookup token from secrets
         token = os.getenv(schema.auth_token_ref, "")
         headers["Authorization"] = f"Bearer {token}"
+    elif schema.auth_type == "basic" and schema.auth_token_ref:
+        raw = os.getenv(schema.auth_token_ref, "")
+        token = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+        headers["Authorization"] = f"Basic {token}"
     elif schema.auth_type == "api_key" and schema.auth_token_ref:
         # TODO: Lookup API key from secrets
         api_key = os.getenv(schema.auth_token_ref, "")
@@ -604,12 +622,29 @@ async def _handle_api_source(
         json.dumps(params, sort_keys=True).encode()
     ).hexdigest()
     
+    if ports_out == "table":
+        if isinstance(data, list):
+            data_out = data
+        elif isinstance(data, dict):
+            data_out = [data]
+        else:
+            lines = str(data).splitlines()
+            data_out = [{"text": ln} for ln in lines if ln.strip()]
+    elif ports_out == "json":
+        data_out = data
+    elif ports_out == "text":
+        data_out = response.text if isinstance(response.text, str) else str(data)
+    elif ports_out == "binary":
+        data_out = response.content
+    else:
+        data_out = data
+
     metadata = FileMetadata(
         file_path=str(output_path),
         file_type=file_format,
-        mime_type=content_type,
+        mime_type=(content_type or _get_mime_type_from_format(file_format)),
         size_bytes=output_path.stat().st_size,
-        schema=schema_info,
+        data_schema=schema_info,
         row_count=row_count,
         access_method="local",
         content_hash=content_hash,
@@ -619,6 +654,7 @@ async def _handle_api_source(
     
     return NodeOutput(
         status="succeeded",
+        data=data_out,
         metadata=metadata,
         execution_time_ms=0.0
     )
@@ -639,11 +675,13 @@ def _get_output_path(node_id: str, file_format: str) -> Path:
 async def _write_output(data: Any, output_path: Path, file_format: str):
     """Write processed data to output file"""
     
-    if file_format in ["csv", "parquet", "excel"]:
+    if file_format in ["csv", "tsv", "parquet", "excel"]:
         # Data should be DataFrame
         if isinstance(data, pd.DataFrame):
             if file_format == "csv":
                 data.to_csv(output_path, index=False)
+            elif file_format == "tsv":
+                data.to_csv(output_path, index=False, sep="\t")
             elif file_format == "parquet":
                 data.to_parquet(output_path, index=False)
             elif file_format == "excel":
@@ -675,6 +713,7 @@ def _get_mime_type_from_format(file_format: str) -> str:
     """Get MIME type from file format"""
     mime_types = {
         "csv": "text/csv",
+        "tsv": "text/tab-separated-values",
         "parquet": "application/vnd.apache.parquet",
         "json": "application/json",
         "excel": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

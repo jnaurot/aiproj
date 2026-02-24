@@ -24,8 +24,8 @@
 	function setFileFormat(ff: string) {
 		const next: Record<string, any> = { file_format: ff };
 
-		if (ff === 'csv') {
-			next.delimiter = params.delimiter ?? ',';
+		if (ff === 'csv' || ff === 'tsv') {
+			next.delimiter = params.delimiter ?? (ff === 'tsv' ? '\t' : ',');
 			next.sheet_name = undefined;
 		} else if (ff === 'excel') {
 			next.sheet_name = params.sheet_name ?? '';
@@ -52,7 +52,7 @@
 					<input
 						bind:this={fileEl}
 						type="file"
-						accept=".csv,.tsv,.xlsx,.json,.txt,.parquet"
+						accept=".csv,.tsv,.xlsx,.json,.txt,.parquet,.pdf"
 						style="display:none"
 						on:change={(e) => {
 							const input = e.currentTarget as HTMLInputElement;
@@ -99,21 +99,23 @@
 						on:change={(e) => setFileFormat((e.currentTarget as HTMLSelectElement).value)}
 					>
 						<option value="csv">csv</option>
+						<option value="tsv">tsv</option>
 						<option value="parquet">parquet</option>
 						<option value="json">json</option>
 						<option value="excel">excel</option>
 						<option value="txt">txt</option>
+						<option value="pdf">pdf</option>
 					</select>
 				</div>
 			</div>
 
-			{#if (params.file_format ?? 'csv') === 'csv'}
+			{#if (params.file_format ?? 'csv') === 'csv' || (params.file_format ?? 'csv') === 'tsv'}
 				<div class="field">
 					<div class="k">delimiter</div>
 					<div class="v">
 						<input
-							value={params.delimiter ?? ','}
-							placeholder=","
+							value={params.delimiter ?? ((params.file_format ?? 'csv') === 'tsv' ? '\t' : ',')}
+							placeholder={(params.file_format ?? 'csv') === 'tsv' ? '\\t' : ','}
 							on:input={(e) => draft({ delimiter: (e.currentTarget as HTMLInputElement).value })}
 						/>
 					</div>

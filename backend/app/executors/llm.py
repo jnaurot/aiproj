@@ -65,11 +65,21 @@ async def exec_llm(
         # Decide: fail fast or continue with prompts only.
         # I recommend fail fast for now:
         return NodeOutput(status="failed", error="No upstream artifacts provided to LLM", metadata=None)
+    if len(upstream_artifact_ids) > 1:
+        await context.bus.emit({
+            "type": "log",
+            "runId": run_id,
+            "nodeId": node_id,
+            "at": iso_now(),
+            "level": "error",
+            "message": f"LLM node received {len(upstream_artifact_ids)} upstream artifacts; only one input is supported in this version.",
+        })
+        return NodeOutput(
+            status="failed",
+            error="LLM multi-input not implemented; expected exactly 1 upstream artifact",
+            metadata=None,
+        )
 
-    text = ""
-    if upstream_artifact_ids:
-        text = await materialize_text(context, upstream_artifact_ids[0])
-        print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
 

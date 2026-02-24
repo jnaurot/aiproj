@@ -12,8 +12,7 @@ const TransformKindSchema = z.enum(["filter",
   "limit",
   "dedupe",
   "sql",
-  "python",
-  "js"]);
+  "python"]);
 
 // ─────────────────────────────────────────────
 // Per-operation parameter schemas
@@ -106,12 +105,6 @@ export const TransformPythonParamsSchema = z.object({
   language: z.literal("python").optional().default("python"),
 }).strip();
 
-export const TransformJsParamsSchema = z.object({
-  source: z.string().min(1, "JavaScript code cannot be empty"),
-  // If you want to enforce language
-  language: z.literal("js").optional().default("js"),
-}).strip();
-
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
   select: TransformSelectParamsSchema,
@@ -123,8 +116,7 @@ export const TransformParamsSchemaByKind = {
   limit: TransformLimitParamsSchema,
   dedupe: TransformDedupeParamsSchema,
   sql: TransformSqlParamsSchema,
-  python: TransformPythonParamsSchema,
-  js: TransformJsParamsSchema
+  python: TransformPythonParamsSchema
 } as const
 
 // ---- inferred types (single source of truth) ----
@@ -139,7 +131,6 @@ export type TransformLimitParams  = z.infer<typeof   TransformLimitParamsSchema>
 export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchema>;
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
 export type  TransformPythonParams = z.infer<typeof   TransformPythonParamsSchema>;
-export type TransformJsParams  = z.infer<typeof   TransformJsParamsSchema>;
 
 
 // ---- common params (shared across all ops) ----
@@ -213,11 +204,6 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("python"),
     code: TransformPythonParamsSchema
-  }).strip(),
-
-  TransformCommonSchema.extend({
-    op: z.literal("js"),
-    code: TransformJsParamsSchema
   }).strip()
 ]);
 

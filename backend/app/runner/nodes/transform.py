@@ -21,7 +21,6 @@ OP_KEYS = {
     "dedupe": "dedupe",
     "sql": "sql",
     "python": "code",
-    "js": "code",
 }
 
 # ---- helpers ----
@@ -29,16 +28,35 @@ OP_KEYS = {
 def sha256_hex(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
+def quote_ident(identifier: str) -> str:
+    return '"' + str(identifier).replace('"', '""') + '"'
+
 def canonical_json(obj: Any) -> str:
     # stable serialization for hashing / caching
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
-def normalize_transform_params(params: Dict[str, Any]) -> Dict[str, Any]:
+def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str] = None) -> Dict[str, Any]:
     p = dict(params)
 
-    op = p.get("op")
+    op = p.get("op") or default_op
+    if op is None:
+        inferred: List[str] = []
+        for candidate_op, payload_key in OP_KEYS.items():
+            if payload_key in p:
+                inferred.append(candidate_op)
+        inferred = sorted(set(inferred))
+        if len(inferred) == 1:
+            op = inferred[0]
+
     if op not in OP_KEYS:
         raise ValueError(f"Transform params missing/invalid op: {op}")
+
+    p["op"] = op
+
+    # Legacy shape compatibility for LIMIT:
+    # { op: "limit", n: 100 } -> { op: "limit", limit: { n: 100 } }
+    if op == "limit" and "limit" not in p and "n" in p:
+        p["limit"] = {"n": int(p.get("n") or 0)}
 
     p["enabled"] = bool(p.get("enabled", True))
     p.pop("notes", None)
@@ -76,28 +94,68 @@ class TransformResult:
 
 # ---- table IO ----
 
-def load_table_from_artifact_bytes(mime_type: str, b: bytes) -> pd.DataFrame:
-    # Minimal: support CSV + JSON (records or JSONL) first.
-    # Add parquet once your pipeline wants it.
-    if mime_type.startswith("text/csv"):
-        return pd.read_csv(io.BytesIO(b))
-    if mime_type.startswith("application/json"):
-        # allow jsonl or records
-        s = b.decode("utf-8")
-        if "\n" in s.strip().splitlines()[0]:
-            # not reliable; prefer heuristic below
-            pass
-        try:
-            obj = json.loads(s)
-            if isinstance(obj, list):
-                return pd.DataFrame(obj)
-            if isinstance(obj, dict) and "rows" in obj:
+def normalize_mime_type(raw: str) -> str:
+    return (raw or "").split(";", 1)[0].strip().lower()
+
+
+def _load_table_from_json_text(s: str) -> pd.DataFrame:
+    # JSON array/object first, then JSONL fallback.
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, list):
+            return pd.DataFrame(obj)
+        if isinstance(obj, dict):
+            if "rows" in obj and isinstance(obj["rows"], list):
                 return pd.DataFrame(obj["rows"])
-        except Exception:
-            # JSONL fallback
-            rows = [json.loads(line) for line in s.splitlines() if line.strip()]
-            return pd.DataFrame(rows)
-    raise ValueError(f"Unsupported input mime_type for Transform: {mime_type}")
+            return pd.DataFrame([obj])
+    except Exception:
+        pass
+
+    rows = [json.loads(line) for line in s.splitlines() if line.strip()]
+    return pd.DataFrame(rows)
+
+
+def _load_table_from_plain_text(b: bytes) -> pd.DataFrame:
+    s = b.decode("utf-8", errors="replace")
+    # Deterministic text-table bridge: one non-empty line per row.
+    lines = [ln for ln in s.splitlines() if ln.strip()]
+    if not lines:
+        return pd.DataFrame({"text": []})
+    return pd.DataFrame({"text": lines})
+
+
+def load_table_from_artifact_bytes(mime_type: str, b: bytes) -> pd.DataFrame:
+    mt = normalize_mime_type(mime_type)
+
+    # CSV / delimited text
+    if mt in ("text/csv", "application/csv", "text/tab-separated-values"):
+        sep = "\t" if mt == "text/tab-separated-values" else ","
+        return pd.read_csv(io.BytesIO(b), sep=sep)
+    if mt in ("text/plain", "application/plain"):
+        return _load_table_from_plain_text(b)
+
+    # JSON / JSONL
+    if mt in ("application/json", "application/x-ndjson", "application/jsonl"):
+        s = b.decode("utf-8", errors="replace")
+        return _load_table_from_json_text(s)
+
+    # Parquet
+    if mt in ("application/vnd.apache.parquet", "application/x-parquet"):
+        return pd.read_parquet(io.BytesIO(b))
+
+    # Excel
+    if mt in (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+    ):
+        return pd.read_excel(io.BytesIO(b))
+
+    raise ValueError(
+        "Unsupported input mime_type for Transform table operations: "
+        f"{mime_type!r}. Supported: text/csv, text/tab-separated-values, "
+        "application/json, application/x-ndjson, application/jsonl, "
+        "application/vnd.apache.parquet, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet."
+    )
 
 def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     # Determinism: stable column order as currently in df; stable line endings; no index.
@@ -138,7 +196,7 @@ def execute_transform_op(
 
         elif op == "select":
             cols = params["select"]["columns"]
-            col_sql = ", ".join([duckdb.quote_identifier(c) for c in cols])
+            col_sql = ", ".join([quote_ident(c) for c in cols])
             return con.execute(f"select {col_sql} from {primary_name}").df()
 
         elif op == "rename":
@@ -148,23 +206,23 @@ def execute_transform_op(
             parts = []
             for c in cols:
                 if c in mp:
-                    parts.append(f"{duckdb.quote_identifier(c)} as {duckdb.quote_identifier(mp[c])}")
+                    parts.append(f"{quote_ident(c)} as {quote_ident(mp[c])}")
                 else:
-                    parts.append(f"{duckdb.quote_identifier(c)}")
+                    parts.append(f"{quote_ident(c)}")
             return con.execute(f"select {', '.join(parts)} from {primary_name}").df()
 
         elif op == "derive":
             cols = list(primary_df.columns)
-            parts = [duckdb.quote_identifier(c) for c in cols]
+            parts = [quote_ident(c) for c in cols]
             for d in params["derive"]["columns"]:
-                parts.append(f"({d['expr']}) as {duckdb.quote_identifier(d['name'])}")
+                parts.append(f"({d['expr']}) as {quote_ident(d['name'])}")
             return con.execute(f"select {', '.join(parts)} from {primary_name}").df()
 
         elif op == "aggregate":
             gb = params["aggregate"]["groupBy"]
             metrics = params["aggregate"]["metrics"]
-            gb_sql = ", ".join([duckdb.quote_identifier(c) for c in gb]) if gb else ""
-            metrics_sql = ", ".join([f"({m['expr']}) as {duckdb.quote_identifier(m['as'])}" for m in metrics])
+            gb_sql = ", ".join([quote_ident(c) for c in gb]) if gb else ""
+            metrics_sql = ", ".join([f"({m['expr']}) as {quote_ident(m['as'])}" for m in metrics])
             if gb_sql:
                 q = f"select {gb_sql}, {metrics_sql} from {primary_name} group by {gb_sql}"
             else:
@@ -186,14 +244,14 @@ def execute_transform_op(
 
             ons = spec["on"]
             on_sql = " AND ".join([
-                f"{primary_name}.{duckdb.quote_identifier(x['left'])} = other.{duckdb.quote_identifier(x['right'])}"
+                f"{primary_name}.{quote_ident(x['left'])} = other.{quote_ident(x['right'])}"
                 for x in ons
             ])
             return con.execute(f"select * from {primary_name} {how_sql} join other on {on_sql}").df()
 
         elif op == "sort":
             by = params["sort"]["by"]
-            order_sql = ", ".join([f"{duckdb.quote_identifier(x['col'])} {x['dir'].upper()}" for x in by])
+            order_sql = ", ".join([f"{quote_ident(x['col'])} {x['dir'].upper()}" for x in by])
             return con.execute(f"select * from {primary_name} order by {order_sql}").df()
 
         elif op == "limit":
@@ -205,10 +263,10 @@ def execute_transform_op(
 
             # columns to order by for deterministic “first row”
             all_cols = list(primary_df.columns)
-            order_sql = ", ".join([duckdb.quote_identifier(c) for c in all_cols])
+            order_sql = ", ".join([quote_ident(c) for c in all_cols])
 
             if by:
-                part_sql = ", ".join([duckdb.quote_identifier(c) for c in by])
+                part_sql = ", ".join([quote_ident(c) for c in by])
                 q = f"""
                 select * exclude (rn)
                 from (
@@ -233,9 +291,9 @@ def execute_transform_op(
             # convention: user writes SQL referencing "input" (and optionally "other" if you add)
             return con.execute(q).df()
 
-        elif op in ("python", "js"):
+        elif op == "python":
             # IMPORTANT: you can enable later behind an explicit "unsafe_allow_code" flag
-            raise ValueError("python/js transform is disabled for determinism (enable explicitly later).")
+            raise ValueError("python transform is disabled for determinism (enable explicitly later).")
 
         raise ValueError(f"Unsupported transform op: {op}")
     finally:

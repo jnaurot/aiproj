@@ -181,6 +181,12 @@ def _render_user_prompt(params: LLMParams, input_metadata: Optional[FileMetadata
         return prompt.replace("{input}", input_text)
     return prompt
 
+def _compose_user_content(user_prompt: str, upstream_text: str) -> str:
+    prompt = user_prompt or "Summarize the input data."
+    if "{input}" in prompt:
+        return prompt.replace("{input}", upstream_text)
+    return f"{prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
+
 
 async def exec_llm_ollama(
     run_id: str,
@@ -248,7 +254,7 @@ async def exec_llm_ollama(
     #     user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{text}"
     # messages = _build_messages(params, user_content)
     user_prompt = params.user_prompt or "Summarize the input data."
-    user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{text}"
+    user_content = _compose_user_content(user_prompt, text)
     messages = _build_messages(params, user_content)
 
 
@@ -438,7 +444,7 @@ async def exec_llm_ollama(
                     error="Ollama returned empty output content",
                 )
 
-            mime_type = "text/plain"
+            mime_type = "text/plain; charset=utf-8"
             if params.output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
@@ -463,7 +469,11 @@ async def exec_llm_ollama(
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
                 file_type = "json"
                 mime_type = "application/json"
-            else: #text
+            elif params.output_mode == "markdown":
+                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.md"
+                file_type = "txt"
+                mime_type = "text/markdown; charset=utf-8"
+            else: # text
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
                 file_type = "txt"
                 

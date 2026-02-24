@@ -2,25 +2,23 @@
 import type { SourceFileParams, SourceDatabaseParams, SourceAPIParams } from "$lib/flow/schema/source";
 
 export const defaultSourceFileParams: SourceFileParams = {
-    file_path: "file:///data.csv",
+    file_path: "data.csv",
     file_format: "csv",
     delimiter: ",",
-    sheet_name: "sheet1",
+    sheet_name: "Sheet1",
     sample_size: 1000,
     encoding: "utf-8",
     cache_enabled: true
 };
 
 export const defaultSourceDatabaseParams: SourceDatabaseParams = {
-    connection_string: "connection_string",
-    connection_ref: "connection_ref",
-    query: "",
-    table_name: "table_name",
+    connection_ref: "conn:default",
+    table_name: "my_table",
     limit: 1000,
 };
 
 export const defaultSourceAPIParams: SourceAPIParams = {
-    url: "",
+    url: "https://example.com/api",
     method: "GET",
     headers: {},
     body: undefined,

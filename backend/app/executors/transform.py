@@ -18,6 +18,14 @@ async def exec_transform(
     input_metadata: Optional[FileMetadata],  # Added
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
+    """
+    Legacy transform executor path.
+    Runtime uses app.runner.nodes.transform via app.runner.run.
+    """
+    raise RuntimeError(
+        "Legacy transform executor is disabled. Use runner.nodes.transform via runner.run."
+    )
+
     """Execute transform node"""
     node_id = node.get("id", "<missing-node-id>")
 

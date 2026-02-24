@@ -7,7 +7,7 @@ const SourceKindSchema = z.enum(["file", "database", "api"]);
 // ---- schemas ----
 export const SourceFileParamsSchema = z.object({
   file_path: z.string().min(1),
-  file_format: z.enum(["csv", "parquet", "json", "excel", "txt"]).default("csv"),
+  file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),
   delimiter: z.string().optional(),
   sheet_name: z.string().optional(),
   sample_size: z.number().int().positive().optional(),
@@ -32,7 +32,7 @@ export const SourceDatabaseParamsSchema = z.object({
 
 export const SourceAPIParamsSchema = z.object({
   url: z.string().url(),
-  method: z.enum(["GET", "POST", "PUT", "DELETE"]).default("GET"),
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
   headers: z.record(z.string(), z.string()).default({}),
   body: z.record(z.string(), z.any()).optional(),
   auth_type: z.enum(["none", "bearer", "basic", "api_key"]).default("none"),

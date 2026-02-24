@@ -58,7 +58,14 @@ export type BaseNodeData<K extends NodeKind, P> = {
 /** ✅ This is what lives inside edge.data */
 export interface PipelineEdgeData extends Record<string, any> {
   exec: EdgeExecState; // make required to simplify runtime state
-  contract?: { in?: PortType, out?: PortType };
+  contract?: {
+    in?: PortType;
+    out?: PortType;
+    payload?: {
+      source?: Record<string, any>;
+      target?: Record<string, any>;
+    };
+  };
 }
 
 /** ✅ Actual edge object type */

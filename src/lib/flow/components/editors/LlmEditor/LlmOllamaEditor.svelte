@@ -1,5 +1,6 @@
 <!-- src/lib/flow/components/editors/LlmEditor/LlmOllamaEditor.svelte -->
 <script lang="ts">
+import { onDestroy } from "svelte";
 import type { Node } from "@xyflow/svelte";
 import type { PipelineNodeData } from "$lib/flow/types";
 import type { LlmParams } from "$lib/flow/schema/llm";
@@ -33,6 +34,76 @@ $: seed = params?.seed;
 
 $: outputMode = asString(params?.output?.mode, "text") as "text" | "markdown" | "json";
 $: jsonSchema = params?.output?.jsonSchema;
+
+let modelOptions: string[] = [];
+let modelLoading = false;
+let modelError = "";
+let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
+let modelAbort: AbortController | null = null;
+let lastModelBaseUrl = "";
+
+function normalizeBaseUrl(url: string): string {
+return url.trim().replace(/\/+$/, "");
+}
+
+function mapModelsFromTags(payload: any): string[] {
+const raw = Array.isArray(payload?.models) ? payload.models : [];
+const out = raw
+	.map((m: any) => (typeof m?.name === "string" ? m.name : typeof m?.model === "string" ? m.model : ""))
+	.filter((x: string) => x.length > 0);
+return Array.from(new Set(out));
+}
+
+async function fetchOllamaModels(baseUrlInput: string): Promise<void> {
+const base = normalizeBaseUrl(baseUrlInput);
+if (!base) {
+	modelOptions = [];
+	modelError = "";
+	modelLoading = false;
+	return;
+}
+
+try {
+	modelAbort?.abort();
+	modelAbort = new AbortController();
+	modelLoading = true;
+	modelError = "";
+
+	const res = await fetch(`${base}/api/tags`, {
+	method: "GET",
+	signal: modelAbort.signal,
+	});
+
+	if (!res.ok) {
+	throw new Error(`HTTP ${res.status}`);
+	}
+
+	const body = await res.json();
+	modelOptions = mapModelsFromTags(body);
+} catch (err: any) {
+	if (err?.name === "AbortError") return;
+	modelOptions = [];
+	modelError = `Could not load models from ${base}/api/tags`;
+} finally {
+	modelLoading = false;
+}
+}
+
+$: {
+const normalized = normalizeBaseUrl(baseUrl);
+if (normalized !== lastModelBaseUrl) {
+	lastModelBaseUrl = normalized;
+	if (modelFetchTimer) clearTimeout(modelFetchTimer);
+	modelFetchTimer = setTimeout(() => {
+	void fetchOllamaModels(normalized);
+	}, 250);
+}
+}
+
+onDestroy(() => {
+if (modelFetchTimer) clearTimeout(modelFetchTimer);
+modelAbort?.abort();
+});
 
 // ---- Setters (draft + commit) ----
 function setStr(key: string, value: string) {
@@ -94,13 +165,33 @@ try {
 	<div class="row">
 	<div class="k">model</div>
 	<div class="v">
-		<input
-		type="text"
-		value={model}
-		placeholder="llama3.1:8b"
-		on:input={(e) => setStr("model", (e.currentTarget as HTMLInputElement).value)}
-		on:blur={(e) => commitStr("model", (e.currentTarget as HTMLInputElement).value)}
-		/>
+		<div class="modelControl">
+		<select
+			value={model}
+			on:change={(e) => {
+			const v = (e.currentTarget as HTMLSelectElement).value;
+			setStr("model", v);
+			commitStr("model", v);
+			}}
+		>
+			{#if model && !modelOptions.includes(model)}
+			<option value={model}>{model} (current)</option>
+			{/if}
+
+			{#if modelOptions.length > 0}
+			{#each modelOptions as m}
+				<option value={m}>{m}</option>
+			{/each}
+			{:else}
+			<option value={model || ""} disabled>
+				{modelLoading ? "Loading models..." : "No models found"}
+			</option>
+			{/if}
+		</select>
+		</div>
+		{#if modelError}
+		<div class="hint">{modelError}</div>
+		{/if}
 	</div>
 	</div>
 
@@ -241,6 +332,13 @@ padding-top: 0;
 
 .v {
 min-width: 0;
+}
+
+.modelControl {
+display: grid;
+grid-template-columns: minmax(0, 1fr);
+gap: 8px;
+align-items: center;
 }
 
 input,

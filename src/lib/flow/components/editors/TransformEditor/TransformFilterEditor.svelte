@@ -1,4 +1,4 @@
-<!-- <script lang="ts">
+﻿<!-- <script lang="ts">
 	// lib/flow/components/editors/SourceEditor/TransformFilterEditor.svelte
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
@@ -51,7 +51,7 @@
 	// We follow your existing signature: editor receives `params` and onDraft/onCommit.
 	//
 	// NOTE: Here `params` is the whole node params object for transform,
-	// but because you said “separate TransformEditor for each op”, we’ll define a local shape
+	// but because you said â€œseparate TransformEditor for each opâ€, weâ€™ll define a local shape
 	// that includes enabled/notes/cache + filter-specific object.
 	type TransformFilterNodeParams = {
 		enabled?: boolean;
@@ -193,72 +193,201 @@
 </div>
 
 <style>
-	.transformOp {
-		padding: 8px 0;
-	}
-
 	.section {
-		border: 1px solid #ddd;
-		border-radius: 6px;
-		padding: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.08);
+		border-radius: 12px;
+		padding: 12px;
+		background: rgba(255, 255, 255, 0.03);
+		margin-top: 8px;
 	}
 
 	.sectionTitle {
-		font-weight: 800;
+		font-weight: 650;
+		font-size: 14px;
 		margin-bottom: 10px;
+		opacity: 0.9;
+	}
+
+	.subTitle {
+		margin-top: 10px;
+		font-weight: 600;
+		font-size: 13px;
+		opacity: 0.95;
+	}
+
+	.hint {
+		font-size: 12px;
+		opacity: 0.75;
+		margin-bottom: 10px;
+		line-height: 1.35;
+	}
+
+	.row {
+		display: flex;
+		gap: 8px;
+		align-items: flex-start;
+		margin-bottom: 8px;
+	}
+
+	.line {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		margin-bottom: 8px;
 	}
 
 	.field {
 		display: grid;
-		grid-template-columns: 120px 1fr;
-		gap: 10px;
+		grid-template-columns: 100px minmax(0, 1fr);
 		align-items: start;
-		margin: 10px 0;
+		gap: 8px;
+		margin-bottom: 10px;
 	}
 
-	.k {
-		font-size: 12px;
+	.field.grow {
+		flex: 1;
+	}
+
+	.field.dir {
+		grid-template-columns: 70px minmax(0, 1fr);
+	}
+
+	.k,
+	.label {
+		font-size: 14px;
 		opacity: 0.85;
-		padding-top: 6px;
+		padding-top: 8px;
+		font-weight: 400;
 	}
 
 	.v {
 		min-width: 0;
+		width: 100%;
 	}
 
-	input[type='text'],
-	textarea {
+	.colInput {
+		flex: 1;
+	}
+
+	.arrow {
+		opacity: 0.75;
+		padding-top: 8px;
+	}
+
+	.toggle {
+		display: inline-flex;
+		gap: 8px;
+		align-items: center;
+	}
+
+	input,
+	select,
+	textarea,
+	.readonly,
+	.code {
 		width: 100%;
 		box-sizing: border-box;
-		padding: 6px 8px;
-		border: 1px solid #ccc;
-		border-radius: 4px;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		background: rgba(0, 0, 0, 0.2);
+		color: inherit;
+		padding: 8px 10px;
+		font-size: 14px;
+		outline: none;
+		min-height: 40px;
 	}
 
-	.hint {
-		margin-top: 6px;
-		font-size: 12px;
-		opacity: 0.75;
+	textarea,
+	.code {
+		resize: vertical;
 		line-height: 1.35;
+		min-height: 96px;
+	}
+
+	input[type='checkbox'] {
+		width: auto;
+		min-height: 0;
+		padding: 0;
+	}
+
+	input:focus,
+	select:focus,
+	textarea:focus,
+	.code:focus,
+	.readonly:focus {
+		border-color: rgba(255, 255, 255, 0.25);
+	}
+
+	.actions,
+	.snips {
+		margin-top: 8px;
+		display: flex;
+		gap: 8px;
+		justify-content: flex-end;
+		flex-wrap: wrap;
+	}
+
+	.snipsTitle {
+		font-size: 12px;
+		opacity: 0.8;
+		align-self: center;
+	}
+
+	.snipRow {
+		display: flex;
+		gap: 8px;
+		width: 100%;
+	}
+
+	button.small {
+		padding: 6px 10px;
+		font-size: 12px;
+		border-radius: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.16);
+		background: rgba(255, 255, 255, 0.06);
+		color: inherit;
+		cursor: pointer;
+	}
+
+	button.ghost {
+		background: transparent;
+	}
+
+	button.danger {
+		border-color: rgba(239, 68, 68, 0.5);
+		background: rgba(239, 68, 68, 0.14);
+		color: #fecaca;
+	}
+
+	.warn {
+		margin-top: 8px;
+		font-size: 12px;
+		color: #fca5a5;
+		white-space: pre-wrap;
+	}
+
+	.warn ul {
+		margin: 6px 0 0 16px;
+		padding: 0;
+	}
+
+	.preview {
+		margin-top: 12px;
+	}
+
+	pre {
+		white-space: pre-wrap;
+		word-break: break-word;
+		padding: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 10px;
+		font-size: 12px;
+		opacity: 0.95;
 	}
 
 	code {
-		font-family:
-			ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
-			monospace;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
 		font-size: 12px;
 	}
-
-	.actions {
-		margin-top: 12px;
-		display: flex;
-		justify-content: flex-end;
-	}
-
-	button {
-		border: 1px solid #444;
-		border-radius: 6px;
-		padding: 6px 10px;
-		cursor: pointer;
-	}
 </style>
+

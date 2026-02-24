@@ -55,12 +55,6 @@
 					op,
 					code: { language: 'python', source: '# disabled by default in backend\n' }
 				};
-			case 'js':
-				return {
-					...common,
-					op,
-					code: { language: 'js', source: '// disabled by default in backend\n' }
-				};
 		}
 	}
 
@@ -75,9 +69,7 @@
 			{ value: 'sort', label: 'Sort' },
 			{ value: 'limit', label: 'Limit' },
 			{ value: 'dedupe', label: 'Deduplicate' },
-			{ value: 'sql', label: 'SQL Query' },
-			{ value: 'python', label: 'Python Code' },
-			{ value: 'js', label: 'JavaScript Code' }
+			{ value: 'sql', label: 'SQL Query' }
 		];
 	}
 

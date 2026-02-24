@@ -1,18 +1,25 @@
 import asyncio, time
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
+from datetime import datetime, timezone
 
 from .runner.events import RunEventBus
-from .runner.artifacts import MemoryArtifactStore
-from .runner.cache import ExecutionCache
+from .runner.artifacts import ArtifactStore, DiskArtifactStore, MemoryArtifactStore
+from .runner.cache import ExecutionCache, SqliteExecutionCache
 from .runner.run import run_graph
+
+
+def datetime_from_ts(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
 @dataclass
 class RunHandle:
     run_id: str
     bus: RunEventBus
-    artifact_store: MemoryArtifactStore
+    artifact_store: ArtifactStore
     cache: ExecutionCache
     task: Optional[asyncio.Task] = None
 
@@ -29,34 +36,93 @@ class RuntimeManager:
 
         self.runs: Dict[str, RunHandle] = {}
         self._artifact_owner: dict[str, str] = {}
+        self.artifact_store, self.cache = self._build_storage()
+
+    def _build_storage(self):
+        store_kind = (os.getenv("ARTIFACT_STORE") or "disk").strip().lower()
+        if store_kind == "memory":
+            return MemoryArtifactStore(), ExecutionCache()
+
+        artifact_dir = Path(os.getenv("ARTIFACT_DIR") or "./data/artifacts").resolve()
+        store = DiskArtifactStore(artifact_dir)
+        cache_db = str((artifact_dir / "meta" / "artifacts.sqlite"))
+        cache = SqliteExecutionCache(cache_db)
+        return store, cache
 
     # ---------- creation ----------
 
     def create_run(self, run_id: str) -> RunHandle:
-        store = MemoryArtifactStore()
-        cache = ExecutionCache()
-
         handle = RunHandle(
             run_id=run_id,
             bus=None,
-            artifact_store=store,
-            cache=cache,
+            artifact_store=self.artifact_store,
+            cache=self.cache,
         )
         bus = RunEventBus(run_id, on_emit=lambda ev: self._apply_event_to_state(handle, ev))
         handle.bus = bus
         
         self.runs[run_id] = handle
         print("BUS INIT OK:", bus, "has on_emit:", hasattr(bus, "_on_emit"))
+        asyncio.create_task(self.artifact_store.record_run(run_id, "pending"))
 
         return handle
 
     def get_run(self, run_id: str) -> Optional[RunHandle]:
         return self.runs.get(run_id)
+
+    async def list_runs(self, include_deleted: bool = False) -> list[Dict[str, Any]]:
+        persisted = await self.artifact_store.list_runs(include_deleted=include_deleted)
+        out: Dict[str, Dict[str, Any]] = {r["run_id"]: dict(r) for r in persisted}
+        for rid, h in self.runs.items():
+            if h.status == "deleted" and not include_deleted:
+                continue
+            out[rid] = {
+                "run_id": rid,
+                "created_at": datetime_from_ts(h.created_at),
+                "status": h.status,
+                "deleted_at": None,
+            }
+        rows = list(out.values())
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows
+
+    async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if handle and handle.task and not handle.task.done():
+            handle.task.cancel()
+
+        result = await self.artifact_store.delete_run(run_id, mode=mode, gc=gc)
+        removed_ids = result.get("artifactIdsRemoved", []) or []
+        cache_removed = await self.cache.delete_artifact_ids(removed_ids)
+        result["cacheRowsRemoved"] = cache_removed
+
+        for aid in removed_ids:
+            self._artifact_owner.pop(aid, None)
+
+        if mode == "hard":
+            self.runs.pop(run_id, None)
+        else:
+            h = self.runs.get(run_id)
+            if h:
+                h.status = "deleted"
+        return result
     
     # ----------------------artifacts------------------------
 
     async def resolve_artifact_owner(self, artifact_id: str) -> str | None:
-        return self._artifact_owner.get(artifact_id)
+        owner = self._artifact_owner.get(artifact_id)
+        if owner:
+            return owner
+        if not await self.artifact_store.exists(artifact_id):
+            return None
+        try:
+            art = await self.artifact_store.get(artifact_id)
+        except Exception:
+            return None
+        if art.run_id:
+            self._artifact_owner[artifact_id] = art.run_id
+            return art.run_id
+        return None
 
     # ---------- execution ----------
 
@@ -77,14 +143,18 @@ class RuntimeManager:
 
     def _apply_event_to_state(self, handle, ev: dict) -> None:
         t = ev.get("type")
+        if handle.status == "deleted":
+            return
 
         # run lifecycle
         if t == "run_started":
             handle.status = "running"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return
 
         if t == "run_finished":
             handle.status = ev.get("status", "finished")
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
             return
 
         # node lifecycle

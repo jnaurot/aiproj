@@ -11,8 +11,7 @@ import type {
     TransformLimitParams,
     TransformDedupeParams,
     TransformSqlParams,
-    TransformPythonParams,
-    TransformJsParams
+    TransformPythonParams
 } from "$lib/flow/schema/transform"
 
 // ─────────────────────────────────────────────
@@ -107,36 +106,84 @@ def transform(df):
     language: "python",
 };
 
-export const defaultTransformJsParams: TransformJsParams = {
-    source: `// JavaScript transform example
-// rows is array of objects (one per input row)
-// return array of objects (transformed rows)
-
-function transform(rows) {
-    return rows
-        .filter(row => row.text?.length > 15)
-        .map(row => ({
-            ...row,
-            upper_text: row.text?.toUpperCase()
-        }));
-}
-`,
-    language: "js",
-};
-
 export const defaultTransformParamsByKind = {
-    filter: defaultTransformFilterParams,
-    select: defaultTransformSelectParams,
-    rename: defaultTransformRenameParams,
-    derive: defaultTransformDeriveParams,
-    aggregate: defaultTransformAggregateParams,
-    join: defaultTransformJoinParams,
-    sort: defaultTransformSortParams,
-    limit: defaultTransformLimitParams,
-    dedupe: defaultTransformDedupeParams,
-    sql: defaultTransformSqlParams,
-    python: defaultTransformPythonParams,
-    js: defaultTransformJsParams
+    filter: {
+        op: "filter",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        filter: defaultTransformFilterParams
+    },
+    select: {
+        op: "select",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        select: defaultTransformSelectParams
+    },
+    rename: {
+        op: "rename",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        rename: defaultTransformRenameParams
+    },
+    derive: {
+        op: "derive",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        derive: defaultTransformDeriveParams
+    },
+    aggregate: {
+        op: "aggregate",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        aggregate: defaultTransformAggregateParams
+    },
+    join: {
+        op: "join",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        join: defaultTransformJoinParams
+    },
+    sort: {
+        op: "sort",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        sort: defaultTransformSortParams
+    },
+    limit: {
+        op: "limit",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        limit: defaultTransformLimitParams
+    },
+    dedupe: {
+        op: "dedupe",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        dedupe: defaultTransformDedupeParams
+    },
+    sql: {
+        op: "sql",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        sql: defaultTransformSqlParams
+    },
+    python: {
+        op: "python",
+        enabled: true,
+        notes: "",
+        cache: { enabled: false },
+        code: defaultTransformPythonParams
+    }
 } as const;
 
 export const defaultTransformParams: TransformParams = {

@@ -44,6 +44,29 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     return p
 
 
+def normalize_tool_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
+    p = dict(raw or {})
+    # canonical provider taxonomy
+    provider = p.get("provider")
+    legacy_tool_type = p.get("tool_type")
+    if not provider and isinstance(legacy_tool_type, str):
+        legacy_map = {
+            "api": "http",
+            "script": "shell",
+            "builtin": "builtin",
+            "python": "python",
+            "mcp": "mcp",
+        }
+        p["provider"] = legacy_map.get(legacy_tool_type, legacy_tool_type)
+
+    # common FE/BE key normalization
+    if "connectionRef" in p and "connection_ref" not in p:
+        p["connection_ref"] = p["connectionRef"]
+    if "timeoutMs" in p and "timeout_ms" not in p:
+        p["timeout_ms"] = p["timeoutMs"]
+    return p
+
+
 # ============================================================================
 # BASE SCHEMA SYSTEM
 # ============================================================================
@@ -70,7 +93,7 @@ class SourceKind(str, Enum):
 class SourceFileParams(NodeParamSchema):
     # source_type: Literal[SourceKind.FILE] = SourceKind.FILE
     file_path: str = Field(..., description="Path to file")
-    file_format: Literal["csv", "parquet", "json", "excel", "txt"] = "csv"
+    file_format: Literal["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"] = "csv"
     delimiter: Optional[str] = None  # for CSV
     sheet_name: Optional[str] = None  # for Excel
     sample_size: Optional[int] = None
@@ -105,7 +128,7 @@ class SourceDatabaseParams(NodeParamSchema):
 class SourceAPIParams(NodeParamSchema):
     #source_type: Literal[SourceKind.API] = SourceKind.API
     url: str = Field(..., description="API endpoint URL")
-    method: Literal["GET", "POST", "PUT", "DELETE"] = "GET"
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
     headers: Dict[str, str] = Field(default_factory=dict)
     body: Optional[Dict[str, Any]] = None
     auth_type: Literal["none", "bearer", "basic", "api_key"] = "none"
@@ -203,6 +226,56 @@ TransformParams = Union[
     CleanTransformParams,
     CustomTransformParams
 ]
+
+
+class TransformParamsCurrent(NodeParamSchema):
+    op: Literal[
+        "filter",
+        "select",
+        "rename",
+        "derive",
+        "aggregate",
+        "join",
+        "sort",
+        "limit",
+        "dedupe",
+        "sql",
+        "python",
+    ]
+    enabled: bool = True
+    notes: str = ""
+    cache: Optional[Dict[str, Any]] = None
+    filter: Optional[Dict[str, Any]] = None
+    select: Optional[Dict[str, Any]] = None
+    rename: Optional[Dict[str, Any]] = None
+    derive: Optional[Dict[str, Any]] = None
+    aggregate: Optional[Dict[str, Any]] = None
+    join: Optional[Dict[str, Any]] = None
+    sort: Optional[Dict[str, Any]] = None
+    limit: Optional[Dict[str, Any]] = None
+    dedupe: Optional[Dict[str, Any]] = None
+    sql: Optional[Dict[str, Any]] = None
+    code: Optional[Dict[str, Any]] = None
+
+    def validate_required(self) -> List[str]:
+        op_to_payload = {
+            "filter": "filter",
+            "select": "select",
+            "rename": "rename",
+            "derive": "derive",
+            "aggregate": "aggregate",
+            "join": "join",
+            "sort": "sort",
+            "limit": "limit",
+            "dedupe": "dedupe",
+            "sql": "sql",
+            "python": "code",
+        }
+        payload_key = op_to_payload.get(self.op)
+        payload = getattr(self, payload_key, None) if payload_key else None
+        if not isinstance(payload, dict):
+            return [f"{payload_key} block is required for op='{self.op}'"]
+        return []
 
 # ============================================================================
 # LLM NODE SCHEMAS
@@ -349,6 +422,70 @@ class BuiltinToolParams(NodeParamSchema):
                 return ["config.channel is required for slack"]
         return []
 
+
+class ToolProviderParams(NodeParamSchema):
+    provider: Literal["mcp", "http", "function", "python", "js", "shell", "db", "builtin"]
+    side_effect_mode: Literal["pure", "idempotent", "effectful"] = "pure"
+    armed: bool = False
+    output: Optional[Dict[str, Any]] = None
+    mcp: Optional[Dict[str, Any]] = None
+    http: Optional[Dict[str, Any]] = None
+    function: Optional[Dict[str, Any]] = None
+    python: Optional[Dict[str, Any]] = None
+    js: Optional[Dict[str, Any]] = None
+    shell: Optional[Dict[str, Any]] = None
+    db: Optional[Dict[str, Any]] = None
+    builtin: Optional[Dict[str, Any]] = None
+
+    def validate_required(self) -> List[str]:
+        errors: List[str] = []
+        provider = self.provider
+        if provider == "mcp":
+            if not isinstance(self.mcp, dict):
+                errors.append("mcp config is required")
+            else:
+                if not self.mcp.get("serverId"):
+                    errors.append("mcp.serverId is required")
+                if not self.mcp.get("toolName"):
+                    errors.append("mcp.toolName is required")
+        elif provider == "http":
+            if not isinstance(self.http, dict):
+                errors.append("http config is required")
+            else:
+                if not self.http.get("url"):
+                    errors.append("http.url is required")
+                if not self.http.get("method"):
+                    errors.append("http.method is required")
+        elif provider == "function":
+            if not isinstance(self.function, dict):
+                errors.append("function config is required")
+            else:
+                if not self.function.get("module"):
+                    errors.append("function.module is required")
+                if not self.function.get("export"):
+                    errors.append("function.export is required")
+        elif provider == "python":
+            if not isinstance(self.python, dict) or not self.python.get("code"):
+                errors.append("python.code is required")
+        elif provider == "js":
+            if not isinstance(self.js, dict) or not self.js.get("code"):
+                errors.append("js.code is required")
+        elif provider == "shell":
+            if not isinstance(self.shell, dict) or not self.shell.get("command"):
+                errors.append("shell.command is required")
+        elif provider == "db":
+            if not isinstance(self.db, dict):
+                errors.append("db config is required")
+            else:
+                if not self.db.get("connectionRef"):
+                    errors.append("db.connectionRef is required")
+                if not self.db.get("sql"):
+                    errors.append("db.sql is required")
+        elif provider == "builtin":
+            if not isinstance(self.builtin, dict) or not self.builtin.get("toolId"):
+                errors.append("builtin.toolId is required")
+        return errors
+
 ToolParams = Union[MCPToolParams, PythonToolParams, APIToolParams, BuiltinToolParams]
 
 # ============================================================================
@@ -361,12 +498,8 @@ SCHEMA_REGISTRY: Dict[str, type[NodeParamSchema]] = {
     "source:database": SourceDatabaseParams,
     "source:api": SourceAPIParams,
     
-    # Transform schemas
-    "transform:filter": FilterTransformParams,
-    "transform:map": MapTransformParams,
-    "transform:aggregate": AggregateTransformParams,
-    "transform:clean": CleanTransformParams,
-    "transform:custom": CustomTransformParams,
+    # Transform schema (current op union contract)
+    "transform": TransformParamsCurrent,
     
     # LLM schemas (single schema with type field)
     "llm": LLMParams,
@@ -376,6 +509,7 @@ SCHEMA_REGISTRY: Dict[str, type[NodeParamSchema]] = {
     "tool:python": PythonToolParams,
     "tool:api": APIToolParams,
     "tool:builtin": BuiltinToolParams,
+    "tool": ToolProviderParams,
 }
 
 def get_schema_for_node(node: Dict[str, Any]) -> Optional[type[NodeParamSchema]]:
@@ -386,10 +520,10 @@ def get_schema_for_node(node: Dict[str, Any]) -> Optional[type[NodeParamSchema]]
         return SCHEMA_REGISTRY.get(f"source:{sk}")
 
     elif kind == "transform":
-        return None
+        return SCHEMA_REGISTRY.get("transform")
 
     elif kind == "tool":
-        return None
+        return SCHEMA_REGISTRY.get("tool")
 
     elif kind == "llm":
         return SCHEMA_REGISTRY.get("llm")
@@ -417,16 +551,85 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
             llm_kind = node.get("data", {}).get("llmKind") or "ollama"
 
             llm_params = LLMParams.model_validate(norm)
-            # Optional: kind-specific checks
-            if llm_kind == "openai_compat":
-                if not llm_params.connection_ref and not llm_params.api_key_ref:
-                    raise ValueError(
-                        "api_key_ref required for openai_compat when no connection_ref"
-                    )
         elif kind == "source":
-            # Keep whatever you already had here for sources.
-            # If you validate sources elsewhere, leave this branch as-is.
-            pass
+            source_kind = (node.get("data", {}).get("sourceKind") or params.get("source_type") or "file")
+            if source_kind == "file":
+                model = SourceFileParams.model_validate(params)
+                errors.extend(model.validate_required())
+            elif source_kind == "database":
+                model = SourceDatabaseParams.model_validate(params)
+                errors.extend(model.validate_required())
+            elif source_kind == "api":
+                model = SourceAPIParams.model_validate(params)
+                errors.extend(model.validate_required())
+            else:
+                errors.append(f"Unsupported source kind: {source_kind}")
+        elif kind == "transform":
+            from .nodes.transform import normalize_transform_params
+
+            transform_kind = (node.get("data", {}) or {}).get("transformKind")
+            norm = normalize_transform_params(params, default_op=transform_kind)
+            model = TransformParamsCurrent.model_validate(norm)
+            errors.extend(model.validate_required())
+
+            op = norm.get("op")
+            payload_key = {
+                "filter": "filter",
+                "select": "select",
+                "rename": "rename",
+                "derive": "derive",
+                "aggregate": "aggregate",
+                "join": "join",
+                "sort": "sort",
+                "limit": "limit",
+                "dedupe": "dedupe",
+                "sql": "sql",
+                "python": "code",
+            }.get(op)
+            payload = norm.get(payload_key) if payload_key else None
+            if not isinstance(payload, dict):
+                errors.append(f"{payload_key} block is required for op='{op}'")
+            else:
+                if op == "filter" and not str(payload.get("expr") or "").strip():
+                    errors.append("filter.expr is required")
+                elif op == "select":
+                    cols = payload.get("columns")
+                    if not isinstance(cols, list) or len(cols) == 0:
+                        errors.append("select.columns must be a non-empty array")
+                elif op == "rename":
+                    mp = payload.get("map")
+                    if not isinstance(mp, dict) or len(mp) == 0:
+                        errors.append("rename.map must be a non-empty object")
+                elif op == "derive":
+                    cols = payload.get("columns")
+                    if not isinstance(cols, list) or len(cols) == 0:
+                        errors.append("derive.columns must be a non-empty array")
+                elif op == "aggregate":
+                    metrics = payload.get("metrics")
+                    if not isinstance(metrics, list) or len(metrics) == 0:
+                        errors.append("aggregate.metrics must be a non-empty array")
+                elif op == "join":
+                    if not str(payload.get("withNodeId") or "").strip():
+                        errors.append("join.withNodeId is required")
+                    ons = payload.get("on")
+                    if not isinstance(ons, list) or len(ons) == 0:
+                        errors.append("join.on must be a non-empty array")
+                elif op == "sort":
+                    by = payload.get("by")
+                    if not isinstance(by, list) or len(by) == 0:
+                        errors.append("sort.by must be a non-empty array")
+                elif op == "limit":
+                    n = payload.get("n")
+                    if not isinstance(n, int) or n < 1:
+                        errors.append("limit.n must be an integer >= 1")
+                elif op == "sql" and not str(payload.get("query") or "").strip():
+                    errors.append("sql.query is required")
+                elif op == "python" and not str(payload.get("source") or "").strip():
+                    errors.append("code.source is required")
+        elif kind == "tool":
+            norm_tool = normalize_tool_params_frontend(params)
+            tool_model = ToolProviderParams.model_validate(norm_tool)
+            errors.extend(tool_model.validate_required())
 
         # ... other kinds ...
 
