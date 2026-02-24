@@ -136,7 +136,7 @@ try {
 <div class="sectionTitle">Prompt</div>
 
 <div class="grid">
-	<div class="row">
+	<div class="row promptRow">
 	<div class="k">system_prompt</div>
 	<div class="v">
 		<textarea
@@ -149,7 +149,7 @@ try {
 	</div>
 	</div>
 
-	<div class="row">
+	<div class="row promptRow">
 	<div class="k">user_prompt</div>
 	<div class="v">
 		<textarea
@@ -219,15 +219,24 @@ gap: 10px;
 
 .row {
 display: grid;
-grid-template-columns: 160px 1fr;
+grid-template-columns: 100px minmax(0, 1fr);
 align-items: start;
-gap: 12px;
+gap: 8px;
+}
+
+.promptRow {
+grid-template-columns: 1fr;
+gap: 8px;
 }
 
 .k {
 font-size: 14px;
 opacity: 0.85;
-padding-top: 6px;
+padding-top: 8px;
+}
+
+.promptRow .k {
+padding-top: 0;
 }
 
 .v {
@@ -246,11 +255,18 @@ color: inherit;
 padding: 8px 10px;
 font-size: 14px;
 outline: none;
+min-height: 40px;
 }
 
 textarea {
 resize: vertical;
 line-height: 1.35;
+min-height: 96px;
+}
+
+.row:not(.promptRow) input,
+.row:not(.promptRow) select {
+min-width: 0;
 }
 
 input:focus,

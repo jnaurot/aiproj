@@ -230,6 +230,37 @@ async def exec_llm_ollama(
                             break
 
             data = "".join(chunks).strip()
+            if not data:
+                # Some Ollama setups may finish a streamed chat without emitting deltas.
+                # Fallback to a non-stream response to recover final text deterministically.
+                await context.bus.emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "level": "warn",
+                        "message": "Ollama stream returned empty content; retrying once with stream=false",
+                    }
+                )
+
+                payload_non_stream = dict(payload)
+                payload_non_stream["stream"] = False
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(url, json=payload_non_stream)
+                    resp.raise_for_status()
+                    obj = resp.json()
+
+                fallback_text = ""
+                if isinstance(obj, dict):
+                    msg = obj.get("message")
+                    if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+                        fallback_text = msg["content"]
+                    elif isinstance(obj.get("response"), str):
+                        fallback_text = obj["response"]
+
+                data = fallback_text.strip()
+
             mime_type = "text/plain"
             if params.output_mode == "json":
                 try:

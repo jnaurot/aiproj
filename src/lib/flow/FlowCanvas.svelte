@@ -9,9 +9,8 @@
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
+	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
-	import { PortTypeSchema } from './schema';
-	import { get } from 'svelte/store';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
@@ -80,7 +79,7 @@
 		);
 	}
 	//ViewArtifact
-	type InspectorMode = 'edit' | 'output';
+	type InspectorMode = 'edit' | 'output' | 'ports';
 	let inspectorMode: InspectorMode = 'edit';
 
 	$: selectedId = $selectedNode?.id;
@@ -265,19 +264,6 @@
 		graphStore.resetRunUi();
 	}
 
-	async function loadOutput(nodeId: string) {
-		const s = get(graphStore);
-		const info = s.nodeOutputs[nodeId];
-		if (!info) return { kind: 'empty' as const };
-
-		const res = await fetch(`/runs/artifacts/${info.artifactId}`);
-		const mime = info.mimeType;
-
-		if (!res.ok) return { kind: 'error' as const, status: res.status, text: await res.text() };
-
-		if (mime === 'application/json') return { kind: 'json' as const, data: await res.json() };
-		return { kind: 'text' as const, text: await res.text() };
-	}
 </script>
 
 <div class="layout">
@@ -354,7 +340,7 @@
 					</div>
 					<div class="inspectorTabs">
 						<button
-								class="tabBtn"
+							class="tabBtn"
 							class:active={inspectorMode === 'edit'}
 							on:click={() => (inspectorMode = 'edit')}
 						>
@@ -362,25 +348,34 @@
 						</button>
 
 						<button
-								class="tabBtn"
+							class="tabBtn"
 							class:active={inspectorMode === 'output'}
 							disabled={!hasOutput}
 							on:click={() => (inspectorMode = 'output')}
 						>
 							Output
 						</button>
+
+						<button
+							class="tabBtn"
+							class:active={inspectorMode === 'ports'}
+							on:click={() => (inspectorMode = 'ports')}
+						>
+							Ports
+						</button>
 					</div>
 
-					<!-- Source editor lives here (and will be scrollable) -->
 					<div class="editorScroll">
 						{#if inspectorMode === 'edit'}
 							<NodeInspector />
-						{:else}
+						{:else if inspectorMode === 'output'}
 							<ArtifactViewer
 								artifactId={nodeOut.artifactId}
 								mimeType={nodeOut.mimeType}
 								preview={nodeOut.preview}
 							/>
+						{:else}
+							<PortsEditor selectedNode={$selectedNode} />
 						{/if}
 					</div>
 

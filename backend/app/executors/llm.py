@@ -1,8 +1,7 @@
 from typing import Any, Dict, Optional
 
 from app.runner.materialize import materialize_text
-from ..runner.events import  RunEventBus
-from ..runner.metadata import ExecutionContext
+from ..runner.metadata import ExecutionContext, NodeOutput
 from datetime import datetime, timezone
 
 from ..runner.schemas import LLMParams
@@ -47,8 +46,6 @@ async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
     context: ExecutionContext,
-    # bus: RunEventBus,
-    input_metadata: Optional[FileMetadata],
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """Execute LLM node"""
@@ -75,14 +72,6 @@ async def exec_llm(
         print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
-
-    if not input_metadata:
-        return NodeOutput(
-            status="failed",
-            metadata=None,
-            execution_time_ms=0.0,
-            error="LLM node requires input data",
-        )
 
     raw_params = node.get("data", {}).get("params", {}) or {}
     print("LLM EXEC raw_params (before normalize):", pformat(raw_params)[:8000])
@@ -116,18 +105,18 @@ async def exec_llm(
             run_id,
             node,
             context,
-            input_metadata,
+            None,
             llm_params,
             upstream_artifact_ids=upstream_artifact_ids,
         )
 
 
     if llm_kind == "openai_compat":
-        return await exec_llm_ollama(
+        return await exec_llm_openai_compat(
             run_id,
             node,
             context,
-            input_metadata,
+            None,
             llm_params,
             upstream_artifact_ids=upstream_artifact_ids,
         )

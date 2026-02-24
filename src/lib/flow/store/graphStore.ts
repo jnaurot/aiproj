@@ -15,7 +15,7 @@ import { createRun, streamRunEvents } from "$lib/flow/client/runs";
 import type { KnownRunEvent } from "$lib/flow/types/run";
 import type { SourceKind, LlmKind, TransformKind } from "$lib/flow/types/paramsMap";
 
-type NodeOutputInfo = { artifactId: string; mimeType: string; preview?: string }
+type NodeOutputInfo = { artifactId: string; mimeType?: string; preview?: string }
 type EdgeExec = "idle" | "active" | "done";
 type LogLevel = "info" | "warn" | "error";
 type RunLog = {
@@ -253,8 +253,6 @@ export const graphStore = (() => {
     ) {
         let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
 
-        console.log("updateNodeConfig called with:", nodeId, config);
-
         update((s) => {
             let nodes = s.nodes;
             let edges = s.edges;
@@ -359,7 +357,6 @@ export const graphStore = (() => {
 
     //BEGIN
     function patchInspectorDraft(patch: Record<string, any>) {
-        console.log("patchInspectorDraft", patch);
         update((s) => {
             if (!s.inspector.nodeId) return s;
             return {
@@ -387,7 +384,6 @@ export const graphStore = (() => {
     }
 
     function applyInspectorDraft() {
-        console.log("inside applyInspectorDraft");
         const s = get({ subscribe } as any) as GraphState;
         const nodeId = s.inspector.nodeId;
         if (!nodeId) return { ok: false, error: "No node selected" };
@@ -412,7 +408,6 @@ export const graphStore = (() => {
     }
 
     function revertInspectorDraft() {
-        console.log("inside revertInspectorDraft");
         update((s) => {
             const nodeId = s.inspector.nodeId;
             if (!nodeId) return s;
@@ -647,8 +642,6 @@ export const graphStore = (() => {
         // ----- selection -----
         selectNode(nodeId: string | null) {
             update((s) => {
-                console.log("selectNode", nodeId, s.inspector.draftParams, s.inspector.draftParams?.type);
-
                 if (!nodeId) {
                     return {
                         ...s,
@@ -658,7 +651,6 @@ export const graphStore = (() => {
                 }
 
                 const n = s.nodes.find((x) => x.id === nodeId);
-                console.log("selectNode", nodeId, n, s.inspector.draftParams, s.inspector.draftParams?.type);
                 return {
                     ...s,
                     selectedNodeId: nodeId,
@@ -854,7 +846,6 @@ export const graphStore = (() => {
                             switch (evt.type) {
 
                                 case "node_output": {
-                                    console.log("node_output", evt.nodeId, evt.artifactId, evt.preview);
                                     const nodeOutputs = {
                                         ...s.nodeOutputs,
                                         [evt.nodeId]: {

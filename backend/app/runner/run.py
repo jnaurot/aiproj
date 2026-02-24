@@ -22,7 +22,6 @@ from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
 
 from ..executors.source import exec_source
-from ..executors.transform import exec_transform
 from ..executors.llm import exec_llm
 from ..executors.tool import exec_tool
 
@@ -159,11 +158,6 @@ async def run_graph(
             upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
 
 
-            # Compatibility path: existing metadata flow
-            upstream_outputs = [context.outputs[nid] for nid in up_nodes if nid in context.outputs]
-            input_metadata = upstream_outputs[0].metadata if upstream_outputs else None
-
-
             exec_key = cache.execution_key(
                 node_kind=kind,
                 params=params,
@@ -180,6 +174,16 @@ async def run_graph(
 
                 # Verification (you asked for checks)
                 print(f"[cache-hit] node={node_id} artifact={cached_artifact_id[:10]}...")
+
+                cached_art = await context.artifact_store.get(cached_artifact_id)
+                await context.bus.emit({
+                    "type": "node_output",
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "at": iso_now(),
+                    "artifactId": cached_artifact_id,
+                    "mimeType": cached_art.mime_type,
+                })
 
                 await context.bus.emit({
                     "type": "node_finished",
@@ -372,23 +376,19 @@ async def run_graph(
                     print("[run_graph] LLM up_nodes:", up_nodes)
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] node_to_artifact keys:", list(node_to_artifact.keys()))
-                    output = await exec_llm(run_id, n, context, input_metadata, upstream_artifact_ids=upstream_ids)
+                    output = await exec_llm(run_id, n, context, upstream_artifact_ids=upstream_ids)
                 elif kind == "tool":
-                    output = await exec_tool(run_id, n, context, input_metadata, upstream_artifact_ids=upstream_ids)
+                    output = await exec_tool(run_id, n, context, upstream_artifact_ids=upstream_ids)
                 else:
                     raise RuntimeError(f"Unknown node kind: {kind}")
 
                 # Validate output
                 if output.status == "failed":
                     raise RuntimeError(output.error or "Node execution failed")
-                
-                if kind != "transform" and output.status == "succeeded" and not output.metadata:
-                    raise RuntimeError("Node succeeded but produced no metadata")
 
                 # Store output for legacy flow / UI
                 context.outputs[node_id] = output
 
-                # Transform now writes its own artifact payload (table bytes). Skip generic writer.
                 if kind == "transform":
                     await context.bus.emit({
                         "type": "node_finished",
@@ -397,126 +397,110 @@ async def run_graph(
                         "nodeId": node_id,
                         "status": output.status
                     })
-                    # Mark incoming edges as done (existing code below already does this)
-                    # continue????
-
-                # ---- Artifact write + binding ----
-                mime_type = "application/json"
-                payload_bytes: bytes
-
-                if kind == "source":
-                    ports = (n.get("data", {}).get("ports", {}) or {})
-                    out_contract = ports.get("out")  # "table" or "text"/"binary"/etc
-
-                    # Try to get parsed rows (list[dict]) from NodeOutput
-                    rows = getattr(output, "data", None)
-
-                    md = getattr(output, "metadata", None)
-                    if rows is None and md is not None:
-                        # metadata might be pydantic
-                        if hasattr(md, "rows"):
-                            rows = md.rows
-                        elif isinstance(md, dict):
-                            rows = md.get("rows")
-                        else:
-                            try:
-                                rows = md.model_dump().get("rows")
-                            except Exception:
-                                rows = None
-
-                    if out_contract == "table":
-                        if rows is None:
-                            raise RuntimeError("Source declares ports.out='table' but produced no rows in output.data/metadata.rows")
-
-                        import pandas as pd
-                        import io
-
-                        if not isinstance(rows, list):
-                            raise RuntimeError(f"Source table expected rows=list[dict], got {type(rows)}: {repr(rows)[:120]}")
-
-
-                        df = pd.DataFrame(rows)
-
-                        buf = io.StringIO()
-                        df.to_csv(buf, index=False, lineterminator="\n")
-                        payload_bytes = buf.getvalue().encode("utf-8")
-                        mime_type = "text/csv; charset=utf-8"
-
-                        # verification print (per your preference)
-                        print(f"[source->table] node={node_id} rows={len(df)} cols={len(df.columns)} bytes={len(payload_bytes)} mime={mime_type}")
-
-                    else:
-                        # fallback: store raw file bytes (text/binary contract)
-                        if not md or not getattr(md, "file_path", None):
-                            raise RuntimeError("Source succeeded but missing metadata.file_path")
-
-                        fp = md.file_path
-                        with open(fp, "rb") as f:
-                            payload_bytes = f.read()
-
-                        mime_type = getattr(md, "mime_type", None) or "application/octet-stream"
-                        print(f"[source->raw] node={node_id} bytes={len(payload_bytes)} mime={mime_type}")
-
-
-
-                elif kind == "llm":
-                    # Store the model output text/JSON
-                    # Prefer output.value if you set it; fallback to NodeOutput JSON
-                    v = getattr(output, "data", None)
-                    if v is None:
-                        payload_bytes = b""
-                    else:
-                        # v should be a string (your NodeOutput schema)
-                        payload_bytes = str(v).encode("utf-8")
-                    # mime_type = getattr(output.metadata, "mime_type", None) or "text/plain"
-                    md = getattr(output, "metadata", None)
-                    mime_type = getattr(md, "mime_type", None) or "text/plain"
-
-
                 else:
-                    # Default fallback (until you convert other nodes)
-                    payload_bytes = output.model_dump_json().encode("utf-8")
-                    mime_type = "application/json"
+                    # ---- Artifact write + binding ----
+                    mime_type = "application/octet-stream"
+                    payload_bytes: bytes
+                    data_value = getattr(output, "data", None)
 
-                artifact = Artifact(
-                    artifact_id=artifact_id,
-                    node_kind=kind,
-                    params_hash = cache.params_hash(params),
-                    upstream_ids=sorted(upstream_ids),
-                    created_at=datetime.now(timezone.utc),
-                    execution_version=context.execution_version,
-                    mime_type=mime_type,
-                    size_bytes=len(payload_bytes),
-                    storage_uri=f"memory://{artifact_id}",
-                    schema=None,
-                )
+                    if kind == "source":
+                        ports = (n.get("data", {}).get("ports", {}) or {})
+                        out_contract = ports.get("out")  # "table" or "text"/"binary"/etc
 
-                await context.artifact_store.write(artifact, payload_bytes)
-                context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
-                node_to_artifact[node_id] = artifact_id
-                #TODO UI FIX
-                await context.bus.emit({
-                    "type": "node_output",
-                    "runId": run_id,
-                    "nodeId": node_id,
-                    "at": iso_now(),
-                    "artifactId": artifact_id,
-                    "mimeType": artifact.mime_type,
-                })
+                        if out_contract == "table":
+                            rows = data_value
+                            if not isinstance(rows, list):
+                                raise RuntimeError(
+                                    f"Source table output must be list[dict], got {type(rows)}"
+                                )
 
-                # Update cache index
-                await cache.store_artifact_id(exec_key, artifact_id)
+                            import io
+                            import pandas as pd
 
-                # Verification print
-                print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
+                            df = pd.DataFrame(rows)
+                            buf = io.StringIO()
+                            df.to_csv(buf, index=False, lineterminator="\n")
+                            payload_bytes = buf.getvalue().encode("utf-8")
+                            mime_type = "text/csv; charset=utf-8"
+                        elif isinstance(data_value, bytes):
+                            payload_bytes = data_value
+                            mime_type = "application/octet-stream"
+                        elif isinstance(data_value, str):
+                            payload_bytes = data_value.encode("utf-8")
+                            mime_type = "text/plain; charset=utf-8"
+                        elif data_value is None:
+                            payload_bytes = b""
+                            mime_type = "text/plain; charset=utf-8"
+                        else:
+                            payload_bytes = json.dumps(data_value, ensure_ascii=False).encode("utf-8")
+                            mime_type = "application/json"
 
-                await context.bus.emit({
-                    "type": "node_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "nodeId": node_id,
-                    "status": output.status
-                })
+                    elif kind == "llm":
+                        md = getattr(output, "metadata", None)
+                        md_mime = getattr(md, "mime_type", None) if md is not None else None
+
+                        if isinstance(data_value, bytes):
+                            payload_bytes = data_value
+                            mime_type = md_mime or "application/octet-stream"
+                        elif data_value is None:
+                            payload_bytes = b""
+                            mime_type = md_mime or "text/plain; charset=utf-8"
+                        else:
+                            payload_bytes = str(data_value).encode("utf-8")
+                            mime_type = md_mime or "text/plain; charset=utf-8"
+
+                    else:
+                        if isinstance(data_value, bytes):
+                            payload_bytes = data_value
+                            mime_type = "application/octet-stream"
+                        elif isinstance(data_value, str):
+                            payload_bytes = data_value.encode("utf-8")
+                            mime_type = "text/plain; charset=utf-8"
+                        elif data_value is None:
+                            payload_bytes = b""
+                            mime_type = "application/json"
+                        else:
+                            payload_bytes = json.dumps(data_value, ensure_ascii=False).encode("utf-8")
+                            mime_type = "application/json"
+
+                    artifact = Artifact(
+                        artifact_id=artifact_id,
+                        node_kind=kind,
+                        params_hash=cache.params_hash(params),
+                        upstream_ids=sorted(upstream_ids),
+                        created_at=datetime.now(timezone.utc),
+                        execution_version=context.execution_version,
+                        mime_type=mime_type,
+                        size_bytes=len(payload_bytes),
+                        storage_uri=f"memory://{artifact_id}",
+                        schema=None,
+                    )
+
+                    await context.artifact_store.write(artifact, payload_bytes)
+                    context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
+                    node_to_artifact[node_id] = artifact_id
+                    await context.bus.emit({
+                        "type": "node_output",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "artifactId": artifact_id,
+                        "mimeType": artifact.mime_type,
+                    })
+
+                    # Update cache index
+                    await cache.store_artifact_id(exec_key, artifact_id)
+
+                    # Verification print
+                    print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
+
+                    await context.bus.emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": output.status
+                    })
 
             except Exception as ex:
                 traceback.print_exc()

@@ -174,6 +174,11 @@ async def _handle_file_source(
             rows = [{"text": ln} for ln in lines]
             data_out = rows
             row_count = len(rows)
+        elif isinstance(data, pd.DataFrame):
+            # convert dataframe rows to list[dict] for artifact serialization
+            rows = data.to_dict(orient="records")
+            data_out = rows
+            row_count = len(rows)
         elif isinstance(data, list):
             # already parsed rows
             data_out = data
@@ -220,7 +225,7 @@ async def _handle_file_source(
 
     return NodeOutput(
         status="succeeded",
-        data=rows,          # <-- THIS is the key change
+        data=data_out,
         metadata=metadata,
         execution_time_ms=0.0  # Will be set by caller
     )

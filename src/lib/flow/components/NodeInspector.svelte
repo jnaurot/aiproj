@@ -4,11 +4,9 @@
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 
-	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
 
-	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
 	import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
@@ -39,15 +37,6 @@
 
 	$: transformKind = (selectedNode?.data as any)?.transformKind ?? 'select';
 
-	$: console.log('NodeInspector selectedNode kind:', kind);
-	$: console.log('NodeInspector selectedNode sourceKind:', (selectedNode?.data as any)?.sourceKind);
-	$: console.log('NodeInspector llmKind:', llmKind);
-
-	function onApplyJson(parsed: unknown) {
-		if (!selectedNode) return;
-		graphStore.updateNodeConfig(selectedNode.id, { params: parsed });
-	}
-
 	function onDraft(patch: Record<string, any>) {
 		graphStore.patchInspectorDraft(patch);
 	}
@@ -56,23 +45,9 @@
 		graphStore.commitInspectorImmediate(patch);
 	}
 
-	function setSourceKind(next: SourceKind) {
-		if (!selectedNode) return;
-		graphStore.setSourceKind(selectedNode.id, next);
-	}
-
-	/**
-	 * For LLM: we keep kind inside params (matches your schema/llm.ts).
-	 * This avoids needing a new node-level discriminator right now.
-	 */
-	function setLlmKind(next: LlmKind) {
-		if (!selectedNode) return;
-		onCommit({ kind: next }); // immediate commit so editor swaps cleanly
-	}
 </script>
 
 {#if selectedNode}
-	<PortsEditor {selectedNode} />
 	{#if isSource}
 		<!-- SOURCE -->
 		<div class="section">

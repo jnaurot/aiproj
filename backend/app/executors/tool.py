@@ -1,6 +1,5 @@
 from typing import Any, Dict, Optional
-from ..runner.events import RunEventBus
-from ..runner.metadata import ExecutionContext, FileMetadata, NodeOutput, ArtifactStore
+from ..runner.metadata import ExecutionContext, NodeOutput
 from datetime import datetime, timezone
 
 print("[exec_tool] Module loaded")
@@ -14,7 +13,6 @@ async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
     context: ExecutionContext,
-    input_metadata: Optional[FileMetadata],  # Added
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """Execute tool node"""
@@ -24,22 +22,6 @@ async def exec_tool(
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
     assert hasattr(context, "artifact_store"), "context missing artifact_store"
-
-    if not input_metadata:
-        await context.bus.emit({
-            "type": "log",
-            "runId": run_id,
-            "at": iso_now(),
-            "level": "error",
-            "message": "Tool node requires input data",
-            "nodeId": node_id
-        })
-        return NodeOutput(
-            status="failed",
-            metadata=None,
-            execution_time_ms=0.0,
-            error="Tool node requires input data"
-        )
 
     params = node["data"].get("params", {})
     provider = params.get("provider")
