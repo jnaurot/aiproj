@@ -31,6 +31,7 @@ Required fields:
 - `nodeId`
 - `nodeKind`
 - `decision` (`cache_hit | cache_miss | cache_hit_contract_mismatch`)
+- `reason` (`CACHE_HIT | CACHE_ENTRY_MISSING | INPUTS_UNRESOLVED | PARAMS_CHANGED | INPUT_CHANGED | ENV_CHANGED | BUILD_CHANGED | UNCACHEABLE_EFFECTFUL_TOOL | CONTRACT_MISMATCH`)
 - `execKey`
 
 Optional fields:
@@ -76,4 +77,3 @@ For cache path nodes:
 For run-level summary:
 
 - `cache_summary` is emitted once per run (success, failure, or cancellation).
-

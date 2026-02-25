@@ -270,6 +270,22 @@ def _is_contract_mismatch_error(message: str) -> bool:
 
 
 _CACHE_DECISIONS = {"cache_hit", "cache_miss", "cache_hit_contract_mismatch"}
+_CACHE_REASONS = {
+    "CACHE_HIT",
+    "CACHE_ENTRY_MISSING",
+    "INPUTS_UNRESOLVED",
+    "PARAMS_CHANGED",
+    "INPUT_CHANGED",
+    "ENV_CHANGED",
+    "BUILD_CHANGED",
+    "UNCACHEABLE_EFFECTFUL_TOOL",
+    "CONTRACT_MISMATCH",
+}
+_DEFAULT_REASON_BY_DECISION = {
+    "cache_hit": "CACHE_HIT",
+    "cache_miss": "CACHE_ENTRY_MISSING",
+    "cache_hit_contract_mismatch": "CONTRACT_MISMATCH",
+}
 
 
 class ContractMismatchError(RuntimeError):
@@ -555,6 +571,9 @@ async def run_graph(
         reason: Optional[str] = None,
     ) -> None:
         d = decision if decision in _CACHE_DECISIONS else "cache_miss"
+        resolved_reason = str(reason or _DEFAULT_REASON_BY_DECISION.get(d, "CACHE_ENTRY_MISSING"))
+        if resolved_reason not in _CACHE_REASONS:
+            resolved_reason = "CACHE_ENTRY_MISSING"
         evt = {
             "type": "cache_decision",
             "schema_version": 1,
@@ -563,6 +582,7 @@ async def run_graph(
             "nodeId": node_id,
             "nodeKind": node_kind,
             "decision": d,
+            "reason": resolved_reason,
             "execKey": exec_key,
         }
         if artifact_id:
@@ -573,8 +593,6 @@ async def run_graph(
             evt["actualPortType"] = actual_port_type
         if producer_exec_key is not None:
             evt["producerExecKey"] = producer_exec_key
-        if reason:
-            evt["reason"] = str(reason)
         await context.bus.emit(evt)
 
     async def _emit_cache_summary_once() -> None:

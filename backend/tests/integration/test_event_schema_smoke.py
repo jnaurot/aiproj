@@ -21,7 +21,7 @@ REQUIRED_BY_TYPE = {
     "node_output": {"runId", "at", "nodeId", "artifactId"},
     "level_started": {"runId", "at", "levelIndex", "nodesInLevel"},
     "level_finished": {"runId", "at", "levelIndex", "elapsedMs"},
-    "cache_decision": {"schema_version", "runId", "at", "nodeId", "nodeKind", "decision", "execKey"},
+    "cache_decision": {"schema_version", "runId", "at", "nodeId", "nodeKind", "decision", "reason", "execKey"},
     "cache_summary": {"schema_version", "runId", "at", "cache_hit", "cache_miss", "cache_hit_contract_mismatch"},
     "edge_exec": {"runId", "at", "edgeId", "exec"},
     "log": {"runId", "at", "level", "message"},
@@ -32,6 +32,18 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "run_cancelled",
     "node_cancelled",
     "scheduler_cancelled",
+}
+
+ALLOWED_CACHE_REASONS = {
+    "CACHE_HIT",
+    "CACHE_ENTRY_MISSING",
+    "INPUTS_UNRESOLVED",
+    "PARAMS_CHANGED",
+    "INPUT_CHANGED",
+    "ENV_CHANGED",
+    "BUILD_CHANGED",
+    "UNCACHEABLE_EFFECTFUL_TOOL",
+    "CONTRACT_MISMATCH",
 }
 
 
@@ -107,5 +119,6 @@ async def test_event_schema_smoke(monkeypatch, tmp_path):
                 "cache_miss",
                 "cache_hit_contract_mismatch",
             }
+            assert evt.get("reason") in ALLOWED_CACHE_REASONS
         if evt["type"] == "cache_summary":
             assert evt.get("schema_version") == 1
