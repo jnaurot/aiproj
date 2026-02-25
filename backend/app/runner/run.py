@@ -571,6 +571,9 @@ async def run_graph(
         reason: Optional[str] = None,
     ) -> None:
         d = decision if decision in _CACHE_DECISIONS else "cache_miss"
+        # Contract note: reason is required on the wire; we always resolve one.
+        # Keep schema_version=1 for additive/non-breaking changes and only bump for
+        # breaking payload changes.
         resolved_reason = str(reason or _DEFAULT_REASON_BY_DECISION.get(d, "CACHE_ENTRY_MISSING"))
         if resolved_reason not in _CACHE_REASONS:
             resolved_reason = "CACHE_ENTRY_MISSING"

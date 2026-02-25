@@ -92,3 +92,9 @@ The project is a data pipeline/execution framework with:
 - Multiple executor types (LLM, source, tool, transform)
 
 The current task is to fix the transform executor and its tests to handle edge cases properly and use async/await correctly throughout.
+
+## Runtime Event Contract Notes
+
+- `cache_decision` events include `schema_version: 1`.
+- `cache_decision.reason` is required in emitted events; the runner resolves a default reason when one is not provided at call sites.
+- Keep `schema_version` at `1` for additive/non-breaking event changes, and bump only for breaking payload changes.
