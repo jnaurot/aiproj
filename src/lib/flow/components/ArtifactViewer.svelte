@@ -1,19 +1,45 @@
 <script lang="ts">
 	import JsonTreeNode from './JsonTreeNode.svelte';
 
-	export let artifactId: string;
-	export let mimeType: string | undefined;
-	export let preview: string | undefined;
+export let artifactId: string;
+export let mimeType: string | undefined;
+export let preview: string | undefined;
+export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 
 	type ArtifactMeta = {
 		artifactId: string;
 		nodeKind: string;
 		mimeType: string;
 		sizeBytes: number;
+		contentHash?: string | null;
 		createdAt: string;
 		paramsHash: string;
 		upstreamCount: number;
+		upstreamArtifactIds?: string[];
+		inputArtifactIds?: string[];
+		producerNodeId?: string | null;
+		producerRunId?: string | null;
+		producerExecKey?: string | null;
+		inputRefs?: { artifactId: string; label?: string }[];
 		payloadSchema?: Record<string, any> | null;
+	};
+
+	type InputArtifactSummary = {
+		label: string;
+		artifactId: string;
+		nodeKind: string;
+		mimeType: string;
+		rows: string | number;
+		cols: string | number;
+	};
+
+	type ConsumerSummary = {
+		inputArtifactId: string;
+		consumerRunId: string;
+		consumerNodeId: string;
+		consumerExecKey?: string | null;
+		outputArtifactId: string;
+		createdAt: string;
 	};
 
 	type TableCol = { name: string; type: string };
@@ -30,8 +56,17 @@
 	let offset = 0;
 	let limit = 100;
 	let jsonEstimatedSize = 0;
+	let inputArtifacts: InputArtifactSummary[] = [];
+	let consumers: ConsumerSummary[] = [];
+	let activeArtifactId = '';
+	let boundArtifactId = '';
+	let lineageJson: any = null;
 
-	$: if (artifactId) void loadArtifact(artifactId);
+	$: if (artifactId && artifactId !== boundArtifactId) {
+		boundArtifactId = artifactId;
+		activeArtifactId = artifactId;
+		void loadArtifact(activeArtifactId);
+	}
 
 	$: effectiveMime = meta?.mimeType ?? mimeType ?? '';
 	$: isTable =
@@ -259,8 +294,126 @@
 
 	async function copyArtifactId() {
 		try {
-			await navigator.clipboard.writeText(artifactId);
+			await navigator.clipboard.writeText(activeArtifactId || artifactId);
 		} catch {}
+	}
+
+	async function copyContentHash() {
+		const hash = meta?.contentHash;
+		if (!hash) return;
+		try {
+			await navigator.clipboard.writeText(hash);
+		} catch {}
+	}
+
+	async function copyLineageJson() {
+		if (!lineageJson) return;
+		try {
+			await navigator.clipboard.writeText(JSON.stringify(lineageJson, null, 2));
+		} catch {}
+	}
+
+	async function copyArtifactLink() {
+		const id = activeArtifactId || artifactId;
+		if (!id) return;
+		const url = `${window.location.origin}/artifacts/${encodeURIComponent(id)}`;
+		try {
+			await navigator.clipboard.writeText(url);
+		} catch {}
+	}
+
+	function shortId(id: string): string {
+		if (!id) return '';
+		return id.length > 16 ? `${id.slice(0, 12)}...` : id;
+	}
+
+	function alphaInputLabel(idx: number): string {
+		let n = idx + 1;
+		let out = '';
+		while (n > 0) {
+			const rem = (n - 1) % 26;
+			out = String.fromCharCode(65 + rem) + out;
+			n = Math.floor((n - 1) / 26);
+		}
+		return `Input ${out}`;
+	}
+
+	function rowsFromSchema(ps: Record<string, any> | null | undefined): string | number {
+		if (!ps || typeof ps !== 'object') return '-';
+		return (ps as any).row_count ?? '-';
+	}
+
+	function colsFromSchema(ps: Record<string, any> | null | undefined): string | number {
+		if (!ps || typeof ps !== 'object') return '-';
+		const cols = (ps as any).columns;
+		return Array.isArray(cols) ? cols.length : '-';
+	}
+
+	async function loadInputSummaries(ids: string[], refs?: { artifactId: string; label?: string }[]) {
+		inputArtifacts = [];
+		if (!Array.isArray(ids) || ids.length === 0) return;
+		const labelById = new Map<string, string>();
+		if (Array.isArray(refs)) {
+			for (const r of refs) {
+				if (r?.artifactId) labelById.set(r.artifactId, String(r.label ?? '').trim());
+			}
+		}
+		const summaries = await Promise.all(
+			ids.map(async (id, idx) => {
+				try {
+					const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/meta`);
+					if (!res.ok) return null;
+					const m = await res.json();
+					return {
+						label: labelById.get(id) || alphaInputLabel(idx),
+						artifactId: String(m.artifactId ?? id),
+						nodeKind: String(m.nodeKind ?? '-'),
+						mimeType: String(m.mimeType ?? '-'),
+						rows: rowsFromSchema(m.payloadSchema),
+						cols: colsFromSchema(m.payloadSchema)
+					} as InputArtifactSummary;
+				} catch {
+					return null;
+				}
+			})
+		);
+		inputArtifacts = summaries.filter((x): x is InputArtifactSummary => Boolean(x));
+	}
+
+	async function openArtifact(id: string) {
+		if (!id) return;
+		activeArtifactId = id;
+		void loadArtifact(id);
+	}
+
+	function jumpToProducer() {
+		const nid = meta?.producerNodeId;
+		if (!nid || !onJumpToNode) return;
+		onJumpToNode(nid);
+	}
+
+	async function loadConsumers(id: string) {
+		consumers = [];
+		try {
+			const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/consumers?limit=50`);
+			if (!res.ok) return;
+			const body = await res.json();
+			consumers = Array.isArray(body?.consumers) ? body.consumers : [];
+		} catch {}
+	}
+
+	async function loadLineage(id: string) {
+		lineageJson = null;
+		try {
+			const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/lineage?depth=1`);
+			if (!res.ok) return;
+			lineageJson = await res.json();
+		} catch {}
+	}
+
+	function jumpToConsumerNode(nodeId: string) {
+		if (!nodeId || !onJumpToNode) return;
+		onJumpToNode(nodeId);
 	}
 
 	async function loadArtifact(id: string) {
@@ -272,11 +425,17 @@
 		tableCols = [];
 		totalRows = 0;
 		offset = 0;
+		inputArtifacts = [];
+		consumers = [];
+		lineageJson = null;
 
 		try {
 			const m = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/meta`);
 			if (!m.ok) throw new Error(`${m.status} ${m.statusText}`);
 			meta = await m.json();
+			const inputIds = (meta?.inputArtifactIds ?? meta?.upstreamArtifactIds ?? []) as string[];
+			await loadInputSummaries(inputIds, meta?.inputRefs);
+			await Promise.all([loadConsumers(id), loadLineage(id)]);
 
 			if (isTableLike(meta?.mimeType ?? mimeType ?? '', meta?.payloadSchema)) {
 				await loadTablePage(0);
@@ -329,7 +488,7 @@
 		error = null;
 		try {
 			const res = await fetch(
-				`/runs/artifacts/${encodeURIComponent(artifactId)}/preview?offset=${nextOffset}&limit=${limit}`
+				`/runs/artifacts/${encodeURIComponent(activeArtifactId || artifactId)}/preview?offset=${nextOffset}&limit=${limit}`
 			);
 			if (!res.ok) {
 				const body = await res.text().catch(() => '');
@@ -362,13 +521,13 @@
 
 	async function downloadArtifact() {
 		try {
-			const res = await fetch(`/runs/artifacts/${encodeURIComponent(artifactId)}`);
+			const res = await fetch(`/runs/artifacts/${encodeURIComponent(activeArtifactId || artifactId)}`);
 			if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 			const blob = await res.blob();
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
 			a.href = url;
-			a.download = `${artifactId.slice(0, 12)}`;
+			a.download = `${(activeArtifactId || artifactId).slice(0, 12)}`;
 			document.body.appendChild(a);
 			a.click();
 			a.remove();
@@ -390,6 +549,11 @@
 	<span class="chip"><b>mime</b> {effectiveMime || '-'}</span>
 	<span class="chip"><b>rows</b> {isTable ? totalRows || '-' : '-'}</span>
 	<span class="chip"><b>cols</b> {isTable ? colCount || '-' : '-'}</span>
+	{#if meta?.contentHash}
+		<span class="chip"><b>hash</b> {shortId(meta.contentHash)}</span>
+	{/if}
+	<button class="copyBtn" on:click={copyLineageJson}>Copy Lineage JSON</button>
+	<button class="copyBtn" on:click={copyArtifactLink}>Copy Link</button>
 	<button class="download" on:click={downloadArtifact}>Download</button>
 </div>
 
@@ -397,8 +561,90 @@
 	<div class="artifactRow">
 		<b>artifactId:</b>
 		<button class="copyBtn" on:click={copyArtifactId}>Copy</button>
-		<span class="artifactId">{artifactId}</span>
+		<span class="artifactId">{activeArtifactId || artifactId}</span>
 	</div>
+	{#if meta?.contentHash}
+		<div class="artifactRow">
+			<b>contentHash:</b>
+			<button class="copyBtn" on:click={copyContentHash}>Copy</button>
+			<span class="artifactId">{meta.contentHash}</span>
+		</div>
+	{/if}
+	{#if meta?.producerNodeId || meta?.producerRunId}
+		<div class="producerRow">
+			<b>Produced by:</b>
+			{#if meta?.producerNodeId}
+				<button class="producerBtn" on:click={jumpToProducer}>node {meta.producerNodeId}</button>
+			{:else}
+				<span>node -</span>
+			{/if}
+			<span>run {meta?.producerRunId || '-'}</span>
+		</div>
+	{/if}
+	{#if inputArtifacts.length > 0}
+		<div class="inputsRow">
+			<b>Inputs:</b>
+			<div class="inputsList">
+				{#each inputArtifacts as inp}
+					<button class="inputItem" on:click={() => openArtifact(inp.artifactId)}>
+						<span class="inputLabel">{inp.label}</span>
+						<span class="inputId">{shortId(inp.artifactId)}</span>
+						<span class="inputMeta">{inp.nodeKind}</span>
+						<span class="inputMeta">{inp.mimeType}</span>
+						<span class="inputMeta">rows {inp.rows}</span>
+						<span class="inputMeta">cols {inp.cols}</span>
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
+	{#if consumers.length > 0}
+		<div class="inputsRow">
+			<b>Used by:</b>
+			<div class="inputsList">
+				{#each consumers as c}
+					<div class="consumerItem">
+						<span class="inputMeta">node {c.consumerNodeId}</span>
+						<span class="inputMeta">run {c.consumerRunId}</span>
+						<button class="copyBtn" on:click={() => jumpToConsumerNode(c.consumerNodeId)}>Jump</button>
+						<button class="copyBtn" on:click={() => openArtifact(c.outputArtifactId)}>
+							Open Output
+						</button>
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
+	{#if lineageJson?.lineage}
+		<details class="miniGraph" open>
+			<summary>Lineage Graph</summary>
+			<div class="miniGraphGrid">
+				<div class="miniCol">
+					<div class="miniTitle">Inputs</div>
+					{#each inputArtifacts as inp}
+						<button class="miniNode" on:click={() => openArtifact(inp.artifactId)}>
+							{inp.label} {shortId(inp.artifactId)}
+						</button>
+					{/each}
+				</div>
+				<div class="miniCol">
+					<div class="miniTitle">Producer</div>
+					<button class="miniNode" on:click={jumpToProducer}>
+						{meta?.producerNodeId ? `node ${meta.producerNodeId}` : 'node -'}
+					</button>
+					<div class="miniNode current">artifact {shortId(activeArtifactId || artifactId)}</div>
+				</div>
+				<div class="miniCol">
+					<div class="miniTitle">Consumers</div>
+					{#each consumers.slice(0, 8) as c}
+						<button class="miniNode" on:click={() => jumpToConsumerNode(c.consumerNodeId)}>
+							node {c.consumerNodeId}
+						</button>
+					{/each}
+				</div>
+			</div>
+		</details>
+	{/if}
 </div>
 
 {#if loading}
@@ -504,7 +750,7 @@
 	.meta {
 		margin: 8px 0 12px;
 		font-size: 12px;
-		opacity: 0.9;
+		opacity: 1;
 	}
 	.block {
 		margin-top: 10px;
@@ -545,17 +791,111 @@
 	.download,
 	.pager button,
 	.pager select,
-	.copyBtn {
+	.copyBtn,
+	.producerBtn {
 		background: var(--av-surface-alt);
 		color: var(--av-text);
 		border: 1px solid var(--av-border);
 		border-radius: 6px;
+	}
+	.producerBtn {
+		padding: 2px 8px;
+		cursor: pointer;
 	}
 	.artifactRow {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 		flex-wrap: wrap;
+	}
+	.producerRow {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		margin-top: 6px;
+	}
+	.inputsRow {
+		margin-top: 8px;
+		display: grid;
+		gap: 6px;
+	}
+	.inputsList {
+		display: grid;
+		gap: 6px;
+	}
+	.inputItem {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+		padding: 6px 8px;
+		border: 1px solid var(--av-border);
+		background: var(--av-surface-alt);
+		color: var(--av-text);
+		border-radius: 8px;
+		text-align: left;
+		cursor: pointer;
+	}
+	.inputId {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+			monospace;
+	}
+	.inputLabel {
+		font-weight: 700;
+		font-size: 11px;
+	}
+	.inputMeta {
+		padding: 2px 6px;
+		border-radius: 999px;
+		border: 1px solid var(--av-border);
+		background: var(--av-chip-bg);
+		color: var(--av-chip-text);
+		font-size: 11px;
+	}
+	.consumerItem {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 8px;
+		padding: 6px 8px;
+		border: 1px solid var(--av-border);
+		border-radius: 8px;
+		background: var(--av-surface-alt);
+	}
+	.miniGraph {
+		margin-top: 10px;
+	}
+	.miniGraphGrid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+		margin-top: 8px;
+	}
+	.miniCol {
+		border: 1px solid var(--av-border);
+		border-radius: 8px;
+		padding: 8px;
+		background: var(--av-surface-alt);
+		display: grid;
+		gap: 6px;
+	}
+	.miniTitle {
+		font-weight: 700;
+		font-size: 11px;
+		opacity: 0.9;
+	}
+	.miniNode {
+		padding: 6px 8px;
+		border: 1px solid var(--av-border);
+		border-radius: 6px;
+		background: var(--av-surface);
+		color: var(--av-text);
+		text-align: left;
+		font-size: 11px;
+	}
+	.miniNode.current {
+		background: var(--av-chip-bg);
 	}
 	.artifactId {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',

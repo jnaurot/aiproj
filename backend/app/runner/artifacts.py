@@ -60,6 +60,16 @@ class ArtifactStore(Protocol):
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]: ...
     async def list_runs(self, include_deleted: bool = False) -> List[Dict[str, Any]]: ...
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]: ...
+    async def record_consumers(
+        self,
+        *,
+        input_artifact_ids: List[str],
+        consumer_run_id: str,
+        consumer_node_id: str,
+        consumer_exec_key: Optional[str],
+        output_artifact_id: str,
+    ) -> None: ...
+    async def get_consumers(self, artifact_id: str, limit: int = 50) -> List[Dict[str, Any]]: ...
     async def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]: ...
@@ -79,6 +89,7 @@ class MemoryArtifactStore:
         self._meta: Dict[str, Artifact] = {}
         self._blob: Dict[str, bytes] = {}
         self._runs: Dict[str, Dict[str, Any]] = {}
+        self._consumers: Dict[str, List[Dict[str, Any]]] = {}
 
     async def exists(self, artifact_id: str) -> bool:
         return artifact_id in self._meta
@@ -153,6 +164,14 @@ class MemoryArtifactStore:
                 artifact_ids.append(aid)
                 self._meta.pop(aid, None)
                 self._blob.pop(aid, None)
+        for input_id, rows in list(self._consumers.items()):
+            self._consumers[input_id] = [
+                r
+                for r in rows
+                if r.get("consumerRunId") != run_id and r.get("outputArtifactId") not in artifact_ids
+            ]
+            if not self._consumers[input_id]:
+                self._consumers.pop(input_id, None)
         run_deleted = (self._runs.pop(run_id, None) is not None) or bool(artifact_ids)
         return {
             "runDeleted": run_deleted,
@@ -162,6 +181,42 @@ class MemoryArtifactStore:
             "blobsDeleted": len(artifact_ids),
             "artifactIdsRemoved": artifact_ids,
         }
+
+    async def record_consumers(
+        self,
+        *,
+        input_artifact_ids: List[str],
+        consumer_run_id: str,
+        consumer_node_id: str,
+        consumer_exec_key: Optional[str],
+        output_artifact_id: str,
+    ) -> None:
+        created_at = datetime.now(timezone.utc).isoformat()
+        for input_id in sorted(set(input_artifact_ids or [])):
+            if not input_id:
+                continue
+            row = {
+                "inputArtifactId": input_id,
+                "consumerRunId": consumer_run_id,
+                "consumerNodeId": consumer_node_id,
+                "consumerExecKey": consumer_exec_key,
+                "outputArtifactId": output_artifact_id,
+                "createdAt": created_at,
+            }
+            rows = self._consumers.setdefault(input_id, [])
+            exists = any(
+                r.get("consumerRunId") == consumer_run_id
+                and r.get("consumerNodeId") == consumer_node_id
+                and r.get("outputArtifactId") == output_artifact_id
+                for r in rows
+            )
+            if not exists:
+                rows.append(row)
+
+    async def get_consumers(self, artifact_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        rows = list(self._consumers.get(artifact_id, []))
+        rows.sort(key=lambda r: str(r.get("createdAt", "")), reverse=True)
+        return rows[: max(1, int(limit))]
 
     async def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
@@ -215,6 +270,28 @@ class _SqliteArtifactIndex:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_node_id ON artifacts(node_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS artifact_consumers (
+                    input_artifact_id TEXT NOT NULL,
+                    consumer_run_id TEXT NOT NULL,
+                    consumer_node_id TEXT NOT NULL,
+                    consumer_exec_key TEXT,
+                    output_artifact_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(input_artifact_id, consumer_run_id, consumer_node_id, output_artifact_id)
+                )
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifact_consumers_input ON artifact_consumers(input_artifact_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifact_consumers_run ON artifact_consumers(consumer_run_id)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_artifact_consumers_output ON artifact_consumers(output_artifact_id)"
+            )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS runs (
@@ -366,6 +443,69 @@ class _SqliteArtifactIndex:
             for r in rows
         ]
 
+    def record_consumers(
+        self,
+        *,
+        input_artifact_ids: List[str],
+        consumer_run_id: str,
+        consumer_node_id: str,
+        consumer_exec_key: Optional[str],
+        output_artifact_id: str,
+    ) -> None:
+        ids = sorted(set(input_artifact_ids or []))
+        if not ids:
+            return
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self._conn.cursor()
+            for input_id in ids:
+                if not input_id:
+                    continue
+                cur.execute(
+                    """
+                    INSERT OR IGNORE INTO artifact_consumers (
+                        input_artifact_id, consumer_run_id, consumer_node_id,
+                        consumer_exec_key, output_artifact_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        input_id,
+                        consumer_run_id,
+                        consumer_node_id,
+                        consumer_exec_key,
+                        output_artifact_id,
+                        created_at,
+                    ),
+                )
+            self._conn.commit()
+
+    def get_consumers(self, artifact_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        lim = max(1, int(limit))
+        with self._lock:
+            cur = self._conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT input_artifact_id, consumer_run_id, consumer_node_id,
+                       consumer_exec_key, output_artifact_id, created_at
+                FROM artifact_consumers
+                WHERE input_artifact_id=?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (artifact_id, lim),
+            ).fetchall()
+        return [
+            {
+                "inputArtifactId": r[0],
+                "consumerRunId": r[1],
+                "consumerNodeId": r[2],
+                "consumerExecKey": r[3],
+                "outputArtifactId": r[4],
+                "createdAt": r[5],
+            }
+            for r in rows
+        ]
+
     def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         mode = (mode or "soft").lower()
         gc = (gc or "none").lower()
@@ -401,6 +541,12 @@ class _SqliteArtifactIndex:
             artifact_ids = [r[0] for r in rows]
             candidate_hashes = {r[1] for r in rows if r[1]}
 
+            cur.execute("DELETE FROM artifact_consumers WHERE consumer_run_id=?", (run_id,))
+            if artifact_ids:
+                cur.execute(
+                    f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({','.join(['?'] * len(artifact_ids))})",
+                    tuple(artifact_ids),
+                )
             cur.execute("DELETE FROM artifacts WHERE run_id=?", (run_id,))
             artifacts_removed = cur.rowcount
             cur.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
@@ -584,6 +730,26 @@ class DiskArtifactStore:
 
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         return self._index.delete_run(run_id, mode=mode, gc=gc)
+
+    async def record_consumers(
+        self,
+        *,
+        input_artifact_ids: List[str],
+        consumer_run_id: str,
+        consumer_node_id: str,
+        consumer_exec_key: Optional[str],
+        output_artifact_id: str,
+    ) -> None:
+        self._index.record_consumers(
+            input_artifact_ids=input_artifact_ids,
+            consumer_run_id=consumer_run_id,
+            consumer_node_id=consumer_node_id,
+            consumer_exec_key=consumer_exec_key,
+            output_artifact_id=output_artifact_id,
+        )
+
+    async def get_consumers(self, artifact_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+        return self._index.get_consumers(artifact_id, limit=limit)
 
     async def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None

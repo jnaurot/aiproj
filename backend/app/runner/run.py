@@ -210,6 +210,48 @@ def _is_contract_mismatch_error(message: str) -> bool:
     return ("contract mismatch" in m) or ("payload schema mismatch" in m)
 
 
+def _env_int(name: str, default: int, minimum: int = 1) -> int:
+    raw = str(__import__("os").environ.get(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        val = int(raw)
+    except Exception:
+        return default
+    return max(minimum, val)
+
+
+def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
+    sub = set(plan.subgraph)
+    indeg: Dict[str, int] = {nid: 0 for nid in sub}
+    adj: Dict[str, list[str]] = {nid: [] for nid in sub}
+    for e in edges.values():
+        s = e.get("source")
+        t = e.get("target")
+        if s in sub and t in sub:
+            adj[s].append(t)
+            indeg[t] += 1
+
+    order_index = {nid: i for i, nid in enumerate(plan.order)}
+    ready = sorted([nid for nid, d in indeg.items() if d == 0], key=lambda n: order_index.get(n, 10**9))
+    levels: list[list[str]] = []
+    seen = 0
+    while ready:
+        level = list(ready)
+        levels.append(level)
+        seen += len(level)
+        nxt: list[str] = []
+        for cur in level:
+            for nb in adj.get(cur, []):
+                indeg[nb] -= 1
+                if indeg[nb] == 0:
+                    nxt.append(nb)
+        ready = sorted(nxt, key=lambda n: order_index.get(n, 10**9))
+    if seen != len(sub):
+        raise ValueError("Graph is not a DAG (cycle detected)")
+    return levels
+
+
 async def _emit_error_artifact(
     *,
     context: ExecutionContext,
@@ -249,6 +291,29 @@ async def _emit_error_artifact(
     await context.artifact_store.write(artifact, payload_bytes)
     context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="failed")
     return artifact_id
+
+
+async def _record_consumers(
+    *,
+    context: ExecutionContext,
+    input_artifact_ids: list[str],
+    consumer_run_id: str,
+    consumer_node_id: str,
+    consumer_exec_key: Optional[str],
+    output_artifact_id: str,
+) -> None:
+    if not input_artifact_ids:
+        return
+    record_fn = getattr(context.artifact_store, "record_consumers", None)
+    if not callable(record_fn):
+        return
+    await record_fn(
+        input_artifact_ids=sorted(set(input_artifact_ids)),
+        consumer_run_id=consumer_run_id,
+        consumer_node_id=consumer_node_id,
+        consumer_exec_key=consumer_exec_key,
+        output_artifact_id=output_artifact_id,
+    )
 
 
 
@@ -321,7 +386,7 @@ async def run_graph(
         nodes = node_map(graph)
         edges = edge_map(graph)
 
-        for node_id in plan.order:
+        async def _execute_node(node_id: str) -> Dict[str, Any]:
             await context.bus.emit({
                 "type": "node_started",
                 "runId": run_id,
@@ -373,6 +438,14 @@ async def run_graph(
             if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
                 context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                 node_to_artifact[node_id] = cached_artifact_id
+                await _record_consumers(
+                    context=context,
+                    input_artifact_ids=upstream_ids,
+                    consumer_run_id=run_id,
+                    consumer_node_id=node_id,
+                    consumer_exec_key=exec_key,
+                    output_artifact_id=cached_artifact_id,
+                )
 
                 # Verification (you asked for checks)
                 print(f"[cache-hit] node={node_id} artifact={cached_artifact_id[:10]}...")
@@ -405,7 +478,8 @@ async def run_graph(
                         "edgeId": edge_id,
                         "exec": "done"
                     })
-                continue
+                await asyncio.sleep(0.05)
+                return {"ok": True, "cached": True}
 
             # ---- Execute node ----
             try:
@@ -520,6 +594,14 @@ async def run_graph(
                         if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
                             context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                             node_to_artifact[node_id] = cached_artifact_id
+                            await _record_consumers(
+                                context=context,
+                                input_artifact_ids=[aid for _, aid in input_refs],
+                                consumer_run_id=run_id,
+                                consumer_node_id=node_id,
+                                consumer_exec_key=exec_key,
+                                output_artifact_id=cached_artifact_id,
+                            )
 
                             print(f"[cache-hit] transform node={node_id} artifact={cached_artifact_id[:10]}...")
 
@@ -553,7 +635,8 @@ async def run_graph(
                                     "edgeId": edge_id,
                                     "exec": "done"
                                 })
-                            continue
+                            await asyncio.sleep(0.05)
+                            return {"ok": True, "cached": True}
 
                         # 4) execute
                         res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
@@ -591,6 +674,14 @@ async def run_graph(
                         )
 
                         await context.artifact_store.write(artifact, res.payload_bytes)
+                        await _record_consumers(
+                            context=context,
+                            input_artifact_ids=[aid for _, aid in input_refs],
+                            consumer_run_id=run_id,
+                            consumer_node_id=node_id,
+                            consumer_exec_key=exec_key,
+                            output_artifact_id=artifact_id,
+                        )
 
                         # bind + node_to_artifact
                         context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
@@ -864,6 +955,14 @@ async def run_graph(
                     )
 
                     await context.artifact_store.write(artifact, payload_bytes)
+                    await _record_consumers(
+                        context=context,
+                        input_artifact_ids=upstream_ids,
+                        consumer_run_id=run_id,
+                        consumer_node_id=node_id,
+                        consumer_exec_key=exec_key,
+                        output_artifact_id=artifact_id,
+                    )
                     context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
                     node_to_artifact[node_id] = artifact_id
                     await context.bus.emit({
@@ -938,13 +1037,7 @@ async def run_graph(
                     "status": "failed",
                     "error": error_message
                 })
-                await context.bus.emit({
-                    "type": "run_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "status": "failed"
-                })
-                return
+                return {"ok": False, "cached": False}
 
             # Mark incoming edges as done
             for edge_id in plan.incoming_edges.get(node_id, []):
@@ -957,6 +1050,141 @@ async def run_graph(
                 })
 
             await asyncio.sleep(0.05)
+            return {"ok": True, "cached": False}
+
+        levels = _plan_levels(plan, edges)
+        run_t0 = asyncio.get_running_loop().time()
+        max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
+        max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
+        max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
+        max_llm = _env_int("RUNNER_MAX_LLM", 2, minimum=1)
+        max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
+        global_sem = asyncio.Semaphore(max_inflight)
+        kind_sems = {
+            "source": asyncio.Semaphore(max_source),
+            "transform": asyncio.Semaphore(max_transform),
+            "llm": asyncio.Semaphore(max_llm),
+            "tool": asyncio.Semaphore(max_tool),
+        }
+
+        inflight_current = 0
+        peak_concurrency = 0
+        total_cached = 0
+        total_succeeded = 0
+        total_failed = 0
+
+        async def _run_with_limits(node_id: str) -> Dict[str, Any]:
+            nonlocal inflight_current, peak_concurrency
+            n = nodes[node_id]
+            kind = n.get("data", {}).get("kind")
+            kind_sem = kind_sems.get(kind)
+            async with global_sem:
+                inflight_current += 1
+                if inflight_current > peak_concurrency:
+                    peak_concurrency = inflight_current
+                if kind_sem is None:
+                    try:
+                        return await _execute_node(node_id)
+                    finally:
+                        inflight_current -= 1
+                try:
+                    async with kind_sem:
+                        return await _execute_node(node_id)
+                finally:
+                    inflight_current -= 1
+
+        run_failed = False
+        for level_idx, level_nodes in enumerate(levels, start=1):
+            kind_counts: Dict[str, int] = {"source": 0, "transform": 0, "llm": 0, "tool": 0}
+            for nid in level_nodes:
+                k = (nodes.get(nid, {}).get("data", {}) or {}).get("kind")
+                if k in kind_counts:
+                    kind_counts[k] += 1
+
+            await context.bus.emit({
+                "type": "level_started",
+                "runId": run_id,
+                "at": iso_now(),
+                "levelIndex": level_idx,
+                "nodesInLevel": len(level_nodes),
+                "globalCap": max_inflight,
+                "caps": {
+                    "source": max_source,
+                    "transform": max_transform,
+                    "llm": max_llm,
+                    "tool": max_tool,
+                },
+                "kindCounts": kind_counts,
+            })
+            await context.bus.emit({
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    f"[scheduler] level {level_idx} start nodes={len(level_nodes)} "
+                    f"caps(g={max_inflight},s={max_source},t={max_transform},l={max_llm},tool={max_tool}) "
+                    f"kinds={kind_counts}"
+                ),
+            })
+
+            level_t0 = asyncio.get_running_loop().time()
+            tasks = [asyncio.create_task(_run_with_limits(nid)) for nid in level_nodes]
+            results = await asyncio.gather(*tasks) if tasks else []
+            level_cached = sum(1 for r in results if r.get("cached"))
+            level_failed = sum(1 for r in results if not r.get("ok"))
+            level_succeeded = len(results) - level_failed - level_cached
+            total_cached += level_cached
+            total_failed += level_failed
+            total_succeeded += level_succeeded
+            level_elapsed_ms = int((asyncio.get_running_loop().time() - level_t0) * 1000)
+
+            await context.bus.emit({
+                "type": "level_finished",
+                "runId": run_id,
+                "at": iso_now(),
+                "levelIndex": level_idx,
+                "succeeded": level_succeeded,
+                "failed": level_failed,
+                "skipped": level_cached,
+                "elapsedMs": level_elapsed_ms,
+            })
+            await context.bus.emit({
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    f"[scheduler] level {level_idx} done ok={level_succeeded} "
+                    f"failed={level_failed} cached={level_cached} elapsed_ms={level_elapsed_ms}"
+                ),
+            })
+
+            if level_failed > 0:
+                run_failed = True
+                break
+
+        total_runtime_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
+        await context.bus.emit({
+            "type": "log",
+            "runId": run_id,
+            "at": iso_now(),
+            "level": "info",
+            "message": (
+                f"[scheduler] summary executed={total_succeeded + total_failed} "
+                f"cached={total_cached} failed={total_failed} "
+                f"peak_concurrency={peak_concurrency} runtime_ms={total_runtime_ms}"
+            ),
+        })
+
+        if run_failed:
+            await context.bus.emit({
+                "type": "run_finished",
+                "runId": run_id,
+                "at": iso_now(),
+                "status": "failed"
+            })
+            return
 
         await context.bus.emit({
             "type": "run_finished",

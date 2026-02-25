@@ -260,6 +260,16 @@
 		graphStore.updateNodeTitle($selectedNode.id, label);
 	}
 
+	function jumpToNodeFromArtifact(nodeId: string) {
+		if (!nodeId) return;
+		const n = nodes.find((x) => x.id === nodeId);
+		if (!n) return;
+		graphStore.selectNode(nodeId);
+		inspectorMode = 'output';
+		const vp = getViewport();
+		setCenter(n.position.x + 120, n.position.y + 40, { zoom: vp.zoom, duration: 250 });
+	}
+
 	function resetRunUi() {
 		graphStore.resetRunUi();
 	}
@@ -373,6 +383,7 @@
 								artifactId={nodeOut.artifactId}
 								mimeType={nodeOut.mimeType}
 								preview={nodeOut.preview}
+								onJumpToNode={jumpToNodeFromArtifact}
 							/>
 						{:else}
 							<PortsEditor selectedNode={$selectedNode} />

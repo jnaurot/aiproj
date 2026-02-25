@@ -19,6 +19,15 @@ router = APIRouter()
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+def _alpha_input_label(idx: int) -> str:
+    n = idx + 1
+    out = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        out = chr(65 + rem) + out
+    return f"Input {out}"
+
 class RunRequest(BaseModel):
     runFrom: Optional[str] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
@@ -137,15 +146,101 @@ async def get_artifact_meta(artifact_id: str, request: Request):
         raise HTTPException(404, "Artifact not found")
 
     art = await store.get(artifact_id)
+    upstream_ids = art.upstream_ids or []
     return {
         "artifactId": art.artifact_id,
         "nodeKind": art.node_kind,
         "mimeType": art.mime_type,
         "sizeBytes": art.size_bytes,
+        "contentHash": art.content_hash,
         "createdAt": art.created_at.isoformat(),
         "paramsHash": art.params_hash,
-        "upstreamCount": len(art.upstream_ids or []),
+        "upstreamCount": len(upstream_ids),
+        "upstreamArtifactIds": upstream_ids,
+        "inputArtifactIds": upstream_ids,
+        "inputRefs": [
+            {"artifactId": up_id, "label": _alpha_input_label(i)}
+            for i, up_id in enumerate(upstream_ids)
+        ],
+        "producerNodeId": art.node_id,
+        "producerRunId": art.run_id,
+        "producerExecKey": art.exec_key,
         "payloadSchema": art.payload_schema,
+    }
+
+
+@router.get("/artifacts/{artifact_id}/consumers")
+async def get_artifact_consumers(
+    artifact_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    rt = request.app.state.runtime
+    store = rt.artifact_store
+    if not await store.exists(artifact_id):
+        raise HTTPException(404, "Artifact not found")
+
+    get_fn = getattr(store, "get_consumers", None)
+    if not callable(get_fn):
+        return {"artifactId": artifact_id, "consumers": []}
+
+    consumers = await get_fn(artifact_id, limit=limit)
+    for c in consumers:
+        node_id = c.get("consumerNodeId")
+        run = c.get("consumerRunId")
+        c["label"] = f"{node_id} ({run})" if node_id and run else str(node_id or run or "")
+    return {"artifactId": artifact_id, "consumers": consumers}
+
+
+@router.get("/artifacts/{artifact_id}/lineage")
+async def get_artifact_lineage(
+    artifact_id: str,
+    request: Request,
+    depth: int = Query(default=2, ge=0, le=6),
+):
+    rt = request.app.state.runtime
+    store = rt.artifact_store
+    if not await store.exists(artifact_id):
+        raise HTTPException(404, "Artifact not found")
+
+    visited: set[str] = set()
+
+    async def _build(aid: str, d: int):
+        if aid in visited:
+            return {"artifactId": aid, "cycle": True}
+        if not await store.exists(aid):
+            return {"artifactId": aid, "missing": True}
+
+        visited.add(aid)
+        art = await store.get(aid)
+        payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else None
+        node = {
+            "artifactId": art.artifact_id,
+            "nodeKind": art.node_kind,
+            "mimeType": art.mime_type,
+            "sizeBytes": art.size_bytes,
+            "createdAt": art.created_at.isoformat(),
+            "payloadSchema": payload_schema,
+            "producer": {
+                "nodeId": art.node_id,
+                "runId": art.run_id,
+                "execKey": art.exec_key,
+            },
+            "inputArtifactIds": art.upstream_ids or [],
+            "inputRefs": [
+                {"artifactId": up_id, "label": _alpha_input_label(i)}
+                for i, up_id in enumerate(art.upstream_ids or [])
+            ],
+        }
+        if d <= 0:
+            return node
+        node["inputs"] = [await _build(up_id, d - 1) for up_id in (art.upstream_ids or [])]
+        return node
+
+    return {
+        "artifactId": artifact_id,
+        "depth": depth,
+        "lineage": await _build(artifact_id, depth),
     }
 
 
