@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "allowedPortTypes": ["table", "json", "text", "binary", "embeddings"],
+  "nodes": {
+    "llm": {
+      "in": ["text", "json", "table"],
+      "out": ["text", "json"]
+    },
+    "transform": {
+      "in": ["table"],
+      "out": ["table"]
+    },
+    "source": {
+      "in": [],
+      "out": ["table", "json", "text", "binary"]
+    },
+    "tool": {
+      "in": ["table", "json", "text", "binary", "embeddings"],
+      "out": ["text", "json", "binary"],
+      "byProvider": {
+        "mcp": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json", "binary"]
+        },
+        "http": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json", "binary"]
+        },
+        "function": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json", "binary"]
+        },
+        "python": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json", "binary"]
+        },
+        "js": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json", "binary"]
+        },
+        "shell": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json"]
+        },
+        "db": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json"]
+        },
+        "builtin": {
+          "in": ["table", "json", "text", "binary", "embeddings"],
+          "out": ["text", "json"]
+        }
+      }
+    }
+  }
+}

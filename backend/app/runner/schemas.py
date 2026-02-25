@@ -283,7 +283,6 @@ class TransformParamsCurrent(NodeParamSchema):
 # from .schemas import LLMParams  # ❌ don't import itself
 class LLMType(str, Enum):
     COMPLETION = "completion"
-    CHAT = "chat"
     EMBEDDINGS = "embeddings"
     CLASSIFICATION = "classification"
 
@@ -297,7 +296,7 @@ class LLMDialect(str, Enum):
 
 class LLMParams(NodeParamSchema):
     # kind: LLMDialect
-    # llm_type: LLMType = LLMType.CHAT
+    # llm_type: LLMType = LLMType.COMPLETION
     
     base_url: Optional[str] = None
     connection_ref: Optional[str] = None  # later

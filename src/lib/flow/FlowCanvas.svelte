@@ -175,7 +175,6 @@
 			t === 'text' ||
 			t === 'json' ||
 			t === 'binary' ||
-			t === 'chat' ||
 			t === 'embeddings'
 		)
 			return t;

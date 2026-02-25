@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .runner.capabilities import capabilities_response, capability_signature
 from .routes.maintenance import router as maintenance_router
 from .routes.runs import router as runs_router
 from .runtime import RuntimeManager
@@ -23,3 +24,13 @@ app.add_middleware(
 
 app.include_router(runs_router, prefix="/runs")
 app.include_router(maintenance_router, prefix="/maintenance")
+
+
+@app.get("/capabilities")
+async def get_capabilities():
+    caps = capabilities_response()
+    return {
+        "schemaVersion": 1,
+        "signature": capability_signature(),
+        "capabilities": caps,
+    }

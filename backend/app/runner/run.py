@@ -21,6 +21,7 @@ from .validator import GraphValidator
 from .metadata import ExecutionContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
+from .capabilities import allowed_ports
 
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
@@ -321,7 +322,7 @@ def _infer_artifact_port_type(artifact: Artifact) -> str:
     ps_type = str(ps.get("type") or "").lower()
     if ps_type == "string":
         ps_type = "text"
-    if ps_type in {"table", "json", "text", "binary", "embeddings", "chat"}:
+    if ps_type in {"table", "json", "text", "binary", "embeddings"}:
         return ps_type
     mt = (artifact.mime_type or "").lower()
     if "json" in mt:
@@ -345,6 +346,10 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     if kind == "tool":
         return "json"
     return None
+
+
+def _allowed_ports(kind: str, direction: str, provider: Optional[str] = None) -> set[str]:
+    return allowed_ports(kind, direction, provider=provider)
 
 
 def _cached_artifact_contract_mismatch(kind: str, node: Dict[str, Any], artifact: Artifact) -> Optional[Dict[str, Any]]:
@@ -617,6 +622,39 @@ async def run_graph(
             n = nodes[node_id]
             kind = n["data"]["kind"]
             params = n["data"].get("params", {}) or {}
+            ports = (n.get("data", {}).get("ports", {}) or {})
+            tool_provider = str(params.get("provider") or "") if kind == "tool" else None
+
+            allowed_in = _allowed_ports(kind, "in", provider=tool_provider)
+            allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
+            declared_in = ports.get("in")
+            declared_out = ports.get("out")
+            if kind == "source":
+                if declared_in not in (None, "", "null"):
+                    raise ContractMismatchError(
+                        "Source output contract mismatch: source nodes do not support input ports",
+                        details=_contract_details(
+                            expected={"inPortType": None},
+                            actual={"inPortType": str(declared_in)},
+                        ),
+                    )
+            elif declared_in is not None and str(declared_in) not in allowed_in:
+                raise ContractMismatchError(
+                    f"{kind.capitalize()} output contract mismatch: unsupported input port '{declared_in}'",
+                    details=_contract_details(
+                        expected={"allowedInPortTypes": sorted(allowed_in)},
+                        actual={"inPortType": str(declared_in)},
+                    ),
+                )
+
+            if declared_out is not None and str(declared_out) not in allowed_out:
+                raise ContractMismatchError(
+                    f"{kind.capitalize()} output contract mismatch: unsupported output port '{declared_out}'",
+                    details=_contract_details(
+                        expected={"allowedOutPortTypes": sorted(allowed_out)},
+                        actual={"outPortType": str(declared_out)},
+                    ),
+                )
 
             # Upstream resolution
             up_nodes = sorted(upstream_node_ids(edges, node_id))
@@ -1178,10 +1216,68 @@ async def run_graph(
                     print("[run_graph] LLM up_nodes:", up_nodes)
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] node_to_artifact keys:", list(node_to_artifact.keys()))
+                    llm_in_contract = str((ports.get("in") or "text"))
+                    llm_allowed_in = _allowed_ports("llm", "in")
+                    if llm_in_contract not in llm_allowed_in:
+                        raise ContractMismatchError(
+                            f"LLM output contract mismatch: unsupported input port '{llm_in_contract}'",
+                            details=_contract_details(
+                                expected={"allowedInPortTypes": sorted(llm_allowed_in)},
+                                actual={"inPortType": llm_in_contract},
+                            ),
+                        )
+                    for upstream_id in upstream_ids:
+                        upstream_art = await context.artifact_store.get(upstream_id)
+                        upstream_pt = _infer_artifact_port_type(upstream_art)
+                        if upstream_pt not in llm_allowed_in:
+                            raise ContractMismatchError(
+                                f"LLM output contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
+                                details=_contract_details(
+                                    expected={"allowedInPortTypes": sorted(llm_allowed_in)},
+                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                ),
+                            )
+                        if upstream_pt != llm_in_contract:
+                            raise ContractMismatchError(
+                                "LLM output contract mismatch: upstream artifact port_type does not match node in port",
+                                details=_contract_details(
+                                    expected={"inPortType": llm_in_contract},
+                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                ),
+                            )
                     output = await exec_llm(run_id, n, context, upstream_artifact_ids=upstream_ids)
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")
+                    tool_in_contract = str((ports.get("in") or "json"))
+                    tool_allowed_in = _allowed_ports("tool", "in", provider=tool_provider)
+                    if tool_in_contract not in tool_allowed_in:
+                        raise ContractMismatchError(
+                            f"Tool output contract mismatch: unsupported input port '{tool_in_contract}'",
+                            details=_contract_details(
+                                expected={"allowedInPortTypes": sorted(tool_allowed_in)},
+                                actual={"inPortType": tool_in_contract},
+                            ),
+                        )
+                    for upstream_id in upstream_ids:
+                        upstream_art = await context.artifact_store.get(upstream_id)
+                        upstream_pt = _infer_artifact_port_type(upstream_art)
+                        if upstream_pt not in tool_allowed_in:
+                            raise ContractMismatchError(
+                                f"Tool output contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
+                                details=_contract_details(
+                                    expected={"allowedInPortTypes": sorted(tool_allowed_in)},
+                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                ),
+                            )
+                        if upstream_pt != tool_in_contract:
+                            raise ContractMismatchError(
+                                "Tool output contract mismatch: upstream artifact port_type does not match node in port",
+                                details=_contract_details(
+                                    expected={"inPortType": tool_in_contract},
+                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                ),
+                            )
 
                     tool_params_runtime = dict(params)
                     tool_params_runtime["_request_fingerprint"] = exec_key

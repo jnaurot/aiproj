@@ -13,7 +13,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple
 from pydantic import BaseModel
 
 
-_PORT_TYPES = {"table", "json", "text", "binary", "embeddings", "chat"}
+_PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
 
 
 def _normalize_payload_schema(payload_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

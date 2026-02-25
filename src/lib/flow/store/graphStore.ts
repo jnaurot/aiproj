@@ -21,6 +21,7 @@ import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from '
 import { createRun, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
+import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
 
 type NodeOutputInfo = {
 	artifactId: string;
@@ -50,7 +51,7 @@ const STALE: NodeStatus = 'stale';
 const IDLE: NodeStatus = 'idle';
 const RUNNING: NodeStatus = 'running';
 const SUCCEEDED: NodeStatus = 'succeeded';
-const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'chat', 'embeddings']);
+const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
 const initialInspector: InspectorState = {
 	nodeId: null,
 	draftParams: {},
@@ -334,16 +335,6 @@ export const graphStore = (() => {
 			// ---- 2) ports (must be valid to commit) ----
 			if (config.ports) {
 				const { in: inPort, out: outPort } = config.ports;
-				if (node.data.kind === 'transform') {
-					if (inPort !== undefined && inPort !== 'table') {
-						out = { ok: false, error: "Transform input port must be 'table'" };
-						return logPush(s, 'warn', out.error!, nodeId);
-					}
-					if (outPort !== undefined && outPort !== 'table') {
-						out = { ok: false, error: "Transform output port must be 'table'" };
-						return logPush(s, 'warn', out.error!, nodeId);
-					}
-				}
 
 				if (inPort !== undefined && inPort !== null && !isPortType(inPort)) {
 					out = { ok: false, error: `Invalid input port type: ${String(inPort)}` };
@@ -351,6 +342,23 @@ export const graphStore = (() => {
 				}
 				if (outPort !== undefined && outPort !== null && !isPortType(outPort)) {
 					out = { ok: false, error: `Invalid output port type: ${String(outPort)}` };
+					return logPush(s, 'warn', out.error!, nodeId);
+				}
+
+				const allowedIn = getAllowedPortsForNode(node as any, 'in');
+				const allowedOut = getAllowedPortsForNode(node as any, 'out');
+				if (inPort !== undefined && inPort !== null && !allowedIn.includes(inPort)) {
+					out = {
+						ok: false,
+						error: `${node.data.kind} input port '${String(inPort)}' is not supported`
+					};
+					return logPush(s, 'warn', out.error!, nodeId);
+				}
+				if (outPort !== undefined && outPort !== null && !allowedOut.includes(outPort)) {
+					out = {
+						ok: false,
+						error: `${node.data.kind} output port '${String(outPort)}' is not supported`
+					};
 					return logPush(s, 'warn', out.error!, nodeId);
 				}
 

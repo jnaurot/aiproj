@@ -1,7 +1,8 @@
 # backend/app/runner/validator.py
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from .schemas import validate_node_params  # Import schema validation
+from .capabilities import allowed_port_types, allowed_ports
 
 from pprint import pformat
 
@@ -32,6 +33,7 @@ class GraphValidator:
         # 2. Type validation
         errors.extend(self._validate_port_types(graph))
         errors.extend(self._validate_llm_input_arity(graph))
+        errors.extend(self._validate_transform_join_arity(graph))
         
         # 3. Schema validation
         errors.extend(self._validate_node_params_schema(graph))
@@ -158,6 +160,60 @@ class GraphValidator:
         errors = []
         edges = graph.get("edges", [])
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
+
+        for nid, node in nodes.items():
+            data = node.get("data", {}) or {}
+            kind = data.get("kind")
+            ports = data.get("ports", {}) or {}
+            in_port = ports.get("in")
+            out_port = ports.get("out")
+            provider = None
+            if kind == "tool":
+                provider = str((data.get("params", {}) or {}).get("provider") or "")
+            caps_in = allowed_ports(str(kind or ""), "in", provider=provider)
+            caps_out = allowed_ports(str(kind or ""), "out", provider=provider)
+
+            all_port_types = allowed_port_types()
+            if in_port is not None and in_port not in all_port_types:
+                errors.append(
+                    ValidationError(
+                        code="UNSUPPORTED_PORT_TYPE",
+                        message=f"Unsupported input port type '{in_port}' on node '{data.get('label', nid)}'",
+                        node_id=nid,
+                    )
+                )
+            if out_port is not None and out_port not in all_port_types:
+                errors.append(
+                    ValidationError(
+                        code="UNSUPPORTED_PORT_TYPE",
+                        message=f"Unsupported output port type '{out_port}' on node '{data.get('label', nid)}'",
+                        node_id=nid,
+                    )
+                )
+            if kind == "source" and in_port not in (None, ""):
+                errors.append(
+                    ValidationError(
+                        code="INVALID_PORT_CAPABILITY",
+                        message=f"Source node '{data.get('label', nid)}' cannot have an input port",
+                        node_id=nid,
+                    )
+                )
+            if in_port is not None and in_port not in caps_in:
+                errors.append(
+                    ValidationError(
+                        code="INVALID_PORT_CAPABILITY",
+                        message=f"Input port '{in_port}' is not supported for node kind '{kind}'",
+                        node_id=nid,
+                    )
+                )
+            if out_port is not None and out_port not in caps_out:
+                errors.append(
+                    ValidationError(
+                        code="INVALID_PORT_CAPABILITY",
+                        message=f"Output port '{out_port}' is not supported for node kind '{kind}'",
+                        node_id=nid,
+                    )
+                )
         
         for edge in edges:
             edge_id = edge.get("id", "unknown")
@@ -266,6 +322,37 @@ class GraphValidator:
                     )
                 )
 
+        return errors
+
+    def _validate_transform_join_arity(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        errors: List[ValidationError] = []
+        nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        edges = graph.get("edges", [])
+
+        incoming_counts: Dict[str, int] = {}
+        for e in edges:
+            tgt = e.get("target")
+            if not tgt:
+                continue
+            incoming_counts[tgt] = incoming_counts.get(tgt, 0) + 1
+
+        for node_id, node in nodes.items():
+            data = node.get("data", {}) or {}
+            if data.get("kind") != "transform":
+                continue
+            params = data.get("params", {}) or {}
+            op = str(params.get("op") or data.get("transformKind") or "")
+            if op != "join":
+                continue
+            count = incoming_counts.get(node_id, 0)
+            if count < 2:
+                errors.append(
+                    ValidationError(
+                        code="TRANSFORM_JOIN_INPUT_ARITY",
+                        message=f"Transform join node '{data.get('label', node_id)}' requires 2 inputs, got {count}",
+                        node_id=node_id,
+                    )
+                )
         return errors
     
     def _validate_node_params(self, graph: Dict[str, Any]) -> List[ValidationError]:

@@ -1,6 +1,6 @@
 import type { Node, Edge } from "@xyflow/svelte";
 
-export const PORT_TYPES = ["table", "text", "json", "binary", "chat", "embeddings"];
+export const PORT_TYPES = ["table", "text", "json", "binary", "embeddings"];
 export type PortType = typeof PORT_TYPES[number];
 export function isPortType(value: unknown): value is PortType {
   return typeof value === "string" && PORT_TYPES.includes(value as any);
