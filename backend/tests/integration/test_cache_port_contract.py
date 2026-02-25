@@ -79,6 +79,7 @@ async def test_cache_hit_with_compatible_port_metadata_change_succeeds(monkeypat
     assert out_2[-1].get("cached") is True
     finish_2 = [e for e in events_2 if e.get("type") == "node_finished" and e.get("nodeId") == "tool_1"]
     assert finish_2 and finish_2[-1].get("status") == "succeeded" and finish_2[-1].get("cached") is True
+    assert float(finish_2[-1].get("execution_time_ms", -1)) >= 0.0
     assert call_count["tool"] == 1
 
 
@@ -140,6 +141,7 @@ async def test_cache_hit_with_incompatible_declared_out_fails_contract(monkeypat
     assert finish_2[-1].get("actualPortType") == "json"
     assert finish_2[-1].get("artifactId") == artifact_id
     assert isinstance(finish_2[-1].get("producerExecKey"), str) or finish_2[-1].get("producerExecKey") is None
+    assert float(finish_2[-1].get("execution_time_ms", -1)) >= 0.0
 
     run_done = [e for e in events_2 if e.get("type") == "run_finished"]
     assert run_done and run_done[-1].get("status") == "failed"

@@ -32,7 +32,6 @@ class GraphValidator:
         
         # 2. Type validation
         errors.extend(self._validate_port_types(graph))
-        errors.extend(self._validate_llm_input_arity(graph))
         errors.extend(self._validate_transform_join_arity(graph))
         
         # 3. Schema validation

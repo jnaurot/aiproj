@@ -21,6 +21,21 @@ def _downstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
                 q.append(nxt)
     return seen
 
+
+def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
+    rev: Dict[str, List[str]] = {}
+    for e in edges:
+        rev.setdefault(e["target"], []).append(e["source"])
+    seen: Set[str] = set()
+    q = [start_id]
+    while q:
+        cur = q.pop(0)
+        for prev in rev.get(cur, []):
+            if prev not in seen:
+                seen.add(prev)
+                q.append(prev)
+    return seen
+
 def compile_plan(graph: Dict[str, Any], run_from: Optional[str]) -> RunPlan:
     print("IN COMPILE_PLAN")
     nodes = graph.get("nodes", [])
@@ -42,6 +57,9 @@ def compile_plan(graph: Dict[str, Any], run_from: Optional[str]) -> RunPlan:
     sub: Set[str] = set()
     if run_from:
         sub.add(run_from)
+        # For subset runs, include ancestors to resolve deterministic inputs,
+        # and downstream to preserve "run from here forward" semantics.
+        sub |= _upstream(run_from, edges)
         sub |= _downstream(run_from, edges)
     else:
         roots = [nid for nid, d in indeg.items() if d == 0]

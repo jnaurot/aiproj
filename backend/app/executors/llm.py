@@ -53,32 +53,6 @@ async def exec_llm(
     node_id = node["id"]
 
     upstream_artifact_ids = upstream_artifact_ids or []
-    if not upstream_artifact_ids:
-        await context.bus.emit({
-            "type": "log",
-            "runId": run_id,
-            "nodeId": node_id,
-            "at": iso_now(),
-            "level": "error",
-            "message": "LLM node received no upstream artifacts (upstream_artifact_ids=[]).",
-        })
-        # Decide: fail fast or continue with prompts only.
-        # I recommend fail fast for now:
-        return NodeOutput(status="failed", error="No upstream artifacts provided to LLM", metadata=None)
-    if len(upstream_artifact_ids) > 1:
-        await context.bus.emit({
-            "type": "log",
-            "runId": run_id,
-            "nodeId": node_id,
-            "at": iso_now(),
-            "level": "error",
-            "message": f"LLM node received {len(upstream_artifact_ids)} upstream artifacts; only one input is supported in this version.",
-        })
-        return NodeOutput(
-            status="failed",
-            error="LLM multi-input not implemented; expected exactly 1 upstream artifact",
-            metadata=None,
-        )
 
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
@@ -94,7 +68,18 @@ async def exec_llm(
 
     llm_kind = node.get("data", {}).get("llmKind") or "ollama"
 
-    text = await materialize_text(context, upstream_artifact_ids[0])
+    text_parts: list[str] = []
+    if not upstream_artifact_ids:
+        text = ""
+    elif len(upstream_artifact_ids) == 1:
+        text = await materialize_text(context, upstream_artifact_ids[0])
+    else:
+        # Deterministic multi-input combine: stable order from upstream_artifact_ids,
+        # explicit provenance headers, and fixed separators.
+        for idx, aid in enumerate(upstream_artifact_ids, start=1):
+            payload = await materialize_text(context, aid)
+            text_parts.append(f"### INPUT {idx} artifact={aid}\n{payload}")
+        text = "\n\n---\n\n".join(text_parts)
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
 
 

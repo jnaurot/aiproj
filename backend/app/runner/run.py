@@ -59,7 +59,7 @@ def resolve_input_refs(edges: Dict[str, Dict[str, Any]], node_id: str, node_to_a
         port = e.get("targetHandle") or "in"
         refs.append((port, node_to_artifact[src]))
     # stable order
-    refs.sort(key=lambda x: x[0])
+    refs.sort(key=lambda x: (x[0], x[1]))
     return refs
 
 
@@ -133,6 +133,7 @@ def _tool_exec_key(
     params: Dict[str, Any],
     input_refs: list[tuple[str, str]],
     execution_version: str,
+    determinism_env: Optional[Dict[str, Any]] = None,
 ) -> str:
     fp = {
         "build": execution_version,
@@ -143,6 +144,7 @@ def _tool_exec_key(
         "params": _sanitize_for_fingerprint(params),
         "inputs": inputs_fingerprint(input_refs),
         "environment": _tool_environment_fingerprint(params),
+        "determinism_env": determinism_env or {},
     }
     return sha256_hex(canonical_json(fp).encode("utf-8"))
 
@@ -152,12 +154,15 @@ def _transform_exec_key(
     normalized_params: Dict[str, Any],
     input_refs: list[tuple[str, str]],
     execution_version: str,
+    determinism_env: Optional[Dict[str, Any]] = None,
 ) -> str:
     fp = {
         "build_version": execution_version,
         "node_kind": "transform",
         "normalized_params": normalized_params,
         "input_artifact_ids": [aid for _, aid in sorted(input_refs)],
+        "input_bindings": [{"port": p, "artifact_id": aid} for p, aid in sorted(input_refs)],
+        "determinism_env": determinism_env or {},
     }
     return sha256_hex(canonical_json(fp).encode("utf-8"))
 
@@ -382,6 +387,34 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return max(minimum, val)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(__import__("os").environ.get(name, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    if kind == "llm":
+        output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
+        return {
+            "llm_input_format": "artifact_text_v1",
+            "llm_table_format": "csv_v1",
+            "llm_table_max_rows": _env_int("LLM_TABLE_MAX_ROWS", 200),
+            "llm_table_max_cols": _env_int("LLM_TABLE_MAX_COLS", 50),
+            "llm_prompt_max_chars": _env_int("LLM_PROMPT_MAX_CHARS", 20000),
+            "llm_table_sort_rows": _env_bool("LLM_TABLE_SORT_ROWS", True),
+            "llm_output_mode": output_mode,
+        }
+    if kind == "transform":
+        return {"transform_engine": "duckdb"}
+    return {}
+
+
 def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
     sub = set(plan.subgraph)
     indeg: Dict[str, int] = {nid: 0 for nid in sub}
@@ -519,6 +552,7 @@ async def run_graph(
         expected_port_type: Optional[str] = None,
         actual_port_type: Optional[str] = None,
         producer_exec_key: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> None:
         d = decision if decision in _CACHE_DECISIONS else "cache_miss"
         evt = {
@@ -539,6 +573,8 @@ async def run_graph(
             evt["actualPortType"] = actual_port_type
         if producer_exec_key is not None:
             evt["producerExecKey"] = producer_exec_key
+        if reason:
+            evt["reason"] = str(reason)
         await context.bus.emit(evt)
 
     async def _emit_cache_summary_once() -> None:
@@ -602,6 +638,7 @@ async def run_graph(
         edges = edge_map(graph)
 
         async def _execute_node(node_id: str) -> Dict[str, Any]:
+            node_started_t = asyncio.get_running_loop().time()
             await context.bus.emit({
                 "type": "node_started",
                 "runId": run_id,
@@ -624,14 +661,16 @@ async def run_graph(
             params = n["data"].get("params", {}) or {}
             ports = (n.get("data", {}).get("ports", {}) or {})
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
+            determinism_env = _determinism_env_for_node(kind, params)
 
             allowed_in = _allowed_ports(kind, "in", provider=tool_provider)
             allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
             declared_in = ports.get("in")
             declared_out = ports.get("out")
+            preflight_error: Optional[ContractMismatchError] = None
             if kind == "source":
                 if declared_in not in (None, "", "null"):
-                    raise ContractMismatchError(
+                    preflight_error = ContractMismatchError(
                         "Source output contract mismatch: source nodes do not support input ports",
                         details=_contract_details(
                             expected={"inPortType": None},
@@ -639,7 +678,7 @@ async def run_graph(
                         ),
                     )
             elif declared_in is not None and str(declared_in) not in allowed_in:
-                raise ContractMismatchError(
+                preflight_error = ContractMismatchError(
                     f"{kind.capitalize()} output contract mismatch: unsupported input port '{declared_in}'",
                     details=_contract_details(
                         expected={"allowedInPortTypes": sorted(allowed_in)},
@@ -647,8 +686,8 @@ async def run_graph(
                     ),
                 )
 
-            if declared_out is not None and str(declared_out) not in allowed_out:
-                raise ContractMismatchError(
+            if (preflight_error is None) and declared_out is not None and str(declared_out) not in allowed_out:
+                preflight_error = ContractMismatchError(
                     f"{kind.capitalize()} output contract mismatch: unsupported output port '{declared_out}'",
                     details=_contract_details(
                         expected={"allowedOutPortTypes": sorted(allowed_out)},
@@ -659,6 +698,7 @@ async def run_graph(
             # Upstream resolution
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
+            llm_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "llm" else []
 
             normalized_params_for_hash = _normalized_params_for_exec_key(
                 kind=kind,
@@ -674,12 +714,14 @@ async def run_graph(
                     params=params,
                     input_refs=tool_input_refs,
                     execution_version=context.execution_version,
+                    determinism_env=determinism_env,
                 )
             elif kind == "transform":
                 exec_key = _transform_exec_key(
                     normalized_params=normalized_params_for_hash,
                     input_refs=transform_input_refs,
                     execution_version=context.execution_version,
+                    determinism_env=determinism_env,
                 )
             else:
                 exec_key = cache.execution_key(
@@ -687,10 +729,20 @@ async def run_graph(
                     normalized_params=normalized_params_for_hash,
                     upstream_artifact_ids=upstream_ids,
                     execution_version=context.execution_version,
+                    input_bindings=llm_input_refs if kind == "llm" else [],
+                    determinism_env=determinism_env,
                 )
             artifact_id = exec_key
 
             use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
+            if not use_cache_for_node:
+                await _emit_cache_decision(
+                    node_id=node_id,
+                    node_kind=kind,
+                    decision="cache_miss",
+                    exec_key=exec_key,
+                    reason="UNCACHEABLE_EFFECTFUL_TOOL",
+                )
 
             # ---- Cache check goes HERE (before execution) ----
             cached_artifact_id = await cache.get_artifact_id(exec_key) if use_cache_for_node else None
@@ -760,6 +812,7 @@ async def run_graph(
                         "at": iso_now(),
                         "nodeId": node_id,
                         "status": "failed",
+                        "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                         "error": mismatch_error["message"],
                         "cached": True,
                         "code": "CONTRACT_MISMATCH",
@@ -776,6 +829,7 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "succeeded",
+                    "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                     "cached": True
                 })
 
@@ -801,6 +855,8 @@ async def run_graph(
 
             # ---- Execute node ----
             try:
+                if preflight_error is not None:
+                    raise preflight_error
                 await asyncio.sleep(0.5)  # visual delay
 
                 if kind == "source":
@@ -936,6 +992,7 @@ async def run_graph(
                             normalized_params=norm,
                             input_refs=input_refs,
                             execution_version=context.execution_version,
+                            determinism_env=determinism_env,
                         )
 
                         # 3) cache hit?
@@ -982,6 +1039,7 @@ async def run_graph(
                                 "at": iso_now(),
                                 "nodeId": node_id,
                                 "status": "succeeded",
+                                "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                                 "cached": True
                             })
 
@@ -1245,7 +1303,8 @@ async def run_graph(
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
                                 ),
                             )
-                    output = await exec_llm(run_id, n, context, upstream_artifact_ids=upstream_ids)
+                    llm_upstream_ids = [aid for _, aid in llm_input_refs] if llm_input_refs else upstream_ids
+                    output = await exec_llm(run_id, n, context, upstream_artifact_ids=llm_upstream_ids)
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")
@@ -1311,7 +1370,8 @@ async def run_graph(
                         "runId": run_id,
                         "at": iso_now(),
                         "nodeId": node_id,
-                        "status": output.status
+                        "status": output.status,
+                        "execution_time_ms": max(0.0, float(getattr(output, "execution_time_ms", 0.0) or 0.0)),
                     })
                 else:
                     # ---- Artifact write + binding ----
@@ -1543,7 +1603,8 @@ async def run_graph(
                         "runId": run_id,
                         "at": iso_now(),
                         "nodeId": node_id,
-                        "status": output.status
+                        "status": output.status,
+                        "execution_time_ms": max(0.0, float(getattr(output, "execution_time_ms", 0.0) or 0.0)),
                     })
 
             except asyncio.CancelledError:
@@ -1560,6 +1621,7 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "cancelled",
+                    "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
                 return {"ok": False, "cached": False, "cancelled": True}
             except Exception as ex:
@@ -1617,7 +1679,8 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "failed",
-                    "error": error_message
+                    "error": error_message,
+                    "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
                 if error_details:
                     await context.bus.emit({
@@ -1677,6 +1740,7 @@ async def run_graph(
             n = nodes[node_id]
             kind = n.get("data", {}).get("kind")
             kind_sem = kind_sems.get(kind)
+            t0 = asyncio.get_running_loop().time()
             async with global_sem:
                 inflight_current += 1
                 if inflight_current > peak_concurrency:
@@ -1684,11 +1748,54 @@ async def run_graph(
                 if kind_sem is None:
                     try:
                         return await _execute_node(node_id)
+                    except asyncio.CancelledError:
+                        await context.bus.emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": "cancelled",
+                            "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                        })
+                        return {"ok": False, "cached": False, "cancelled": True}
+                    except Exception as ex:
+                        await context.bus.emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": "failed",
+                            "error": str(ex),
+                            "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                        })
+                        return {"ok": False, "cached": False}
                     finally:
                         inflight_current -= 1
                 try:
                     async with kind_sem:
-                        return await _execute_node(node_id)
+                        try:
+                            return await _execute_node(node_id)
+                        except asyncio.CancelledError:
+                            await context.bus.emit({
+                                "type": "node_finished",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "nodeId": node_id,
+                                "status": "cancelled",
+                                "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                            })
+                            return {"ok": False, "cached": False, "cancelled": True}
+                        except Exception as ex:
+                            await context.bus.emit({
+                                "type": "node_finished",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "nodeId": node_id,
+                                "status": "failed",
+                                "error": str(ex),
+                                "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                            })
+                            return {"ok": False, "cached": False}
                 finally:
                     inflight_current -= 1
 
