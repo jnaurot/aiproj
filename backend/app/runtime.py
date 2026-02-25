@@ -118,6 +118,92 @@ class RuntimeManager:
     async def list_run_events(self, run_id: str, *, after_id: int = 0, limit: int = 500) -> list[Dict[str, Any]]:
         return await self.event_store.list_events(run_id, after_id=after_id, limit=limit)
 
+    async def _list_all_run_events(self, run_id: str) -> list[Dict[str, Any]]:
+        out: list[Dict[str, Any]] = []
+        after_id = 0
+        while True:
+            rows = await self.event_store.list_events(run_id, after_id=after_id, limit=2000)
+            if not rows:
+                break
+            out.extend(rows)
+            after_id = int(rows[-1].get("id") or after_id)
+            if len(rows) < 2000:
+                break
+        return out
+
+    async def recover_unfinished_runs(self) -> Dict[str, Any]:
+        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        unfinished = {"pending", "running", "cancel_requested"}
+        recs = await self.artifact_store.list_runs(include_deleted=True)
+        recovered = 0
+        scanned = 0
+
+        for rec in recs:
+            run_id = str(rec.get("run_id") or "")
+            status = str(rec.get("status") or "").strip().lower()
+            if not run_id or status in terminal or status not in unfinished:
+                continue
+            scanned += 1
+            rows = await self._list_all_run_events(run_id)
+            payloads = [dict(r.get("payload") or {}) for r in rows]
+            has_run_finished = any(p.get("type") == "run_finished" for p in payloads)
+
+            # If persisted events already contain terminal status, normalize run table and continue.
+            if has_run_finished:
+                last_finished = [p for p in payloads if p.get("type") == "run_finished"][-1]
+                await self.artifact_store.update_run_status(run_id, str(last_finished.get("status") or "failed"))
+                continue
+
+            decisions = [p for p in payloads if p.get("type") == "cache_decision"]
+            has_cache_summary = any(p.get("type") == "cache_summary" for p in payloads)
+            if not has_cache_summary:
+                cache_hit = sum(1 for p in decisions if p.get("decision") == "cache_hit")
+                cache_miss = sum(1 for p in decisions if p.get("decision") == "cache_miss")
+                cache_hit_contract_mismatch = sum(
+                    1 for p in decisions if p.get("decision") == "cache_hit_contract_mismatch"
+                )
+                await self.event_store.append_event(
+                    {
+                        "type": "cache_summary",
+                        "schema_version": 1,
+                        "runId": run_id,
+                        "at": datetime_from_ts(time.time()),
+                        "cache_hit": int(cache_hit),
+                        "cache_miss": int(cache_miss),
+                        "cache_hit_contract_mismatch": int(cache_hit_contract_mismatch),
+                    }
+                )
+
+            if status == "cancel_requested":
+                recovered_status = "cancelled"
+                reason = "RECOVERED_CANCEL_REQUESTED_ON_STARTUP"
+                await self.event_store.append_event(
+                    {
+                        "type": "run_cancelled",
+                        "runId": run_id,
+                        "at": datetime_from_ts(time.time()),
+                        "reason": reason,
+                    }
+                )
+            else:
+                recovered_status = "failed"
+                reason = "RECOVERED_UNFINISHED_RUN_ON_STARTUP"
+
+            await self.event_store.append_event(
+                {
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "status": recovered_status,
+                    "error": reason,
+                    "recovered": True,
+                }
+            )
+            await self.artifact_store.update_run_status(run_id, recovered_status)
+            recovered += 1
+
+        return {"scanned": scanned, "recovered": recovered}
+
     async def prune_events(
         self,
         *,
@@ -170,7 +256,7 @@ class RuntimeManager:
 
     # ---------- execution ----------
 
-    async def start_run(self, run_id: str, graph, run_from):
+    async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None):
         handle = self.runs[run_id]
         print("Scheduling run task:", run_id, "loop:", asyncio.get_running_loop())
 
@@ -180,6 +266,7 @@ class RuntimeManager:
                 graph,
                 run_from,
                 handle.bus,
+                run_mode=run_mode,
                 artifact_store=handle.artifact_store,
                 cache=handle.cache,
                 cancel_event=handle.cancel_event,

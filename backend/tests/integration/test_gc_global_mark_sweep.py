@@ -75,10 +75,11 @@ async def test_global_mark_sweep_keeps_referenced_and_collects_dangling(monkeypa
     assert done["mode"] == "delete"
     assert dangling_hash in done["orphan_hashes"]
     assert done["blobs_deleted"] >= 1
+    assert set(done["orphan_hashes"]) == set(dry["orphan_hashes"])
+    assert int(done["blobs_deleted"]) == len(done["orphan_hashes"])
 
     # Safety: referenced blob is preserved.
     assert referenced_blob_path.exists()
     assert await rt.artifact_store.exists(artifact_id)
     # Liveness: dangling blob is eventually collected.
     assert not dangling_path.exists()
-

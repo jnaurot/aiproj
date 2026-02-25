@@ -5,7 +5,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 class RunPlan:
     order: List[str]                 # topo order of nodeIds
     subgraph: Set[str]               # nodes included
+    execute_nodes: Set[str]          # nodes that may execute (cache misses allowed)
+    cache_only_nodes: Set[str]       # nodes that must resolve from cache only
     incoming_edges: Dict[str, List[str]]  # nodeId -> edgeIds
+    run_mode: str                    # full | from_selected_onward | selected_only
 
 def _downstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
     adj: Dict[str, List[str]] = {}
@@ -36,11 +39,14 @@ def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
                 q.append(prev)
     return seen
 
-def compile_plan(graph: Dict[str, Any], run_from: Optional[str]) -> RunPlan:
+def compile_plan(graph: Dict[str, Any], run_from: Optional[str], run_mode: Optional[str] = None) -> RunPlan:
     print("IN COMPILE_PLAN")
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     node_ids = [n["id"] for n in nodes]
+    mode = str(run_mode or "from_selected_onward").strip().lower()
+    if mode not in {"full", "from_selected_onward", "selected_only"}:
+        mode = "from_selected_onward"
 
     # Build adjacency + indegree
     adj = {nid: [] for nid in node_ids}
@@ -55,17 +61,26 @@ def compile_plan(graph: Dict[str, Any], run_from: Optional[str]) -> RunPlan:
 
     # Determine subgraph set
     sub: Set[str] = set()
+    execute_nodes: Set[str] = set()
+    cache_only_nodes: Set[str] = set()
     if run_from:
-        sub.add(run_from)
-        # For subset runs, include ancestors to resolve deterministic inputs,
-        # and downstream to preserve "run from here forward" semantics.
-        sub |= _upstream(run_from, edges)
-        sub |= _downstream(run_from, edges)
+        ancestors = _upstream(run_from, edges)
+        if mode == "selected_only":
+            sub = ancestors | {run_from}
+            execute_nodes = {run_from}
+            cache_only_nodes = sub - execute_nodes
+        else:
+            # Include ancestors to resolve deterministic inputs, and downstream
+            # to preserve "run from here forward" semantics.
+            sub = ancestors | {run_from} | _downstream(run_from, edges)
+            execute_nodes = set(sub)
     else:
+        mode = "full"
         roots = [nid for nid, d in indeg.items() if d == 0]
         for r in roots:
             sub.add(r)
             sub |= _downstream(r, edges)
+        execute_nodes = set(sub)
 
     # Recompute indegree restricted to subgraph
     indeg2 = {nid: 0 for nid in sub}
@@ -96,4 +111,11 @@ def compile_plan(graph: Dict[str, Any], run_from: Optional[str]) -> RunPlan:
         if e["target"] in incoming and e.get("id"):
             incoming[e["target"]].append(e["id"])
 
-    return RunPlan(order=order, subgraph=sub, incoming_edges=incoming)
+    return RunPlan(
+        order=order,
+        subgraph=sub,
+        execute_nodes=execute_nodes,
+        cache_only_nodes=cache_only_nodes,
+        incoming_edges=incoming,
+        run_mode=mode,
+    )

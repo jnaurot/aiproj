@@ -11,6 +11,7 @@ app = FastAPI(title="Flow Runner")
 @app.on_event("startup")
 async def startup():
     app.state.runtime = RuntimeManager()
+    await app.state.runtime.recover_unfinished_runs()
     
 # If you proxy through SvelteKit, you can keep this strict.
 # If you hit FastAPI directly in dev, allow your dev origin.

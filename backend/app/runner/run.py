@@ -536,6 +536,7 @@ async def run_graph(
     graph: Dict[str, Any], 
     run_from: Optional[str], 
     bus: RunEventBus, 
+    run_mode: Optional[str] = None,
     artifact_store=None, 
     cache=None,
     cancel_event: Optional[asyncio.Event] = None,
@@ -650,15 +651,16 @@ async def run_graph(
         "type": "run_started",
         "runId": run_id,
         "at": iso_now(),
-        "runFrom": run_from
+        "runFrom": run_from,
+        "runMode": run_mode or "from_selected_onward",
     })
 
     try:
-        plan = compile_plan(graph, run_from)
+        plan = compile_plan(graph, run_from, run_mode=run_mode)
         nodes = node_map(graph)
         edges = edge_map(graph)
 
-        async def _execute_node(node_id: str) -> Dict[str, Any]:
+        async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
             node_started_t = asyncio.get_running_loop().time()
             await context.bus.emit({
                 "type": "node_started",
@@ -764,6 +766,24 @@ async def run_graph(
                     exec_key=exec_key,
                     reason="UNCACHEABLE_EFFECTFUL_TOOL",
                 )
+                if cache_only:
+                    msg = (
+                        "Selected-only run requires cache for ancestor nodes, "
+                        f"but node '{node_id}' is uncacheable (effectful tool)."
+                    )
+                    await context.bus.emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": "failed",
+                        "execution_time_ms": max(
+                            0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                        ),
+                        "error": msg,
+                        "cached": False,
+                    })
+                    return {"ok": False, "cached": False}
 
             # ---- Cache check goes HERE (before execution) ----
             cached_artifact_id = await cache.get_artifact_id(exec_key) if use_cache_for_node else None
@@ -873,6 +893,24 @@ async def run_graph(
                     decision="cache_miss",
                     exec_key=exec_key,
                 )
+                if cache_only:
+                    msg = (
+                        "Selected-only run requires cached ancestors, "
+                        f"but cache entry was missing for node '{node_id}'."
+                    )
+                    await context.bus.emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": "failed",
+                        "execution_time_ms": max(
+                            0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                        ),
+                        "error": msg,
+                        "cached": False,
+                    })
+                    return {"ok": False, "cached": False}
 
             # ---- Execute node ----
             try:
@@ -1795,7 +1833,10 @@ async def run_graph(
                 try:
                     async with kind_sem:
                         try:
-                            return await _execute_node(node_id)
+                            return await _execute_node(
+                                node_id,
+                                cache_only=(node_id in plan.cache_only_nodes),
+                            )
                         except asyncio.CancelledError:
                             await context.bus.emit({
                                 "type": "node_finished",

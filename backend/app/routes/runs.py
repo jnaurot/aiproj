@@ -30,6 +30,7 @@ def _alpha_input_label(idx: int) -> str:
 
 class RunRequest(BaseModel):
     runFrom: Optional[str] = None
+    runMode: Optional[str] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
 
     @field_validator("graph")
@@ -38,6 +39,16 @@ class RunRequest(BaseModel):
         if "nodes" not in v or "edges" not in v:
             raise ValueError("graph must include 'nodes' and 'edges'")
         return v
+    
+    @field_validator("runMode")
+    @classmethod
+    def validate_run_mode(cls, v):
+        if v is None:
+            return v
+        mode = str(v).strip().lower()
+        if mode not in {"from_selected_onward", "selected_only"}:
+            raise ValueError("runMode must be 'from_selected_onward' or 'selected_only'")
+        return mode
     
 class RunCreated(BaseModel):
     schemaVersion: int = 1
@@ -58,7 +69,10 @@ async def create_run(req: RunRequest, request: Request):
     run_id = str(uuid4())
     rt.create_run(run_id)
     
-    await rt.start_run(run_id, req.graph, req.runFrom)
+    if req.runMode == "selected_only" and not req.runFrom:
+        raise HTTPException(400, "runMode='selected_only' requires runFrom")
+
+    await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode)
     
     return RunCreated(schemaVersion=1, runId=run_id)
 
