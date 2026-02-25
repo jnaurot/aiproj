@@ -102,3 +102,36 @@ async def gc_maintenance(
         response["audit_artifact_id"] = audit_id
 
     return response
+
+
+@router.post("/events/prune")
+async def prune_events_maintenance(
+    request: Request,
+    keep_last: int = Query(..., ge=0),
+    dry_run: bool = Query(default=True),
+):
+    if not _maintenance_enabled():
+        raise HTTPException(403, "Maintenance endpoints are disabled")
+
+    rt = request.app.state.runtime
+    result = await rt.prune_events(keep_last=keep_last, dry_run=dry_run, run_id=None)
+    response = {
+        "keep_last": int(result.get("keep_last", keep_last)),
+        "dry_run": bool(result.get("dry_run", dry_run)),
+        "rows_deleted": int(result.get("rows_deleted", 0)),
+        "runs_affected": int(result.get("runs_affected", 0)),
+        "oldest_remaining_event_id": result.get("oldest_remaining_event_id"),
+    }
+
+    if not dry_run:
+        audit_payload = {
+            "operation": "maintenance.events.prune",
+            "keep_last": keep_last,
+            "dry_run": False,
+            "result": response,
+            "remote_addr": getattr(getattr(request, "client", None), "host", None),
+        }
+        audit_id = await _write_maintenance_audit_artifact(request, audit_payload)
+        response["audit_artifact_id"] = audit_id
+
+    return response

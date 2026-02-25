@@ -95,18 +95,61 @@ async def delete_run(
         raise HTTPException(404, "Unknown runId")
     return result
 
-@router.get("/{run_id}/events")
-async def stream_events(run_id: str, request: Request):
+
+@router.delete("/{run_id}/events")
+async def prune_run_events(
+    run_id: str,
+    request: Request,
+    keep_last: int = Query(..., ge=0),
+    dry_run: bool = Query(default=True),
+):
     rt = request.app.state.runtime
+    rec = await rt.artifact_store.get_run(run_id)
     handle = rt.get_run(run_id)
-    if not handle:
+    if not rec and not handle:
         raise HTTPException(404, "Unknown runId")
 
-    bus = handle.bus
-    await bus.emit({"type": "debug_ping", "runId": run_id, "at": iso_now()})
+    result = await rt.prune_events(keep_last=keep_last, dry_run=dry_run, run_id=run_id)
+    return {
+        "runId": run_id,
+        "keep_last": int(result.get("keep_last", keep_last)),
+        "dry_run": bool(result.get("dry_run", dry_run)),
+        "rows_deleted": int(result.get("rows_deleted", 0)),
+        "runs_affected": int(result.get("runs_affected", 0)),
+        "oldest_remaining_event_id": result.get("oldest_remaining_event_id"),
+    }
 
-    if not bus:
-        raise HTTPException(status_code=404, detail="Unknown runId")
+@router.get("/{run_id}/events")
+async def stream_events(
+    run_id: str,
+    request: Request,
+    after_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    rt = request.app.state.runtime
+    handle = rt.get_run(run_id)
+    rec = await rt.artifact_store.get_run(run_id)
+    if not handle and not rec:
+        raise HTTPException(404, "Unknown runId")
+
+    accept = (request.headers.get("accept") or "").lower()
+    wants_sse = "text/event-stream" in accept
+
+    # Replay mode: persisted events in deterministic order.
+    if not wants_sse:
+        rows = await rt.list_run_events(run_id, after_id=after_id, limit=limit)
+        next_after_id = rows[-1]["id"] if rows else after_id
+        return {
+            "runId": run_id,
+            "afterId": after_id,
+            "limit": limit,
+            "events": rows,
+            "nextAfterId": next_after_id,
+        }
+
+    if not handle or not handle.bus:
+        raise HTTPException(404, "Run is not active for live streaming; use replay mode")
+    bus = handle.bus
 
     async def event_gen():
         # Send initial comment so proxies don't buffer

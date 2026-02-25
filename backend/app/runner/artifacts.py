@@ -234,14 +234,21 @@ class MemoryArtifactStore:
 
 
 class _SqliteArtifactIndex:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, blob_root: Optional[Path] = None) -> None:
         self._db_path = db_path
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._blob_root = blob_root
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
         self._init_schema()
+
+    def _blob_path(self, content_hash: str) -> Path:
+        if self._blob_root is None:
+            raise RuntimeError("Blob root is not configured for sqlite artifact index")
+        ch = content_hash.lower()
+        return self._blob_root / ch[:2] / ch[2:4] / f"{ch}.bin"
 
     def _init_schema(self) -> None:
         with self._lock:
@@ -641,7 +648,10 @@ class DiskArtifactStore:
         self._root = Path(root_dir).resolve()
         self._blob_root = self._root / "blobs" / "sha256"
         self._blob_root.mkdir(parents=True, exist_ok=True)
-        self._index = _SqliteArtifactIndex(self._root / "meta" / "artifacts.sqlite")
+        self._index = _SqliteArtifactIndex(
+            self._root / "meta" / "artifacts.sqlite",
+            blob_root=self._blob_root,
+        )
 
     def _blob_path(self, content_hash: str) -> Path:
         ch = content_hash.lower()

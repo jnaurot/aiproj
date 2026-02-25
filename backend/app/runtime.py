@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 
-from .runner.events import RunEventBus
+from .runner.events import EventStore, MemoryEventStore, RunEventBus, SqliteEventStore
 from .runner.artifacts import ArtifactStore, DiskArtifactStore, MemoryArtifactStore
 from .runner.cache import ExecutionCache, SqliteExecutionCache
 from .runner.run import run_graph
@@ -36,18 +36,19 @@ class RuntimeManager:
 
         self.runs: Dict[str, RunHandle] = {}
         self._artifact_owner: dict[str, str] = {}
-        self.artifact_store, self.cache = self._build_storage()
+        self.artifact_store, self.cache, self.event_store = self._build_storage()
 
     def _build_storage(self):
         store_kind = (os.getenv("ARTIFACT_STORE") or "disk").strip().lower()
         if store_kind == "memory":
-            return MemoryArtifactStore(), ExecutionCache()
+            return MemoryArtifactStore(), ExecutionCache(), MemoryEventStore()
 
         artifact_dir = Path(os.getenv("ARTIFACT_DIR") or "./data/artifacts").resolve()
         store = DiskArtifactStore(artifact_dir)
         cache_db = str((artifact_dir / "meta" / "artifacts.sqlite"))
         cache = SqliteExecutionCache(cache_db)
-        return store, cache
+        event_store: EventStore = SqliteEventStore(cache_db)
+        return store, cache, event_store
 
     # ---------- creation ----------
 
@@ -58,7 +59,11 @@ class RuntimeManager:
             artifact_store=self.artifact_store,
             cache=self.cache,
         )
-        bus = RunEventBus(run_id, on_emit=lambda ev: self._apply_event_to_state(handle, ev))
+        bus = RunEventBus(
+            run_id,
+            on_emit=lambda ev: self._apply_event_to_state(handle, ev),
+            persist_event=lambda ev: self.event_store.append_event(ev),
+        )
         handle.bus = bus
         
         self.runs[run_id] = handle
@@ -101,11 +106,24 @@ class RuntimeManager:
 
         if mode == "hard":
             self.runs.pop(run_id, None)
+            await self.event_store.delete_run_events(run_id)
         else:
             h = self.runs.get(run_id)
             if h:
                 h.status = "deleted"
         return result
+
+    async def list_run_events(self, run_id: str, *, after_id: int = 0, limit: int = 500) -> list[Dict[str, Any]]:
+        return await self.event_store.list_events(run_id, after_id=after_id, limit=limit)
+
+    async def prune_events(
+        self,
+        *,
+        keep_last: int,
+        dry_run: bool = True,
+        run_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self.event_store.prune_events(keep_last=keep_last, dry_run=dry_run, run_id=run_id)
     
     # ----------------------artifacts------------------------
 
