@@ -1,0 +1,1 @@
+{"type": "error", "code": "CONTRACT_MISMATCH", "message": "Source output contract mismatch: out=json expects object/array, got <class 'str'>", "nodeId": "n_6ec34f34-8659-45e6-8d12-0a7c7be57131", "nodeKind": "source", "runId": "359e17f8-39a7-43a4-a793-a55b634a0cb8", "at": "2026-02-25T18:50:35.208382+00:00"}
