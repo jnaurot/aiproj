@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -145,6 +146,44 @@ def _tool_exec_key(
     return sha256_hex(canonical_json(fp).encode("utf-8"))
 
 
+def _transform_exec_key(
+    *,
+    normalized_params: Dict[str, Any],
+    input_refs: list[tuple[str, str]],
+    execution_version: str,
+) -> str:
+    fp = {
+        "build_version": execution_version,
+        "node_kind": "transform",
+        "normalized_params": normalized_params,
+        "input_artifact_ids": [aid for _, aid in sorted(input_refs)],
+    }
+    return sha256_hex(canonical_json(fp).encode("utf-8"))
+
+
+def _normalized_params_for_exec_key(
+    *,
+    kind: str,
+    node: Dict[str, Any],
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    p = dict(params or {})
+    if kind == "llm":
+        from .schemas import normalize_llm_params_frontend
+
+        return normalize_llm_params_frontend(p)
+    if kind == "source":
+        source_kind = (node.get("data", {}).get("sourceKind") or p.get("source_type") or "file")
+        p["source_type"] = source_kind
+        return p
+    if kind == "transform":
+        return normalize_transform_params(
+            p,
+            default_op=(node.get("data", {}) or {}).get("transformKind"),
+        )
+    return p
+
+
 def _tool_is_armed(params: Dict[str, Any]) -> bool:
     return bool(params.get("armed", False))
 
@@ -154,19 +193,23 @@ def _table_payload_schema_from_rows(rows: list[dict[str, Any]]) -> Dict[str, Any
     if rows:
         sample = rows[0]
         for k, v in sample.items():
-            columns.append({"name": str(k), "type": type(v).__name__ if v is not None else "unknown"})
-    return {"type": "table", "columns": columns}
+            columns.append({"name": str(k), "dtype": type(v).__name__ if v is not None else "unknown"})
+    return {"schema_version": 1, "type": "table", "columns": columns}
 
 
 def _source_payload_schema(out_contract: Optional[str], data_value: Any) -> Optional[Dict[str, Any]]:
     if out_contract == "table" and isinstance(data_value, list):
         return _table_payload_schema_from_rows(data_value)
     if out_contract == "json":
-        return {"type": "json", "shape": "array" if isinstance(data_value, list) else "object"}
+        return {
+            "schema_version": 1,
+            "type": "json",
+            "json_shape": "array" if isinstance(data_value, list) else "object",
+        }
     if out_contract == "text":
-        return {"type": "string"}
+        return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
     if out_contract == "binary":
-        return {"type": "binary"}
+        return {"schema_version": 1, "type": "binary"}
     return None
 
 
@@ -178,36 +221,149 @@ def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, A
             try:
                 parsed = json.loads(parsed)
             except Exception:
-                return {"type": "json", "shape": "unknown"}
+                return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
         if isinstance(parsed, dict):
-            return {"type": "json", "shape": "object", "keys": sorted(list(parsed.keys()))}
+            return {
+                "schema_version": 1,
+                "type": "json",
+                "json_shape": "object",
+                "keys_sample": sorted(list(parsed.keys())),
+            }
         if isinstance(parsed, list):
-            return {"type": "json", "shape": "array"}
-        return {"type": "json", "shape": "unknown"}
+            return {"schema_version": 1, "type": "json", "json_shape": "array"}
+        return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
     if "text/markdown" in mt:
-        return {"type": "string", "format": "markdown"}
+        return {"schema_version": 1, "type": "text", "encoding": "utf-8", "format": "markdown"}
     if "text/plain" in mt:
-        return {"type": "string"}
+        return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
     return None
 
 
 def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str, Any]]:
     if envelope_kind == "json":
         if isinstance(payload, dict):
-            return {"type": "json", "shape": "object", "keys": sorted(list(payload.keys()))}
+            return {
+                "schema_version": 1,
+                "type": "json",
+                "json_shape": "object",
+                "keys_sample": sorted(list(payload.keys())),
+            }
         if isinstance(payload, list):
-            return {"type": "json", "shape": "array"}
-        return {"type": "json", "shape": "unknown"}
+            return {"schema_version": 1, "type": "json", "json_shape": "array"}
+        return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
     if envelope_kind == "text":
-        return {"type": "string"}
+        return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
     if envelope_kind == "binary":
-        return {"type": "binary"}
+        return {"schema_version": 1, "type": "binary"}
     return None
 
 
 def _is_contract_mismatch_error(message: str) -> bool:
     m = (message or "").lower()
     return ("contract mismatch" in m) or ("payload schema mismatch" in m)
+
+
+_CACHE_DECISIONS = {"cache_hit", "cache_miss", "cache_hit_contract_mismatch"}
+
+
+class ContractMismatchError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "CONTRACT_MISMATCH",
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.details = details or {}
+
+
+def _sorted_unique_strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out = [str(v) for v in values if v is not None and str(v) != ""]
+    return sorted(set(out))
+
+
+def _contract_details(
+    *,
+    missing_columns: Optional[list[str]] = None,
+    expected: Optional[Dict[str, Any]] = None,
+    actual: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    # Canonical, stable shape for deterministic errors/tests.
+    details: Dict[str, Any] = {
+        "missingColumns": _sorted_unique_strings(missing_columns or []),
+        "expected": expected or {},
+        "actual": actual or {},
+    }
+    return details
+
+
+def _extract_quoted_identifiers(expr: str) -> list[str]:
+    # Deterministic conservative parse: only quoted/backticked column refs are checked.
+    if not isinstance(expr, str) or not expr.strip():
+        return []
+    names = re.findall(r'"([^"]+)"|`([^`]+)`', expr)
+    out: list[str] = []
+    for a, b in names:
+        n = (a or b or "").strip()
+        if n:
+            out.append(n)
+    return sorted(set(out))
+
+
+def _infer_artifact_port_type(artifact: Artifact) -> str:
+    if artifact.port_type:
+        return str(artifact.port_type)
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    ps_type = str(ps.get("type") or "").lower()
+    if ps_type == "string":
+        ps_type = "text"
+    if ps_type in {"table", "json", "text", "binary", "embeddings", "chat"}:
+        return ps_type
+    mt = (artifact.mime_type or "").lower()
+    if "json" in mt:
+        return "json"
+    if "markdown" in mt or mt.startswith("text/"):
+        return "text"
+    if "csv" in mt or "tsv" in mt or "parquet" in mt:
+        return "table"
+    return "binary"
+
+
+def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
+    ports = (node.get("data", {}).get("ports", {}) or {})
+    declared = ports.get("out")
+    if declared:
+        return str(declared)
+    if kind == "transform":
+        return "table"
+    if kind == "llm":
+        return "text"
+    if kind == "tool":
+        return "json"
+    return None
+
+
+def _cached_artifact_contract_mismatch(kind: str, node: Dict[str, Any], artifact: Artifact) -> Optional[Dict[str, Any]]:
+    declared = _declared_out_port(kind, node)
+    if not declared:
+        return None
+    artifact_pt = _infer_artifact_port_type(artifact)
+    if declared != artifact_pt:
+        return {
+            "message": (
+                "Contract mismatch (cache hit): "
+                f"declared out='{declared}' but cached artifact port_type='{artifact_pt}'"
+            ),
+            "expectedPortType": declared,
+            "actualPortType": artifact_pt,
+            "artifactId": artifact.artifact_id,
+            "producerExecKey": artifact.exec_key,
+        }
+    return None
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -261,6 +417,7 @@ async def _emit_error_artifact(
     upstream_ids: list[str],
     message: str,
     code: str,
+    details: Optional[Dict[str, Any]] = None,
 ) -> str:
     at = iso_now()
     body = {
@@ -272,6 +429,8 @@ async def _emit_error_artifact(
         "runId": context.run_id,
         "at": at,
     }
+    if details:
+        body["details"] = details
     payload_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
     artifact_id = sha256_hex(payload_bytes)
     artifact = Artifact(
@@ -282,9 +441,10 @@ async def _emit_error_artifact(
         created_at=datetime.now(timezone.utc),
         execution_version=context.execution_version,
         mime_type="application/json",
+        port_type="json",
         size_bytes=len(payload_bytes),
         storage_uri=f"artifact://{artifact_id}",
-        payload_schema={"type": "error"},
+        payload_schema={"schema_version": 1, "type": "json", "json_shape": "object"},
         run_id=context.run_id,
         node_id=node_id,
     )
@@ -323,7 +483,8 @@ async def run_graph(
     run_from: Optional[str], 
     bus: RunEventBus, 
     artifact_store=None, 
-    cache=None
+    cache=None,
+    cancel_event: Optional[asyncio.Event] = None,
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
@@ -340,6 +501,55 @@ async def run_graph(
 
     node_to_artifact: dict[str, str] = {}
     cache = cache or ExecutionCache()
+    cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
+    cache_summary_emitted = False
+
+    async def _emit_cache_decision(
+        *,
+        node_id: str,
+        node_kind: str,
+        decision: str,
+        exec_key: str,
+        artifact_id: Optional[str] = None,
+        expected_port_type: Optional[str] = None,
+        actual_port_type: Optional[str] = None,
+        producer_exec_key: Optional[str] = None,
+    ) -> None:
+        d = decision if decision in _CACHE_DECISIONS else "cache_miss"
+        evt = {
+            "type": "cache_decision",
+            "schema_version": 1,
+            "runId": run_id,
+            "at": iso_now(),
+            "nodeId": node_id,
+            "nodeKind": node_kind,
+            "decision": d,
+            "execKey": exec_key,
+        }
+        if artifact_id:
+            evt["artifactId"] = artifact_id
+        if expected_port_type:
+            evt["expectedPortType"] = expected_port_type
+        if actual_port_type:
+            evt["actualPortType"] = actual_port_type
+        if producer_exec_key is not None:
+            evt["producerExecKey"] = producer_exec_key
+        await context.bus.emit(evt)
+
+    async def _emit_cache_summary_once() -> None:
+        nonlocal cache_summary_emitted
+        if cache_summary_emitted:
+            return
+        cache_summary_emitted = True
+        await context.bus.emit({
+            "type": "cache_summary",
+            "schema_version": 1,
+            "runId": run_id,
+            "at": iso_now(),
+            "cache_hit": int(cache_stats["hit"]),
+            "cache_miss": int(cache_stats["miss"]),
+            "cache_hit_contract_mismatch": int(cache_stats["hit_contract_mismatch"]),
+        })
 
     # ===== PHASE 1: PRE-EXECUTION VALIDATION =====
     validator = GraphValidator()
@@ -412,9 +622,14 @@ async def run_graph(
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
 
-
+            normalized_params_for_hash = _normalized_params_for_exec_key(
+                kind=kind,
+                node=n,
+                params=params,
+            )
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
             tool_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "tool" else []
+            transform_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "transform" else []
 
             if kind == "tool":
                 exec_key = _tool_exec_key(
@@ -422,10 +637,16 @@ async def run_graph(
                     input_refs=tool_input_refs,
                     execution_version=context.execution_version,
                 )
+            elif kind == "transform":
+                exec_key = _transform_exec_key(
+                    normalized_params=normalized_params_for_hash,
+                    input_refs=transform_input_refs,
+                    execution_version=context.execution_version,
+                )
             else:
                 exec_key = cache.execution_key(
                     node_kind=kind,
-                    params=params,
+                    normalized_params=normalized_params_for_hash,
                     upstream_artifact_ids=upstream_ids,
                     execution_version=context.execution_version,
                 )
@@ -436,6 +657,14 @@ async def run_graph(
             # ---- Cache check goes HERE (before execution) ----
             cached_artifact_id = await cache.get_artifact_id(exec_key) if use_cache_for_node else None
             if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
+                cache_stats["hit"] += 1
+                await _emit_cache_decision(
+                    node_id=node_id,
+                    node_kind=kind,
+                    decision="cache_hit",
+                    exec_key=exec_key,
+                    artifact_id=cached_artifact_id,
+                )
                 context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                 node_to_artifact[node_id] = cached_artifact_id
                 await _record_consumers(
@@ -451,6 +680,7 @@ async def run_graph(
                 print(f"[cache-hit] node={node_id} artifact={cached_artifact_id[:10]}...")
 
                 cached_art = await context.artifact_store.get(cached_artifact_id)
+                mismatch_error = _cached_artifact_contract_mismatch(kind, n, cached_art)
                 await context.bus.emit({
                     "type": "node_output",
                     "runId": run_id,
@@ -458,7 +688,49 @@ async def run_graph(
                     "at": iso_now(),
                     "artifactId": cached_artifact_id,
                     "mimeType": cached_art.mime_type,
+                    "portType": cached_art.port_type or ((n.get("data", {}).get("ports", {}) or {}).get("out")),
+                    "cached": True,
                 })
+                if mismatch_error:
+                    cache_stats["hit_contract_mismatch"] += 1
+                    await _emit_cache_decision(
+                        node_id=node_id,
+                        node_kind=kind,
+                        decision="cache_hit_contract_mismatch",
+                        exec_key=exec_key,
+                        artifact_id=cached_artifact_id,
+                        expected_port_type=mismatch_error["expectedPortType"],
+                        actual_port_type=mismatch_error["actualPortType"],
+                        producer_exec_key=mismatch_error.get("producerExecKey"),
+                    )
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": mismatch_error["message"],
+                        "nodeId": node_id,
+                        "code": "CONTRACT_MISMATCH",
+                        "expectedPortType": mismatch_error["expectedPortType"],
+                        "actualPortType": mismatch_error["actualPortType"],
+                        "artifactId": mismatch_error["artifactId"],
+                        "producerExecKey": mismatch_error.get("producerExecKey"),
+                    })
+                    await context.bus.emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": "failed",
+                        "error": mismatch_error["message"],
+                        "cached": True,
+                        "code": "CONTRACT_MISMATCH",
+                        "expectedPortType": mismatch_error["expectedPortType"],
+                        "actualPortType": mismatch_error["actualPortType"],
+                        "artifactId": mismatch_error["artifactId"],
+                        "producerExecKey": mismatch_error.get("producerExecKey"),
+                    })
+                    return {"ok": False, "cached": True}
 
                 await context.bus.emit({
                     "type": "node_finished",
@@ -480,6 +752,14 @@ async def run_graph(
                     })
                 await asyncio.sleep(0.05)
                 return {"ok": True, "cached": True}
+            elif use_cache_for_node:
+                cache_stats["miss"] += 1
+                await _emit_cache_decision(
+                    node_id=node_id,
+                    node_kind=kind,
+                    decision="cache_miss",
+                    exec_key=exec_key,
+                )
 
             # ---- Execute node ----
             try:
@@ -494,12 +774,20 @@ async def run_graph(
                     in_contract = ports.get("in") or "table"
                     out_contract = ports.get("out") or "table"
                     if in_contract != "table":
-                        raise RuntimeError(
-                            f"Transform output contract mismatch: in must be 'table', got '{in_contract}'"
+                        raise ContractMismatchError(
+                            f"Transform output contract mismatch: in must be 'table', got '{in_contract}'",
+                            details=_contract_details(
+                                expected={"portType": "table"},
+                                actual={"portType": str(in_contract)},
+                            ),
                         )
                     if out_contract != "table":
-                        raise RuntimeError(
-                            f"Transform output contract mismatch: out must be 'table', got '{out_contract}'"
+                        raise ContractMismatchError(
+                            f"Transform output contract mismatch: out must be 'table', got '{out_contract}'",
+                            details=_contract_details(
+                                expected={"portType": "table"},
+                                actual={"portType": str(out_contract)},
+                            ),
                         )
 
                     await context.bus.emit({
@@ -527,6 +815,7 @@ async def run_graph(
                         # 1) collect upstream artifacts (port -> artifact_id)
                         input_refs = resolve_input_refs(edges, node_id, node_to_artifact)  # [(port, artifact_id), ...]
                         input_tables = {}  # port -> DataFrame
+                        input_columns: dict[str, list[str]] = {}
                         required_cols_by_artifact: dict[str, list[str]] = {}
 
                         for e in edges.values():
@@ -544,6 +833,26 @@ async def run_graph(
 
                         for port, upstream_artifact_id in input_refs:
                             art = await context.artifact_store.get(upstream_artifact_id)
+                            ps = getattr(art, "payload_schema", None) or {}
+                            ps_type_raw = ps.get("type") if isinstance(ps, dict) else None
+                            ps_type = str(ps_type_raw or "").lower()
+                            if ps_type == "string":
+                                ps_type = "text"
+                            if ps_type and ps_type != "table":
+                                raise ContractMismatchError(
+                                    (
+                                        "Transform payload schema mismatch: "
+                                        f"expected table input but got '{ps_type}'"
+                                    ),
+                                    code="PAYLOAD_SCHEMA_MISMATCH",
+                                    details=_contract_details(
+                                        expected={"payloadType": "table"},
+                                        actual={
+                                            "payloadType": ps_type,
+                                            "artifactId": upstream_artifact_id,
+                                        },
+                                    ),
+                                )
                             req_cols = required_cols_by_artifact.get(upstream_artifact_id)
                             if req_cols:
                                 payload_schema = getattr(art, "payload_schema", None) or {}
@@ -556,12 +865,22 @@ async def run_graph(
                                 if src_col_names:
                                     missing = [c for c in req_cols if c not in src_col_names]
                                     if missing:
-                                        raise RuntimeError(
-                                            f"Edge payload schema mismatch: missing required columns {missing}"
+                                        raise ContractMismatchError(
+                                            f"Edge payload schema mismatch: missing required columns {missing}",
+                                            code="PAYLOAD_SCHEMA_MISMATCH",
+                                            details=_contract_details(
+                                                missing_columns=missing,
+                                                expected={"requiredColumns": _sorted_unique_strings(req_cols)},
+                                                actual={
+                                                    "availableColumns": _sorted_unique_strings(src_col_names),
+                                                    "artifactId": upstream_artifact_id,
+                                                },
+                                            ),
                                         )
                             b = await context.artifact_store.read(upstream_artifact_id)
                             df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
                             input_tables[port] = df
+                            input_columns[port] = [str(c) for c in list(getattr(df, "columns", []))]
 
                         # join lookup (node_id -> DataFrame), best-effort
                         join_lookup: dict[str, Any] = {}
@@ -573,25 +892,25 @@ async def run_graph(
                             except Exception:
                                 pass
 
-                        # 2) exec_key (transform-specific)
-                        # NOTE: you currently use context.execution_version; keep that as build/version here too.
-                        build_version = context.execution_version
-
-                        norm = normalize_transform_params(
-                            params,
-                            default_op=(n.get("data", {}) or {}).get("transformKind"),
+                        # 2) exec_key (transform-specific deterministic fingerprint)
+                        norm = normalized_params_for_hash
+                        exec_key = _transform_exec_key(
+                            normalized_params=norm,
+                            input_refs=input_refs,
+                            execution_version=context.execution_version,
                         )
-                        fp = {
-                            "build": build_version,
-                            "kind": "transform",
-                            "params": norm,
-                            "inputs": inputs_fingerprint(input_refs),
-                        }
-                        exec_key = sha256_hex(canonical_json(fp).encode("utf-8"))
 
                         # 3) cache hit?
                         cached_artifact_id = await cache.get_artifact_id(exec_key)
                         if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
+                            cache_stats["hit"] += 1
+                            await _emit_cache_decision(
+                                node_id=node_id,
+                                node_kind=kind,
+                                decision="cache_hit",
+                                exec_key=exec_key,
+                                artifact_id=cached_artifact_id,
+                            )
                             context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                             node_to_artifact[node_id] = cached_artifact_id
                             await _record_consumers(
@@ -614,6 +933,8 @@ async def run_graph(
                                 "at": iso_now(),
                                 "artifactId": cached_artifact_id,
                                 "mimeType": cached_art.mime_type,
+                                "portType": cached_art.port_type or "table",
+                                "cached": True,
                             })
 
                             # finish the node (skip compute)
@@ -637,9 +958,144 @@ async def run_graph(
                                 })
                             await asyncio.sleep(0.05)
                             return {"ok": True, "cached": True}
+                        else:
+                            cache_stats["miss"] += 1
+                            await _emit_cache_decision(
+                                node_id=node_id,
+                                node_kind=kind,
+                                decision="cache_miss",
+                                exec_key=exec_key,
+                            )
 
                         # 4) execute
-                        res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
+                        op = str(norm.get("op") or "")
+                        primary_port = "in" if "in" in input_tables else (next(iter(input_tables.keys())) if input_tables else "in")
+                        primary_cols = input_columns.get(primary_port, [])
+                        primary_cols_set = set(primary_cols)
+                        input_artifact_ids = [aid for _, aid in input_refs]
+
+                        if op == "select":
+                            expected_cols = [str(c) for c in ((norm.get("select") or {}).get("columns") or [])]
+                            missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: select references missing columns {missing_cols}",
+                                    code="PAYLOAD_SCHEMA_MISMATCH",
+                                    details=_contract_details(
+                                        missing_columns=missing_cols,
+                                        expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
+                                        actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                    ),
+                                )
+                        elif op == "rename":
+                            rename_map = (norm.get("rename") or {}).get("map") or {}
+                            expected_cols = [str(c) for c in rename_map.keys()]
+                            missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: rename references missing columns {missing_cols}",
+                                    code="PAYLOAD_SCHEMA_MISMATCH",
+                                    details=_contract_details(
+                                        missing_columns=missing_cols,
+                                        expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
+                                        actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                    ),
+                                )
+                        elif op == "derive":
+                            derive_cols = ((norm.get("derive") or {}).get("columns") or [])
+                            expected_cols: list[str] = []
+                            for d in derive_cols:
+                                if not isinstance(d, dict):
+                                    continue
+                                expected_cols.extend(_extract_quoted_identifiers(str(d.get("expr") or "")))
+                            expected_cols = sorted(set(expected_cols))
+                            if expected_cols:
+                                missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: derive references missing columns {missing_cols}",
+                                        code="PAYLOAD_SCHEMA_MISMATCH",
+                                        details=_contract_details(
+                                            missing_columns=missing_cols,
+                                            expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
+                                            actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                        ),
+                                    )
+                        elif op == "join":
+                            join_spec = norm.get("join") or {}
+                            with_node = str(join_spec.get("withNodeId") or "")
+                            if len(input_refs) < 2:
+                                raise ContractMismatchError(
+                                    "Transform output contract mismatch: join requires two connected inputs",
+                                    details=_contract_details(
+                                        expected={"inputCount": 2},
+                                        actual={"inputCount": int(len(input_refs))},
+                                    ),
+                                )
+                            with_node_artifact = node_to_artifact.get(with_node)
+                            if not with_node_artifact or with_node_artifact not in input_artifact_ids:
+                                raise ContractMismatchError(
+                                    "Transform output contract mismatch: join.withNodeId must be connected as an input",
+                                    details=_contract_details(
+                                        expected={"withNodeIdConnected": True},
+                                        actual={
+                                            "withNodeId": with_node,
+                                            "connectedInputArtifactIds": sorted(input_artifact_ids),
+                                        },
+                                    ),
+                                )
+                            other_df = join_lookup.get(with_node)
+                            other_cols = (
+                                [str(c) for c in list(getattr(other_df, "columns", []))]
+                                if other_df is not None
+                                else []
+                            )
+                            other_cols_set = set(other_cols)
+                            on_specs = join_spec.get("on") or []
+                            left_expected = [
+                                str(x.get("left"))
+                                for x in on_specs
+                                if isinstance(x, dict) and x.get("left") is not None
+                            ]
+                            right_expected = [
+                                str(x.get("right"))
+                                for x in on_specs
+                                if isinstance(x, dict) and x.get("right") is not None
+                            ]
+                            missing_left = [c for c in left_expected if c not in primary_cols_set]
+                            missing_right = [c for c in right_expected if c not in other_cols_set]
+                            missing_cols = sorted(set(missing_left + missing_right))
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: join references missing columns {missing_cols}",
+                                    code="PAYLOAD_SCHEMA_MISMATCH",
+                                    details=_contract_details(
+                                        missing_columns=missing_cols,
+                                        expected={
+                                            "leftRequiredColumns": _sorted_unique_strings(left_expected),
+                                            "rightRequiredColumns": _sorted_unique_strings(right_expected),
+                                        },
+                                        actual={
+                                            "leftAvailableColumns": _sorted_unique_strings(primary_cols),
+                                            "rightAvailableColumns": _sorted_unique_strings(other_cols),
+                                        },
+                                    ),
+                                )
+
+                        try:
+                            res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
+                        except Exception as transform_ex:
+                            if op == "derive":
+                                # Best-effort precheck can miss complex SQL semantics.
+                                raise ContractMismatchError(
+                                    "Transform expression invalid: derive expression rejected by engine",
+                                    code="EXPR_INVALID",
+                                    details=_contract_details(
+                                        expected={"op": "derive", "engine": "duckdb"},
+                                        actual={"engineError": str(transform_ex)[:500]},
+                                    ),
+                                ) from transform_ex
+                            raise
 
                         await context.bus.emit({
                             "type": "log",
@@ -662,11 +1118,13 @@ async def run_graph(
                             created_at=datetime.now(timezone.utc),
                             execution_version=context.execution_version,
                             mime_type=res.mime_type,
+                            port_type="table",
                             size_bytes=len(res.payload_bytes),
                             storage_uri=f"artifact://{artifact_id}",
                             payload_schema={
+                                "schema_version": 1,
                                 "type": "table",
-                                "columns": [{"name": c, "type": "unknown"} for c in (res.meta.get("columns") or [])],
+                                "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
                             },
                             run_id=run_id,
                             node_id=node_id,
@@ -700,6 +1158,7 @@ async def run_graph(
                             "at": iso_now(),
                             "artifactId": artifact_id,
                             "mimeType": res.mime_type,
+                            "portType": "table",
                         })
 
                         # return a NodeOutput for legacy metadata flow
@@ -921,7 +1380,7 @@ async def run_graph(
                     artifact_params_hash = (
                         sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
                         if kind == "tool"
-                        else cache.params_hash(params)
+                        else cache.params_hash(normalized_params_for_hash)
                     )
 
                     artifact = Artifact(
@@ -932,6 +1391,7 @@ async def run_graph(
                         created_at=datetime.now(timezone.utc),
                         execution_version=context.execution_version,
                         mime_type=mime_type,
+                        port_type=((n.get("data", {}).get("ports", {}) or {}).get("out")),
                         size_bytes=len(payload_bytes),
                         storage_uri=f"artifact://{artifact_id}",
                         payload_schema=(
@@ -972,6 +1432,7 @@ async def run_graph(
                         "at": iso_now(),
                         "artifactId": artifact_id,
                         "mimeType": artifact.mime_type,
+                        "portType": artifact.port_type,
                     })
 
                     # Update cache index
@@ -989,19 +1450,42 @@ async def run_graph(
                         "status": output.status
                     })
 
+            except asyncio.CancelledError:
+                await context.bus.emit({
+                    "type": "node_cancelled",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": node_id,
+                    "status": "cancelled",
+                })
+                await context.bus.emit({
+                    "type": "node_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": node_id,
+                    "status": "cancelled",
+                })
+                return {"ok": False, "cached": False, "cancelled": True}
             except Exception as ex:
                 traceback.print_exc()
                 error_message = str(ex)
-                if _is_contract_mismatch_error(error_message):
+                error_details: Dict[str, Any] = {}
+                error_code: Optional[str] = None
+                if isinstance(ex, ContractMismatchError):
+                    error_code = ex.code
+                    error_details = dict(ex.details or {})
+                elif _is_contract_mismatch_error(error_message):
                     error_code = (
                         "PAYLOAD_SCHEMA_MISMATCH"
                         if "payload schema mismatch" in error_message.lower()
                         else "CONTRACT_MISMATCH"
                     )
+
+                if error_code:
                     error_params_hash = (
                         sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
                         if kind == "tool"
-                        else cache.params_hash(params)
+                        else cache.params_hash(normalized_params_for_hash)
                     )
                     error_artifact_id = await _emit_error_artifact(
                         context=context,
@@ -1011,6 +1495,7 @@ async def run_graph(
                         upstream_ids=upstream_ids,
                         message=error_message,
                         code=error_code,
+                        details=error_details,
                     )
                     node_to_artifact[node_id] = error_artifact_id
                     await context.bus.emit({
@@ -1020,6 +1505,7 @@ async def run_graph(
                         "at": iso_now(),
                         "artifactId": error_artifact_id,
                         "mimeType": "application/json",
+                        "portType": "json",
                     })
                 await context.bus.emit({
                     "type": "log",
@@ -1037,6 +1523,23 @@ async def run_graph(
                     "status": "failed",
                     "error": error_message
                 })
+                if error_details:
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": json.dumps(
+                            {
+                                "code": (ex.code if isinstance(ex, ContractMismatchError) else "CONTRACT_MISMATCH"),
+                                "missingColumns": error_details.get("missingColumns", []),
+                                "expected": error_details.get("expected"),
+                                "actual": error_details.get("actual"),
+                            },
+                            ensure_ascii=False,
+                        ),
+                        "nodeId": node_id,
+                    })
                 return {"ok": False, "cached": False}
 
             # Mark incoming edges as done
@@ -1095,6 +1598,30 @@ async def run_graph(
 
         run_failed = False
         for level_idx, level_nodes in enumerate(levels, start=1):
+            if cancel_event and cancel_event.is_set():
+                await context.bus.emit({
+                    "type": "scheduler_cancelled",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "levelIndex": level_idx,
+                    "scheduled": 0,
+                    "inflightCancelled": 0,
+                    "completedBeforeCancel": 0,
+                })
+                await context.bus.emit({
+                    "type": "run_cancelled",
+                    "runId": run_id,
+                    "at": iso_now(),
+                })
+                await context.bus.emit({
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "cancelled"
+                })
+                await _emit_cache_summary_once()
+                return
+
             kind_counts: Dict[str, int] = {"source": 0, "transform": 0, "llm": 0, "tool": 0}
             for nid in level_nodes:
                 k = (nodes.get(nid, {}).get("data", {}) or {}).get("kind")
@@ -1129,10 +1656,51 @@ async def run_graph(
             })
 
             level_t0 = asyncio.get_running_loop().time()
-            tasks = [asyncio.create_task(_run_with_limits(nid)) for nid in level_nodes]
-            results = await asyncio.gather(*tasks) if tasks else []
+            tasks = []
+            for nid in level_nodes:
+                if cancel_event and cancel_event.is_set():
+                    break
+                tasks.append(asyncio.create_task(_run_with_limits(nid)))
+
+            cancelled_tasks = 0
+            if cancel_event and cancel_event.is_set():
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                        cancelled_tasks += 1
+
+            raw_results = []
+            if tasks:
+                pending = set(tasks)
+                while pending:
+                    if cancel_event and cancel_event.is_set():
+                        for t in pending:
+                            if not t.done():
+                                t.cancel()
+                                cancelled_tasks += 1
+                    done, pending = await asyncio.wait(
+                        pending,
+                        timeout=0.05,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for d in done:
+                        try:
+                            raw_results.append(d.result())
+                        except asyncio.CancelledError as ce:
+                            raw_results.append(ce)
+                        except Exception as ex:
+                            raw_results.append(ex)
+            results = []
+            for r in raw_results:
+                if isinstance(r, asyncio.CancelledError):
+                    results.append({"ok": False, "cached": False, "cancelled": True})
+                elif isinstance(r, Exception):
+                    raise r
+                else:
+                    results.append(r)
             level_cached = sum(1 for r in results if r.get("cached"))
             level_failed = sum(1 for r in results if not r.get("ok"))
+            level_cancelled = sum(1 for r in results if r.get("cancelled"))
             level_succeeded = len(results) - level_failed - level_cached
             total_cached += level_cached
             total_failed += level_failed
@@ -1160,6 +1728,30 @@ async def run_graph(
                 ),
             })
 
+            if cancel_event and cancel_event.is_set():
+                await context.bus.emit({
+                    "type": "scheduler_cancelled",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "levelIndex": level_idx,
+                    "scheduled": len(tasks),
+                    "inflightCancelled": max(cancelled_tasks, level_cancelled),
+                    "completedBeforeCancel": max(0, len(results) - level_cancelled),
+                })
+                await context.bus.emit({
+                    "type": "run_cancelled",
+                    "runId": run_id,
+                    "at": iso_now(),
+                })
+                await context.bus.emit({
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "cancelled"
+                })
+                await _emit_cache_summary_once()
+                return
+
             if level_failed > 0:
                 run_failed = True
                 break
@@ -1176,6 +1768,7 @@ async def run_graph(
                 f"peak_concurrency={peak_concurrency} runtime_ms={total_runtime_ms}"
             ),
         })
+        await _emit_cache_summary_once()
 
         if run_failed:
             await context.bus.emit({
@@ -1184,6 +1777,7 @@ async def run_graph(
                 "at": iso_now(),
                 "status": "failed"
             })
+            await _emit_cache_summary_once()
             return
 
         await context.bus.emit({
@@ -1192,14 +1786,21 @@ async def run_graph(
             "at": iso_now(),
             "status": "succeeded"
         })
+        await _emit_cache_summary_once()
     except asyncio.CancelledError:
+        await context.bus.emit({
+            "type": "run_cancelled",
+            "runId": run_id,
+            "at": iso_now(),
+        })
         await context.bus.emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "run_canceled"
+            "status": "cancelled"
         })
-        raise  # ✅ important: propagate cancellation
+        await _emit_cache_summary_once()
+        return
     except Exception as ex:
         traceback.print_exc()
         await context.bus.emit({
@@ -1215,3 +1816,4 @@ async def run_graph(
             "at": iso_now(),
             "status": "failed"
         })
+        await _emit_cache_summary_once()

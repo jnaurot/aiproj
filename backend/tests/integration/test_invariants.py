@@ -388,3 +388,5 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
 
     run_finished = [e for e in events if e.get("type") == "run_finished"]
     assert run_finished and run_finished[-1].get("status") == "failed"
+    cache_summary = [e for e in events if e.get("type") == "cache_summary"]
+    assert cache_summary and cache_summary[-1].get("schema_version") == 1

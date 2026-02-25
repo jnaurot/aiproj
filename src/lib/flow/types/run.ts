@@ -12,7 +12,8 @@ export type KnownRunEvent =
   | { type: "node_finished"; runId: string; at: string; nodeId: string; status: RunStatus; error?: string }
   | { type: "edge_exec"; runId: string; at: string; edgeId: string; exec: "idle" | "active" | "done" }
   | { type: "log"; runId: string; at: string; level: "info" | "warn" | "error"; message: string; nodeId?: string }
-  | { type: "node_output"; runId: string; at: string; nodeId: string; artifactId: string; mimeType?: string; preview?: string };
+  | { type: "node_output"; runId: string; at: string; nodeId: string; artifactId: string; mimeType?: string; portType?: string; preview?: string; cached?: boolean }
+  | { type: "cache_decision"; schema_version?: number; runId: string; at: string; nodeId: string; nodeKind: string; decision: "cache_hit" | "cache_miss" | "cache_hit_contract_mismatch"; execKey: string; artifactId?: string; expectedPortType?: string; actualPortType?: string; producerExecKey?: string };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };
 

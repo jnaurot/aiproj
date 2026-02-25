@@ -40,6 +40,7 @@ class RunRequest(BaseModel):
         return v
     
 class RunCreated(BaseModel):
+    schemaVersion: int = 1
     runId: str
 
 
@@ -47,7 +48,7 @@ class RunCreated(BaseModel):
 async def list_runs(request: Request, include_deleted: bool = Query(default=False)):
     rt = request.app.state.runtime
     rows = await rt.list_runs(include_deleted=include_deleted)
-    return {"runs": rows}
+    return {"schemaVersion": 1, "runs": rows}
 
 
 @router.post("", response_model=RunCreated)
@@ -59,7 +60,7 @@ async def create_run(req: RunRequest, request: Request):
     
     await rt.start_run(run_id, req.graph, req.runFrom)
     
-    return RunCreated(runId=run_id)
+    return RunCreated(schemaVersion=1, runId=run_id)
 
 
 @router.post("/{run_id}/cancel")
@@ -68,9 +69,23 @@ async def cancel_run(run_id: str, request: Request):
     h = rt.get_run(run_id)
     if not h:
         raise HTTPException(404, "Unknown runId")
-    if h.task:
-        h.task.cancel()
-    return {"ok": True}
+    result = await rt.request_cancel(run_id)
+    if not result.get("found"):
+        raise HTTPException(404, "Unknown runId")
+    if result.get("cancelRequested"):
+        return {
+            "runId": run_id,
+            "status": result.get("status", "cancel_requested"),
+            "cancelRequested": True,
+        }
+    raise HTTPException(
+        409,
+        detail={
+            "runId": run_id,
+            "status": result.get("status", "unknown"),
+            "cancelRequested": False,
+        },
+    )
 
 
 @router.delete("/{run_id}")
@@ -191,8 +206,10 @@ async def get_artifact_meta(artifact_id: str, request: Request):
     art = await store.get(artifact_id)
     upstream_ids = art.upstream_ids or []
     return {
+        "schemaVersion": 1,
         "artifactId": art.artifact_id,
         "nodeKind": art.node_kind,
+        "portType": art.port_type,
         "mimeType": art.mime_type,
         "sizeBytes": art.size_bytes,
         "contentHash": art.content_hash,
@@ -260,6 +277,7 @@ async def get_artifact_lineage(
         node = {
             "artifactId": art.artifact_id,
             "nodeKind": art.node_kind,
+            "portType": art.port_type,
             "mimeType": art.mime_type,
             "sizeBytes": art.size_bytes,
             "createdAt": art.created_at.isoformat(),
@@ -281,6 +299,7 @@ async def get_artifact_lineage(
         return node
 
     return {
+        "schemaVersion": 1,
         "artifactId": artifact_id,
         "depth": depth,
         "lineage": await _build(artifact_id, depth),
@@ -318,7 +337,10 @@ async def get_artifact_preview(
         for col in payload_schema["columns"]:
             if isinstance(col, dict):
                 schema_cols.append(
-                    {"name": str(col.get("name", "")), "type": str(col.get("type", "unknown"))}
+                    {
+                        "name": str(col.get("name", "")),
+                        "type": str(col.get("dtype", col.get("type", "unknown"))),
+                    }
                 )
             else:
                 schema_cols.append({"name": str(col), "type": "unknown"})
@@ -350,6 +372,7 @@ async def get_run(run_id: str, request: Request):
         if rec.get("status") == "deleted":
             raise HTTPException(404, "Unknown runId")
         return {
+            "schemaVersion": 1,
             "runId": rec.get("run_id", run_id),
             "status": rec.get("status", "unknown"),
             "error": None,
@@ -361,6 +384,7 @@ async def get_run(run_id: str, request: Request):
         raise HTTPException(404, "Unknown runId")
 
     return {
+        "schemaVersion": 1,
         "runId": h.run_id,
         "status": h.status,
         "error": h.error,

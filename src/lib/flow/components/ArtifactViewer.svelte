@@ -3,6 +3,13 @@
 
 export let artifactId: string;
 export let mimeType: string | undefined;
+export let portType: string | undefined;
+export let cached: boolean | undefined = undefined;
+export let cacheDecision:
+	| 'cache_hit'
+	| 'cache_miss'
+	| 'cache_hit_contract_mismatch'
+	| undefined = undefined;
 export let preview: string | undefined;
 export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 
@@ -10,6 +17,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		artifactId: string;
 		nodeKind: string;
 		mimeType: string;
+		portType?: string | null;
 		sizeBytes: number;
 		contentHash?: string | null;
 		createdAt: string;
@@ -69,6 +77,8 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	}
 
 	$: effectiveMime = meta?.mimeType ?? mimeType ?? '';
+	$: effectivePortType = meta?.portType ?? portType ?? '-';
+	$: payloadType = String((meta?.payloadSchema as any)?.type ?? '-');
 	$: isTable =
 		((meta?.payloadSchema as any)?.type === 'table') ||
 		effectiveMime.includes('text/csv') ||
@@ -546,9 +556,16 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 {/if}
 
 <div class="chips">
+	<span class="chip"><b>port</b> {effectivePortType}</span>
 	<span class="chip"><b>mime</b> {effectiveMime || '-'}</span>
+	<span class="chip"><b>payload</b> {payloadType}</span>
 	<span class="chip"><b>rows</b> {isTable ? totalRows || '-' : '-'}</span>
 	<span class="chip"><b>cols</b> {isTable ? colCount || '-' : '-'}</span>
+	{#if cacheDecision}
+		<span class="chip"><b>cache</b> {cacheDecision}</span>
+	{:else if cached}
+		<span class="chip"><b>cache</b> cache_hit</span>
+	{/if}
 	{#if meta?.contentHash}
 		<span class="chip"><b>hash</b> {shortId(meta.contentHash)}</span>
 	{/if}

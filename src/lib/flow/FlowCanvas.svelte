@@ -85,6 +85,12 @@
 	$: selectedId = $selectedNode?.id;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: hasOutput = !!nodeOut?.artifactId;
+	$: outputCacheLabel =
+		nodeOut?.cacheDecision === 'cache_hit_contract_mismatch'
+			? 'cached:mismatch'
+			: nodeOut?.cached || nodeOut?.cacheDecision === 'cache_hit'
+				? 'cached'
+				: '';
 
 	// auto-fallback if you select a node without output
 	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
@@ -365,6 +371,11 @@
 						>
 							Output
 						</button>
+						{#if outputCacheLabel}
+							<span class={`pill ${outputCacheLabel === 'cached:mismatch' ? 'st-failed' : 'st-succeeded'}`}>
+								{outputCacheLabel}
+							</span>
+						{/if}
 
 						<button
 							class="tabBtn"
@@ -382,6 +393,9 @@
 							<ArtifactViewer
 								artifactId={nodeOut.artifactId}
 								mimeType={nodeOut.mimeType}
+								portType={nodeOut.portType}
+								cached={nodeOut.cached}
+								cacheDecision={nodeOut.cacheDecision}
 								preview={nodeOut.preview}
 								onJumpToNode={jumpToNodeFromArtifact}
 							/>

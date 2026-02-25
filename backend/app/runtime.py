@@ -26,6 +26,8 @@ class RunHandle:
     created_at: float = field(default_factory=lambda: time.time())
     status: str = "pending"  # pending|running|finished|failed|canceled
     error: Optional[str] = None
+    cancel_requested_at: Optional[float] = None
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     node_status: Dict[str, str] = field(default_factory=dict)   # idle|active|done|error|skipped|blocked|paused
     node_outputs: Dict[str, str] = field(default_factory=dict)  # node_id -> artifact_id
@@ -94,7 +96,7 @@ class RuntimeManager:
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         handle = self.runs.get(run_id)
         if handle and handle.task and not handle.task.done():
-            handle.task.cancel()
+            await self.request_cancel(run_id)
 
         result = await self.artifact_store.delete_run(run_id, mode=mode, gc=gc)
         removed_ids = result.get("artifactIdsRemoved", []) or []
@@ -124,6 +126,30 @@ class RuntimeManager:
         run_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         return await self.event_store.prune_events(keep_last=keep_last, dry_run=dry_run, run_id=run_id)
+
+    async def request_cancel(self, run_id: str) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if not handle:
+            return {"runId": run_id, "found": False, "cancelRequested": False, "status": "unknown"}
+
+        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        if handle.status in terminal:
+            return {"runId": run_id, "found": True, "cancelRequested": False, "status": handle.status}
+
+        if handle.cancel_event.is_set() or handle.status == "cancel_requested":
+            return {"runId": run_id, "found": True, "cancelRequested": True, "status": "cancel_requested"}
+
+        handle.cancel_requested_at = time.time()
+        handle.status = "cancel_requested"
+        handle.cancel_event.set()
+        await handle.bus.emit(
+            {
+                "type": "run_cancel_requested",
+                "runId": run_id,
+                "at": datetime_from_ts(handle.cancel_requested_at),
+            }
+        )
+        return {"runId": run_id, "found": True, "cancelRequested": True, "status": "cancel_requested"}
     
     # ----------------------artifacts------------------------
 
@@ -156,6 +182,7 @@ class RuntimeManager:
                 handle.bus,
                 artifact_store=handle.artifact_store,
                 cache=handle.cache,
+                cancel_event=handle.cancel_event,
             )
         )
 
@@ -168,6 +195,16 @@ class RuntimeManager:
         if t == "run_started":
             handle.status = "running"
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
+            return
+
+        if t == "run_cancel_requested":
+            handle.status = "cancel_requested"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancel_requested"))
+            return
+
+        if t == "run_cancelled":
+            handle.status = "cancelled"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancelled"))
             return
 
         if t == "run_finished":
@@ -186,6 +223,12 @@ class RuntimeManager:
             nid = ev.get("nodeId")
             if nid:
                 handle.node_status[nid] = ev.get("status", "succeeded")
+            return
+
+        if t == "node_cancelled":
+            nid = ev.get("nodeId")
+            if nid:
+                handle.node_status[nid] = "cancelled"
             return
 
         # artifacts

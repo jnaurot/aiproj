@@ -32,7 +32,6 @@
 		loaded = { kind: 'loading' };
 		try {
 			const res = await fetch(`http://127.0.0.1:8000/runs/artifacts/${info.artifactId}`)
-console.log("RESPONSE: ", res)
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
 			if (info.mimeType === 'application/json') {

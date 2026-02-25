@@ -22,7 +22,14 @@ import { createRun, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
 
-type NodeOutputInfo = { artifactId: string; mimeType?: string; preview?: string };
+type NodeOutputInfo = {
+	artifactId: string;
+	mimeType?: string;
+	portType?: string;
+	preview?: string;
+	cached?: boolean;
+	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
+};
 type EdgeExec = 'idle' | 'active' | 'done';
 type LogLevel = 'info' | 'warn' | 'error';
 type RunLog = {
@@ -922,13 +929,41 @@ export const graphStore = (() => {
 										[evt.nodeId]: {
 											artifactId: evt.artifactId,
 											mimeType: evt.mimeType,
-											preview: evt.preview ?? undefined
+											portType: evt.portType,
+											preview: evt.preview ?? undefined,
+											cached: evt.cached ?? false,
+											cacheDecision: s.nodeOutputs?.[evt.nodeId]?.cacheDecision
 										}
 									};
 
 									return {
 										...s,
 										nodeOutputs
+									};
+								}
+								case 'cache_decision': {
+									const prev = s.nodeOutputs?.[evt.nodeId];
+									const nextForNode: NodeOutputInfo = {
+										artifactId: evt.artifactId ?? prev?.artifactId ?? '',
+										mimeType: prev?.mimeType,
+										portType: prev?.portType,
+										preview: prev?.preview,
+										cached:
+											evt.decision === 'cache_hit' ||
+											evt.decision === 'cache_hit_contract_mismatch'
+												? true
+												: (prev?.cached ?? false),
+										cacheDecision: evt.decision
+									};
+									if (!nextForNode.artifactId) {
+										return s;
+									}
+									return {
+										...s,
+										nodeOutputs: {
+											...s.nodeOutputs,
+											[evt.nodeId]: nextForNode
+										}
 									};
 								}
 

@@ -40,22 +40,21 @@ class ExecutionCache:
     def execution_key(
         self,
         node_kind: str,
-        params: Dict[str, Any],
+        normalized_params: Dict[str, Any],
         upstream_artifact_ids: List[str],
         execution_version: str,
     ) -> str:
         """
-        Deterministic key for a node execution.
+        Deterministic execution key for artifact reuse.
 
         Note: upstream ids must be sorted to avoid nondeterminism due to edge ordering.
         """
-        ph = self.params_hash(params)
         upstream_sorted = sorted(upstream_artifact_ids or [])
         key_obj = {
+            "build_version": execution_version,
             "node_kind": node_kind,
-            "params_hash": ph,
-            "upstream_ids": upstream_sorted,
-            "execution_version": execution_version,
+            "normalized_params": normalized_params,
+            "input_artifact_ids": upstream_sorted,
         }
         return sha256_hex(_canon_json(key_obj))
 
