@@ -55,6 +55,11 @@ class RunCreated(BaseModel):
     runId: str
 
 
+class AcceptNodeParamsRequest(BaseModel):
+    graph: Dict[str, Any]
+    params: Dict[str, Any]
+
+
 @router.get("")
 async def list_runs(request: Request, include_deleted: bool = Query(default=False)):
     rt = request.app.state.runtime
@@ -100,6 +105,26 @@ async def cancel_run(run_id: str, request: Request):
             "cancelRequested": False,
         },
     )
+
+
+@router.post("/{run_id}/nodes/{node_id}/accept-params")
+async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsRequest, request: Request):
+    rt = request.app.state.runtime
+    h = rt.get_run(run_id)
+    if not h:
+        raise HTTPException(404, "Unknown runId")
+    try:
+        out = await rt.accept_node_params(
+            run_id=run_id,
+            graph=req.graph,
+            node_id=node_id,
+            params=req.params,
+        )
+        return out
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+    except RuntimeError as ex:
+        raise HTTPException(409, str(ex))
 
 
 @router.delete("/{run_id}")
@@ -393,6 +418,7 @@ async def get_run(run_id: str, request: Request):
             "createdAt": rec.get("created_at"),
             "nodeStatus": {},
             "nodeOutputs": {},
+            "nodeBindings": {},
         }
     if h.status == "deleted":
         raise HTTPException(404, "Unknown runId")
@@ -405,4 +431,5 @@ async def get_run(run_id: str, request: Request):
         "createdAt": h.created_at,
         "nodeStatus": h.node_status,
         "nodeOutputs": h.node_outputs,
+        "nodeBindings": h.node_bindings,
     }

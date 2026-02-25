@@ -8,6 +8,7 @@
 	import { nodeTypes } from '$lib/flow/nodeTypes';
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
+	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
@@ -29,6 +30,8 @@
 
 	let lastStoreNodes: Node<PipelineNodeData>[] | null = null;
 	let lastStoreEdges: Edge<PipelineEdgeData>[] | null = null;
+	let lastSelectedNodeId: string | null = null;
+	let lastStoreNodeBindings: Record<string, unknown> | null = null;
 
 	$: if ($graphStore.logs && scrollElement) {
 		scrollToBottom();
@@ -39,6 +42,24 @@
 		class: `edge edge-${e.data?.exec ?? 'idle'}`
 	}));
 
+	function applyCanvasSelection(
+		seedNodes: Node<PipelineNodeData>[],
+		selectedNodeId: string | null
+	): Node<PipelineNodeData>[] {
+		return seedNodes.map((n) => ({ ...n, selected: !!selectedNodeId && n.id === selectedNodeId }));
+	}
+
+	function applyBindingStatuses(
+		seedNodes: Node<PipelineNodeData>[],
+		nodeBindings: Record<string, any>
+	): Node<PipelineNodeData>[] {
+		return seedNodes.map((n) => {
+			const derived = displayStatusFromBinding(nodeBindings?.[n.id]);
+			if (n.data.status === derived) return n;
+			return { ...n, data: { ...n.data, status: derived } };
+		});
+	}
+
 	$: {
 		const s = $graphStore;
 
@@ -46,13 +67,17 @@
 		// not when the CANVAS changes (like while dragging).
 		const storeNodesChanged = s.nodes !== lastStoreNodes;
 		const storeEdgesChanged = s.edges !== lastStoreEdges;
+		const storeSelectionChanged = s.selectedNodeId !== lastSelectedNodeId;
+		const storeBindingsChanged = s.nodeBindings !== lastStoreNodeBindings;
 
-		if (storeNodesChanged || storeEdgesChanged) {
+		if (storeNodesChanged || storeEdgesChanged || storeSelectionChanged || storeBindingsChanged) {
 			applyingFromStore = true;
 
-			if (storeNodesChanged) {
-				nodes = s.nodes;
+			if (storeNodesChanged || storeSelectionChanged || storeBindingsChanged) {
+				nodes = applyCanvasSelection(applyBindingStatuses(s.nodes, s.nodeBindings ?? {}), s.selectedNodeId);
 				lastStoreNodes = s.nodes;
+				lastSelectedNodeId = s.selectedNodeId;
+				lastStoreNodeBindings = s.nodeBindings;
 			}
 
 			if (storeEdgesChanged) {
@@ -83,14 +108,22 @@
 	let inspectorMode: InspectorMode = 'edit';
 
 	$: selectedId = $selectedNode?.id;
+	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
-	$: hasOutput = !!nodeOut?.artifactId;
+	$: activeArtifactId = nodeBinding?.currentArtifactId ?? nodeBinding?.lastArtifactId ?? nodeOut?.artifactId;
+	$: hasOutput = !!activeArtifactId;
+	$: displayNodeStatus =
+		displayStatusFromBinding(nodeBinding as any);
 	$: outputCacheLabel =
 		nodeOut?.cacheDecision === 'cache_hit_contract_mismatch'
 			? 'cached:mismatch'
 			: nodeOut?.cached || nodeOut?.cacheDecision === 'cache_hit'
 				? 'cached'
 				: '';
+	$: graphHeaderStatus =
+		$graphStore.lastRunStatus === 'never_run'
+			? 'Never run'
+			: `${$graphStore.lastRunStatus === 'cancelled' ? 'Cancelled' : $graphStore.lastRunStatus.charAt(0).toUpperCase() + $graphStore.lastRunStatus.slice(1)}${$graphStore.freshness === 'stale' ? ` + Needs rerun${$graphStore.staleNodeCount > 0 ? ` (${$graphStore.staleNodeCount} stale)` : ''}` : ''}`;
 
 	// auto-fallback if you select a node without output
 	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
@@ -286,16 +319,18 @@
 		<div class="topbar">
 			<div class="btnrow">
 				<button on:click={resetRunUi}>Reset</button>
-				<button class="primary" on:click={() => graphStore.runRemote(null)}>Run from start</button>
+				<button class="primary" on:click={() => graphStore.runRemote(null, 'from_start')}>
+					Run from start
+				</button>
 				<button
 					class="primary"
 					disabled={!$selectedNode}
-					on:click={() => graphStore.runRemote($selectedNode?.id ?? null)}
+					on:click={() => graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward')}
 				>
 					Run from selected
 				</button>
 
-				<span class="status">Status: {$graphStore.runStatus}</span>
+				<span class="status">Graph: {graphHeaderStatus}</span>
 			</div>
 
 			<div class="btnrow">
@@ -338,8 +373,8 @@
 							<b class="title">{$selectedNode.data.label}</b>
 							<span class="pill">{$selectedNode.data.kind}</span>
 						</div>
-						<span class={`pill st-${$selectedNode.data.status ?? 'idle'}`}>
-							{$selectedNode.data.status ?? 'idle'}
+						<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
+							{displayNodeStatus ?? 'idle'}
 						</span>
 					</div>
 
@@ -390,7 +425,7 @@
 							<NodeInspector />
 						{:else if inspectorMode === 'output'}
 							<ArtifactViewer
-								artifactId={nodeOut.artifactId}
+								artifactId={activeArtifactId}
 								mimeType={nodeOut.mimeType}
 								portType={nodeOut.portType}
 								cached={nodeOut.cached}

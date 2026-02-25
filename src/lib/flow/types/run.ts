@@ -3,10 +3,18 @@ export type RunStatus = "idle" | "running" | "succeeded" | "failed" | "canceled"
 
 export type RunRequest = {
   runFrom: string | null; // null = from start
+  runMode?: "from_start" | "from_selected_onward" | "selected_only";
 };
 
 export type KnownRunEvent =
-  | { type: "run_started"; runId: string; at: string; runFrom: string | null }
+  | {
+      type: "run_started";
+      runId: string;
+      at: string;
+      runFrom: string | null;
+      runMode?: "from_start" | "from_selected_onward" | "selected_only";
+      plannedNodeIds?: string[];
+    }
   | { type: "run_finished"; runId: string; at: string; status: RunStatus }
   | { type: "node_started"; runId: string; at: string; nodeId: string }
   | { type: "node_finished"; runId: string; at: string; nodeId: string; status: RunStatus; error?: string }

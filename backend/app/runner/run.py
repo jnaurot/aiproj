@@ -647,16 +647,17 @@ async def run_graph(
         })
 
     # ===== PHASE 2: EXECUTION =====
-    await context.bus.emit({
-        "type": "run_started",
-        "runId": run_id,
-        "at": iso_now(),
-        "runFrom": run_from,
-        "runMode": run_mode or "from_selected_onward",
-    })
-
     try:
         plan = compile_plan(graph, run_from, run_mode=run_mode)
+        effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
+        await context.bus.emit({
+            "type": "run_started",
+            "runId": run_id,
+            "at": iso_now(),
+            "runFrom": run_from,
+            "runMode": effective_run_mode,
+            "plannedNodeIds": sorted(list(plan.subgraph)),
+        })
         nodes = node_map(graph)
         edges = edge_map(graph)
 

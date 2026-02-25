@@ -7,6 +7,7 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
+		"test": "vitest run",
 		"prepare": "svelte-kit sync || echo ''",
 		"lint": "prettier --check .",
 		"format": "prettier --write ."
@@ -24,7 +25,8 @@
 		"tailwindcss": "^4.1.18",
 		"typescript": "^5.9.3",
 		"vite": "^7.3.1",
-		"vite-plugin-devtools-json": "^1.0.0"
+		"vite-plugin-devtools-json": "^1.0.0",
+		"vitest": "^3.2.4"
 	},
 	"dependencies": {
 		"@xyflow/svelte": "^1.5.0",

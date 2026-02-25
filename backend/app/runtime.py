@@ -1,5 +1,6 @@
 import asyncio, time
 import os
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -31,6 +32,9 @@ class RunHandle:
 
     node_status: Dict[str, str] = field(default_factory=dict)   # idle|active|done|error|skipped|blocked|paused
     node_outputs: Dict[str, str] = field(default_factory=dict)  # node_id -> artifact_id
+    node_bindings: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # node_id -> ui binding state
+    active_run_planned: set[str] = field(default_factory=set)
+    graph: Optional[Dict[str, Any]] = None
     
 class RuntimeManager:
     def __init__(self):
@@ -76,6 +80,76 @@ class RuntimeManager:
 
     def get_run(self, run_id: str) -> Optional[RunHandle]:
         return self.runs.get(run_id)
+
+    def _binding_for(self, handle: RunHandle, node_id: str) -> Dict[str, Any]:
+        b = handle.node_bindings.get(node_id)
+        if b is None:
+            b = {
+                "status": "idle",
+                "lastArtifactId": None,
+                "lastRunId": None,
+                "lastExecKey": None,
+                "currentExecKey": None,
+                "currentArtifactId": None,
+                "currentRunId": None,
+                "isUpToDate": False,
+                "cacheValid": False,
+                "staleReason": None,
+            }
+            handle.node_bindings[node_id] = b
+        return b
+
+    def _log_stale_regression(
+        self,
+        *,
+        handle: RunHandle,
+        node_id: str,
+        prev: Dict[str, Any],
+        nxt: Dict[str, Any],
+        ev: Dict[str, Any],
+    ) -> None:
+        prev_status = str(prev.get("status") or "")
+        prev_up_to_date = prev.get("isUpToDate")
+        next_status = str(nxt.get("status") or "")
+        next_up_to_date = nxt.get("isUpToDate")
+        was_succeeded = (prev_status == "succeeded_up_to_date") or (prev_up_to_date is True)
+        became_stale = (next_status == "stale") or (next_up_to_date is False)
+        if not (was_succeeded and became_stale):
+            return
+        payload = {
+            "type": "SUCCEEDED_TO_STALE",
+            "runId": handle.run_id,
+            "eventType": ev.get("type"),
+            "event": dict(ev),
+            "nodeId": node_id,
+            "previousBinding": dict(prev),
+            "nextBinding": dict(nxt),
+            "nodeInPlannedSet": (node_id in handle.active_run_planned) if handle.active_run_planned else None,
+            "plannedNodeCount": len(handle.active_run_planned),
+            "stack": "".join(traceback.format_stack(limit=12)),
+        }
+        print("[binding-regression]", payload)
+        strict = os.getenv("RUNTIME_STRICT_STALE_TRANSITIONS", "").strip().lower()
+        if strict in {"1", "true", "yes", "on"}:
+            raise RuntimeError(f"SUCCEEDED_TO_STALE node={node_id} event={ev.get('type')}")
+
+    def _downstream_nodes(self, graph: Dict[str, Any], node_id: str) -> set[str]:
+        edges = graph.get("edges", []) if isinstance(graph, dict) else []
+        adj: Dict[str, list[str]] = {}
+        for e in edges:
+            s = e.get("source")
+            t = e.get("target")
+            if isinstance(s, str) and isinstance(t, str):
+                adj.setdefault(s, []).append(t)
+        seen: set[str] = set()
+        q = [node_id]
+        while q:
+            cur = q.pop(0)
+            for nxt in adj.get(cur, []):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    q.append(nxt)
+        return seen
 
     async def list_runs(self, include_deleted: bool = False) -> list[Dict[str, Any]]:
         persisted = await self.artifact_store.list_runs(include_deleted=include_deleted)
@@ -236,6 +310,53 @@ class RuntimeManager:
             }
         )
         return {"runId": run_id, "found": True, "cancelRequested": True, "status": "cancel_requested"}
+
+    async def accept_node_params(
+        self,
+        *,
+        run_id: str,
+        graph: Dict[str, Any],
+        node_id: str,
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if not handle:
+            raise KeyError(run_id)
+        if handle.status == "running":
+            raise RuntimeError("Cannot accept params while run is active")
+
+        g = graph if isinstance(graph, dict) else (handle.graph or {})
+        nodes = g.get("nodes", []) if isinstance(g, dict) else []
+        target = None
+        for n in nodes:
+            if n.get("id") == node_id:
+                target = n
+                break
+        if target is None:
+            raise ValueError(f"Unknown node_id: {node_id}")
+
+        data = target.setdefault("data", {})
+        data["params"] = dict(params or {})
+        handle.graph = g
+
+        affected = {node_id} | self._downstream_nodes(g, node_id)
+        for nid in sorted(affected):
+            b = self._binding_for(handle, nid)
+            b["status"] = "stale"
+            b["isUpToDate"] = False
+            b["cacheValid"] = False
+            b["currentArtifactId"] = None
+            b["currentRunId"] = None
+            b["staleReason"] = "PARAMS_CHANGED" if nid == node_id else "UPSTREAM_CHANGED"
+            handle.node_status[nid] = "stale"
+            handle.node_outputs.pop(nid, None)
+
+        return {
+            "runId": run_id,
+            "nodeId": node_id,
+            "affectedNodeIds": sorted(affected),
+            "status": "accepted",
+        }
     
     # ----------------------artifacts------------------------
 
@@ -258,6 +379,12 @@ class RuntimeManager:
 
     async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None):
         handle = self.runs[run_id]
+        handle.graph = graph
+        for n in (graph.get("nodes", []) if isinstance(graph, dict) else []):
+            nid = n.get("id")
+            if not isinstance(nid, str) or not nid:
+                continue
+            handle.node_status.setdefault(nid, "idle")
         print("Scheduling run task:", run_id, "loop:", asyncio.get_running_loop())
 
         handle.task = asyncio.create_task(
@@ -281,6 +408,9 @@ class RuntimeManager:
         # run lifecycle
         if t == "run_started":
             handle.status = "running"
+            planned = ev.get("plannedNodeIds") or []
+            if isinstance(planned, list):
+                handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return
 
@@ -296,6 +426,7 @@ class RuntimeManager:
 
         if t == "run_finished":
             handle.status = ev.get("status", "finished")
+            handle.active_run_planned = set()
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
             return
 
@@ -303,19 +434,71 @@ class RuntimeManager:
         if t == "node_started":
             nid = ev.get("nodeId")
             if nid:
+                b = self._binding_for(handle, nid)
+                prev = dict(b)
+                b["status"] = "running"
                 handle.node_status[nid] = "running"
+                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         if t == "node_finished":
             nid = ev.get("nodeId")
             if nid:
-                handle.node_status[nid] = ev.get("status", "succeeded")
+                status = str(ev.get("status", "succeeded"))
+                b = self._binding_for(handle, nid)
+                prev = dict(b)
+                if status == "succeeded":
+                    b["status"] = "succeeded_up_to_date"
+                    b["isUpToDate"] = bool(b.get("currentArtifactId"))
+                    b["cacheValid"] = bool(b.get("currentArtifactId")) and bool(b.get("currentExecKey"))
+                    b["staleReason"] = None
+                    handle.node_status[nid] = "succeeded_up_to_date"
+                elif status == "cancelled":
+                    b["status"] = "cancelled"
+                    b["isUpToDate"] = False
+                    handle.node_status[nid] = "cancelled"
+                else:
+                    b["status"] = "failed"
+                    b["isUpToDate"] = False
+                    handle.node_status[nid] = "failed"
+                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         if t == "node_cancelled":
             nid = ev.get("nodeId")
             if nid:
+                b = self._binding_for(handle, nid)
+                prev = dict(b)
+                b["status"] = "cancelled"
+                b["isUpToDate"] = False
                 handle.node_status[nid] = "cancelled"
+                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
+            return
+
+        if t == "cache_decision":
+            nid = ev.get("nodeId")
+            if nid:
+                b = self._binding_for(handle, nid)
+                prev = dict(b)
+                exec_key = ev.get("execKey")
+                decision = ev.get("decision")
+                if isinstance(exec_key, str) and exec_key:
+                    b["currentExecKey"] = exec_key
+                if decision == "cache_hit":
+                    b["cacheValid"] = True
+                    b["isUpToDate"] = True
+                    aid = ev.get("artifactId")
+                    if isinstance(aid, str) and aid:
+                        b["currentArtifactId"] = aid
+                        b["currentRunId"] = handle.run_id
+                elif decision == "cache_hit_contract_mismatch":
+                    b["cacheValid"] = False
+                    b["isUpToDate"] = False
+                    b["staleReason"] = "CONTRACT_MISMATCH"
+                elif decision == "cache_miss":
+                    b["cacheValid"] = False
+                    # cache_miss means compute required; do not force staleness.
+                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         # artifacts
@@ -323,9 +506,18 @@ class RuntimeManager:
             nid = ev.get("nodeId")
             aid = ev.get("artifactId")
             if nid and aid:
+                b = self._binding_for(handle, nid)
+                prev = dict(b)
+                b["currentArtifactId"] = aid
+                b["currentRunId"] = handle.run_id
+                b["lastArtifactId"] = aid
+                b["lastRunId"] = handle.run_id
+                if b.get("currentExecKey"):
+                    b["lastExecKey"] = b.get("currentExecKey")
                 handle.node_outputs[nid] = aid
                 # Option B registry (artifact → runId)
                 self._artifact_owner[aid] = handle.run_id
+                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         # optional: edge exec
@@ -334,15 +526,21 @@ class RuntimeManager:
             return
 
         if t == "node_blocked":
-            handle.node_status[nid] = "blocked"
+            nid = ev.get("nodeId")
+            if nid:
+                handle.node_status[nid] = "blocked"
             return
 
         if t == "node_paused":
-            handle.node_status[nid] = "paused"
+            nid = ev.get("nodeId")
+            if nid:
+                handle.node_status[nid] = "paused"
             return
 
         if t == "node_resumed":
-            handle.node_status[nid] = "active"
+            nid = ev.get("nodeId")
+            if nid:
+                handle.node_status[nid] = "active"
             return
 
 

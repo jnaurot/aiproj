@@ -6,6 +6,10 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
     plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
+    test: {
+        environment: 'node',
+        include: ['src/**/*.test.ts']
+    },
     server: {
         fs: {
             allow: [resolve(__dirname, 'shared')]

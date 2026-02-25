@@ -23,18 +23,22 @@
 			return;
 		}
 
-		const info = get(graphStore).nodeOutputs[nodeId];
-		if (!info) {
+		const state = get(graphStore);
+		const binding = state.nodeBindings?.[nodeId];
+		const info = state.nodeOutputs?.[nodeId];
+		const artifactId = binding?.currentArtifactId ?? binding?.lastArtifactId ?? info?.artifactId;
+		const mimeType = info?.mimeType;
+		if (!artifactId) {
 			loaded = { kind: 'empty' };
 			return;
 		}
 
 		loaded = { kind: 'loading' };
 		try {
-			const res = await fetch(`http://127.0.0.1:8000/runs/artifacts/${info.artifactId}`)
+			const res = await fetch(`http://127.0.0.1:8000/runs/artifacts/${artifactId}`)
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-			if (info.mimeType === 'application/json') {
+			if (mimeType === 'application/json') {
 				loaded = { kind: 'json', data: await res.json() };
 			} else {
 				loaded = { kind: 'text', text: await res.text() };

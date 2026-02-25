@@ -18,10 +18,21 @@ import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
-import { createRun, streamRunEvents } from '$lib/flow/client/runs';
+import { acceptNodeParams, createRun, getRun, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
 import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
+import {
+	buildRunCreateRequest,
+	computeGraphFreshness,
+	computePlannedNodeSet,
+	displayStatusFromBinding,
+	getStaleFlipNodeIds,
+	mergeBindingsSticky,
+	shouldUpdateBinding,
+	type ActiveRunMode,
+	type GraphFreshness as ScopeFreshness
+} from './runScope';
 
 type NodeOutputInfo = {
 	artifactId: string;
@@ -30,6 +41,18 @@ type NodeOutputInfo = {
 	preview?: string;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
+};
+type NodeBindingInfo = {
+	status?: string;
+	lastArtifactId?: string | null;
+	lastRunId?: string | null;
+	lastExecKey?: string | null;
+	currentExecKey?: string | null;
+	currentArtifactId?: string | null;
+	currentRunId?: string | null;
+	isUpToDate?: boolean;
+	cacheValid?: boolean;
+	staleReason?: string | null;
 };
 type EdgeExec = 'idle' | 'active' | 'done';
 type LogLevel = 'info' | 'warn' | 'error';
@@ -40,16 +63,21 @@ type RunLog = {
 	message: string;
 	nodeId?: string;
 };
-type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'canceled';
+type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
+type GraphLastRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'never_run';
+type AuditContext = {
+	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
+	evt?: KnownRunEvent;
+	allowedNodeIds?: Set<string>;
+	snapshotNodeIds?: Set<string>;
+};
 type InspectorState = {
 	nodeId: string | null;
 	draftParams: Record<string, any>;
 	dirty: boolean;
 };
 
-const STALE: NodeStatus = 'stale';
 const IDLE: NodeStatus = 'idle';
-const RUNNING: NodeStatus = 'running';
 const SUCCEEDED: NodeStatus = 'succeeded';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
 const initialInspector: InspectorState = {
@@ -59,6 +87,26 @@ const initialInspector: InspectorState = {
 };
 
 let logSeq = 0;
+const statusRegressionLogThrottle = new Map<string, number>();
+const debugLastStatusChange = new Map<
+	string,
+	{
+		ts: string;
+		eventType: string;
+		stack: string;
+		prevDisplay: NodeStatus;
+		nextDisplay: NodeStatus;
+		prevNodeStatus?: NodeStatus;
+		nextNodeStatus?: NodeStatus;
+	}
+>();
+const DEV_MODE = (() => {
+	try {
+		return Boolean((import.meta as any)?.env?.DEV);
+	} catch {
+		return false;
+	}
+})();
 
 export type GraphState = {
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
@@ -67,7 +115,15 @@ export type GraphState = {
 	inspector: InspectorState; // âœ… add this
 	logs: RunLog[];
 	runStatus: RunStatus;
+	lastRunStatus: GraphLastRunStatus;
+	freshness: ScopeFreshness;
+	staleNodeCount: number;
+	activeRunMode: ActiveRunMode;
+	activeRunFrom: string | null;
+	activeRunNodeSet: Set<string>;
 	nodeOutputs: Record<string, NodeOutputInfo>;
+	nodeBindings: Record<string, NodeBindingInfo>;
+	activeRunId: string | null;
 };
 
 function nowTs() {
@@ -80,6 +136,499 @@ function logPush(state: GraphState, level: LogLevel, message: string, nodeId?: s
 		...state,
 		logs: [...state.logs, { id: logSeq, ts: nowTs(), level, message, nodeId }]
 	};
+}
+
+function captureStack(label: string): string {
+	try {
+		return new Error(label).stack ?? '';
+	} catch {
+		return '';
+	}
+}
+
+function nodeStatusById(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): Record<string, NodeStatus> {
+	const out: Record<string, NodeStatus> = {};
+	for (const n of nodes) {
+		out[n.id] = n.data.status as NodeStatus;
+	}
+	return out;
+}
+
+function isAllowedSucceededRegression(nodeId: string, ctx: AuditContext): boolean {
+	if (ctx.source === 'accept_params') {
+		return Boolean(ctx.allowedNodeIds?.has(nodeId));
+	}
+	if (ctx.source === 'hydrate_snapshot') return false;
+	if (ctx.source === 'graph_edit') return true;
+	if (ctx.source !== 'event' || !ctx.evt) return false;
+	const evt = ctx.evt;
+	if (
+		(evt.type === 'node_started' || evt.type === 'node_finished' || evt.type === 'cache_decision') &&
+		evt.nodeId === nodeId
+	) {
+		if (evt.type === 'cache_decision') return evt.decision !== 'cache_hit';
+		return true;
+	}
+	return false;
+}
+
+function logSucceededRegression(
+	channel: 'binding' | 'node_data',
+	nodeId: string,
+	prev: GraphState,
+	next: GraphState,
+	ctx: AuditContext,
+	prevDisplay: NodeStatus,
+	nextDisplay: NodeStatus,
+	prevNodeStatus?: NodeStatus,
+	nextNodeStatus?: NodeStatus
+): void {
+	const eventType = ctx.evt?.type ?? ctx.source;
+	const stack = captureStack(`[graphStore] ${channel} succeeded regression ${nodeId}`);
+	const payload = {
+		channel,
+		eventType,
+		event: ctx.evt ?? null,
+		nodeId,
+		prevDisplay,
+		nextDisplay,
+		prevNodeStatus,
+		nextNodeStatus,
+		prevBinding: prev.nodeBindings?.[nodeId] ?? null,
+		nextBinding: next.nodeBindings?.[nodeId] ?? null,
+		prevOutput: prev.nodeOutputs?.[nodeId] ?? null,
+		nextOutput: next.nodeOutputs?.[nodeId] ?? null,
+		activeRunId: next.activeRunId,
+		activeRunMode: next.activeRunMode,
+		activeRunFrom: next.activeRunFrom,
+		activeRunNodeSetSize: next.activeRunNodeSet?.size ?? 0,
+		stack
+	};
+
+	const key = `${channel}:${eventType}:${nodeId}`;
+	const now = Date.now();
+	const last = statusRegressionLogThrottle.get(key) ?? 0;
+	if (DEV_MODE || now - last > 2000) {
+		console.error('[graphStore] SUCCEEDED_REGRESSION', payload);
+		statusRegressionLogThrottle.set(key, now);
+	}
+	debugLastStatusChange.set(nodeId, {
+		ts: new Date().toISOString(),
+		eventType,
+		stack,
+		prevDisplay,
+		nextDisplay,
+		prevNodeStatus,
+		nextNodeStatus
+	});
+}
+
+function auditSucceededRegressions(prev: GraphState, next: GraphState, ctx: AuditContext): void {
+	if (ctx.source === 'hydrate_snapshot') return;
+	const ids = new Set([...Object.keys(prev.nodeBindings ?? {}), ...Object.keys(next.nodeBindings ?? {})]);
+	for (const nodeId of ids) {
+		const prevDisplay = displayStatusFromBinding(prev.nodeBindings?.[nodeId]);
+		const nextDisplay = displayStatusFromBinding(next.nodeBindings?.[nodeId]);
+		if (prevDisplay !== SUCCEEDED || nextDisplay === SUCCEEDED) continue;
+		if (nextDisplay === 'running') continue;
+		if (nextDisplay === 'idle' && !next.nodeBindings?.[nodeId]) continue;
+		const allowed = isAllowedSucceededRegression(nodeId, ctx);
+		logSucceededRegression('binding', nodeId, prev, next, ctx, prevDisplay, nextDisplay);
+		if (DEV_MODE && !allowed) {
+			throw new Error(`SUCCEEDED_REGRESSION(binding): node=${nodeId}, source=${ctx.source}`);
+		}
+	}
+}
+
+function auditNodeDataStatusRegressions(prev: GraphState, next: GraphState, ctx: AuditContext): void {
+	if (ctx.source === 'hydrate_snapshot') return;
+	const prevById = nodeStatusById(prev.nodes);
+	const nextById = nodeStatusById(next.nodes);
+	const ids = new Set([...Object.keys(prevById), ...Object.keys(nextById)]);
+	for (const nodeId of ids) {
+		const prevStatus = prevById[nodeId];
+		const nextStatus = nextById[nodeId];
+		if (prevStatus !== SUCCEEDED || !nextStatus || nextStatus === SUCCEEDED) continue;
+		if (nextStatus === 'running') continue;
+		const allowed = isAllowedSucceededRegression(nodeId, ctx);
+		const prevDisplay = displayStatusFromBinding(prev.nodeBindings?.[nodeId]);
+		const nextDisplay = displayStatusFromBinding(next.nodeBindings?.[nodeId]);
+		logSucceededRegression(
+			'node_data',
+			nodeId,
+			prev,
+			next,
+			ctx,
+			prevDisplay,
+			nextDisplay,
+			prevStatus,
+			nextStatus
+		);
+		if (DEV_MODE && !allowed) {
+			throw new Error(`SUCCEEDED_REGRESSION(node_data): node=${nodeId}, source=${ctx.source}`);
+		}
+	}
+}
+
+function assertHydrationBindingInvariants(prev: GraphState, next: GraphState, ctx: AuditContext): void {
+	if (!DEV_MODE || ctx.source !== 'hydrate_snapshot') return;
+	const prevBindings = prev.nodeBindings ?? {};
+	const nextBindings = next.nodeBindings ?? {};
+	const patchIds = ctx.snapshotNodeIds ?? new Set<string>();
+	const dropped = Object.keys(prevBindings).filter((id) => !nextBindings[id]);
+	if (dropped.length > 0) {
+		console.error('[graphStore] BINDING_DROPPED_DURING_HYDRATION', {
+			droppedNodeIds: dropped,
+			patchNodeIds: Array.from(patchIds)
+		});
+		throw new Error(`BINDING_DROPPED_DURING_HYDRATION: ${dropped.join(',')}`);
+	}
+	for (const [id, prevBinding] of Object.entries(prevBindings)) {
+		if (patchIds.has(id)) continue;
+		const nextBinding = nextBindings[id];
+		const same = JSON.stringify(prevBinding) === JSON.stringify(nextBinding);
+		if (!same) {
+			console.error('[graphStore] OUT_OF_SCOPE_BINDING_MUTATED_DURING_HYDRATION', {
+				nodeId: id,
+				prevBinding,
+				nextBinding,
+				patchNodeIds: Array.from(patchIds)
+			});
+			throw new Error(`OUT_OF_SCOPE_BINDING_MUTATED_DURING_HYDRATION: ${id}`);
+		}
+	}
+}
+
+function auditStateTransition(prev: GraphState, next: GraphState, ctx: AuditContext): void {
+	assertHydrationBindingInvariants(prev, next, ctx);
+	auditSucceededRegressions(prev, next, ctx);
+	auditNodeDataStatusRegressions(prev, next, ctx);
+}
+
+function withGraphMeta(state: GraphState): GraphState {
+	const { freshness, staleNodeCount } = computeGraphFreshness(state.nodeBindings ?? {});
+	let lastRunStatus = state.lastRunStatus;
+	if (state.runStatus === 'succeeded') lastRunStatus = 'succeeded';
+	if (state.runStatus === 'failed') lastRunStatus = 'failed';
+	if (state.runStatus === 'canceled' || state.runStatus === 'cancelled') lastRunStatus = 'cancelled';
+	if (freshness === 'never_run') lastRunStatus = 'never_run';
+	return { ...state, freshness, staleNodeCount, lastRunStatus };
+}
+
+function canApplyNodeEvent(state: GraphState, nodeId: string): boolean {
+	return shouldUpdateBinding(state.activeRunId, state.activeRunNodeSet, nodeId);
+}
+
+function changedBindingNodeIds(
+	prev: Record<string, NodeBindingInfo>,
+	next: Record<string, NodeBindingInfo>
+): string[] {
+	const ids = new Set([...Object.keys(prev ?? {}), ...Object.keys(next ?? {})]);
+	const changed: string[] = [];
+	for (const id of ids) {
+		const a = prev?.[id] ?? null;
+		const b = next?.[id] ?? null;
+		if (a === b) continue;
+		if (!a || !b) {
+			changed.push(id);
+			continue;
+		}
+		const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+		let mutated = false;
+		for (const k of keys) {
+			if ((a as any)[k] !== (b as any)[k]) {
+				mutated = true;
+				break;
+			}
+		}
+		if (mutated) changed.push(id);
+	}
+	return changed;
+}
+
+function debugLogOutOfScopeBindingMutation(prev: GraphState, next: GraphState, context: string): void {
+	if (!DEV_MODE) return;
+	if (!next.activeRunId || !next.activeRunNodeSet || next.activeRunNodeSet.size === 0) return;
+	const changed = changedBindingNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
+	const outside = changed.filter((id) => !next.activeRunNodeSet.has(id));
+	if (outside.length === 0) return;
+	console.warn('[graphStore] out-of-scope nodeBindings mutation', {
+		context,
+		outsideNodeIds: outside,
+		activeRunId: next.activeRunId,
+		activeRunNodeSet: Array.from(next.activeRunNodeSet)
+	});
+}
+
+function debugLogStaleFlips(prev: GraphState, next: GraphState, context: string): void {
+	if (!DEV_MODE) return;
+	const flips = getStaleFlipNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
+	if (flips.length === 0) return;
+	console.warn('[graphStore] stale flip detected', {
+		context,
+		nodeIds: flips,
+		activeRunId: next.activeRunId,
+		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : []
+	});
+}
+
+function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, context: string): void {
+	if (!DEV_MODE) return;
+	if (!next.activeRunId || !next.activeRunNodeSet || next.activeRunNodeSet.size === 0) return;
+	const flips = getStaleFlipNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
+	const outOfScope = flips.filter((id) => !next.activeRunNodeSet.has(id));
+	for (const nodeId of outOfScope) {
+		console.error('[graphStore] out-of-scope stale flip', {
+			context,
+			nodeId,
+			prevBinding: prev.nodeBindings?.[nodeId] ?? null,
+			nextBinding: next.nodeBindings?.[nodeId] ?? null,
+			activeRunId: next.activeRunId,
+			runMode: next.activeRunMode,
+			runFrom: next.activeRunFrom,
+			activeRunNodeSet: Array.from(next.activeRunNodeSet)
+		});
+	}
+}
+
+function assertNoRunStartedStaleFlips(prev: GraphState, next: GraphState): void {
+	if (!DEV_MODE) return;
+	const flips = getStaleFlipNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
+	if (flips.length === 0) return;
+	console.error('[graphStore] stale flip detected on run_started', {
+		nodeIds: flips,
+		activeRunId: next.activeRunId,
+		runMode: next.activeRunMode,
+		runFrom: next.activeRunFrom,
+		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : []
+	});
+}
+
+function assertRunStartedNoBindingTouch(prev: GraphState, next: GraphState): void {
+	if (!DEV_MODE) return;
+	const changed = changedBindingNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
+	if (changed.length === 0) return;
+	const outOfScope = changed.filter((id) => !next.activeRunNodeSet?.has(id));
+	console.error('[graphStore] run_started mutated nodeBindings (forbidden)', {
+		changedNodeIds: changed,
+		outOfScopeNodeIds: outOfScope,
+		activeRunId: next.activeRunId,
+		runMode: next.activeRunMode,
+		runFrom: next.activeRunFrom,
+		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : [],
+		bindingsBefore: changed.reduce(
+			(acc, id) => ({ ...acc, [id]: prev.nodeBindings?.[id] ?? null }),
+			{} as Record<string, NodeBindingInfo | null>
+		),
+		bindingsAfter: changed.reduce(
+			(acc, id) => ({ ...acc, [id]: next.nodeBindings?.[id] ?? null }),
+			{} as Record<string, NodeBindingInfo | null>
+		)
+	});
+}
+
+function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
+	switch (evt.type) {
+		case 'node_output': {
+			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...prevBinding,
+					currentArtifactId: evt.artifactId,
+					lastArtifactId: evt.artifactId,
+					currentRunId: runId,
+					lastRunId: runId,
+					isUpToDate: typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true
+				}
+			};
+			const nodeOutputs = {
+				...state.nodeOutputs,
+				[evt.nodeId]: {
+					artifactId: evt.artifactId,
+					mimeType: evt.mimeType,
+					portType: evt.portType,
+					preview: evt.preview ?? undefined,
+					cached: evt.cached ?? false,
+					cacheDecision: state.nodeOutputs?.[evt.nodeId]?.cacheDecision
+				}
+			};
+			return withGraphMeta({
+				...state,
+				nodeOutputs,
+				nodeBindings
+			});
+		}
+		case 'cache_decision': {
+			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const nextIsUpToDate =
+				evt.decision === 'cache_hit'
+					? true
+					: evt.decision === 'cache_hit_contract_mismatch'
+						? false
+						: (typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true);
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...prevBinding,
+					currentExecKey: evt.execKey,
+					cacheValid: evt.decision === 'cache_hit',
+					isUpToDate: nextIsUpToDate,
+					currentArtifactId:
+						evt.decision === 'cache_hit'
+							? (evt.artifactId ?? prevBinding.currentArtifactId ?? prevBinding.lastArtifactId)
+							: null
+				}
+			};
+			const prev = state.nodeOutputs?.[evt.nodeId];
+			const nextForNode: NodeOutputInfo = {
+				artifactId: evt.artifactId ?? prev?.artifactId ?? '',
+				mimeType: prev?.mimeType,
+				portType: prev?.portType,
+				preview: prev?.preview,
+				cached:
+					evt.decision === 'cache_hit' || evt.decision === 'cache_hit_contract_mismatch'
+						? true
+						: (prev?.cached ?? false),
+				cacheDecision: evt.decision
+			};
+			if (!nextForNode.artifactId) {
+				return withGraphMeta({ ...state, nodeBindings });
+			}
+			return withGraphMeta({
+				...state,
+				nodeBindings,
+				nodeOutputs: {
+					...state.nodeOutputs,
+					[evt.nodeId]: nextForNode
+				}
+			});
+		}
+		case 'run_started': {
+			const evtMode = ((evt as any).runMode ?? state.activeRunMode) as ActiveRunMode;
+			const evtPlanned = Array.isArray((evt as any).plannedNodeIds)
+				? new Set<string>((evt as any).plannedNodeIds as string[])
+				: computePlannedNodeSet(
+					state.nodes,
+					state.edges,
+					evt.runFrom ?? null,
+					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start')
+				);
+			return withGraphMeta(
+				logPush(
+					{
+						...state,
+						activeRunId: evt.runId ?? state.activeRunId,
+						activeRunMode: evtMode,
+						activeRunFrom: evt.runFrom ?? state.activeRunFrom,
+						activeRunNodeSet: evtPlanned
+					},
+					'info',
+					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
+				)
+			);
+		}
+		case 'node_started': {
+			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...(state.nodeBindings?.[evt.nodeId] ?? {}),
+					status: 'running'
+				}
+			};
+			return withGraphMeta(logPush({ ...state, nodeBindings }, 'info', 'Node started', evt.nodeId));
+		}
+		case 'edge_exec': {
+			const edges = state.edges.map((e) =>
+				e.id === evt.edgeId ? { ...e, data: { ...(e.data ?? {}), exec: evt.exec } } : e
+			);
+			return { ...state, edges };
+		}
+		case 'log':
+			return logPush(state, evt.level, evt.message, evt.nodeId);
+		case 'node_finished': {
+			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const nextBinding: NodeBindingInfo = {
+				...prevBinding,
+				status: evt.status === 'succeeded' ? 'succeeded_up_to_date' : evt.status
+			};
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: nextBinding
+			};
+			return withGraphMeta(
+				logPush(
+					{ ...state, nodeBindings },
+					'info',
+					`Node finished (${displayStatusFromBinding(nextBinding)})`,
+					evt.nodeId
+				)
+			);
+		}
+		case 'run_finished': {
+			return withGraphMeta(
+				logPush({ ...state, runStatus: evt.status }, 'info', `Run finished (${evt.status})`)
+			);
+		}
+		default:
+			return state;
+	}
+}
+
+type RunSnapshotLike = {
+	status?: string;
+	runMode?: ActiveRunMode;
+	plannedNodeIds?: string[];
+	nodeStatus?: Record<string, string>;
+	nodeOutputs?: Record<string, string>;
+	nodeBindings?: Record<string, Record<string, unknown>>;
+};
+
+function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): GraphState {
+	const nodeBindingsPatch: Record<string, NodeBindingInfo> = {};
+	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
+	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
+		const b = raw as NodeBindingInfo;
+		nodeBindingsPatch[nodeId] = b;
+		const aid = (b.currentArtifactId ?? b.lastArtifactId) as string | null | undefined;
+		if (aid) {
+			nodeOutputs[nodeId] = { ...(nodeOutputs[nodeId] ?? {}), artifactId: aid };
+		}
+	}
+	for (const [nodeId, aid] of Object.entries(snap.nodeOutputs ?? {})) {
+		if (!aid) continue;
+		nodeOutputs[nodeId] = { ...(nodeOutputs[nodeId] ?? {}), artifactId: aid };
+	}
+	const nodeBindings = mergeBindingsSticky(state.nodeBindings ?? {}, nodeBindingsPatch);
+	const runStatus = (snap.status as RunStatus) || state.runStatus;
+	const runMode = snap.runMode ?? state.activeRunMode;
+	const activeRunNodeSet = Array.isArray(snap.plannedNodeIds)
+		? new Set<string>(snap.plannedNodeIds)
+		: state.activeRunNodeSet;
+	return withGraphMeta({
+		...state,
+		runStatus,
+		nodeBindings,
+		nodeOutputs,
+		activeRunMode: runMode,
+		activeRunFrom: state.activeRunFrom,
+		activeRunNodeSet
+	});
+}
+
+export function __applyRunEventForTest(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
+	return reduceRunEventState(state, evt, runId);
+}
+
+export function __hydrateFromRunSnapshotForTest(
+	state: GraphState,
+	snap: RunSnapshotLike
+): GraphState {
+	return hydrateFromRunSnapshotState(state, snap);
 }
 
 function stripToDTO(
@@ -297,13 +846,31 @@ const initialState: GraphState = {
 	inspector: initialInspector,
 	logs: [],
 	runStatus: IDLE,
-	nodeOutputs: {}
+	lastRunStatus: 'never_run',
+	freshness: 'never_run',
+	staleNodeCount: 0,
+	activeRunMode: 'from_start',
+	activeRunFrom: null,
+	activeRunNodeSet: new Set<string>(),
+	nodeOutputs: {},
+	nodeBindings: {},
+	activeRunId: null
 };
 
 const statusOrIdle = (s: NodeStatus): NodeStatus => s;
 
 export const graphStore = (() => {
-	const { subscribe, set, update } = writable<GraphState>(initialState);
+	const { subscribe, set, update: rawUpdate } = writable<GraphState>(initialState);
+
+	const update = (
+		recipe: (state: GraphState) => GraphState,
+		ctx: AuditContext = { source: 'unknown' }
+	) =>
+		rawUpdate((state) => {
+			const next = recipe(state);
+			auditStateTransition(state, next, ctx);
+			return next;
+		});
 
 	function updateNodeConfigImpl(
 		nodeId: string,
@@ -433,11 +1000,11 @@ export const graphStore = (() => {
 
 	type PreviewUpdateResult =
 		| {
-				ok: true;
-				prunedEdgeIds: string[];
-				nextNodes: Node<PipelineNodeData>[];
-				nextEdges: Edge<PipelineEdgeData>[];
-		  }
+			ok: true;
+			prunedEdgeIds: string[];
+			nextNodes: Node<PipelineNodeData>[];
+			nextEdges: Edge<PipelineEdgeData>[];
+		}
 		| { ok: false; error: string };
 
 	//BEGIN
@@ -468,7 +1035,7 @@ export const graphStore = (() => {
 		return updateNodeConfigImpl(nodeId, { params: patch });
 	}
 
-	function applyInspectorDraft() {
+	async function applyInspectorDraft() {
 		const s = get({ subscribe } as any) as GraphState;
 		const nodeId = s.inspector.nodeId;
 		if (!nodeId) return { ok: false, error: 'No node selected' };
@@ -488,6 +1055,44 @@ export const graphStore = (() => {
 					}
 				};
 			});
+
+			const st = get({ subscribe } as any) as GraphState;
+			if (st.activeRunId) {
+				try {
+					const resp = await acceptNodeParams({
+						runId: st.activeRunId,
+						nodeId,
+						graph: { version: 1, nodes: st.nodes, edges: st.edges },
+						params: s.inspector.draftParams
+					});
+					if (Array.isArray(resp.affectedNodeIds) && resp.affectedNodeIds.length > 0) {
+						update((cur) => {
+							const nodeBindings = { ...cur.nodeBindings };
+							for (const affectedId of resp.affectedNodeIds) {
+								const prev = nodeBindings[affectedId] ?? {};
+								nodeBindings[affectedId] = {
+									...prev,
+									status: 'stale',
+									isUpToDate: false,
+									currentArtifactId: null,
+									currentRunId: null,
+									currentExecKey: null
+								};
+							}
+							return withGraphMeta({ ...cur, nodeBindings });
+						}, { source: 'accept_params', allowedNodeIds: new Set(resp.affectedNodeIds) });
+					}
+					const snap = await getRun(st.activeRunId);
+					update((cur) => hydrateFromRunSnapshot(cur, snap), {
+						source: 'hydrate_snapshot',
+						snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+					});
+				} catch (e) {
+					update((cur) =>
+						logPush(cur, 'warn', `accept-params sync failed: ${String(e)}`, nodeId)
+					);
+				}
+			}
 		}
 		return r;
 	}
@@ -514,6 +1119,13 @@ export const graphStore = (() => {
 		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges));
 	}
 
+	function hydrateFromRunSnapshot(
+		state: GraphState,
+		snap: RunSnapshotLike
+	): GraphState {
+		return hydrateFromRunSnapshotState(state, snap);
+	}
+
 	return {
 		subscribe,
 		patchInspectorDraft,
@@ -533,13 +1145,13 @@ export const graphStore = (() => {
 				const nodes = s.nodes.map((n) =>
 					n.id === nodeId
 						? {
-								...n,
-								data: {
-									...n.data,
-									sourceKind: nextKind, // âœ… structural
-									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-								}
+							...n,
+							data: {
+								...n.data,
+								sourceKind: nextKind, // âœ… structural
+								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 							}
+						}
 						: n
 				);
 
@@ -580,13 +1192,13 @@ export const graphStore = (() => {
 				const nodes = s.nodes.map((n) =>
 					n.id === nodeId
 						? {
-								...n,
-								data: {
-									...n.data,
-									llmKind: nextKind, // âœ… structural
-									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-								}
+							...n,
+							data: {
+								...n.data,
+								llmKind: nextKind, // âœ… structural
+								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 							}
+						}
 						: n
 				);
 
@@ -631,13 +1243,13 @@ export const graphStore = (() => {
 				const nodes = s.nodes.map((n) =>
 					n.id === nodeId
 						? {
-								...n,
-								data: {
-									...n.data,
-									transformKind: nextKind, // âœ… structural
-									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-								}
+							...n,
+							data: {
+								...n.data,
+								transformKind: nextKind, // âœ… structural
+								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 							}
+						}
 						: n
 				);
 
@@ -886,41 +1498,60 @@ export const graphStore = (() => {
 		// ----- clear edges of prior run's status (uses edge highlighting) -----
 		resetRunUi() {
 			update((s) => {
-				const nodes = s.nodes.map((n) => ({
-					...n,
-					data: { ...n.data, status: n.data.status === 'stale' ? STALE : IDLE }
-				}));
 				const edges = resetEdgesExec(s.edges);
-				const next = { ...s, nodes, edges, logs: [], runStatus: IDLE, nodeOutputs: {} };
+				const next = withGraphMeta({ ...s, edges, logs: [], runStatus: IDLE });
 				persist(next);
 				return next;
 			});
 		},
 
-		async runRemote(runFrom: string | null) {
+		async runRemote(runFrom: string | null, runMode?: ActiveRunMode) {
 			// prevent concurrent runs
 			const s0 = get({ subscribe } as any) as GraphState;
 			if (s0.runStatus === 'running') return;
 
 			// reset UI
 			this.resetRunUi();
-			update((s) => ({ ...s, runStatus: 'running' }));
+			update((s) => withGraphMeta({ ...s, runStatus: 'running' }));
 
 			// snapshot graph DTO
 			const s1 = get({ subscribe } as any) as GraphState;
-			const payload = {
+			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
+			const payload = buildRunCreateRequest(
+				{ version: 1, nodes: s1.nodes, edges: s1.edges },
 				runFrom,
-				graph: { version: 1, nodes: s1.nodes, edges: s1.edges }
-			};
+				effectiveRunMode
+			);
+			const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 
 			// create run
 			let runId: string;
 
 			try {
 				({ runId } = await createRun(payload));
+				update((s) =>
+					withGraphMeta({
+						...s,
+						activeRunId: runId,
+						activeRunMode: effectiveRunMode,
+						activeRunFrom: runFrom,
+						activeRunNodeSet: plannedNodeSet
+					})
+				);
+				try {
+					const snap = await getRun(runId);
+					update((s) => hydrateFromRunSnapshot(s, snap), {
+						source: 'hydrate_snapshot',
+						snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+					});
+				} catch {
+					// non-fatal: stream events can still drive updates
+				}
 			} catch (e) {
 				update((s) =>
-					logPush({ ...s, runStatus: 'failed' }, 'error', `Run create failed: ${String(e)}`)
+					withGraphMeta(
+						logPush({ ...s, runStatus: 'failed' }, 'error', `Run create failed: ${String(e)}`)
+					)
 				);
 				return;
 			}
@@ -930,117 +1561,36 @@ export const graphStore = (() => {
 					runId,
 					(evt: KnownRunEvent) => {
 						update((s) => {
-							switch (evt.type) {
-								case 'node_output': {
-									const nodeOutputs = {
-										...s.nodeOutputs,
-										[evt.nodeId]: {
-											artifactId: evt.artifactId,
-											mimeType: evt.mimeType,
-											portType: evt.portType,
-											preview: evt.preview ?? undefined,
-											cached: evt.cached ?? false,
-											cacheDecision: s.nodeOutputs?.[evt.nodeId]?.cacheDecision
-										}
-									};
-
-									return {
-										...s,
-										nodeOutputs
-									};
-								}
-								case 'cache_decision': {
-									const prev = s.nodeOutputs?.[evt.nodeId];
-									const nextForNode: NodeOutputInfo = {
-										artifactId: evt.artifactId ?? prev?.artifactId ?? '',
-										mimeType: prev?.mimeType,
-										portType: prev?.portType,
-										preview: prev?.preview,
-										cached:
-											evt.decision === 'cache_hit' ||
-											evt.decision === 'cache_hit_contract_mismatch'
-												? true
-												: (prev?.cached ?? false),
-										cacheDecision: evt.decision
-									};
-									if (!nextForNode.artifactId) {
-										return s;
-									}
-									return {
-										...s,
-										nodeOutputs: {
-											...s.nodeOutputs,
-											[evt.nodeId]: nextForNode
-										}
-									};
-								}
-
-								case 'run_started': {
-									const next = {
-										...s,
-										nodeOutputs: {}
-									};
-
-									return logPush(
-										next,
-										'info',
-										`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
-									);
-								}
-
-								case 'node_started': {
-									const nodes = s.nodes.map((n) =>
-										n.id === evt.nodeId ? { ...n, data: { ...n.data, status: RUNNING } } : n
-									);
-									return logPush({ ...s, nodes }, 'info', 'Node started', evt.nodeId);
-								}
-
-								case 'edge_exec': {
-									// IMPORTANT: store only data.exec. Do NOT â€œdecorateâ€ here.
-									const edges = s.edges.map((e) =>
-										e.id === evt.edgeId ? { ...e, data: { ...(e.data ?? {}), exec: evt.exec } } : e
-									);
-									return { ...s, edges };
-								}
-
-								case 'log':
-									return logPush(s, evt.level, evt.message, evt.nodeId);
-
-								case 'node_finished': {
-									const nodes = s.nodes.map(
-										(n) =>
-											n.id === evt.nodeId ? { ...n, data: { ...n.data, status: evt.status } } : n // was status: evt.status
-									);
-									return logPush(
-										{ ...s, nodes },
-										'info',
-										`Node finished (${evt.status})`,
-										evt.nodeId
-									);
-								}
-
-								case 'run_finished': {
-									const next = logPush(
-										{ ...s, runStatus: evt.status },
-										'info',
-										`Run finished (${evt.status})`
-									);
-									persist(next);
-									return next;
-								}
-
-								default:
-									return s;
+							const nextState = reduceRunEventState(s, evt, runId);
+							debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
+							debugLogStaleFlips(s, nextState, evt.type);
+							assertNoOutOfScopeStaleFlips(s, nextState, evt.type);
+							if (evt.type === 'run_started') {
+								assertRunStartedNoBindingTouch(s, nextState);
+								assertNoRunStartedStaleFlips(s, nextState);
 							}
-						});
+							return nextState;
+						}, { source: 'event', evt });
 
 						if (evt.type === 'run_finished') {
+							const cur = get({ subscribe } as any) as GraphState;
+							persist(cur);
+							void getRun(runId)
+								.then((snap) => {
+									update((s) => hydrateFromRunSnapshot(s, snap), {
+										source: 'hydrate_snapshot',
+										snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+									});
+								})
+								.catch(() => { });
 							sub.close();
 							resolve();
 						}
 					},
 					() => {
-						update((s) => logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'));
+						update((s) =>
+							withGraphMeta(logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'))
+						);
 						resolve();
 					}
 				);
