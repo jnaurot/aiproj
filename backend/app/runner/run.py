@@ -9,7 +9,6 @@ from typing import Any, Dict, Optional
 from app.runner.nodes.transform import (
     normalize_transform_params,
     canonical_json,
-    inputs_fingerprint,
     load_table_from_artifact_bytes,
     run_transform,
     sha256_hex,
@@ -22,6 +21,7 @@ from .validator import GraphValidator
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
+from .node_state import build_node_state_hash, build_source_fingerprint
 from .capabilities import allowed_ports
 
 from ..executors.source import exec_source
@@ -106,70 +106,6 @@ def _tool_side_effect_mode(params: Dict[str, Any]) -> str:
     return mode
 
 
-def _tool_name(params: Dict[str, Any]) -> str:
-    provider = params.get("provider") or "tool"
-    return params.get("name") or f"{provider}.invoke"
-
-
-def _tool_version(params: Dict[str, Any]) -> str:
-    return str(params.get("toolVersion") or params.get("tool_version") or "v1")
-
-
-def _tool_environment_fingerprint(params: Dict[str, Any]) -> Dict[str, Any]:
-    provider = params.get("provider")
-    env: Dict[str, Any] = {
-        "provider": provider,
-        "connection_ref": params.get("connection_ref") or params.get("connectionRef"),
-        "region": params.get("region"),
-        "tenant": params.get("tenant"),
-    }
-    if provider in ("http", "api"):
-        http_cfg = params.get("http") if isinstance(params.get("http"), dict) else {}
-        url = http_cfg.get("url") or params.get("url")
-        if isinstance(url, str):
-            env["base_url"] = url
-    return _sanitize_for_fingerprint(env)
-
-
-def _tool_exec_key(
-    *,
-    params: Dict[str, Any],
-    input_refs: list[tuple[str, str]],
-    execution_version: str,
-    determinism_env: Optional[Dict[str, Any]] = None,
-) -> str:
-    fp = {
-        "build": execution_version,
-        "kind": "tool",
-        "tool_name": _tool_name(params),
-        "tool_version": _tool_version(params),
-        "side_effect_mode": _tool_side_effect_mode(params),
-        "params": _sanitize_for_fingerprint(params),
-        "inputs": inputs_fingerprint(input_refs),
-        "environment": _tool_environment_fingerprint(params),
-        "determinism_env": determinism_env or {},
-    }
-    return sha256_hex(canonical_json(fp).encode("utf-8"))
-
-
-def _transform_exec_key(
-    *,
-    normalized_params: Dict[str, Any],
-    input_refs: list[tuple[str, str]],
-    execution_version: str,
-    determinism_env: Optional[Dict[str, Any]] = None,
-) -> str:
-    fp = {
-        "build_version": execution_version,
-        "node_kind": "transform",
-        "normalized_params": normalized_params,
-        "input_artifact_ids": [aid for _, aid in sorted(input_refs)],
-        "input_bindings": [{"port": p, "artifact_id": aid} for p, aid in sorted(input_refs)],
-        "determinism_env": determinism_env or {},
-    }
-    return sha256_hex(canonical_json(fp).encode("utf-8"))
-
-
 def _normalized_params_for_exec_key(
     *,
     kind: str,
@@ -191,6 +127,72 @@ def _normalized_params_for_exec_key(
             default_op=(node.get("data", {}) or {}).get("transformKind"),
         )
     return p
+
+
+def _execution_key_from_node_state(
+    *,
+    node_kind: str,
+    node_state_hash: str,
+    upstream_artifact_ids: list[str],
+    input_refs: list[tuple[str, str]],
+    determinism_env: Optional[Dict[str, Any]] = None,
+    execution_version: str,
+) -> str:
+    payload = {
+        "build_version": execution_version,
+        "node_kind": node_kind,
+        "node_state_hash": node_state_hash,
+        "input_artifact_ids": sorted(upstream_artifact_ids),
+        "input_bindings": [{"port": p, "artifact_id": aid} for p, aid in sorted(input_refs)],
+        "determinism_env": determinism_env or {},
+    }
+    return sha256_hex(canonical_json(payload).encode("utf-8"))
+
+
+def _tool_exec_key(
+    *,
+    params: Dict[str, Any],
+    input_refs: list[tuple[str, str]],
+    execution_version: str,
+    determinism_env: Optional[Dict[str, Any]] = None,
+) -> str:
+    node = {"data": {"kind": "tool", "ports": {}, "schema": {}, "settings": {}}}
+    node_state_hash = build_node_state_hash(
+        node=node,
+        params=params or {},
+        execution_version=execution_version,
+    )
+    return _execution_key_from_node_state(
+        node_kind="tool",
+        node_state_hash=node_state_hash,
+        upstream_artifact_ids=[aid for _, aid in sorted(input_refs)],
+        input_refs=input_refs,
+        determinism_env=determinism_env,
+        execution_version=execution_version,
+    )
+
+
+def _transform_exec_key(
+    *,
+    normalized_params: Dict[str, Any],
+    input_refs: list[tuple[str, str]],
+    execution_version: str,
+    determinism_env: Optional[Dict[str, Any]] = None,
+) -> str:
+    node = {"data": {"kind": "transform", "ports": {}, "schema": {}, "settings": {}}}
+    node_state_hash = build_node_state_hash(
+        node=node,
+        params=normalized_params or {},
+        execution_version=execution_version,
+    )
+    return _execution_key_from_node_state(
+        node_kind="transform",
+        node_state_hash=node_state_hash,
+        upstream_artifact_ids=[aid for _, aid in sorted(input_refs)],
+        input_refs=input_refs,
+        determinism_env=determinism_env,
+        execution_version=execution_version,
+    )
 
 
 def _tool_is_armed(params: Dict[str, Any]) -> bool:
@@ -733,7 +735,7 @@ async def run_graph(
             # Upstream resolution
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
-            llm_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "llm" else []
+            input_refs = resolve_input_refs(edges, node_id, node_to_artifact)
 
             normalized_params_for_hash = _normalized_params_for_exec_key(
                 kind=kind,
@@ -741,32 +743,21 @@ async def run_graph(
                 params=params,
             )
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
-            tool_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "tool" else []
-            transform_input_refs = resolve_input_refs(edges, node_id, node_to_artifact) if kind == "transform" else []
-
-            if kind == "tool":
-                exec_key = _tool_exec_key(
-                    params=params,
-                    input_refs=tool_input_refs,
-                    execution_version=context.execution_version,
-                    determinism_env=determinism_env,
-                )
-            elif kind == "transform":
-                exec_key = _transform_exec_key(
-                    normalized_params=normalized_params_for_hash,
-                    input_refs=transform_input_refs,
-                    execution_version=context.execution_version,
-                    determinism_env=determinism_env,
-                )
-            else:
-                exec_key = cache.execution_key(
-                    node_kind=kind,
-                    normalized_params=normalized_params_for_hash,
-                    upstream_artifact_ids=upstream_ids,
-                    execution_version=context.execution_version,
-                    input_bindings=llm_input_refs if kind == "llm" else [],
-                    determinism_env=determinism_env,
-                )
+            source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
+            node_state_hash = build_node_state_hash(
+                node=n,
+                params=normalized_params_for_hash,
+                execution_version=context.execution_version,
+                source_fingerprint=source_fp,
+            )
+            exec_key = _execution_key_from_node_state(
+                node_kind=kind,
+                node_state_hash=node_state_hash,
+                upstream_artifact_ids=upstream_ids,
+                input_refs=input_refs,
+                determinism_env=determinism_env,
+                execution_version=context.execution_version,
+            )
             logger.debug(
                 "exec_key_generated run_id=%s node_id=%s kind=%s exec_key=%s run_from=%s run_mode=%s",
                 run_id,
@@ -1068,14 +1059,8 @@ async def run_graph(
                             except Exception:
                                 pass
 
-                        # 2) exec_key (transform-specific deterministic fingerprint)
+                        # 2) node state hash + exec_key (centralized hashing)
                         norm = normalized_params_for_hash
-                        exec_key = _transform_exec_key(
-                            normalized_params=norm,
-                            input_refs=input_refs,
-                            execution_version=context.execution_version,
-                            determinism_env=determinism_env,
-                        )
 
                         # 3) cache hit?
                         cached_artifact_id = await cache.get_artifact_id(exec_key)
@@ -1290,8 +1275,7 @@ async def run_graph(
                         artifact = Artifact(
                             artifact_id=artifact_id,
                             node_kind=kind,
-                            # params_hash=cache.params_hash(params),
-                            params_hash = sha256_hex(canonical_json(norm).encode("utf-8")),
+                            params_hash=node_state_hash,
                             upstream_ids=sorted([aid for _, aid in input_refs]),
                             created_at=datetime.now(timezone.utc),
                             execution_version=context.execution_version,
@@ -1386,7 +1370,7 @@ async def run_graph(
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
                                 ),
                             )
-                    llm_upstream_ids = [aid for _, aid in llm_input_refs] if llm_input_refs else upstream_ids
+                    llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
                     output = await exec_llm(run_id, n, context, upstream_artifact_ids=llm_upstream_ids)
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
@@ -1617,9 +1601,7 @@ async def run_graph(
                             mime_type = "application/json"
 
                     artifact_params_hash = (
-                        sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
-                        if kind == "tool"
-                        else cache.params_hash(normalized_params_for_hash)
+                        node_state_hash
                     )
 
                     artifact = Artifact(
@@ -1724,11 +1706,7 @@ async def run_graph(
                     )
 
                 if error_code:
-                    error_params_hash = (
-                        sha256_hex(canonical_json(_sanitize_for_fingerprint(params)).encode("utf-8"))
-                        if kind == "tool"
-                        else cache.params_hash(normalized_params_for_hash)
-                    )
+                    error_params_hash = node_state_hash
                     error_artifact_id = await _emit_error_artifact(
                         context=context,
                         node_id=node_id,
