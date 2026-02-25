@@ -2,7 +2,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from pathlib import Path
 from ..runner.events import RunEventBus
-from ..runner.metadata import ExecutionContext, FileMetadata, NodeOutput
+from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from datetime import datetime, timezone
 from ..runner.artifacts import ArtifactStore
 
@@ -14,7 +14,7 @@ def iso_now() -> str:
 async def exec_transform(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     input_metadata: Optional[FileMetadata],  # Added
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:

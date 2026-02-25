@@ -19,7 +19,7 @@ from app.runner.nodes.transform import (
 from .compile import compile_plan
 from .events import RunEventBus
 from .validator import GraphValidator
-from .metadata import ExecutionContext, NodeOutput
+from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
 from .capabilities import allowed_ports
@@ -467,7 +467,7 @@ def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
 
 async def _emit_error_artifact(
     *,
-    context: ExecutionContext,
+    context: GraphContext,
     node_id: str,
     node_kind: str,
     params_hash: str,
@@ -512,7 +512,7 @@ async def _emit_error_artifact(
 
 async def _record_consumers(
     *,
-    context: ExecutionContext,
+    context: GraphContext,
     input_artifact_ids: list[str],
     consumer_run_id: str,
     consumer_node_id: str,
@@ -543,16 +543,20 @@ async def run_graph(
     artifact_store=None, 
     cache=None,
     cancel_event: Optional[asyncio.Event] = None,
+    runtime_ref: Optional[Any] = None,
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
     bindings = RunBindings(run_id)
 
-    context = ExecutionContext(
+    graph_id = str(graph.get("id") or graph.get("graphId") or run_id)
+    context = GraphContext(
+        graph_id=graph_id,
         run_id=run_id,
         bus=bus,
         artifact_store=artifact_store,
         bindings=bindings,
+        runtime_ref=runtime_ref,
     )
     
     print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
@@ -652,6 +656,7 @@ async def run_graph(
     # ===== PHASE 2: EXECUTION =====
     try:
         plan = compile_plan(graph, run_from, run_mode=run_mode)
+        context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
         await context.bus.emit({
             "type": "run_started",

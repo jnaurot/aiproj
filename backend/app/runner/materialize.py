@@ -5,7 +5,7 @@ import io
 import os
 from typing import Any
 
-from .metadata import ExecutionContext
+from .metadata import GraphContext
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -90,7 +90,7 @@ def _table_bytes_to_csv_text(
     return _clip_chars(txt, max_chars)
 
 
-async def materialize_text(context: ExecutionContext, artifact_id: str) -> str:
+async def materialize_text(context: GraphContext, artifact_id: str) -> str:
     art = await context.artifact_store.get(artifact_id)
     b = await context.artifact_store.read(artifact_id)
     mime = str(getattr(art, "mime_type", "") or "")

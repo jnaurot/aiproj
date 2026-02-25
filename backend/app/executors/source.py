@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 import mimetypes
 
 from ..runner.events import RunEventBus
-from ..runner.metadata import ExecutionContext, NodeOutput, FileMetadata
+from ..runner.metadata import GraphContext, NodeOutput, FileMetadata
 from ..runner.schemas import SourceFileParams, SourceDatabaseParams, SourceAPIParams
 
 # Import data reading libraries
@@ -39,7 +39,7 @@ import httpx
 async def exec_source(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     # bus: RunEventBus
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:

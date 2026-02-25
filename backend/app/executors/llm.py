@@ -1,7 +1,7 @@
 from typing import Any, Dict, Optional
 
 from app.runner.materialize import materialize_text
-from ..runner.metadata import ExecutionContext, NodeOutput
+from ..runner.metadata import GraphContext, NodeOutput
 from datetime import datetime, timezone
 
 from ..runner.schemas import LLMParams
@@ -45,7 +45,7 @@ def iso_now():
 async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """Execute LLM node"""

@@ -14,7 +14,7 @@ from app.runner.materialize import materialize_text
 
 # Adjust these imports to your actual paths/types
 from ..runner.schemas import LLMParams
-from ..runner.metadata import ExecutionContext, FileMetadata, NodeOutput
+from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from ..runner.events import RunEventBus
 from app.runner.emit import emit
 
@@ -191,7 +191,7 @@ def _compose_user_content(user_prompt: str, upstream_text: str) -> str:
 async def exec_llm_ollama(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     # bus: RunEventBus,
     input_metadata: Optional[FileMetadata],
     params: LLMParams,

@@ -420,6 +420,7 @@ class RuntimeManager:
                 artifact_store=handle.artifact_store,
                 cache=handle.cache,
                 cancel_event=handle.cancel_event,
+                runtime_ref=self,
             )
         )
 

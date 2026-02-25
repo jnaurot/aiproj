@@ -10,7 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from ..runner.metadata import ExecutionContext, NodeOutput
+from ..runner.metadata import GraphContext, NodeOutput
 
 
 def iso_now() -> str:
@@ -91,7 +91,7 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-async def _materialize_tool_inputs(context: ExecutionContext, upstream_artifact_ids: list[str]) -> Dict[str, Any]:
+async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids: list[str]) -> Dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
     for aid in upstream_artifact_ids:
         art = await context.artifact_store.get(aid)
@@ -152,7 +152,7 @@ def _contract_mismatch(message: str) -> str:
 async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     node_id = node.get("id", "<missing-node-id>")

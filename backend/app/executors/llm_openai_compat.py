@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.runner.materialize import materialize_text
-from ..runner.metadata import ExecutionContext, FileMetadata, NodeOutput
+from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from ..runner.schemas import LLMParams
 
 
@@ -85,7 +85,7 @@ def _extract_chat_content(obj: Dict[str, Any]) -> str:
 async def exec_llm_openai_compat(
     run_id: str,
     node: Dict[str, Any],
-    context: ExecutionContext,
+    context: GraphContext,
     input_metadata: Optional[FileMetadata],
     params: LLMParams,
     upstream_artifact_ids: Optional[list[str]] = None,

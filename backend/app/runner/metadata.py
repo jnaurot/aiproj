@@ -53,15 +53,19 @@ class NodeOutput(BaseModel):
     stale_reason: Optional[str] = None
 
 @dataclass
-class ExecutionContext:
-    """Context passed during execution"""
-        # required (no defaults) MUST come first
+class GraphContext:
+    """Per-graph execution context passed to all node executors."""
     run_id: str
     bus: RunEventBus
     artifact_store: ArtifactStore
-    bindings: RunBindings        # run_id+node_id -> artifact_id
-    
-        # optional / defaulted fields AFTER required ones
+    bindings: RunBindings
+    graph_id: str = ""
+    runtime_ref: Optional[Any] = None
+    planner_ref: Optional[Any] = None
     outputs: Dict[str, NodeOutput] = field(default_factory=dict)
     metadata_cache: Dict[str, FileMetadata] = field(default_factory=dict)
-    execution_version: str = "v1"   # bump when executor semantics change
+    execution_version: str = "v1"
+
+
+# Backward-compatible alias while the codebase migrates to GraphContext.
+ExecutionContext = GraphContext
