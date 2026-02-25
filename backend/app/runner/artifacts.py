@@ -74,12 +74,14 @@ class Artifact(BaseModel):
     payload_schema: Optional[Dict[str, Any]] = None
     content_hash: Optional[str] = None
     run_id: Optional[str] = None
+    graph_id: Optional[str] = None
     node_id: Optional[str] = None
     exec_key: Optional[str] = None
 
 
 class RunArtifactBinding(BaseModel):
     run_id: str
+    graph_id: str
     node_id: str
     artifact_id: str
     status: str  # "computed" | "cached" | "reused"
@@ -326,12 +328,14 @@ class _SqliteArtifactIndex:
                     storage_uri TEXT NOT NULL,
                     payload_schema_json TEXT,
                     run_id TEXT,
+                    graph_id TEXT,
                     node_id TEXT,
                     exec_key TEXT
                 )
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_id ON artifacts(graph_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_node_id ON artifacts(node_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
@@ -339,6 +343,8 @@ class _SqliteArtifactIndex:
             cols = [r[1] for r in cur.execute("PRAGMA table_info(artifacts)").fetchall()]
             if "port_type" not in cols:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN port_type TEXT")
+            if "graph_id" not in cols:
+                cur.execute("ALTER TABLE artifacts ADD COLUMN graph_id TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_port_type ON artifacts(port_type)")
             # Backfill legacy rows with null port_type.
             null_rows = cur.execute(
@@ -415,7 +421,7 @@ class _SqliteArtifactIndex:
                 """
                 SELECT artifact_id, content_hash, node_kind, params_hash, upstream_ids_json,
                        created_at, execution_version, mime_type, port_type, size_bytes, storage_uri,
-                       payload_schema_json, run_id, node_id, exec_key
+                       payload_schema_json, run_id, graph_id, node_id, exec_key
                 FROM artifacts
                 WHERE artifact_id=?
                 """,
@@ -445,8 +451,9 @@ class _SqliteArtifactIndex:
             storage_uri=row[10],
             payload_schema=payload_schema,
             run_id=row[12],
-            node_id=row[13],
-            exec_key=row[14],
+            graph_id=row[13],
+            node_id=row[14],
+            exec_key=row[15],
         )
 
     def put(self, artifact: Artifact) -> None:
@@ -457,8 +464,8 @@ class _SqliteArtifactIndex:
                 INSERT OR IGNORE INTO artifacts (
                     artifact_id, content_hash, node_kind, params_hash, upstream_ids_json,
                     created_at, execution_version, mime_type, port_type, size_bytes, storage_uri,
-                    payload_schema_json, run_id, node_id, exec_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payload_schema_json, run_id, graph_id, node_id, exec_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     artifact.artifact_id,
@@ -476,6 +483,7 @@ class _SqliteArtifactIndex:
                     if artifact.payload_schema is not None
                     else None,
                     artifact.run_id,
+                    artifact.graph_id,
                     artifact.node_id,
                     artifact.exec_key,
                 ),
@@ -884,9 +892,13 @@ class RunBindings:
     Minimal binding map for a single run.
     If you want cross-run bindings later, move to a repo/db.
     """
-    def __init__(self, run_id: str) -> None:
+    def __init__(self, run_id: str, graph_id: str = "") -> None:
         self.run_id = run_id
+        self.graph_id = str(graph_id or "")
         self._bindings: Dict[str, RunArtifactBinding] = {}
+
+    def _key(self, node_id: str) -> str:
+        return f"{self.graph_id}:{node_id}"
 
     def bind(self, node_id: str, artifact_id: str, status: str = "computed") -> RunArtifactBinding:
         logger.debug(
@@ -898,19 +910,20 @@ class RunBindings:
         )
         b = RunArtifactBinding(
             run_id=self.run_id,
+            graph_id=self.graph_id,
             node_id=node_id,
             artifact_id=artifact_id,
             status=status,
             bound_at=datetime.now(timezone.utc),
         )
-        self._bindings[node_id] = b
+        self._bindings[self._key(node_id)] = b
         return b
 
     def get(self, node_id: str) -> Optional[RunArtifactBinding]:
-        return self._bindings.get(node_id)
+        return self._bindings.get(self._key(node_id))
 
     def artifact_id_for(self, node_id: str) -> Optional[str]:
-        b = self._bindings.get(node_id)
+        b = self._bindings.get(self._key(node_id))
         return b.artifact_id if b else None
 
     def all(self) -> List[RunArtifactBinding]:

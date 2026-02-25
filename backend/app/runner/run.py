@@ -503,6 +503,7 @@ async def _emit_error_artifact(
         storage_uri=f"artifact://{artifact_id}",
         payload_schema={"schema_version": 1, "type": "json", "json_shape": "object"},
         run_id=context.run_id,
+        graph_id=context.graph_id,
         node_id=node_id,
     )
     await context.artifact_store.write(artifact, payload_bytes)
@@ -544,12 +545,13 @@ async def run_graph(
     cache=None,
     cancel_event: Optional[asyncio.Event] = None,
     runtime_ref: Optional[Any] = None,
+    graph_id: Optional[str] = None,
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
-    bindings = RunBindings(run_id)
+    graph_id = str(graph_id or graph.get("id") or graph.get("graphId") or run_id)
+    bindings = RunBindings(run_id, graph_id=graph_id)
 
-    graph_id = str(graph.get("id") or graph.get("graphId") or run_id)
     context = GraphContext(
         graph_id=graph_id,
         run_id=run_id,
@@ -560,6 +562,7 @@ async def run_graph(
     )
     
     print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
+    context.bus.graph_id = graph_id
 
     node_to_artifact: dict[str, str] = {}
     cache = cache or ExecutionCache()
@@ -1302,6 +1305,7 @@ async def run_graph(
                                 "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
                             },
                             run_id=run_id,
+                            graph_id=context.graph_id,
                             node_id=node_id,
                             exec_key=exec_key,
                         )
@@ -1645,6 +1649,7 @@ async def run_graph(
                             else None
                         ),
                         run_id=run_id,
+                        graph_id=context.graph_id,
                         node_id=node_id,
                         exec_key=exec_key,
                     )

@@ -1,1 +1,0 @@
-{"type": "error", "code": "CONTRACT_MISMATCH", "message": "LLM output contract mismatch: unsupported out port 'table'", "nodeId": "n_15f09fd7-5a4c-480e-a948-de960c2332a3", "nodeKind": "llm", "runId": "d4234cc5-b597-4029-a504-de7feb545117", "at": "2026-02-25T05:16:23.412386+00:00"}

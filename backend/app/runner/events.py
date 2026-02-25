@@ -268,10 +268,12 @@ class RunEventBus:
     def __init__(
         self,
         run_id: str,
+        graph_id: Optional[str] = None,
         on_emit: Optional[Callable[[Dict[str, Any]], None]] = None,
         persist_event: Optional[Callable[[Dict[str, Any]], Awaitable[int] | int | None]] = None,
     ):
         self.run_id = run_id
+        self.graph_id = str(graph_id or "")
         self._seq = 0
         self.q = asyncio.Queue()
         self._on_emit = on_emit
@@ -280,6 +282,8 @@ class RunEventBus:
     async def emit(self, evt: dict):
         if "runId" not in evt:
             evt["runId"] = self.run_id
+        if "graphId" not in evt and self.graph_id:
+            evt["graphId"] = self.graph_id
         self._seq += 1
         evt["seq"] = self._seq
         if self._persist_event:

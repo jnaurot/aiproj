@@ -22,6 +22,7 @@ def datetime_from_ts(ts: float) -> str:
 @dataclass
 class RunHandle:
     run_id: str
+    graph_id: str
     bus: RunEventBus
     artifact_store: ArtifactStore
     cache: ExecutionCache
@@ -64,12 +65,14 @@ class RuntimeManager:
     def create_run(self, run_id: str) -> RunHandle:
         handle = RunHandle(
             run_id=run_id,
+            graph_id="",
             bus=None,
             artifact_store=self.artifact_store,
             cache=self.cache,
         )
         bus = RunEventBus(
             run_id,
+            graph_id="",
             on_emit=lambda ev: self._apply_event_to_state(handle, ev),
             persist_event=lambda ev: self.event_store.append_event(ev),
         )
@@ -88,6 +91,7 @@ class RuntimeManager:
         b = handle.node_bindings.get(node_id)
         if b is None:
             b = {
+                "graphId": handle.graph_id,
                 "status": "idle",
                 "lastArtifactId": None,
                 "lastRunId": None,
@@ -400,8 +404,10 @@ class RuntimeManager:
 
     # ---------- execution ----------
 
-    async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None):
+    async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None, graph_id: Optional[str] = None):
         handle = self.runs[run_id]
+        handle.graph_id = str(graph_id or graph.get("id") or graph.get("graphId") or run_id)
+        handle.bus.graph_id = handle.graph_id
         handle.graph = graph
         for n in (graph.get("nodes", []) if isinstance(graph, dict) else []):
             nid = n.get("id")
@@ -421,6 +427,7 @@ class RuntimeManager:
                 cache=handle.cache,
                 cancel_event=handle.cancel_event,
                 runtime_ref=self,
+                graph_id=handle.graph_id,
             )
         )
 

@@ -29,6 +29,7 @@ def _alpha_input_label(idx: int) -> str:
     return f"Input {out}"
 
 class RunRequest(BaseModel):
+    graphId: Optional[str] = None
     runFrom: Optional[str] = None
     runMode: Optional[str] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
@@ -53,6 +54,7 @@ class RunRequest(BaseModel):
 class RunCreated(BaseModel):
     schemaVersion: int = 1
     runId: str
+    graphId: str
 
 
 class AcceptNodeParamsRequest(BaseModel):
@@ -77,9 +79,10 @@ async def create_run(req: RunRequest, request: Request):
     if req.runMode == "selected_only" and not req.runFrom:
         raise HTTPException(400, "runMode='selected_only' requires runFrom")
 
-    await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode)
+    graph_id = str(req.graphId or req.graph.get("id") or req.graph.get("graphId") or run_id)
+    await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
     
-    return RunCreated(schemaVersion=1, runId=run_id)
+    return RunCreated(schemaVersion=1, runId=run_id, graphId=graph_id)
 
 
 @router.post("/{run_id}/cancel")
@@ -223,26 +226,30 @@ async def stream_events(
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 @router.get("/artifacts/{artifact_id}")
-async def get_artifact(artifact_id: str, request: Request):
+async def get_artifact(artifact_id: str, request: Request, graphId: str = Query(...)):
     rt = request.app.state.runtime
     store = rt.artifact_store
     if not await store.exists(artifact_id):
         raise HTTPException(404, "Artifact not found")
 
     art = await store.get(artifact_id)          # metadata object
+    if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
+        raise HTTPException(404, "Artifact not found")
     mime = getattr(art, "mime_type", None) or "application/octet-stream"
     stream = store.open_payload(artifact_id)
     return StreamingResponse(stream, media_type=mime)
 
 
 @router.get("/artifacts/{artifact_id}/meta")
-async def get_artifact_meta(artifact_id: str, request: Request):
+async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Query(...)):
     rt = request.app.state.runtime
     store = rt.artifact_store
     if not await store.exists(artifact_id):
         raise HTTPException(404, "Artifact not found")
 
     art = await store.get(artifact_id)
+    if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
+        raise HTTPException(404, "Artifact not found")
     upstream_ids = art.upstream_ids or []
     return {
         "schemaVersion": 1,
@@ -263,6 +270,7 @@ async def get_artifact_meta(artifact_id: str, request: Request):
         ],
         "producerNodeId": art.node_id,
         "producerRunId": art.run_id,
+        "graphId": art.graph_id,
         "producerExecKey": art.exec_key,
         "payloadSchema": art.payload_schema,
     }
@@ -272,11 +280,15 @@ async def get_artifact_meta(artifact_id: str, request: Request):
 async def get_artifact_consumers(
     artifact_id: str,
     request: Request,
+    graphId: str = Query(...),
     limit: int = Query(default=50, ge=1, le=500),
 ):
     rt = request.app.state.runtime
     store = rt.artifact_store
     if not await store.exists(artifact_id):
+        raise HTTPException(404, "Artifact not found")
+    art = await store.get(artifact_id)
+    if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
         raise HTTPException(404, "Artifact not found")
 
     get_fn = getattr(store, "get_consumers", None)
@@ -295,11 +307,15 @@ async def get_artifact_consumers(
 async def get_artifact_lineage(
     artifact_id: str,
     request: Request,
+    graphId: str = Query(...),
     depth: int = Query(default=2, ge=0, le=6),
 ):
     rt = request.app.state.runtime
     store = rt.artifact_store
     if not await store.exists(artifact_id):
+        raise HTTPException(404, "Artifact not found")
+    root_art = await store.get(artifact_id)
+    if not getattr(root_art, "graph_id", None) or str(root_art.graph_id) != str(graphId):
         raise HTTPException(404, "Artifact not found")
 
     visited: set[str] = set()
@@ -312,6 +328,8 @@ async def get_artifact_lineage(
 
         visited.add(aid)
         art = await store.get(aid)
+        if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
+            return {"artifactId": aid, "missing": True}
         payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else None
         node = {
             "artifactId": art.artifact_id,
@@ -324,6 +342,7 @@ async def get_artifact_lineage(
             "producer": {
                 "nodeId": art.node_id,
                 "runId": art.run_id,
+                "graphId": art.graph_id,
                 "execKey": art.exec_key,
             },
             "inputArtifactIds": art.upstream_ids or [],
@@ -349,6 +368,7 @@ async def get_artifact_lineage(
 async def get_artifact_preview(
     artifact_id: str,
     request: Request,
+    graphId: str = Query(...),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
 ):
@@ -358,6 +378,8 @@ async def get_artifact_preview(
         raise HTTPException(404, "Artifact not found")
 
     art = await store.get(artifact_id)
+    if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
+        raise HTTPException(404, "Artifact not found")
     data = await store.read(artifact_id)
     mime = getattr(art, "mime_type", None) or "application/octet-stream"
 
@@ -413,6 +435,7 @@ async def get_run(run_id: str, request: Request):
         return {
             "schemaVersion": 1,
             "runId": rec.get("run_id", run_id),
+            "graphId": None,
             "status": rec.get("status", "unknown"),
             "error": None,
             "createdAt": rec.get("created_at"),
@@ -426,6 +449,7 @@ async def get_run(run_id: str, request: Request):
     return {
         "schemaVersion": 1,
         "runId": h.run_id,
+        "graphId": h.graph_id,
         "status": h.status,
         "error": h.error,
         "createdAt": h.created_at,

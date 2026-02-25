@@ -92,6 +92,8 @@ def _jsonable(value: Any) -> Any:
 
 
 async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids: list[str]) -> Dict[str, Any]:
+    if not getattr(context, "graph_id", ""):
+        raise ValueError("graphId is required for artifact lookup")
     artifacts: list[dict[str, Any]] = []
     for aid in upstream_artifact_ids:
         art = await context.artifact_store.get(aid)

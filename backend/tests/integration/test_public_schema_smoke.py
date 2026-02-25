@@ -51,6 +51,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         assert created.get("schemaVersion") == 1
         assert isinstance(created.get("runId"), str) and created["runId"]
         run_id = created["runId"]
+        graph_id = created["graphId"]
 
         status = None
         for _ in range(60):
@@ -77,7 +78,10 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         artifact_id = node_outputs.get("tool_1")
         assert artifact_id
 
-        meta = client.get(f"/runs/artifacts/{artifact_id}/meta")
+        meta_missing_graph = client.get(f"/runs/artifacts/{artifact_id}/meta")
+        assert meta_missing_graph.status_code == 422
+
+        meta = client.get(f"/runs/artifacts/{artifact_id}/meta?graphId={graph_id}")
         assert meta.status_code == 200, meta.text
         meta_json = meta.json()
         assert meta_json.get("schemaVersion") == 1
@@ -92,7 +96,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         ):
             assert key in meta_json
 
-        lineage = client.get(f"/runs/artifacts/{artifact_id}/lineage?depth=1")
+        lineage = client.get(f"/runs/artifacts/{artifact_id}/lineage?graphId={graph_id}&depth=1")
         assert lineage.status_code == 200, lineage.text
         lineage_json = lineage.json()
         assert lineage_json.get("schemaVersion") == 1

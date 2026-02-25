@@ -91,6 +91,8 @@ def _table_bytes_to_csv_text(
 
 
 async def materialize_text(context: GraphContext, artifact_id: str) -> str:
+    if not getattr(context, "graph_id", ""):
+        raise ValueError("graphId is required for artifact lookup")
     art = await context.artifact_store.get(artifact_id)
     b = await context.artifact_store.read(artifact_id)
     mime = str(getattr(art, "mime_type", "") or "")
