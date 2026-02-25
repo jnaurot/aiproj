@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import traceback
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -26,6 +27,8 @@ from .capabilities import allowed_ports
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
 from ..executors.tool import exec_tool
+
+logger = logging.getLogger(__name__)
 
 
 def iso_now() -> str:
@@ -756,6 +759,17 @@ async def run_graph(
                     input_bindings=llm_input_refs if kind == "llm" else [],
                     determinism_env=determinism_env,
                 )
+            logger.debug(
+                "exec_key_generated run_id=%s node_id=%s kind=%s exec_key=%s run_from=%s run_mode=%s",
+                run_id,
+                node_id,
+                kind,
+                exec_key,
+                run_from,
+                run_mode,
+            )
+            graph_id = graph.get("id") if isinstance(graph, dict) else None
+            print(f"[debug-exec-key] graphId={graph_id} nodeId={node_id} exec_key={exec_key}")
             artifact_id = exec_key
 
             use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")

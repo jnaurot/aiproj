@@ -1,6 +1,7 @@
 import asyncio, time
 import os
 import traceback
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -10,6 +11,8 @@ from .runner.events import EventStore, MemoryEventStore, RunEventBus, SqliteEven
 from .runner.artifacts import ArtifactStore, DiskArtifactStore, MemoryArtifactStore
 from .runner.cache import ExecutionCache, SqliteExecutionCache
 from .runner.run import run_graph
+
+logger = logging.getLogger(__name__)
 
 
 def datetime_from_ts(ts: float) -> str:
@@ -132,6 +135,26 @@ class RuntimeManager:
         strict = os.getenv("RUNTIME_STRICT_STALE_TRANSITIONS", "").strip().lower()
         if strict in {"1", "true", "yes", "on"}:
             raise RuntimeError(f"SUCCEEDED_TO_STALE node={node_id} event={ev.get('type')}")
+
+    def _log_binding_update(
+        self,
+        *,
+        handle: RunHandle,
+        node_id: str,
+        event_type: str,
+        prev: Dict[str, Any],
+        nxt: Dict[str, Any],
+    ) -> None:
+        logger.debug(
+            "binding_update run_id=%s node_id=%s event=%s prev_status=%s next_status=%s prev_isUpToDate=%s next_isUpToDate=%s",
+            handle.run_id,
+            node_id,
+            event_type,
+            prev.get("status"),
+            nxt.get("status"),
+            prev.get("isUpToDate"),
+            nxt.get("isUpToDate"),
+        )
 
     def _downstream_nodes(self, graph: Dict[str, Any], node_id: str) -> set[str]:
         edges = graph.get("edges", []) if isinstance(graph, dict) else []
@@ -438,6 +461,7 @@ class RuntimeManager:
                 prev = dict(b)
                 b["status"] = "running"
                 handle.node_status[nid] = "running"
+                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
@@ -461,6 +485,7 @@ class RuntimeManager:
                     b["status"] = "failed"
                     b["isUpToDate"] = False
                     handle.node_status[nid] = "failed"
+                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
@@ -472,6 +497,7 @@ class RuntimeManager:
                 b["status"] = "cancelled"
                 b["isUpToDate"] = False
                 handle.node_status[nid] = "cancelled"
+                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
@@ -498,6 +524,7 @@ class RuntimeManager:
                 elif decision == "cache_miss":
                     b["cacheValid"] = False
                     # cache_miss means compute required; do not force staleness.
+                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
@@ -517,6 +544,7 @@ class RuntimeManager:
                 handle.node_outputs[nid] = aid
                 # Option B registry (artifact → runId)
                 self._artifact_owner[aid] = handle.run_id
+                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 

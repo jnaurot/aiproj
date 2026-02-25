@@ -6,11 +6,14 @@ import os
 import sqlite3
 import threading
 import uuid
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 
 _PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
@@ -151,8 +154,24 @@ class MemoryArtifactStore:
     async def write(self, artifact: Artifact, data: bytes) -> None:
         # Enforce immutability: don't overwrite
         if artifact.artifact_id in self._meta:
+            logger.debug(
+                "artifact_write_skip_existing store=memory artifact_id=%s run_id=%s node_id=%s exec_key=%s",
+                artifact.artifact_id,
+                artifact.run_id,
+                artifact.node_id,
+                artifact.exec_key,
+            )
             return
         content_hash = hashlib.sha256(data).hexdigest()
+        logger.debug(
+            "artifact_write store=memory artifact_id=%s run_id=%s node_id=%s exec_key=%s size_bytes=%s content_hash=%s",
+            artifact.artifact_id,
+            artifact.run_id,
+            artifact.node_id,
+            artifact.exec_key,
+            len(data),
+            content_hash,
+        )
         self._meta[artifact.artifact_id] = artifact.model_copy(
             update={"content_hash": content_hash, "size_bytes": len(data)}
         )
@@ -785,10 +804,27 @@ class DiskArtifactStore:
 
     async def write(self, artifact: Artifact, data: bytes) -> None:
         if self._index.exists(artifact.artifact_id):
+            logger.debug(
+                "artifact_write_skip_existing store=disk artifact_id=%s run_id=%s node_id=%s exec_key=%s",
+                artifact.artifact_id,
+                artifact.run_id,
+                artifact.node_id,
+                artifact.exec_key,
+            )
             return
 
         content_hash = hashlib.sha256(data).hexdigest()
         storage_uri = self._write_blob_atomic(content_hash, data)
+        logger.debug(
+            "artifact_write store=disk artifact_id=%s run_id=%s node_id=%s exec_key=%s size_bytes=%s content_hash=%s storage_uri=%s",
+            artifact.artifact_id,
+            artifact.run_id,
+            artifact.node_id,
+            artifact.exec_key,
+            len(data),
+            content_hash,
+            storage_uri,
+        )
         artifact_to_store = artifact.model_copy(
             update={
                 "content_hash": content_hash,
@@ -853,6 +889,13 @@ class RunBindings:
         self._bindings: Dict[str, RunArtifactBinding] = {}
 
     def bind(self, node_id: str, artifact_id: str, status: str = "computed") -> RunArtifactBinding:
+        logger.debug(
+            "run_binding_bind run_id=%s node_id=%s artifact_id=%s status=%s",
+            self.run_id,
+            node_id,
+            artifact_id,
+            status,
+        )
         b = RunArtifactBinding(
             run_id=self.run_id,
             node_id=node_id,
