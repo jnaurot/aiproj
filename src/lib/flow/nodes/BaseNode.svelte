@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
   import type { PipelineNodeData } from "$lib/flow/types";
+  import { graphStore } from "$lib/flow/store/graphStore";
+  import { displayStatusFromBinding } from "$lib/flow/store/runScope";
 
   // xyflow passes these props into node components
   export let id: string;
@@ -9,8 +11,9 @@
   // xyflow also passes some optional props (safe to accept)
   export let selected: boolean = false;
 
-  // keep these reactive but simple
-  $: status = data?.status ?? "idle";
+  // Status is derived from bindings; node.data.status is not authoritative.
+  $: binding = $graphStore.nodeBindings?.[id];
+  $: status = displayStatusFromBinding(binding as any);
   $: kind = data?.kind ?? "node";
   $: label = data?.label ?? "Node";
 

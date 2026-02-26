@@ -7,8 +7,11 @@ export type ActiveRunMode = 'from_start' | 'from_selected_onward' | 'selected_on
 export type NodeBindingLike = {
 	isUpToDate?: boolean;
 	status?: unknown;
+	currentArtifactId?: string | null;
 	lastArtifactId?: string | null;
+	currentExecKey?: string | null;
 	lastRunId?: string | null;
+	lastExecKey?: string | null;
 	[key: string]: unknown;
 };
 
@@ -23,10 +26,16 @@ export function isBindingStale(binding: NodeBindingLike | null | undefined): boo
 
 export function displayStatusFromBinding(binding: NodeBindingLike | null | undefined): NodeStatus {
 	if (!binding) return 'idle';
+	const hasArtifact = Boolean(binding.currentArtifactId || binding.lastArtifactId);
 	const raw = String(binding.status ?? '').toLowerCase();
 	if (raw === 'running') return 'running';
 	if (isBindingStale(binding)) return 'stale';
+	const currentExecKey =
+		typeof binding.currentExecKey === 'string' ? binding.currentExecKey : undefined;
+	const lastExecKey = typeof binding.lastExecKey === 'string' ? binding.lastExecKey : undefined;
+	if (currentExecKey && lastExecKey && currentExecKey !== lastExecKey) return 'stale';
 	if (raw === 'succeeded_up_to_date' || raw === 'succeeded') return 'succeeded';
+	if (hasArtifact && raw === '') return 'succeeded';
 	if (raw === 'failed') return 'failed';
 	if (raw === 'cancelled' || raw === 'canceled') return 'canceled';
 	if (raw === 'stale') return 'stale';

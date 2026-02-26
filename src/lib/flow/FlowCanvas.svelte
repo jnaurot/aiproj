@@ -31,7 +31,6 @@
 	let lastStoreNodes: Node<PipelineNodeData>[] | null = null;
 	let lastStoreEdges: Edge<PipelineEdgeData>[] | null = null;
 	let lastSelectedNodeId: string | null = null;
-	let lastStoreNodeBindings: Record<string, unknown> | null = null;
 
 	$: if ($graphStore.logs && scrollElement) {
 		scrollToBottom();
@@ -49,17 +48,6 @@
 		return seedNodes.map((n) => ({ ...n, selected: !!selectedNodeId && n.id === selectedNodeId }));
 	}
 
-	function applyBindingStatuses(
-		seedNodes: Node<PipelineNodeData>[],
-		nodeBindings: Record<string, any>
-	): Node<PipelineNodeData>[] {
-		return seedNodes.map((n) => {
-			const derived = displayStatusFromBinding(nodeBindings?.[n.id]);
-			if (n.data.status === derived) return n;
-			return { ...n, data: { ...n.data, status: derived } };
-		});
-	}
-
 	$: {
 		const s = $graphStore;
 
@@ -68,16 +56,14 @@
 		const storeNodesChanged = s.nodes !== lastStoreNodes;
 		const storeEdgesChanged = s.edges !== lastStoreEdges;
 		const storeSelectionChanged = s.selectedNodeId !== lastSelectedNodeId;
-		const storeBindingsChanged = s.nodeBindings !== lastStoreNodeBindings;
 
-		if (storeNodesChanged || storeEdgesChanged || storeSelectionChanged || storeBindingsChanged) {
+		if (storeNodesChanged || storeEdgesChanged || storeSelectionChanged) {
 			applyingFromStore = true;
 
-			if (storeNodesChanged || storeSelectionChanged || storeBindingsChanged) {
-				nodes = applyCanvasSelection(applyBindingStatuses(s.nodes, s.nodeBindings ?? {}), s.selectedNodeId);
+			if (storeNodesChanged || storeSelectionChanged) {
+				nodes = applyCanvasSelection(s.nodes, s.selectedNodeId);
 				lastStoreNodes = s.nodes;
 				lastSelectedNodeId = s.selectedNodeId;
-				lastStoreNodeBindings = s.nodeBindings;
 			}
 
 			if (storeEdgesChanged) {

@@ -152,9 +152,11 @@ describe('graphStore partial run scope events', () => {
 		expect(state.nodeBindings.llm_a.lastArtifactId).toBe('art-a');
 	});
 
-	it('hydrate snapshot does not touch node card status for nodes absent from snapshot bindings', () => {
+	it('hydrate snapshot preserves derived status for nodes absent from snapshot bindings', () => {
 		const state = makeState();
-		const beforeNodeStatuses = state.nodes.map((n) => ({ id: n.id, status: n.data.status }));
+		const beforeDerived = new Map(
+			Object.entries(state.nodeBindings).map(([id, b]) => [id, displayStatusFromBinding(b as any)])
+		);
 		const beforeBindingCount = Object.keys(state.nodeBindings).length;
 		const next = __hydrateFromRunSnapshotForTest(state, {
 			status: 'running',
@@ -162,10 +164,7 @@ describe('graphStore partial run scope events', () => {
 				llm_b: { status: 'running' }
 			}
 		});
-		const afterMap = new Map(next.nodes.map((n) => [n.id, n.data.status]));
-		expect(afterMap.get('llm_a')).toBe(
-			beforeNodeStatuses.find((n) => n.id === 'llm_a')?.status
-		);
+		expect(displayStatusFromBinding(next.nodeBindings.llm_a as any)).toBe(beforeDerived.get('llm_a'));
 		expect(Object.keys(next.nodeBindings).length).toBeGreaterThanOrEqual(beforeBindingCount);
 		expect(next.nodeBindings.llm_a).toEqual(state.nodeBindings.llm_a);
 	});

@@ -154,14 +154,6 @@ function captureStack(label: string): string {
 	}
 }
 
-function nodeStatusById(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): Record<string, NodeStatus> {
-	const out: Record<string, NodeStatus> = {};
-	for (const n of nodes) {
-		out[n.id] = n.data.status as NodeStatus;
-	}
-	return out;
-}
-
 function isAllowedSucceededRegression(nodeId: string, ctx: AuditContext): boolean {
 	if (ctx.source === 'accept_params') {
 		return Boolean(ctx.allowedNodeIds?.has(nodeId));
@@ -248,36 +240,6 @@ function auditSucceededRegressions(prev: GraphState, next: GraphState, ctx: Audi
 	}
 }
 
-function auditNodeDataStatusRegressions(prev: GraphState, next: GraphState, ctx: AuditContext): void {
-	if (ctx.source === 'hydrate_snapshot') return;
-	const prevById = nodeStatusById(prev.nodes);
-	const nextById = nodeStatusById(next.nodes);
-	const ids = new Set([...Object.keys(prevById), ...Object.keys(nextById)]);
-	for (const nodeId of ids) {
-		const prevStatus = prevById[nodeId];
-		const nextStatus = nextById[nodeId];
-		if (prevStatus !== SUCCEEDED || !nextStatus || nextStatus === SUCCEEDED) continue;
-		if (nextStatus === 'running') continue;
-		const allowed = isAllowedSucceededRegression(nodeId, ctx);
-		const prevDisplay = displayStatusFromBinding(prev.nodeBindings?.[nodeId]);
-		const nextDisplay = displayStatusFromBinding(next.nodeBindings?.[nodeId]);
-		logSucceededRegression(
-			'node_data',
-			nodeId,
-			prev,
-			next,
-			ctx,
-			prevDisplay,
-			nextDisplay,
-			prevStatus,
-			nextStatus
-		);
-		if (DEV_MODE && !allowed) {
-			throw new Error(`SUCCEEDED_REGRESSION(node_data): node=${nodeId}, source=${ctx.source}`);
-		}
-	}
-}
-
 function assertHydrationBindingInvariants(prev: GraphState, next: GraphState, ctx: AuditContext): void {
 	if (!DEV_MODE || ctx.source !== 'hydrate_snapshot') return;
 	const prevBindings = prev.nodeBindings ?? {};
@@ -310,7 +272,6 @@ function assertHydrationBindingInvariants(prev: GraphState, next: GraphState, ct
 function auditStateTransition(prev: GraphState, next: GraphState, ctx: AuditContext): void {
 	assertHydrationBindingInvariants(prev, next, ctx);
 	auditSucceededRegressions(prev, next, ctx);
-	auditNodeDataStatusRegressions(prev, next, ctx);
 }
 
 function withGraphMeta(state: GraphState): GraphState {
@@ -634,9 +595,8 @@ export function __hydrateFromRunSnapshotForTest(
 	return hydrateFromRunSnapshotState(state, snap);
 }
 
-function buildHardResetState(state: GraphState, freshGraphId: string): GraphState {
+function buildHardResetState(freshGraphId: string): GraphState {
 	return {
-		...state,
 		graphId: freshGraphId,
 		nodes: [],
 		edges: [],
@@ -656,8 +616,8 @@ function buildHardResetState(state: GraphState, freshGraphId: string): GraphStat
 	};
 }
 
-export function __hardResetGraphForTest(state: GraphState, freshGraphId = 'graph_test_reset'): GraphState {
-	return buildHardResetState(state, freshGraphId);
+export function __hardResetGraphForTest(_state: GraphState, freshGraphId = 'graph_test_reset'): GraphState {
+	return buildHardResetState(freshGraphId);
 }
 
 function stripToDTO(
@@ -891,8 +851,6 @@ const initialState: GraphState = {
 	nodeBindings: {},
 	activeRunId: null
 };
-
-const statusOrIdle = (s: NodeStatus): NodeStatus => s;
 
 export const graphStore = (() => {
 	const { subscribe, set, update: rawUpdate } = writable<GraphState>(initialState);
@@ -1542,11 +1500,9 @@ export const graphStore = (() => {
 
 		hardResetGraph() {
 			const freshGraphId = mintGraphId();
-			update((s) => {
-				const next = buildHardResetState(s, freshGraphId);
-				persist(next);
-				return next;
-			});
+			const next = buildHardResetState(freshGraphId);
+			persist(next);
+			set(next);
 		},
 
 		async runRemote(runFrom: string | null, runMode?: ActiveRunMode) {
