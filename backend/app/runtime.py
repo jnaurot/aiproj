@@ -161,6 +161,43 @@ class RuntimeManager:
             nxt.get("isUpToDate"),
         )
 
+    def _debug_assert_sibling_status_unchanged(
+        self,
+        *,
+        handle: RunHandle,
+        before_status_by_node: Dict[str, Any],
+        excluded_node_ids: set[str],
+        reason: str,
+    ) -> None:
+        regressions: list[Dict[str, Any]] = []
+        for nid, prev_status in before_status_by_node.items():
+            if nid in excluded_node_ids:
+                continue
+            current_binding = handle.node_bindings.get(nid) or {}
+            next_status = current_binding.get("status")
+            if next_status != prev_status:
+                regressions.append(
+                    {
+                        "nodeId": nid,
+                        "previousStatus": prev_status,
+                        "nextStatus": next_status,
+                    }
+                )
+        if not regressions:
+            return
+        payload = {
+            "type": "SIBLING_STATUS_CHANGED_DURING_INVALIDATION",
+            "runId": handle.run_id,
+            "reason": reason,
+            "regressions": regressions,
+            "count": len(regressions),
+            "stack": "".join(traceback.format_stack(limit=12)),
+        }
+        print("[invalidation-regression]", payload)
+        strict = os.getenv("RUNTIME_STRICT_INVALIDATION_ASSERTS", "").strip().lower()
+        if strict in {"1", "true", "yes", "on"}:
+            raise RuntimeError("SIBLING_STATUS_CHANGED_DURING_INVALIDATION")
+
     def _downstream_nodes(self, graph: Dict[str, Any], node_id: str) -> set[str]:
         edges = graph.get("edges", []) if isinstance(graph, dict) else []
         adj: Dict[str, list[str]] = {}
@@ -188,6 +225,10 @@ class RuntimeManager:
         graph: Optional[Dict[str, Any]] = None,
     ) -> set[str]:
         graph_ref = graph if isinstance(graph, dict) else (handle.graph or {})
+        before_status_by_node = {
+            nid: (binding.get("status") if isinstance(binding, dict) else None)
+            for nid, binding in handle.node_bindings.items()
+        }
         candidate_ids = {node_id} | self._downstream_nodes(graph_ref, node_id)
         invalidated: set[str] = set()
         for nid in sorted(candidate_ids):
@@ -207,6 +248,12 @@ class RuntimeManager:
             handle.node_status[nid] = "stale"
             handle.node_outputs.pop(nid, None)
             invalidated.add(nid)
+        self._debug_assert_sibling_status_unchanged(
+            handle=handle,
+            before_status_by_node=before_status_by_node,
+            excluded_node_ids=candidate_ids,
+            reason=reason,
+        )
         return invalidated
 
     async def list_runs(self, include_deleted: bool = False) -> list[Dict[str, Any]]:
