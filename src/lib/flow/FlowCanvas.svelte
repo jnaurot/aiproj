@@ -24,6 +24,7 @@
 	let edges: Edge<PipelineEdgeData>[] = [];
 
 	let scrollElement: HTMLDivElement;
+	let inspectorPane: HTMLDivElement;
 
 	// Guard: when we apply store -> local, we don't want to sync right back.
 	let applyingFromStore = false;
@@ -92,6 +93,8 @@
 	//ViewArtifact
 	type InspectorMode = 'edit' | 'output' | 'ports';
 	let inspectorMode: InspectorMode = 'edit';
+	let inspectorTopRatio = 0.5;
+	let resizingInspector = false;
 
 	$: selectedId = $selectedNode?.id;
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
@@ -302,7 +305,35 @@
 		graphStore.hardResetGraph();
 	}
 
+	function clampInspectorRatio(v: number): number {
+		return Math.max(0.2, Math.min(0.8, v));
+	}
+
+	function updateInspectorSplit(clientY: number) {
+		if (!inspectorPane) return;
+		const rect = inspectorPane.getBoundingClientRect();
+		if (rect.height <= 0) return;
+		const ratio = (clientY - rect.top) / rect.height;
+		inspectorTopRatio = clampInspectorRatio(ratio);
+	}
+
+	function onInspectorSplitDown(event: PointerEvent) {
+		resizingInspector = true;
+		updateInspectorSplit(event.clientY);
+	}
+
+	function onInspectorSplitMove(event: PointerEvent) {
+		if (!resizingInspector) return;
+		updateInspectorSplit(event.clientY);
+	}
+
+	function onInspectorSplitUp() {
+		resizingInspector = false;
+	}
+
 </script>
+
+<svelte:window on:pointermove={onInspectorSplitMove} on:pointerup={onInspectorSplitUp} />
 
 <div class="layout">
 	<div class="flow">
@@ -353,8 +384,8 @@
 		</SvelteFlow>
 	</div>
 
-	<aside class="inspector">
-		<div class="inspectorTop">
+	<aside class="inspector" bind:this={inspectorPane}>
+		<div class="inspectorTop" style={`flex: 0 0 ${Math.round(inspectorTopRatio * 100)}%;`}>
 			<h3>Inspector</h3>
 
 			{#if $selectedNode}
@@ -417,6 +448,7 @@
 						{:else if inspectorMode === 'output'}
 							<ArtifactViewer
 								artifactId={activeArtifactId}
+								graphId={$graphStore.graphId}
 								mimeType={nodeOut.mimeType}
 								portType={nodeOut.portType}
 								cached={nodeOut.cached}
@@ -453,7 +485,13 @@
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
-		<hr style="border:3px solid #283044;" />
+		<div
+			class="inspectorSplitter"
+			role="separator"
+			aria-orientation="horizontal"
+			tabindex="0"
+			on:pointerdown={onInspectorSplitDown}
+		/>
 		<div class="inspectorBottom">
 			<h3>Run Logs</h3>
 			<div class="logs" bind:this={scrollElement}>
@@ -558,15 +596,27 @@
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
-		gap: 10px;
+		gap: 8px;
 	}
 
-	/* Top cannot exceed 50% */
 	.inspectorTop {
-		max-height: 50%;
 		min-height: 0;
 		overflow: hidden;
 		padding-bottom: 20px;
+	}
+
+	.inspectorSplitter {
+		height: 8px;
+		border-radius: 999px;
+		background: #283044;
+		cursor: row-resize;
+		flex: 0 0 auto;
+	}
+
+	.inspectorSplitter:hover,
+	.inspectorSplitter:focus {
+		background: #3c4d70;
+		outline: none;
 	}
 
 	.inspectorBottom {

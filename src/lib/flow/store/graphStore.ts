@@ -62,7 +62,8 @@ type RunLog = {
 	message: string;
 	nodeId?: string;
 };
-type RunStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
+const RUN_IDLE = "idle"
+type RunStatus = typeof RUN_IDLE | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
 type GraphLastRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'never_run';
 type AuditContext = {
 	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
@@ -603,7 +604,7 @@ function buildHardResetState(freshGraphId: string): GraphState {
 		selectedNodeId: null,
 		inspector: initialInspector,
 		logs: [],
-		runStatus: IDLE,
+		runStatus: RUN_IDLE,//change or fix 
 		lastRunStatus: 'never_run',
 		freshness: 'never_run',
 		staleNodeCount: 0,

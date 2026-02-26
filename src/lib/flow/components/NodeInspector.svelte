@@ -48,6 +48,7 @@
 </script>
 
 {#if selectedNode}
+	<div class="nodeInspectorTheme">
 	{#if isSource}
 		<!-- SOURCE -->
 		<div class="section">
@@ -176,16 +177,76 @@
 	{#if configError}
 		<div class="configError">{configError}</div>
 	{/if}
+	</div>
 {/if}
 
 <style>
+	.nodeInspectorTheme {
+		--ni-bg: #f7f9fc;
+		--ni-card: #ffffff;
+		--ni-border: #d7deea;
+		--ni-text: #1f2937;
+		--ni-muted: #5b6677;
+		--ni-control-bg: #ffffff;
+		--ni-control-text: #1f2937;
+		--ni-control-border: #b9c5da;
+		--ni-error-bg: #fee2e2;
+		--ni-error-border: #fca5a5;
+		--ni-error-text: #7f1d1d;
+		color: var(--ni-text);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.nodeInspectorTheme {
+			--ni-bg: #0b0f17;
+			--ni-card: #0f1724;
+			--ni-border: #253049;
+			--ni-text: #e5e7eb;
+			--ni-muted: #9aa3b2;
+			--ni-control-bg: #0b1220;
+			--ni-control-text: #e5e7eb;
+			--ni-control-border: #2c3b59;
+			--ni-error-bg: rgba(239, 68, 68, 0.12);
+			--ni-error-border: rgba(239, 68, 68, 0.45);
+			--ni-error-text: #fecaca;
+		}
+	}
+
+	:global(.nodeInspectorTheme .section) {
+		background: var(--ni-card);
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px 10px;
+	}
+
+	:global(.nodeInspectorTheme .sectionTitle) {
+		color: var(--ni-text);
+	}
+
+	:global(.nodeInspectorTheme .k) {
+		color: var(--ni-muted);
+	}
+
+	:global(.nodeInspectorTheme .v input),
+	:global(.nodeInspectorTheme .v select),
+	:global(.nodeInspectorTheme .v textarea) {
+		background: var(--ni-control-bg);
+		color: var(--ni-control-text);
+		border: 1px solid var(--ni-control-border);
+	}
+
+	:global(.nodeInspectorTheme .v select option) {
+		background: var(--ni-control-bg);
+		color: var(--ni-control-text);
+	}
+
 	.configError {
 		margin-top: 8px;
 		padding: 8px 10px;
 		border-radius: 8px;
-		border: 1px solid rgba(239, 68, 68, 0.45);
-		background: rgba(239, 68, 68, 0.12);
-		color: #fecaca;
+		border: 1px solid var(--ni-error-border);
+		background: var(--ni-error-bg);
+		color: var(--ni-error-text);
 		font-size: 12px;
 	}
 </style>

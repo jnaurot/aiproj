@@ -1,7 +1,15 @@
 <script lang="ts">
 	import JsonTreeNode from './JsonTreeNode.svelte';
+	import {
+		getArtifactConsumersUrl,
+		getArtifactLineageUrl,
+		getArtifactMetaUrl,
+		getArtifactPreviewUrl,
+		getArtifactUrl
+	} from '$lib/flow/client/runs';
 
 export let artifactId: string;
+export let graphId: string;
 export let mimeType: string | undefined;
 export let portType: string | undefined;
 export let cached: boolean | undefined = undefined;
@@ -359,6 +367,12 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		return Array.isArray(cols) ? cols.length : '-';
 	}
 
+	function ensureGraphId(): string {
+		const g = String(graphId ?? '').trim();
+		if (!g) throw new Error('graphId is required for artifact requests');
+		return g;
+	}
+
 	async function loadInputSummaries(ids: string[], refs?: { artifactId: string; label?: string }[]) {
 		inputArtifacts = [];
 		if (!Array.isArray(ids) || ids.length === 0) return;
@@ -371,7 +385,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		const summaries = await Promise.all(
 			ids.map(async (id, idx) => {
 				try {
-					const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/meta`);
+					const res = await fetch(getArtifactMetaUrl(id, ensureGraphId()));
 					if (!res.ok) return null;
 					const m = await res.json();
 					return {
@@ -405,7 +419,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	async function loadConsumers(id: string) {
 		consumers = [];
 		try {
-			const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/consumers?limit=50`);
+			const res = await fetch(getArtifactConsumersUrl(id, ensureGraphId(), 50));
 			if (!res.ok) return;
 			const body = await res.json();
 			consumers = Array.isArray(body?.consumers) ? body.consumers : [];
@@ -415,7 +429,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	async function loadLineage(id: string) {
 		lineageJson = null;
 		try {
-			const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/lineage?depth=1`);
+			const res = await fetch(getArtifactLineageUrl(id, ensureGraphId(), 1));
 			if (!res.ok) return;
 			lineageJson = await res.json();
 		} catch {}
@@ -440,7 +454,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		lineageJson = null;
 
 		try {
-			const m = await fetch(`/runs/artifacts/${encodeURIComponent(id)}/meta`);
+			const m = await fetch(getArtifactMetaUrl(id, ensureGraphId()));
 			if (!m.ok) throw new Error(`${m.status} ${m.statusText}`);
 			meta = await m.json();
 			const inputIds = (meta?.inputArtifactIds ?? meta?.upstreamArtifactIds ?? []) as string[];
@@ -452,7 +466,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 				return;
 			}
 
-			const res = await fetch(`/runs/artifacts/${encodeURIComponent(id)}`);
+			const res = await fetch(getArtifactUrl(id, ensureGraphId()));
 			if (!res.ok) {
 				const body = await res.text().catch(() => '');
 				throw new Error(`${res.status} ${res.statusText} ${body}`);
@@ -498,7 +512,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		error = null;
 		try {
 			const res = await fetch(
-				`/runs/artifacts/${encodeURIComponent(activeArtifactId || artifactId)}/preview?offset=${nextOffset}&limit=${limit}`
+				getArtifactPreviewUrl(activeArtifactId || artifactId, ensureGraphId(), nextOffset, limit)
 			);
 			if (!res.ok) {
 				const body = await res.text().catch(() => '');
@@ -531,7 +545,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 
 	async function downloadArtifact() {
 		try {
-			const res = await fetch(`/runs/artifacts/${encodeURIComponent(activeArtifactId || artifactId)}`);
+			const res = await fetch(getArtifactUrl(activeArtifactId || artifactId, ensureGraphId()));
 			if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 			const blob = await res.blob();
 			const url = URL.createObjectURL(blob);

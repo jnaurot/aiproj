@@ -2,6 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { get } from 'svelte/store';
 	import { graphStore } from '$lib/flow/store/graphStore';
+	import { getArtifactUrl } from '$lib/flow/client/runs';
 
 	export let open = false;
 	export let nodeId: string | null = null;
@@ -26,16 +27,17 @@
 		const state = get(graphStore);
 		const binding = state.nodeBindings?.[nodeId];
 		const info = state.nodeOutputs?.[nodeId];
+		const graphId = state.graphId;
 		const artifactId = binding?.currentArtifactId ?? binding?.lastArtifactId;
 		const mimeType = info?.mimeType;
-		if (!artifactId) {
+		if (!artifactId || !graphId) {
 			loaded = { kind: 'empty' };
 			return;
 		}
 
 		loaded = { kind: 'loading' };
 		try {
-			const res = await fetch(`http://127.0.0.1:8000/runs/artifacts/${artifactId}`)
+			const res = await fetch(getArtifactUrl(artifactId, graphId));
 			if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
 			if (mimeType === 'application/json') {

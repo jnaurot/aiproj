@@ -39,6 +39,7 @@
 </script>
 
 {#if selectedNode}
+	<div class="portsTheme">
 	<div class="section">
 		<div class="sectionTitle">Ports</div>
 
@@ -86,17 +87,82 @@
 	{#if configError}
 		<div class="configError">{configError}</div>
 	{/if}
-	<hr style="border:1px solid #ccc; margin:3px" />
+	<hr class="divider" />
+	</div>
 {/if}
 
 <style>
+	.portsTheme {
+		--pe-card: #ffffff;
+		--pe-border: #d7deea;
+		--pe-text: #1f2937;
+		--pe-muted: #5b6677;
+		--pe-control-bg: #ffffff;
+		--pe-control-text: #1f2937;
+		--pe-control-border: #b9c5da;
+		--pe-divider: #d7deea;
+		--pe-error-bg: #fee2e2;
+		--pe-error-border: #fca5a5;
+		--pe-error-text: #7f1d1d;
+		color: var(--pe-text);
+	}
+
+	@media (prefers-color-scheme: dark) {
+		.portsTheme {
+			--pe-card: #0f1724;
+			--pe-border: #253049;
+			--pe-text: #e5e7eb;
+			--pe-muted: #9aa3b2;
+			--pe-control-bg: #0b1220;
+			--pe-control-text: #e5e7eb;
+			--pe-control-border: #2c3b59;
+			--pe-divider: #253049;
+			--pe-error-bg: rgba(239, 68, 68, 0.12);
+			--pe-error-border: rgba(239, 68, 68, 0.45);
+			--pe-error-text: #fecaca;
+		}
+	}
+
+	:global(.portsTheme .section) {
+		background: var(--pe-card);
+		border: 1px solid var(--pe-border);
+		border-radius: 10px;
+		padding: 8px 10px;
+	}
+
+	:global(.portsTheme .sectionTitle) {
+		color: var(--pe-text);
+	}
+
+	:global(.portsTheme .k) {
+		color: var(--pe-muted);
+	}
+
+	:global(.portsTheme .v input),
+	:global(.portsTheme .v select),
+	:global(.portsTheme .v textarea) {
+		background: var(--pe-control-bg);
+		color: var(--pe-control-text);
+		border: 1px solid var(--pe-control-border);
+	}
+
+	:global(.portsTheme .v select option) {
+		background: var(--pe-control-bg);
+		color: var(--pe-control-text);
+	}
+
+	.divider {
+		border: 1px solid var(--pe-divider);
+		margin: 6px 0 3px;
+	}
+
 	.configError {
 		margin-top: 8px;
 		padding: 8px 10px;
 		border-radius: 8px;
-		border: 1px solid rgba(239, 68, 68, 0.45);
-		background: rgba(239, 68, 68, 0.12);
-		color: #fecaca;
+		border: 1px solid var(--pe-error-border);
+		background: var(--pe-error-bg);
+		color: var(--pe-error-text);
 		font-size: 12px;
 	}
 </style>

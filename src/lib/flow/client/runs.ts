@@ -1,5 +1,49 @@
 import type { RunEvent } from "$lib/flow/types/run";
 
+function requireGraphId(graphId: string): string {
+  const g = String(graphId ?? "").trim();
+  if (!g) throw new Error("graphId is required for artifact requests");
+  return g;
+}
+
+function withGraphId(path: string, graphId: string, extra?: Record<string, string | number>) {
+  const params = new URLSearchParams({ graphId: requireGraphId(graphId) });
+  for (const [k, v] of Object.entries(extra ?? {})) params.set(k, String(v));
+  return `${path}?${params.toString()}`;
+}
+
+export function getArtifactUrl(artifactId: string, graphId: string) {
+  return withGraphId(`/runs/artifacts/${encodeURIComponent(artifactId)}`, graphId);
+}
+
+export function getArtifactMetaUrl(artifactId: string, graphId: string) {
+  return withGraphId(`/runs/artifacts/${encodeURIComponent(artifactId)}/meta`, graphId);
+}
+
+export function getArtifactPreviewUrl(
+  artifactId: string,
+  graphId: string,
+  offset: number,
+  limit: number
+) {
+  return withGraphId(`/runs/artifacts/${encodeURIComponent(artifactId)}/preview`, graphId, {
+    offset,
+    limit
+  });
+}
+
+export function getArtifactConsumersUrl(artifactId: string, graphId: string, limit = 50) {
+  return withGraphId(`/runs/artifacts/${encodeURIComponent(artifactId)}/consumers`, graphId, {
+    limit
+  });
+}
+
+export function getArtifactLineageUrl(artifactId: string, graphId: string, depth = 1) {
+  return withGraphId(`/runs/artifacts/${encodeURIComponent(artifactId)}/lineage`, graphId, {
+    depth
+  });
+}
+
 // src/lib/api/runs.ts
 export async function createRun(req: {
   graphId: string;
