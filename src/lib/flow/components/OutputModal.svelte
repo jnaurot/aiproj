@@ -26,7 +26,7 @@
 		const state = get(graphStore);
 		const binding = state.nodeBindings?.[nodeId];
 		const info = state.nodeOutputs?.[nodeId];
-		const artifactId = binding?.currentArtifactId ?? binding?.lastArtifactId ?? info?.artifactId;
+		const artifactId = binding?.currentArtifactId ?? binding?.lastArtifactId;
 		const mimeType = info?.mimeType;
 		if (!artifactId) {
 			loaded = { kind: 'empty' };

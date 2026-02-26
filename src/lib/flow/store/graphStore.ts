@@ -35,7 +35,6 @@ import {
 } from './runScope';
 
 type NodeOutputInfo = {
-	artifactId: string;
 	mimeType?: string;
 	portType?: string;
 	preview?: string;
@@ -459,7 +458,6 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const nodeOutputs = {
 				...state.nodeOutputs,
 				[evt.nodeId]: {
-					artifactId: evt.artifactId,
 					mimeType: evt.mimeType,
 					portType: evt.portType,
 					preview: evt.preview ?? undefined,
@@ -497,7 +495,6 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			};
 			const prev = state.nodeOutputs?.[evt.nodeId];
 			const nextForNode: NodeOutputInfo = {
-				artifactId: evt.artifactId ?? prev?.artifactId ?? '',
 				mimeType: prev?.mimeType,
 				portType: prev?.portType,
 				preview: prev?.preview,
@@ -507,9 +504,6 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						: (prev?.cached ?? false),
 				cacheDecision: evt.decision
 			};
-			if (!nextForNode.artifactId) {
-				return withGraphMeta({ ...state, nodeBindings });
-			}
 			return withGraphMeta({
 				...state,
 				nodeBindings,
@@ -611,14 +605,6 @@ function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): 
 	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
 		const b = raw as NodeBindingInfo;
 		nodeBindingsPatch[nodeId] = b;
-		const aid = (b.currentArtifactId ?? b.lastArtifactId) as string | null | undefined;
-		if (aid) {
-			nodeOutputs[nodeId] = { ...(nodeOutputs[nodeId] ?? {}), artifactId: aid };
-		}
-	}
-	for (const [nodeId, aid] of Object.entries(snap.nodeOutputs ?? {})) {
-		if (!aid) continue;
-		nodeOutputs[nodeId] = { ...(nodeOutputs[nodeId] ?? {}), artifactId: aid };
 	}
 	const nodeBindings = mergeBindingsSticky(state.nodeBindings ?? {}, nodeBindingsPatch);
 	const runStatus = (snap.status as RunStatus) || state.runStatus;

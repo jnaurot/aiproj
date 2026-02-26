@@ -1107,5 +1107,8 @@ class RunBindings:
         b = self._bindings.get(self._key(node_id))
         return b.artifact_id if b else None
 
+    def get_current_artifact(self, node_id: str) -> Optional[str]:
+        return self.artifact_id_for(node_id)
+
     def all(self) -> List[RunArtifactBinding]:
         return list(self._bindings.values())

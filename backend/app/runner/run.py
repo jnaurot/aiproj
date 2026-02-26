@@ -46,21 +46,28 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
-def resolve_input_refs(edges: Dict[str, Dict[str, Any]], node_id: str, node_to_artifact: Dict[str, str]) -> list[tuple[str, str]]:
+def resolve_input_refs(
+    edges: Dict[str, Dict[str, Any]],
+    node_id: str,
+    get_current_artifact,
+) -> list[tuple[str, str]]:
     """
     Returns stable (port, upstream_artifact_id) pairs for edges targeting node_id.
     Port name is taken from edge.targetHandle if present; else 'in'.
-    Only includes edges whose source node has produced an artifact.
+    Only includes edges whose source node has produced an artifact via bindings.
     """
     refs: list[tuple[str, str]] = []
     for e in edges.values():
         if e.get("target") != node_id:
             continue
         src = e.get("source")
-        if not src or src not in node_to_artifact:
+        if not src:
+            continue
+        aid = get_current_artifact(src)
+        if not aid:
             continue
         port = e.get("targetHandle") or "in"
-        refs.append((port, node_to_artifact[src]))
+        refs.append((port, aid))
     # stable order
     refs.sort(key=lambda x: (x[0], x[1]))
     return refs
@@ -510,7 +517,6 @@ async def run_graph(
     print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
     context.bus.graph_id = graph_id
 
-    node_to_artifact: dict[str, str] = {}
     cache = cache or ExecutionCache()
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
     cache_summary_emitted = False
@@ -617,6 +623,7 @@ async def run_graph(
         })
         nodes = node_map(graph)
         edges = edge_map(graph)
+        get_current_artifact = context.bindings.get_current_artifact
 
         async def _resolve_node_execution(node_id: str) -> Dict[str, Any]:
             n = nodes[node_id]
@@ -629,8 +636,8 @@ async def run_graph(
             use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
-            upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
-            input_refs = resolve_input_refs(edges, node_id, node_to_artifact)
+            upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
+            input_refs = resolve_input_refs(edges, node_id, get_current_artifact)
 
             normalized_params_for_hash = _normalized_params_for_exec_key(
                 kind=kind,
@@ -863,7 +870,6 @@ async def run_graph(
                 else:
                     cache_stats["hit"] += 1
                     context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
-                    node_to_artifact[node_id] = cached_artifact_id
                     await _record_consumers(
                         context=context,
                         input_artifact_ids=upstream_ids,
@@ -985,7 +991,7 @@ async def run_graph(
                         output = NodeOutput(status="succeeded", data=None, metadata=None, execution_time_ms=0.0)
                     else:
                         # 1) collect upstream artifacts (port -> artifact_id)
-                        input_refs = resolve_input_refs(edges, node_id, node_to_artifact)  # [(port, artifact_id), ...]
+                        input_refs = resolve_input_refs(edges, node_id, get_current_artifact)  # [(port, artifact_id), ...]
                         input_tables = {}  # port -> DataFrame
                         input_columns: dict[str, list[str]] = {}
                         required_cols_by_artifact: dict[str, list[str]] = {}
@@ -994,14 +1000,17 @@ async def run_graph(
                             if e.get("target") != node_id:
                                 continue
                             src = e.get("source")
-                            if not src or src not in node_to_artifact:
+                            if not src:
+                                continue
+                            src_artifact_id = get_current_artifact(src)
+                            if not src_artifact_id:
                                 continue
                             contract = (e.get("data", {}) or {}).get("contract", {}) or {}
                             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
                             target_hint = payload.get("target", {}) if isinstance(payload, dict) else {}
                             req_cols = target_hint.get("required_columns") if isinstance(target_hint, dict) else None
                             if isinstance(req_cols, list) and req_cols:
-                                required_cols_by_artifact[node_to_artifact[src]] = req_cols
+                                required_cols_by_artifact[src_artifact_id] = req_cols
 
                         for port, upstream_artifact_id in input_refs:
                             art = await context.artifact_store.get(upstream_artifact_id)
@@ -1056,7 +1065,10 @@ async def run_graph(
 
                         # join lookup (node_id -> DataFrame), best-effort
                         join_lookup: dict[str, Any] = {}
-                        for upstream_node_id, upstream_artifact_id in node_to_artifact.items():
+                        for upstream_node_id in nodes.keys():
+                            upstream_artifact_id = get_current_artifact(upstream_node_id)
+                            if not upstream_artifact_id:
+                                continue
                             art = await context.artifact_store.get(upstream_artifact_id)
                             b = await context.artifact_store.read(upstream_artifact_id)
                             try:
@@ -1132,7 +1144,7 @@ async def run_graph(
                                         actual={"inputCount": int(len(input_refs))},
                                     ),
                                 )
-                            with_node_artifact = node_to_artifact.get(with_node)
+                            with_node_artifact = get_current_artifact(with_node)
                             if not with_node_artifact or with_node_artifact not in input_artifact_ids:
                                 raise ContractMismatchError(
                                     "Transform output contract mismatch: join.withNodeId must be connected as an input",
@@ -1241,9 +1253,8 @@ async def run_graph(
                             output_artifact_id=artifact_id,
                         )
 
-                        # bind + node_to_artifact
+                        # bind artifact
                         context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
-                        node_to_artifact[node_id] = artifact_id
 
                         # cache index
                         await cache.store_artifact_id(exec_key, artifact_id)
@@ -1276,7 +1287,7 @@ async def run_graph(
                         )
                 elif kind == "llm":
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
-                    print("[run_graph] node_to_artifact keys:", list(node_to_artifact.keys()))
+                    print("[run_graph] bound node ids:", [b.node_id for b in context.bindings.all()])
 
                     llm_in_contract = str((ports.get("in") or "text"))
                     llm_allowed_in = _allowed_ports("llm", "in")
@@ -1595,7 +1606,6 @@ async def run_graph(
                         output_artifact_id=artifact_id,
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
-                    node_to_artifact[node_id] = artifact_id
                     await context.bus.emit({
                         "type": "node_output",
                         "runId": run_id,

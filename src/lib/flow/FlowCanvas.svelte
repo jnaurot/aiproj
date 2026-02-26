@@ -110,7 +110,7 @@
 	$: selectedId = $selectedNode?.id;
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
-	$: activeArtifactId = nodeBinding?.currentArtifactId ?? nodeBinding?.lastArtifactId ?? nodeOut?.artifactId;
+	$: activeArtifactId = nodeBinding?.currentArtifactId ?? nodeBinding?.lastArtifactId;
 	$: hasOutput = !!activeArtifactId;
 	$: displayNodeStatus =
 		displayStatusFromBinding(nodeBinding as any);
