@@ -491,6 +491,11 @@ class RuntimeManager:
             for aid in removed_ids:
                 self._artifact_owner.pop(aid, None)
         affected = self.invalidate_node(handle, node_id, reason="NODE_DELETED", graph=graph_ref)
+        # Node deletion semantics: deleted node no longer has binding/output/status state.
+        handle.node_bindings.pop(node_id, None)
+        handle.node_outputs.pop(node_id, None)
+        handle.node_status.pop(node_id, None)
+        affected.discard(node_id)
         result["affectedNodeIds"] = sorted(affected)
         return result
 
