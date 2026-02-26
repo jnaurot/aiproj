@@ -618,6 +618,69 @@ async def run_graph(
         nodes = node_map(graph)
         edges = edge_map(graph)
 
+        async def _resolve_node_execution(node_id: str) -> Dict[str, Any]:
+            n = nodes[node_id]
+            kind = n["data"]["kind"]
+            params = n["data"].get("params", {}) or {}
+            ports = (n.get("data", {}).get("ports", {}) or {})
+            tool_provider = str(params.get("provider") or "") if kind == "tool" else None
+            determinism_env = _determinism_env_for_node(kind, params)
+            tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
+            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
+
+            up_nodes = sorted(upstream_node_ids(edges, node_id))
+            upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
+            input_refs = resolve_input_refs(edges, node_id, node_to_artifact)
+
+            normalized_params_for_hash = _normalized_params_for_exec_key(
+                kind=kind,
+                node=n,
+                params=params,
+            )
+            source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
+            node_state_hash = build_node_state_hash(
+                node=n,
+                params=normalized_params_for_hash,
+                execution_version=context.execution_version,
+                source_fingerprint=source_fp,
+            )
+            exec_key = build_exec_key(
+                graph_id=context.graph_id,
+                node_id=node_id,
+                node_kind=kind,
+                node_state_hash=node_state_hash,
+                upstream_artifact_ids=upstream_ids,
+                input_refs=input_refs,
+                determinism_env=determinism_env,
+                execution_version=context.execution_version,
+            )
+            cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
+            cache_resolution = "CACHE_HIT" if cached_artifact_id else "CACHE_MISS"
+            logger.debug(
+                "resolve_phase run_id=%s node_id=%s exec_key=%s cache_resolution=%s",
+                run_id,
+                node_id,
+                exec_key,
+                cache_resolution,
+            )
+            return {
+                "node": n,
+                "kind": kind,
+                "params": params,
+                "ports": ports,
+                "tool_provider": tool_provider,
+                "determinism_env": determinism_env,
+                "tool_mode": tool_mode,
+                "use_cache_for_node": use_cache_for_node,
+                "upstream_ids": upstream_ids,
+                "input_refs": input_refs,
+                "node_state_hash": node_state_hash,
+                "exec_key": exec_key,
+                "artifact_id": exec_key,
+                "cache_resolution": cache_resolution,
+                "cached_artifact_id": cached_artifact_id,
+            }
+
         async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
             node_started_t = asyncio.get_running_loop().time()
             await context.bus.emit({
@@ -637,12 +700,22 @@ async def run_graph(
                     "exec": "active"
                 })
 
-            n = nodes[node_id]
-            kind = n["data"]["kind"]
-            params = n["data"].get("params", {}) or {}
-            ports = (n.get("data", {}).get("ports", {}) or {})
-            tool_provider = str(params.get("provider") or "") if kind == "tool" else None
-            determinism_env = _determinism_env_for_node(kind, params)
+            resolved = await _resolve_node_execution(node_id)
+            n = resolved["node"]
+            kind = resolved["kind"]
+            params = resolved["params"]
+            ports = resolved["ports"]
+            tool_provider = resolved["tool_provider"]
+            determinism_env = resolved["determinism_env"]
+            tool_mode = resolved["tool_mode"]
+            use_cache_for_node = resolved["use_cache_for_node"]
+            upstream_ids = resolved["upstream_ids"]
+            input_refs = resolved["input_refs"]
+            node_state_hash = resolved["node_state_hash"]
+            exec_key = resolved["exec_key"]
+            artifact_id = resolved["artifact_id"]
+            cache_resolution = resolved["cache_resolution"]
+            cached_artifact_id = resolved["cached_artifact_id"]
 
             allowed_in = _allowed_ports(kind, "in", provider=tool_provider)
             allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
@@ -676,34 +749,6 @@ async def run_graph(
                     ),
                 )
 
-            # Upstream resolution
-            up_nodes = sorted(upstream_node_ids(edges, node_id))
-            upstream_ids = [node_to_artifact[nid] for nid in up_nodes if nid in node_to_artifact]
-            input_refs = resolve_input_refs(edges, node_id, node_to_artifact)
-
-            normalized_params_for_hash = _normalized_params_for_exec_key(
-                kind=kind,
-                node=n,
-                params=params,
-            )
-            tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
-            source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
-            node_state_hash = build_node_state_hash(
-                node=n,
-                params=normalized_params_for_hash,
-                execution_version=context.execution_version,
-                source_fingerprint=source_fp,
-            )
-            exec_key = build_exec_key(
-                graph_id=context.graph_id,
-                node_id=node_id,
-                node_kind=kind,
-                node_state_hash=node_state_hash,
-                upstream_artifact_ids=upstream_ids,
-                input_refs=input_refs,
-                determinism_env=determinism_env,
-                execution_version=context.execution_version,
-            )
             logger.debug(
                 "exec_key_generated run_id=%s node_id=%s kind=%s exec_key=%s run_from=%s run_mode=%s",
                 run_id,
@@ -714,9 +759,7 @@ async def run_graph(
                 run_mode,
             )
             print(f"[debug-exec-key] graphId={context.graph_id} nodeId={node_id} exec_key={exec_key}")
-            artifact_id = exec_key
 
-            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
             if not use_cache_for_node:
                 await _emit_cache_decision(
                     node_id=node_id,
@@ -744,9 +787,8 @@ async def run_graph(
                     })
                     return {"ok": False, "cached": False}
 
-            # ---- Cache check goes HERE (before execution) ----
-            cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
-            if cached_artifact_id:
+            # ---- Resolve phase result ----
+            if cache_resolution == "CACHE_HIT" and cached_artifact_id:
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
@@ -862,7 +904,7 @@ async def run_graph(
                         })
                     await asyncio.sleep(0.05)
                     return {"ok": True, "cached": True}
-            if use_cache_for_node and not cached_artifact_id:
+            if use_cache_for_node and cache_resolution == "CACHE_MISS":
                 cache_stats["miss"] += 1
                 await _emit_cache_decision(
                     node_id=node_id,
