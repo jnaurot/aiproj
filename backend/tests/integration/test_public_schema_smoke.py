@@ -45,7 +45,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
     }
 
     with TestClient(app) as client:
-        create = client.post("/runs", json={"runFrom": None, "graph": graph})
+        create = client.post("/runs", json={"graphId": "graph-public-smoke", "runFrom": None, "graph": graph})
         assert create.status_code == 200, create.text
         created = create.json()
         assert created.get("schemaVersion") == 1
@@ -137,7 +137,7 @@ async def test_create_run_without_runmode_or_runfrom_executes_full_graph(monkeyp
     }
 
     with TestClient(app) as client:
-        create = client.post("/runs", json={"graph": graph})
+        create = client.post("/runs", json={"graphId": "graph-full-run", "graph": graph})
         assert create.status_code == 200, create.text
         run_id = create.json()["runId"]
 
@@ -158,3 +158,38 @@ async def test_create_run_without_runmode_or_runfrom_executes_full_graph(monkeyp
         assert run_started, "run_started event missing"
         assert run_started[-1].get("runMode") == "from_start"
         assert run_started[-1].get("runFrom") is None
+
+
+@pytest.mark.asyncio
+async def test_create_run_requires_graph_id(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setenv("ARTIFACT_STORE", "memory")
+    from app.main import app
+
+    graph = {
+        "nodes": [
+            {
+                "id": "tool_1",
+                "data": {
+                    "kind": "tool",
+                    "label": "Tool",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                    "ports": {"in": None, "out": "json"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    with TestClient(app) as client:
+        create = client.post("/runs", json={"graph": graph})
+        assert create.status_code == 422

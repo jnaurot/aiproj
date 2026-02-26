@@ -312,12 +312,17 @@
 		graphStore.resetRunUi();
 	}
 
+	function newGraph() {
+		graphStore.hardResetGraph();
+	}
+
 </script>
 
 <div class="layout">
 	<div class="flow">
 		<div class="topbar">
 			<div class="btnrow">
+				<button on:click={newGraph}>New Graph</button>
 				<button on:click={resetRunUi}>Reset</button>
 				<button class="primary" on:click={() => graphStore.runRemote(null, 'from_start')}>
 					Run from start

@@ -2,6 +2,7 @@ import type { RunEvent } from "$lib/flow/types/run";
 
 // src/lib/api/runs.ts
 export async function createRun(req: {
+  graphId: string;
   runFrom?: string | null;
   runMode?: "from_selected_onward" | "selected_only";
   graph: any;
@@ -17,7 +18,7 @@ export async function createRun(req: {
     throw new Error(`createRun failed: ${res.status} ${text}`);
   }
 
-  return (await res.json()) as { runId: string };
+  return (await res.json()) as { runId: string; graphId: string };
 }
 
 export async function getRun(runId: string) {
@@ -28,6 +29,7 @@ export async function getRun(runId: string) {
   }
   return (await res.json()) as {
     runId: string;
+    graphId?: string;
     status: string;
     runMode?: "from_start" | "from_selected_onward" | "selected_only";
     plannedNodeIds?: string[];

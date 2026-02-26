@@ -71,6 +71,7 @@ async def test_restart_cache_hit_still_works(monkeypatch, tmp_path):
         bus=bus_1,
         artifact_store=store_1,
         cache=cache_1,
+        graph_id="graph-cache",
     )
 
     assert call_count["tool"] == 1
@@ -90,6 +91,7 @@ async def test_restart_cache_hit_still_works(monkeypatch, tmp_path):
         bus=bus_2,
         artifact_store=store_2,
         cache=cache_2,
+        graph_id="graph-cache",
     )
 
     # Should be a cache hit; executor should not run again.
@@ -121,7 +123,7 @@ async def test_hard_delete_removes_artifacts_cache_and_unreferenced_blobs(monkey
     rt = RuntimeManager()
     run_id = "run-delete-1"
     rt.create_run(run_id)
-    await rt.start_run(run_id, _tool_graph(), run_from=None)
+    await rt.start_run(run_id, _tool_graph(), run_from=None, graph_id="graph-delete-run")
     await rt.get_run(run_id).task
 
     handle = rt.get_run(run_id)
@@ -212,6 +214,7 @@ async def test_lineage_inputs_producer_consumers_round_trip(monkeypatch, tmp_pat
         bus=bus,
         artifact_store=store,
         cache=cache,
+        graph_id="graph-lineage",
     )
 
     node_output_by_node = {
@@ -376,6 +379,7 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
         bus=bus,
         artifact_store=DiskArtifactStore(artifact_root),
         cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-scheduler",
     )
 
     assert max_seen["global"] <= 2
@@ -390,3 +394,157 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
     assert run_finished and run_finished[-1].get("status") == "failed"
     cache_summary = [e for e in events if e.get("type") == "cache_summary"]
     assert cache_summary and cache_summary[-1].get("schema_version") == 1
+
+
+@pytest.mark.asyncio
+async def test_node_retention_keeps_last_five_artifacts(monkeypatch, tmp_path):
+    _ensure_duckdb_stub()
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        marker = (node.get("data", {}).get("params", {}) or {}).get("marker")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"marker": marker}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setenv("ARTIFACT_STORE", "disk")
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "artifact-retention"))
+
+    rt = RuntimeManager()
+    seen_graph_id = None
+    for i in range(7):
+        run_id = f"run-retention-{i}"
+        graph = _tool_graph()
+        graph["nodes"][0]["data"]["params"]["marker"] = i
+        rt.create_run(run_id)
+        await rt.start_run(run_id, graph, run_from=None, graph_id="graph-retention")
+        await rt.get_run(run_id).task
+        if seen_graph_id is None:
+            seen_graph_id = rt.get_run(run_id).graph_id
+
+    conn = rt.artifact_store._index._conn
+    count = conn.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+        (seen_graph_id, "tool_1"),
+    ).fetchone()[0]
+    assert count == 5
+
+
+@pytest.mark.asyncio
+async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(monkeypatch, tmp_path):
+    _ensure_duckdb_stub()
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setenv("ARTIFACT_STORE", "disk")
+    monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path / "artifact-delete-node"))
+
+    graph = {
+        "nodes": [
+            {
+                "id": "source_1",
+                "data": {
+                    "kind": "source",
+                    "label": "Source",
+                    "sourceKind": "file",
+                    "params": {"file_path": "dummy.txt", "file_format": "txt"},
+                    "ports": {"in": None, "out": "text"},
+                },
+            },
+            {
+                "id": "tool_1",
+                "data": {
+                    "kind": "tool",
+                    "label": "Tool",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                    "ports": {"in": "text", "out": "json"},
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "source_1", "target": "tool_1"}],
+    }
+
+    rt = RuntimeManager()
+    run_id = "run-delete-node-1"
+    rt.create_run(run_id)
+    await rt.start_run(run_id, graph, run_from=None, graph_id="graph-delete-node")
+    await rt.get_run(run_id).task
+    handle = rt.get_run(run_id)
+    graph_id = handle.graph_id
+
+    before = rt.artifact_store._index._conn.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+        (graph_id, "source_1"),
+    ).fetchone()[0]
+    assert before >= 1
+
+    result = await rt.delete_node_artifacts(run_id=run_id, node_id="source_1", graph=graph)
+    assert result["artifactsRemoved"] >= 1
+
+    after = rt.artifact_store._index._conn.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+        (graph_id, "source_1"),
+    ).fetchone()[0]
+    assert after == 0
+    assert handle.node_bindings["source_1"]["status"] == "stale"
+    assert handle.node_bindings["tool_1"]["status"] == "stale"
+
+
+@pytest.mark.asyncio
+async def test_no_cross_graph_reuse(monkeypatch, tmp_path):
+    _ensure_duckdb_stub()
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"tool": 0}
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        calls["tool"] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    artifact_dir = tmp_path / "artifacts-cross-graph"
+    cache_db = artifact_dir / "meta" / "artifacts.sqlite"
+    store = DiskArtifactStore(artifact_dir)
+    cache = SqliteExecutionCache(str(cache_db))
+    graph = _tool_graph()
+
+    await run_mod.run_graph(
+        run_id="run-graph-a",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-graph-a"),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-A",
+    )
+    await run_mod.run_graph(
+        run_id="run-graph-b",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-graph-b"),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-B",
+    )
+    # same node/config in different graphs should compute twice (no cross-graph cache reuse)
+    assert calls["tool"] == 2

@@ -57,11 +57,12 @@ describe('runScope partial-run binding behavior', () => {
 
 	it('omits runMode and runFrom for full run requests', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
-		const full = buildRunCreateRequest(graph, null, 'from_start');
-		expect(full).toEqual({ graph });
+		const full = buildRunCreateRequest(graph, 'graph-test', null, 'from_start');
+		expect(full).toEqual({ graphId: 'graph-test', graph });
 
-		const partial = buildRunCreateRequest(graph, 'a1', 'from_selected_onward');
+		const partial = buildRunCreateRequest(graph, 'graph-test', 'a1', 'from_selected_onward');
 		expect(partial).toEqual({
+			graphId: 'graph-test',
 			graph,
 			runFrom: 'a1',
 			runMode: 'from_selected_onward'

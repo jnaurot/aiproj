@@ -87,6 +87,7 @@ coverage.xml
 *.db
 *.sqlite3
 *.sqlite
+backend/data/artifacts/
 
 # Virtual environments (very common names)
 venv/

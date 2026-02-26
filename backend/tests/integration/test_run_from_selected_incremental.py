@@ -86,6 +86,7 @@ async def test_run_from_selected_resolves_ancestors_from_cache(monkeypatch, tmp_
         bus=RunEventBus("run-full", on_emit=lambda e: events_1.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-incremental",
     )
     assert calls["source"] == 1
     assert calls["tool"] == 2
@@ -98,6 +99,7 @@ async def test_run_from_selected_resolves_ancestors_from_cache(monkeypatch, tmp_
         bus=RunEventBus("run-from-mid", on_emit=lambda e: events_2.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-incremental",
     )
 
     # Ancestor + selected + downstream are resolved from cache; no recompute.
@@ -144,6 +146,7 @@ async def test_run_selected_only_executes_selected_and_uses_cached_ancestors(mon
         bus=RunEventBus("run-full-selected-only"),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-selected-only",
     )
     assert calls["source"] == 1
     assert calls["tool"] == 2
@@ -157,6 +160,7 @@ async def test_run_selected_only_executes_selected_and_uses_cached_ancestors(mon
         bus=RunEventBus("run-selected-only-mid", on_emit=lambda e: events_2.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-selected-only",
     )
 
     # Selected-only: ancestor resolved from cache, selected resolved from cache,

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..runner.artifacts import Artifact
+from ..runner.node_state import build_exec_key, build_node_state_hash
 
 router = APIRouter()
 
@@ -32,23 +33,41 @@ async def _write_maintenance_audit_artifact(request: Request, payload: dict) -> 
         "payload": payload,
     }
     payload_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    artifact_id = hashlib.sha256(payload_bytes).hexdigest()
+    graph_id = "maintenance"
+    node_id = "maintenance.gc"
+    node = {"data": {"kind": "maintenance", "ports": {}, "schema": {}, "settings": {}}}
+    node_state_hash = build_node_state_hash(
+        node=node,
+        params=payload,
+        execution_version="v1",
+    )
+    exec_key = build_exec_key(
+        graph_id=graph_id,
+        node_id=node_id,
+        node_kind="maintenance",
+        node_state_hash=node_state_hash,
+        upstream_artifact_ids=[],
+        input_refs=[],
+        determinism_env={},
+        execution_version="v1",
+    )
+    artifact_id = exec_key
     artifact = Artifact(
         artifact_id=artifact_id,
         node_kind="maintenance",
-        params_hash=hashlib.sha256(
-            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest(),
+        params_hash=node_state_hash,
         upstream_ids=[],
         created_at=datetime.now(timezone.utc),
         execution_version="v1",
         mime_type="application/json",
+        port_type="json",
         size_bytes=len(payload_bytes),
         storage_uri=f"artifact://{artifact_id}",
         payload_schema={"type": "maintenance_audit"},
         run_id="maintenance",
-        node_id="maintenance.gc",
-        exec_key=None,
+        graph_id=graph_id,
+        node_id=node_id,
+        exec_key=exec_key,
     )
     await store.write(artifact, payload_bytes)
     return artifact_id

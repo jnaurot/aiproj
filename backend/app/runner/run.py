@@ -21,7 +21,7 @@ from .validator import GraphValidator
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
-from .node_state import build_node_state_hash, build_source_fingerprint
+from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .capabilities import allowed_ports
 
 from ..executors.source import exec_source
@@ -129,32 +129,14 @@ def _normalized_params_for_exec_key(
     return p
 
 
-def _execution_key_from_node_state(
-    *,
-    node_kind: str,
-    node_state_hash: str,
-    upstream_artifact_ids: list[str],
-    input_refs: list[tuple[str, str]],
-    determinism_env: Optional[Dict[str, Any]] = None,
-    execution_version: str,
-) -> str:
-    payload = {
-        "build_version": execution_version,
-        "node_kind": node_kind,
-        "node_state_hash": node_state_hash,
-        "input_artifact_ids": sorted(upstream_artifact_ids),
-        "input_bindings": [{"port": p, "artifact_id": aid} for p, aid in sorted(input_refs)],
-        "determinism_env": determinism_env or {},
-    }
-    return sha256_hex(canonical_json(payload).encode("utf-8"))
-
-
 def _tool_exec_key(
     *,
     params: Dict[str, Any],
     input_refs: list[tuple[str, str]],
     execution_version: str,
     determinism_env: Optional[Dict[str, Any]] = None,
+    graph_id: str = "test_graph",
+    node_id: str = "tool",
 ) -> str:
     node = {"data": {"kind": "tool", "ports": {}, "schema": {}, "settings": {}}}
     node_state_hash = build_node_state_hash(
@@ -162,7 +144,9 @@ def _tool_exec_key(
         params=params or {},
         execution_version=execution_version,
     )
-    return _execution_key_from_node_state(
+    return build_exec_key(
+        graph_id=graph_id,
+        node_id=node_id,
         node_kind="tool",
         node_state_hash=node_state_hash,
         upstream_artifact_ids=[aid for _, aid in sorted(input_refs)],
@@ -178,6 +162,8 @@ def _transform_exec_key(
     input_refs: list[tuple[str, str]],
     execution_version: str,
     determinism_env: Optional[Dict[str, Any]] = None,
+    graph_id: str = "test_graph",
+    node_id: str = "transform",
 ) -> str:
     node = {"data": {"kind": "transform", "ports": {}, "schema": {}, "settings": {}}}
     node_state_hash = build_node_state_hash(
@@ -185,7 +171,9 @@ def _transform_exec_key(
         params=normalized_params or {},
         execution_version=execution_version,
     )
-    return _execution_key_from_node_state(
+    return build_exec_key(
+        graph_id=graph_id,
+        node_id=node_id,
         node_kind="transform",
         node_state_hash=node_state_hash,
         upstream_artifact_ids=[aid for _, aid in sorted(input_refs)],
@@ -467,52 +455,6 @@ def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
     return levels
 
 
-async def _emit_error_artifact(
-    *,
-    context: GraphContext,
-    node_id: str,
-    node_kind: str,
-    params_hash: str,
-    upstream_ids: list[str],
-    message: str,
-    code: str,
-    details: Optional[Dict[str, Any]] = None,
-) -> str:
-    at = iso_now()
-    body = {
-        "type": "error",
-        "code": code,
-        "message": message,
-        "nodeId": node_id,
-        "nodeKind": node_kind,
-        "runId": context.run_id,
-        "at": at,
-    }
-    if details:
-        body["details"] = details
-    payload_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    artifact_id = sha256_hex(payload_bytes)
-    artifact = Artifact(
-        artifact_id=artifact_id,
-        node_kind=node_kind,
-        params_hash=params_hash,
-        upstream_ids=sorted(upstream_ids),
-        created_at=datetime.now(timezone.utc),
-        execution_version=context.execution_version,
-        mime_type="application/json",
-        port_type="json",
-        size_bytes=len(payload_bytes),
-        storage_uri=f"artifact://{artifact_id}",
-        payload_schema={"schema_version": 1, "type": "json", "json_shape": "object"},
-        run_id=context.run_id,
-        graph_id=context.graph_id,
-        node_id=node_id,
-    )
-    await context.artifact_store.write(artifact, payload_bytes)
-    context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="failed")
-    return artifact_id
-
-
 async def _record_consumers(
     *,
     context: GraphContext,
@@ -551,7 +493,9 @@ async def run_graph(
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
-    graph_id = str(graph_id or graph.get("id") or graph.get("graphId") or run_id)
+    if not str(graph_id or "").strip():
+        raise ValueError("graph_id is required")
+    graph_id = str(graph_id)
     bindings = RunBindings(run_id, graph_id=graph_id)
 
     context = GraphContext(
@@ -750,7 +694,9 @@ async def run_graph(
                 execution_version=context.execution_version,
                 source_fingerprint=source_fp,
             )
-            exec_key = _execution_key_from_node_state(
+            exec_key = build_exec_key(
+                graph_id=context.graph_id,
+                node_id=node_id,
                 node_kind=kind,
                 node_state_hash=node_state_hash,
                 upstream_artifact_ids=upstream_ids,
@@ -767,8 +713,7 @@ async def run_graph(
                 run_from,
                 run_mode,
             )
-            graph_id = graph.get("id") if isinstance(graph, dict) else None
-            print(f"[debug-exec-key] graphId={graph_id} nodeId={node_id} exec_key={exec_key}")
+            print(f"[debug-exec-key] graphId={context.graph_id} nodeId={node_id} exec_key={exec_key}")
             artifact_id = exec_key
 
             use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
@@ -800,9 +745,8 @@ async def run_graph(
                     return {"ok": False, "cached": False}
 
             # ---- Cache check goes HERE (before execution) ----
-            cached_artifact_id = await cache.get_artifact_id(exec_key) if use_cache_for_node else None
-            if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
-                cache_stats["hit"] += 1
+            cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
+            if cached_artifact_id:
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
@@ -810,33 +754,18 @@ async def run_graph(
                     exec_key=exec_key,
                     artifact_id=cached_artifact_id,
                 )
-                context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
-                node_to_artifact[node_id] = cached_artifact_id
-                await _record_consumers(
-                    context=context,
-                    input_artifact_ids=upstream_ids,
-                    consumer_run_id=run_id,
-                    consumer_node_id=node_id,
-                    consumer_exec_key=exec_key,
-                    output_artifact_id=cached_artifact_id,
-                )
 
                 # Verification (you asked for checks)
                 print(f"[cache-hit] node={node_id} artifact={cached_artifact_id[:10]}...")
 
                 cached_art = await context.artifact_store.get(cached_artifact_id)
+                if cached_art.graph_id and str(cached_art.graph_id) != str(context.graph_id):
+                    raise RuntimeError(
+                        f"Cache graph mismatch for node '{node_id}': artifact graph_id={cached_art.graph_id} run graph_id={context.graph_id}"
+                    )
                 mismatch_error = _cached_artifact_contract_mismatch(kind, n, cached_art)
-                await context.bus.emit({
-                    "type": "node_output",
-                    "runId": run_id,
-                    "nodeId": node_id,
-                    "at": iso_now(),
-                    "artifactId": cached_artifact_id,
-                    "mimeType": cached_art.mime_type,
-                    "portType": cached_art.port_type or ((n.get("data", {}).get("ports", {}) or {}).get("out")),
-                    "cached": True,
-                })
                 if mismatch_error:
+                    # Contract mismatch on cached artifact is a cache rejection, not a successful cache hit.
                     cache_stats["hit_contract_mismatch"] += 1
                     await _emit_cache_decision(
                         node_id=node_id,
@@ -847,6 +776,7 @@ async def run_graph(
                         expected_port_type=mismatch_error["expectedPortType"],
                         actual_port_type=mismatch_error["actualPortType"],
                         producer_exec_key=mismatch_error.get("producerExecKey"),
+                        reason="CONTRACT_MISMATCH",
                     )
                     await context.bus.emit({
                         "type": "log",
@@ -861,45 +791,78 @@ async def run_graph(
                         "artifactId": mismatch_error["artifactId"],
                         "producerExecKey": mismatch_error.get("producerExecKey"),
                     })
+                    # Continue as a miss; do not emit node_output/node_finished here.
+                    cache_stats["miss"] += 1
+                    await _emit_cache_decision(
+                        node_id=node_id,
+                        node_kind=kind,
+                        decision="cache_miss",
+                        exec_key=exec_key,
+                        reason="CONTRACT_MISMATCH",
+                    )
+                    if cache_only:
+                        msg = (
+                            "Selected-only run requires cached ancestors, "
+                            f"but cached entry was rejected for node '{node_id}' due to contract mismatch."
+                        )
+                        await context.bus.emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": "failed",
+                            "execution_time_ms": max(
+                                0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                            ),
+                            "error": msg,
+                            "cached": False,
+                        })
+                        return {"ok": False, "cached": False}
+                else:
+                    cache_stats["hit"] += 1
+                    context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
+                    node_to_artifact[node_id] = cached_artifact_id
+                    await _record_consumers(
+                        context=context,
+                        input_artifact_ids=upstream_ids,
+                        consumer_run_id=run_id,
+                        consumer_node_id=node_id,
+                        consumer_exec_key=exec_key,
+                        output_artifact_id=cached_artifact_id,
+                    )
+                    await context.bus.emit({
+                        "type": "node_output",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "artifactId": cached_artifact_id,
+                        "mimeType": cached_art.mime_type,
+                        "portType": cached_art.port_type or ((n.get("data", {}).get("ports", {}) or {}).get("out")),
+                        "cached": True,
+                    })
+
                     await context.bus.emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
                         "nodeId": node_id,
-                        "status": "failed",
+                        "status": "succeeded",
                         "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
-                        "error": mismatch_error["message"],
-                        "cached": True,
-                        "code": "CONTRACT_MISMATCH",
-                        "expectedPortType": mismatch_error["expectedPortType"],
-                        "actualPortType": mismatch_error["actualPortType"],
-                        "artifactId": mismatch_error["artifactId"],
-                        "producerExecKey": mismatch_error.get("producerExecKey"),
+                        "cached": True
                     })
-                    return {"ok": False, "cached": True}
 
-                await context.bus.emit({
-                    "type": "node_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "nodeId": node_id,
-                    "status": "succeeded",
-                    "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
-                    "cached": True
-                })
-
-                # Mark incoming edges as done
-                for edge_id in plan.incoming_edges.get(node_id, []):
-                    await context.bus.emit({
-                        "type": "edge_exec",
-                        "runId": run_id,
-                        "at": iso_now(),
-                        "edgeId": edge_id,
-                        "exec": "done"
-                    })
-                await asyncio.sleep(0.05)
-                return {"ok": True, "cached": True}
-            elif use_cache_for_node:
+                    # Mark incoming edges as done
+                    for edge_id in plan.incoming_edges.get(node_id, []):
+                        await context.bus.emit({
+                            "type": "edge_exec",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "edgeId": edge_id,
+                            "exec": "done"
+                        })
+                    await asyncio.sleep(0.05)
+                    return {"ok": True, "cached": True}
+            if use_cache_for_node and not cached_artifact_id:
                 cache_stats["miss"] += 1
                 await _emit_cache_decision(
                     node_id=node_id,
@@ -1062,75 +1025,7 @@ async def run_graph(
                         # 2) node state hash + exec_key (centralized hashing)
                         norm = normalized_params_for_hash
 
-                        # 3) cache hit?
-                        cached_artifact_id = await cache.get_artifact_id(exec_key)
-                        if cached_artifact_id and await context.artifact_store.exists(cached_artifact_id):
-                            cache_stats["hit"] += 1
-                            await _emit_cache_decision(
-                                node_id=node_id,
-                                node_kind=kind,
-                                decision="cache_hit",
-                                exec_key=exec_key,
-                                artifact_id=cached_artifact_id,
-                            )
-                            context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
-                            node_to_artifact[node_id] = cached_artifact_id
-                            await _record_consumers(
-                                context=context,
-                                input_artifact_ids=[aid for _, aid in input_refs],
-                                consumer_run_id=run_id,
-                                consumer_node_id=node_id,
-                                consumer_exec_key=exec_key,
-                                output_artifact_id=cached_artifact_id,
-                            )
-
-                            print(f"[cache-hit] transform node={node_id} artifact={cached_artifact_id[:10]}...")
-
-                            # Emit node_output so UI can fetch bytes by artifactId
-                            cached_art = await context.artifact_store.get(cached_artifact_id)
-                            await context.bus.emit({
-                                "type": "node_output",
-                                "runId": run_id,
-                                "nodeId": node_id,
-                                "at": iso_now(),
-                                "artifactId": cached_artifact_id,
-                                "mimeType": cached_art.mime_type,
-                                "portType": cached_art.port_type or "table",
-                                "cached": True,
-                            })
-
-                            # finish the node (skip compute)
-                            await context.bus.emit({
-                                "type": "node_finished",
-                                "runId": run_id,
-                                "at": iso_now(),
-                                "nodeId": node_id,
-                                "status": "succeeded",
-                                "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
-                                "cached": True
-                            })
-
-                            # Mark incoming edges as done
-                            for edge_id in plan.incoming_edges.get(node_id, []):
-                                await context.bus.emit({
-                                    "type": "edge_exec",
-                                    "runId": run_id,
-                                    "at": iso_now(),
-                                    "edgeId": edge_id,
-                                    "exec": "done"
-                                })
-                            await asyncio.sleep(0.05)
-                            return {"ok": True, "cached": True}
-                        else:
-                            cache_stats["miss"] += 1
-                            await _emit_cache_decision(
-                                node_id=node_id,
-                                node_kind=kind,
-                                decision="cache_miss",
-                                exec_key=exec_key,
-                            )
-
-                        # 4) execute
+                        # 3) execute (cache resolve already happened before node execution)
                         op = str(norm.get("op") or "")
                         primary_port = "in" if "in" in input_tables else (next(iter(input_tables.keys())) if input_tables else "in")
                         primary_cols = input_columns.get(primary_port, [])
@@ -1705,28 +1600,6 @@ async def run_graph(
                         else "CONTRACT_MISMATCH"
                     )
 
-                if error_code:
-                    error_params_hash = node_state_hash
-                    error_artifact_id = await _emit_error_artifact(
-                        context=context,
-                        node_id=node_id,
-                        node_kind=kind,
-                        params_hash=error_params_hash,
-                        upstream_ids=upstream_ids,
-                        message=error_message,
-                        code=error_code,
-                        details=error_details,
-                    )
-                    node_to_artifact[node_id] = error_artifact_id
-                    await context.bus.emit({
-                        "type": "node_output",
-                        "runId": run_id,
-                        "nodeId": node_id,
-                        "at": iso_now(),
-                        "artifactId": error_artifact_id,
-                        "mimeType": "application/json",
-                        "portType": "json",
-                    })
                 await context.bus.emit({
                     "type": "log",
                     "runId": run_id,

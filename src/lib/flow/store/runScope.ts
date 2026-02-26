@@ -126,17 +126,20 @@ export function shouldUpdateBinding(
 
 export function buildRunCreateRequest(
 	graph: { version: number; nodes: unknown[]; edges: unknown[] },
+	graphId: string,
 	runFrom: string | null,
 	runMode?: ActiveRunMode
 ): {
+	graphId: string;
 	graph: { version: number; nodes: unknown[]; edges: unknown[] };
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
 } {
 	if (runFrom === null || runMode === 'from_start' || !runMode) {
-		return { graph };
+		return { graphId, graph };
 	}
 	return {
+		graphId,
 		graph,
 		runFrom,
 		runMode

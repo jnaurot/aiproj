@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphState } from './graphStore';
-import { __applyRunEventForTest, __hydrateFromRunSnapshotForTest } from './graphStore';
+import { __applyRunEventForTest, __hardResetGraphForTest, __hydrateFromRunSnapshotForTest } from './graphStore';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import { displayStatusFromBinding } from './runScope';
 
 function makeState(): GraphState {
 	return {
+		graphId: 'graph-test',
 		nodes: [
 			{ id: 'src', data: { status: 'succeeded' } },
 			{ id: 'xfm', data: { status: 'succeeded' } },
@@ -194,5 +195,41 @@ describe('graphStore partial run scope events', () => {
 		for (const [id, status] of beforeDisplay.entries()) {
 			expect(displayStatusFromBinding(next.nodeBindings[id] as any)).toBe(status);
 		}
+	});
+
+	it('hard reset rotates graphId, clears bindings, and rejects old-graph updates', () => {
+		const prev = makeState();
+		const reset = __hardResetGraphForTest(prev, 'graph-B');
+
+		expect(reset.graphId).toBe('graph-B');
+		expect(reset.graphId).not.toBe(prev.graphId);
+		expect(reset.nodes).toEqual([]);
+		expect(reset.edges).toEqual([]);
+		expect(reset.nodeBindings).toEqual({});
+		expect(reset.nodeOutputs).toEqual({});
+		expect(reset.activeRunId).toBeNull();
+		expect(reset.freshness).toBe('never_run');
+		expect(reset.lastRunStatus).toBe('never_run');
+
+		const foreignEvt: KnownRunEvent = {
+			type: 'run_started',
+			runId: 'run-old',
+			at: '2026-02-26T00:00:00Z',
+			runFrom: null,
+			runMode: 'from_start',
+			plannedNodeIds: ['src']
+		} as any;
+		(foreignEvt as any).graphId = 'graph-A';
+		const afterForeignEvent = __applyRunEventForTest(reset, foreignEvt, 'run-old');
+		expect(afterForeignEvent).toEqual(reset);
+
+		const afterForeignSnapshot = __hydrateFromRunSnapshotForTest(reset, {
+			graphId: 'graph-A',
+			status: 'running',
+			nodeBindings: {
+				src: { status: 'running' }
+			}
+		});
+		expect(afterForeignSnapshot).toEqual(reset);
 	});
 });

@@ -46,6 +46,23 @@ def _sha256_text(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
+def _normalize_determinism_env(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {str(k): _normalize_determinism_env(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(obj, list):
+        return [_normalize_determinism_env(x) for x in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    return str(obj)
+
+
+def _normalize_input_refs(input_refs: Optional[list[tuple[str, str]]]) -> list[dict[str, str]]:
+    refs = input_refs or []
+    norm = [(str(port), str(aid)) for port, aid in refs]
+    norm.sort(key=lambda x: (x[0], x[1]))
+    return [{"port": port, "artifact_id": aid} for port, aid in norm]
+
+
 def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file")
@@ -107,3 +124,33 @@ def build_node_state_hash(
             source_fingerprint if isinstance(source_fingerprint, dict) else build_source_fingerprint(node, params or {})
         )
     return _sha256_text(_canon_json(state))
+
+
+def build_exec_key(
+    *,
+    graph_id: str,
+    node_id: str,
+    node_kind: str,
+    node_state_hash: str,
+    upstream_artifact_ids: Optional[list[str]] = None,
+    input_refs: Optional[list[tuple[str, str]]] = None,
+    determinism_env: Optional[Dict[str, Any]] = None,
+    execution_version: str,
+) -> str:
+    if not str(graph_id or "").strip():
+        raise ValueError("graph_id is required for exec_key generation")
+    if not str(node_id or "").strip():
+        raise ValueError("node_id is required for exec_key generation")
+    if not str(node_state_hash or "").strip():
+        raise ValueError("node_state_hash is required for exec_key generation")
+    payload = {
+        "build_version": execution_version,
+        "graph_id": str(graph_id or ""),
+        "node_id": str(node_id or ""),
+        "node_kind": str(node_kind or ""),
+        "node_state_hash": str(node_state_hash or ""),
+        "upstream_artifact_keys": sorted(str(aid) for aid in (upstream_artifact_ids or [])),
+        "input_bindings": _normalize_input_refs(input_refs),
+        "determinism_env": _normalize_determinism_env(determinism_env or {}),
+    }
+    return _sha256_text(_canon_json(payload))

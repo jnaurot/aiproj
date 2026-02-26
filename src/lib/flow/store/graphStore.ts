@@ -109,6 +109,7 @@ const DEV_MODE = (() => {
 })();
 
 export type GraphState = {
+	graphId: string;
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
 	selectedNodeId: string | null;
@@ -125,6 +126,14 @@ export type GraphState = {
 	nodeBindings: Record<string, NodeBindingInfo>;
 	activeRunId: string | null;
 };
+
+function mintGraphId(): string {
+	try {
+		return `graph_${crypto.randomUUID()}`;
+	} catch {
+		return `graph_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+	}
+}
 
 function nowTs() {
 	return new Date().toLocaleTimeString();
@@ -428,6 +437,10 @@ function assertRunStartedNoBindingTouch(prev: GraphState, next: GraphState): voi
 }
 
 function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
+	const evtGraphId = (evt as any)?.graphId;
+	if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== state.graphId) {
+		return state;
+	}
 	switch (evt.type) {
 		case 'node_output': {
 			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
@@ -580,6 +593,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 }
 
 type RunSnapshotLike = {
+	graphId?: string;
 	status?: string;
 	runMode?: ActiveRunMode;
 	plannedNodeIds?: string[];
@@ -589,6 +603,9 @@ type RunSnapshotLike = {
 };
 
 function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): GraphState {
+	if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== state.graphId) {
+		return state;
+	}
 	const nodeBindingsPatch: Record<string, NodeBindingInfo> = {};
 	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
 	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
@@ -631,11 +648,42 @@ export function __hydrateFromRunSnapshotForTest(
 	return hydrateFromRunSnapshotState(state, snap);
 }
 
+function buildHardResetState(state: GraphState, freshGraphId: string): GraphState {
+	return {
+		...state,
+		graphId: freshGraphId,
+		nodes: [],
+		edges: [],
+		selectedNodeId: null,
+		inspector: initialInspector,
+		logs: [],
+		runStatus: IDLE,
+		lastRunStatus: 'never_run',
+		freshness: 'never_run',
+		staleNodeCount: 0,
+		activeRunMode: 'from_start',
+		activeRunFrom: null,
+		activeRunNodeSet: new Set<string>(),
+		nodeOutputs: {},
+		nodeBindings: {},
+		activeRunId: null
+	};
+}
+
+export function __hardResetGraphForTest(state: GraphState, freshGraphId = 'graph_test_reset'): GraphState {
+	return buildHardResetState(state, freshGraphId);
+}
+
 function stripToDTO(
 	nodes: Node<PipelineNodeData>[],
-	edges: Edge<PipelineEdgeData>[]
+	edges: Edge<PipelineEdgeData>[],
+	graphId?: string
 ): PipelineGraphDTO {
-	return { version: 1, nodes, edges };
+	const dto: PipelineGraphDTO = { version: 1, nodes, edges };
+	if (graphId) {
+		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
+	}
+	return dto;
 }
 
 function getPortType(
@@ -840,6 +888,7 @@ function topoFrom(
 const loaded = loadGraphFromLocalStorage(emptyGraph);
 
 const initialState: GraphState = {
+	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
 	nodes: loaded.nodes,
 	edges: loaded.edges,
 	selectedNodeId: null,
@@ -1116,7 +1165,7 @@ export const graphStore = (() => {
 	//END
 
 	function persist(state: GraphState) {
-		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges));
+		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
 	}
 
 	function hydrateFromRunSnapshot(
@@ -1505,6 +1554,15 @@ export const graphStore = (() => {
 			});
 		},
 
+		hardResetGraph() {
+			const freshGraphId = mintGraphId();
+			update((s) => {
+				const next = buildHardResetState(s, freshGraphId);
+				persist(next);
+				return next;
+			});
+		},
+
 		async runRemote(runFrom: string | null, runMode?: ActiveRunMode) {
 			// prevent concurrent runs
 			const s0 = get({ subscribe } as any) as GraphState;
@@ -1519,6 +1577,7 @@ export const graphStore = (() => {
 			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
 			const payload = buildRunCreateRequest(
 				{ version: 1, nodes: s1.nodes, edges: s1.edges },
+				s1.graphId,
 				runFrom,
 				effectiveRunMode
 			);
@@ -1528,10 +1587,12 @@ export const graphStore = (() => {
 			let runId: string;
 
 			try {
-				({ runId } = await createRun(payload));
+				const created = await createRun(payload);
+				runId = created.runId;
 				update((s) =>
 					withGraphMeta({
 						...s,
+						graphId: created.graphId || s.graphId,
 						activeRunId: runId,
 						activeRunMode: effectiveRunMode,
 						activeRunFrom: runFrom,
@@ -1560,6 +1621,15 @@ export const graphStore = (() => {
 				const sub = streamRunEvents(
 					runId,
 					(evt: KnownRunEvent) => {
+						const cur = get({ subscribe } as any) as GraphState;
+						const evtGraphId = (evt as any)?.graphId;
+						if (
+							typeof evtGraphId === 'string' &&
+							evtGraphId &&
+							evtGraphId !== cur.graphId
+						) {
+							return;
+						}
 						update((s) => {
 							const nextState = reduceRunEventState(s, evt, runId);
 							debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
@@ -1577,6 +1647,14 @@ export const graphStore = (() => {
 							persist(cur);
 							void getRun(runId)
 								.then((snap) => {
+									const current = get({ subscribe } as any) as GraphState;
+									if (
+										typeof snap.graphId === 'string' &&
+										snap.graphId &&
+										snap.graphId !== current.graphId
+									) {
+										return;
+									}
 									update((s) => hydrateFromRunSnapshot(s, snap), {
 										source: 'hydrate_snapshot',
 										snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))

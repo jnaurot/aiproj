@@ -58,7 +58,7 @@ def _infer_port_type(
 # ----------------------------
 
 class Artifact(BaseModel):
-    artifact_id: str  # content-addressed hash
+    artifact_id: str  # execution key identity for runtime artifacts
     node_kind: str
     params_hash: str
     upstream_ids: List[str]
@@ -116,6 +116,7 @@ class ArtifactStore(Protocol):
     async def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]: ...
+    async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]: ...
 
 
 # ----------------------------
@@ -133,6 +134,29 @@ class MemoryArtifactStore:
         self._blob: Dict[str, bytes] = {}
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._consumers: Dict[str, List[Dict[str, Any]]] = {}
+
+    def _prune_node_artifacts(self, *, graph_id: str, node_id: str, keep_last: int = 5) -> List[str]:
+        if not graph_id or not node_id:
+            return []
+        rows = [
+            (aid, art)
+            for aid, art in self._meta.items()
+            if str(art.graph_id or "") == str(graph_id) and str(art.node_id or "") == str(node_id)
+        ]
+        rows.sort(key=lambda x: x[1].created_at, reverse=True)
+        keep = max(0, int(keep_last))
+        to_delete = [aid for aid, _ in rows[keep:]]
+        if not to_delete:
+            return []
+        delete_set = set(to_delete)
+        for aid in to_delete:
+            self._meta.pop(aid, None)
+            self._blob.pop(aid, None)
+        for input_id, consumers in list(self._consumers.items()):
+            self._consumers[input_id] = [c for c in consumers if c.get("outputArtifactId") not in delete_set]
+            if not self._consumers[input_id]:
+                self._consumers.pop(input_id, None)
+        return to_delete
 
     async def exists(self, artifact_id: str) -> bool:
         return artifact_id in self._meta
@@ -154,6 +178,14 @@ class MemoryArtifactStore:
             yield data[i : i + chunk_size]
 
     async def write(self, artifact: Artifact, data: bytes) -> None:
+        if artifact.run_id and (
+            not artifact.graph_id or not artifact.node_id or not artifact.exec_key
+        ):
+            raise ValueError("Runtime artifact writes require graph_id, node_id, and exec_key")
+        if artifact.run_id and not str(artifact.params_hash or "").strip():
+            raise ValueError("Runtime artifact writes require non-empty params_hash (node_state_hash)")
+        if artifact.exec_key and artifact.artifact_id != artifact.exec_key:
+            raise ValueError("artifact_id must equal exec_key when exec_key is present")
         # Enforce immutability: don't overwrite
         if artifact.artifact_id in self._meta:
             logger.debug(
@@ -178,6 +210,11 @@ class MemoryArtifactStore:
             update={"content_hash": content_hash, "size_bytes": len(data)}
         )
         self._blob[artifact.artifact_id] = data
+        self._prune_node_artifacts(
+            graph_id=str(artifact.graph_id or ""),
+            node_id=str(artifact.node_id or ""),
+            keep_last=5,
+        )
 
     async def record_run(self, run_id: str, status: str) -> None:
         self._runs[run_id] = {
@@ -291,6 +328,24 @@ class MemoryArtifactStore:
             "scanned_blobs": 0,
         }
 
+    async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]:
+        ids = [
+            aid
+            for aid, art in self._meta.items()
+            if str(art.graph_id or "") == str(graph_id) and str(art.node_id or "") == str(node_id)
+        ]
+        if not ids:
+            return {"graphId": graph_id, "nodeId": node_id, "artifactsRemoved": 0, "artifactIdsRemoved": []}
+        delete_set = set(ids)
+        for aid in ids:
+            self._meta.pop(aid, None)
+            self._blob.pop(aid, None)
+        for input_id, consumers in list(self._consumers.items()):
+            self._consumers[input_id] = [c for c in consumers if c.get("outputArtifactId") not in delete_set]
+            if not self._consumers[input_id]:
+                self._consumers.pop(input_id, None)
+        return {"graphId": graph_id, "nodeId": node_id, "artifactsRemoved": len(ids), "artifactIdsRemoved": ids}
+
 
 class _SqliteArtifactIndex:
     def __init__(self, db_path: Path, *, blob_root: Optional[Path] = None) -> None:
@@ -337,6 +392,8 @@ class _SqliteArtifactIndex:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_id ON artifacts(graph_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_node_id ON artifacts(node_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node ON artifacts(graph_id, node_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node_created ON artifacts(graph_id, node_id, created_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
             # Migration: older DBs won't have port_type.
@@ -345,6 +402,10 @@ class _SqliteArtifactIndex:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN port_type TEXT")
             if "graph_id" not in cols:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN graph_id TEXT")
+            if "node_id" not in cols:
+                cur.execute("ALTER TABLE artifacts ADD COLUMN node_id TEXT")
+            if "exec_key" not in cols:
+                cur.execute("ALTER TABLE artifacts ADD COLUMN exec_key TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_port_type ON artifacts(port_type)")
             # Backfill legacy rows with null port_type.
             null_rows = cur.execute(
@@ -488,7 +549,116 @@ class _SqliteArtifactIndex:
                     artifact.exec_key,
                 ),
             )
+            if artifact.graph_id and artifact.node_id:
+                self._prune_node_artifacts_locked(
+                    cur=cur,
+                    graph_id=str(artifact.graph_id),
+                    node_id=str(artifact.node_id),
+                    keep_last=5,
+                )
             self._conn.commit()
+
+    def _prune_node_artifacts_locked(
+        self,
+        *,
+        cur: sqlite3.Cursor,
+        graph_id: str,
+        node_id: str,
+        keep_last: int = 5,
+    ) -> List[str]:
+        keep = max(0, int(keep_last))
+        rows = cur.execute(
+            """
+            SELECT artifact_id, content_hash
+            FROM artifacts
+            WHERE graph_id=? AND node_id=?
+            ORDER BY created_at DESC
+            """,
+            (graph_id, node_id),
+        ).fetchall()
+        to_delete = rows[keep:]
+        if not to_delete:
+            return []
+        ids = [r[0] for r in to_delete]
+        hashes = [r[1] for r in to_delete if r[1]]
+        placeholders = ",".join(["?"] * len(ids))
+        cur.execute(
+            f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({placeholders})",
+            tuple(ids),
+        )
+        cur.execute(
+            f"DELETE FROM artifacts WHERE artifact_id IN ({placeholders})",
+            tuple(ids),
+        )
+        for content_hash in hashes:
+            still_used = cur.execute(
+                "SELECT 1 FROM artifacts WHERE content_hash=? LIMIT 1",
+                (content_hash,),
+            ).fetchone()
+            if still_used:
+                continue
+            try:
+                path = Path(self._blob_path(content_hash))
+                if path.exists():
+                    path.unlink()
+            except Exception:
+                pass
+        return ids
+
+    def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]:
+        with self._lock:
+            cur = self._conn.cursor()
+            rows = cur.execute(
+                """
+                SELECT artifact_id, content_hash
+                FROM artifacts
+                WHERE graph_id=? AND node_id=?
+                ORDER BY created_at DESC
+                """,
+                (graph_id, node_id),
+            ).fetchall()
+            if not rows:
+                return {
+                    "graphId": graph_id,
+                    "nodeId": node_id,
+                    "artifactsRemoved": 0,
+                    "artifactIdsRemoved": [],
+                    "blobsDeleted": 0,
+                }
+            ids = [r[0] for r in rows]
+            hashes = [r[1] for r in rows if r[1]]
+            placeholders = ",".join(["?"] * len(ids))
+            cur.execute(
+                f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({placeholders})",
+                tuple(ids),
+            )
+            cur.execute(
+                f"DELETE FROM artifacts WHERE artifact_id IN ({placeholders})",
+                tuple(ids),
+            )
+            blobs_deleted = 0
+            for content_hash in hashes:
+                still_used = cur.execute(
+                    "SELECT 1 FROM artifacts WHERE content_hash=? LIMIT 1",
+                    (content_hash,),
+                ).fetchone()
+                if still_used:
+                    continue
+                try:
+                    path = Path(self._blob_path(content_hash))
+                    if path.exists():
+                        path.unlink()
+                        blobs_deleted += 1
+                except Exception:
+                    pass
+            self._conn.commit()
+        return {
+            "graphId": graph_id,
+            "nodeId": node_id,
+            "artifactsRemoved": len(ids),
+            "artifactIdsRemoved": ids,
+            "blobsDeleted": blobs_deleted,
+        }
 
     def record_run(self, run_id: str, status: str) -> None:
         with self._lock:
@@ -811,6 +981,14 @@ class DiskArtifactStore:
                 yield chunk
 
     async def write(self, artifact: Artifact, data: bytes) -> None:
+        if artifact.run_id and (
+            not artifact.graph_id or not artifact.node_id or not artifact.exec_key
+        ):
+            raise ValueError("Runtime artifact writes require graph_id, node_id, and exec_key")
+        if artifact.run_id and not str(artifact.params_hash or "").strip():
+            raise ValueError("Runtime artifact writes require non-empty params_hash (node_state_hash)")
+        if artifact.exec_key and artifact.artifact_id != artifact.exec_key:
+            raise ValueError("artifact_id must equal exec_key when exec_key is present")
         if self._index.exists(artifact.artifact_id):
             logger.debug(
                 "artifact_write_skip_existing store=disk artifact_id=%s run_id=%s node_id=%s exec_key=%s",
@@ -881,6 +1059,9 @@ class DiskArtifactStore:
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]:
         return self._index.gc_orphan_blobs(mode=mode, limit=limit, max_seconds=max_seconds)
+
+    async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]:
+        return self._index.delete_node_artifacts(graph_id=graph_id, node_id=node_id)
 
 
 # ----------------------------

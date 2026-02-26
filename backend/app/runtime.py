@@ -19,6 +19,7 @@ def datetime_from_ts(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
+
 @dataclass
 class RunHandle:
     run_id: str
@@ -402,11 +403,47 @@ class RuntimeManager:
             return art.run_id
         return None
 
+    async def delete_node_artifacts(
+        self,
+        *,
+        run_id: str,
+        node_id: str,
+        graph: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if not handle:
+            raise KeyError(run_id)
+        graph_ref = graph if isinstance(graph, dict) else (handle.graph or {})
+        result = await self.artifact_store.delete_node_artifacts(
+            graph_id=handle.graph_id,
+            node_id=node_id,
+        )
+        removed_ids = list(result.get("artifactIdsRemoved") or [])
+        if removed_ids:
+            await self.cache.delete_artifact_ids(removed_ids)
+            for aid in removed_ids:
+                self._artifact_owner.pop(aid, None)
+        affected = {node_id} | self._downstream_nodes(graph_ref, node_id)
+        for nid in sorted(affected):
+            b = self._binding_for(handle, nid)
+            b["status"] = "stale"
+            b["isUpToDate"] = False
+            b["cacheValid"] = False
+            b["currentArtifactId"] = None
+            b["currentRunId"] = None
+            b["staleReason"] = "NODE_DELETED" if nid == node_id else "UPSTREAM_CHANGED"
+            handle.node_status[nid] = "stale"
+            handle.node_outputs.pop(nid, None)
+        result["affectedNodeIds"] = sorted(affected)
+        return result
+
     # ---------- execution ----------
 
     async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None, graph_id: Optional[str] = None):
         handle = self.runs[run_id]
-        handle.graph_id = str(graph_id or graph.get("id") or graph.get("graphId") or run_id)
+        if not str(graph_id or "").strip():
+            raise ValueError("graph_id is required")
+        handle.graph_id = str(graph_id)
         handle.bus.graph_id = handle.graph_id
         handle.graph = graph
         for n in (graph.get("nodes", []) if isinstance(graph, dict) else []):
