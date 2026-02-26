@@ -97,7 +97,7 @@ class ArtifactStore(Protocol):
     async def get(self, artifact_id: str) -> Artifact: ...
     async def read(self, artifact_id: str) -> bytes: ...
     async def open_payload(self, artifact_id: str) -> AsyncIterator[bytes]: ...
-    async def write(self, artifact: Artifact, data: bytes) -> None: ...
+    async def write(self, artifact: Artifact, data: bytes) -> str: ...
     async def record_run(self, run_id: str, status: str) -> None: ...
     async def update_run_status(self, run_id: str, status: str) -> None: ...
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]: ...
@@ -177,7 +177,7 @@ class MemoryArtifactStore:
         for i in range(0, len(data), chunk_size):
             yield data[i : i + chunk_size]
 
-    async def write(self, artifact: Artifact, data: bytes) -> None:
+    async def write(self, artifact: Artifact, data: bytes) -> str:
         if artifact.run_id and (
             not artifact.graph_id or not artifact.node_id or not artifact.exec_key
         ):
@@ -195,7 +195,7 @@ class MemoryArtifactStore:
                 artifact.node_id,
                 artifact.exec_key,
             )
-            return
+            return artifact.artifact_id
         content_hash = hashlib.sha256(data).hexdigest()
         logger.debug(
             "artifact_write store=memory artifact_id=%s run_id=%s node_id=%s exec_key=%s size_bytes=%s content_hash=%s",
@@ -206,15 +206,34 @@ class MemoryArtifactStore:
             len(data),
             content_hash,
         )
-        self._meta[artifact.artifact_id] = artifact.model_copy(
+        artifact_to_store = artifact.model_copy(
             update={"content_hash": content_hash, "size_bytes": len(data)}
         )
+        # Atomic commit order:
+        # 1) payload bytes
+        # 2) metadata row
+        # 3) validate committed artifact
         self._blob[artifact.artifact_id] = data
+        self._meta[artifact.artifact_id] = artifact_to_store
+        committed = self._meta.get(artifact.artifact_id)
+        if committed is None:
+            raise RuntimeError(f"Artifact metadata commit failed: {artifact.artifact_id}")
+        if artifact.artifact_id not in self._blob:
+            raise RuntimeError(f"Artifact payload commit failed: {artifact.artifact_id}")
+        if str(committed.content_hash or "") != content_hash:
+            raise RuntimeError(
+                f"Artifact commit validation failed (content_hash mismatch): {artifact.artifact_id}"
+            )
+        if int(committed.size_bytes or -1) != len(data):
+            raise RuntimeError(
+                f"Artifact commit validation failed (size mismatch): {artifact.artifact_id}"
+            )
         self._prune_node_artifacts(
             graph_id=str(artifact.graph_id or ""),
             node_id=str(artifact.node_id or ""),
             keep_last=5,
         )
+        return artifact.artifact_id
 
     async def record_run(self, run_id: str, status: str) -> None:
         self._runs[run_id] = {
@@ -980,7 +999,7 @@ class DiskArtifactStore:
                     break
                 yield chunk
 
-    async def write(self, artifact: Artifact, data: bytes) -> None:
+    async def write(self, artifact: Artifact, data: bytes) -> str:
         if artifact.run_id and (
             not artifact.graph_id or not artifact.node_id or not artifact.exec_key
         ):
@@ -997,7 +1016,7 @@ class DiskArtifactStore:
                 artifact.node_id,
                 artifact.exec_key,
             )
-            return
+            return artifact.artifact_id
 
         content_hash = hashlib.sha256(data).hexdigest()
         storage_uri = self._write_blob_atomic(content_hash, data)
@@ -1018,7 +1037,26 @@ class DiskArtifactStore:
                 "size_bytes": len(data),
             }
         )
+        # Atomic commit order:
+        # 1) payload blob
+        # 2) metadata row
+        # 3) validate committed artifact
         self._index.put(artifact_to_store)
+        committed = self._index.get(artifact.artifact_id)
+        if str(committed.content_hash or "") != content_hash:
+            raise RuntimeError(
+                f"Artifact commit validation failed (content_hash mismatch): {artifact.artifact_id}"
+            )
+        if int(committed.size_bytes or -1) != len(data):
+            raise RuntimeError(
+                f"Artifact commit validation failed (size mismatch): {artifact.artifact_id}"
+            )
+        blob_path = self._blob_path(content_hash)
+        if not blob_path.exists():
+            raise RuntimeError(
+                f"Artifact commit validation failed (payload missing): {artifact.artifact_id}"
+            )
+        return artifact.artifact_id
 
     async def record_run(self, run_id: str, status: str) -> None:
         self._index.record_run(run_id, status)

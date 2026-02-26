@@ -625,6 +625,26 @@ async def run_graph(
         edges = edge_map(graph)
         get_current_artifact = context.bindings.get_current_artifact
 
+        def _binding_snapshot(node_id: str) -> tuple[Optional[str], Optional[str]]:
+            b = context.bindings.get(node_id)
+            if b is None:
+                return (None, None)
+            return (b.artifact_id, b.status)
+
+        def _assert_binding_unchanged(
+            *,
+            node_id: str,
+            snapshot: tuple[Optional[str], Optional[str]],
+            phase: str,
+        ) -> None:
+            current = _binding_snapshot(node_id)
+            if current == snapshot:
+                return
+            raise RuntimeError(
+                "Binding changed during execution before commit "
+                f"(node_id={node_id}, phase={phase}, expected={snapshot}, actual={current})"
+            )
+
         async def _resolve_node_execution(node_id: str) -> Dict[str, Any]:
             n = nodes[node_id]
             kind = n["data"]["kind"]
@@ -690,6 +710,7 @@ async def run_graph(
 
         async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
             node_started_t = asyncio.get_running_loop().time()
+            binding_snapshot = _binding_snapshot(node_id)
             await context.bus.emit({
                 "type": "node_started",
                 "runId": run_id,
@@ -869,6 +890,11 @@ async def run_graph(
                         return {"ok": False, "cached": False}
                 else:
                     cache_stats["hit"] += 1
+                    _assert_binding_unchanged(
+                        node_id=node_id,
+                        snapshot=binding_snapshot,
+                        phase="cache_hit_bind",
+                    )
                     context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                     await _record_consumers(
                         context=context,
@@ -1243,21 +1269,26 @@ async def run_graph(
                             exec_key=exec_key,
                         )
 
-                        await context.artifact_store.write(artifact, res.payload_bytes)
+                        committed_artifact_id = await context.artifact_store.write(artifact, res.payload_bytes)
                         await _record_consumers(
                             context=context,
                             input_artifact_ids=[aid for _, aid in input_refs],
                             consumer_run_id=run_id,
                             consumer_node_id=node_id,
                             consumer_exec_key=exec_key,
-                            output_artifact_id=artifact_id,
+                            output_artifact_id=committed_artifact_id,
                         )
 
                         # bind artifact
-                        context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
+                        _assert_binding_unchanged(
+                            node_id=node_id,
+                            snapshot=binding_snapshot,
+                            phase="post_write_bind_transform",
+                        )
+                        context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
 
                         # cache index
-                        await cache.store_artifact_id(exec_key, artifact_id)
+                        await cache.store_artifact_id(exec_key, committed_artifact_id)
 
                         print(f"[artifact] transform node={node_id} bytes={len(res.payload_bytes)} id={artifact_id[:10]}...")
 
@@ -1267,7 +1298,7 @@ async def run_graph(
                             "runId": run_id,
                             "nodeId": node_id,
                             "at": iso_now(),
-                            "artifactId": artifact_id,
+                            "artifactId": committed_artifact_id,
                             "mimeType": res.mime_type,
                             "portType": "table",
                         })
@@ -1596,29 +1627,34 @@ async def run_graph(
                         exec_key=exec_key,
                     )
 
-                    await context.artifact_store.write(artifact, payload_bytes)
+                    committed_artifact_id = await context.artifact_store.write(artifact, payload_bytes)
                     await _record_consumers(
                         context=context,
                         input_artifact_ids=upstream_ids,
                         consumer_run_id=run_id,
                         consumer_node_id=node_id,
                         consumer_exec_key=exec_key,
-                        output_artifact_id=artifact_id,
+                        output_artifact_id=committed_artifact_id,
                     )
-                    context.bindings.bind(node_id=node_id, artifact_id=artifact_id, status="computed")
+                    _assert_binding_unchanged(
+                        node_id=node_id,
+                        snapshot=binding_snapshot,
+                        phase="post_write_bind",
+                    )
+                    context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
                     await context.bus.emit({
                         "type": "node_output",
                         "runId": run_id,
                         "nodeId": node_id,
                         "at": iso_now(),
-                        "artifactId": artifact_id,
+                        "artifactId": committed_artifact_id,
                         "mimeType": artifact.mime_type,
                         "portType": artifact.port_type,
                     })
 
                     # Update cache index
                     if use_cache_for_node:
-                        await cache.store_artifact_id(exec_key, artifact_id)
+                        await cache.store_artifact_id(exec_key, committed_artifact_id)
 
                     # Verification print
                     print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
