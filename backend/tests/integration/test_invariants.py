@@ -427,11 +427,16 @@ async def test_node_retention_keeps_last_five_artifacts(monkeypatch, tmp_path):
             seen_graph_id = rt.get_run(run_id).graph_id
 
     conn = rt.artifact_store._index._conn
-    count = conn.execute(
-        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+    rows = conn.execute(
+        "SELECT content_hash FROM artifacts WHERE graph_id=? AND node_id=?",
         (seen_graph_id, "tool_1"),
-    ).fetchone()[0]
-    assert count == 5
+    ).fetchall()
+    assert len(rows) == 5
+    unique_hashes = sorted({r[0] for r in rows if r[0]})
+    assert len(unique_hashes) == 5
+    for h in unique_hashes:
+        blob_path = rt.artifact_store._blob_path(h)
+        assert blob_path.exists()
 
 
 @pytest.mark.asyncio
@@ -488,11 +493,12 @@ async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(mo
     handle = rt.get_run(run_id)
     graph_id = handle.graph_id
 
-    before = rt.artifact_store._index._conn.execute(
-        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+    before_rows = rt.artifact_store._index._conn.execute(
+        "SELECT artifact_id, content_hash FROM artifacts WHERE graph_id=? AND node_id=?",
         (graph_id, "source_1"),
-    ).fetchone()[0]
-    assert before >= 1
+    ).fetchall()
+    assert len(before_rows) >= 1
+    deleted_hashes = sorted({r[1] for r in before_rows if r[1]})
 
     result = await rt.delete_node_artifacts(run_id=run_id, node_id="source_1", graph=graph)
     assert result["artifactsRemoved"] >= 1
@@ -502,8 +508,18 @@ async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(mo
         (graph_id, "source_1"),
     ).fetchone()[0]
     assert after == 0
-    assert handle.node_bindings["source_1"]["status"] == "stale"
+    # Deleted node binding is removed; descendants are invalidated.
+    assert "source_1" not in handle.node_bindings
     assert handle.node_bindings["tool_1"]["status"] == "stale"
+    for h in deleted_hashes:
+        still_referenced = rt.artifact_store._index._conn.execute(
+            "SELECT 1 FROM artifacts WHERE content_hash=? LIMIT 1",
+            (h,),
+        ).fetchone()
+        if still_referenced:
+            continue
+        blob_path = rt.artifact_store._blob_path(h)
+        assert not blob_path.exists()
 
 
 @pytest.mark.asyncio
