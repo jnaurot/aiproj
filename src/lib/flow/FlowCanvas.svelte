@@ -606,7 +606,7 @@
 	}
 
 	.inspectorSplitter {
-		height: 8px;
+		height: 4px;
 		border-radius: 999px;
 		background: #283044;
 		cursor: row-resize;
@@ -623,6 +623,8 @@
 		flex: 1;
 		min-height: 0;
 		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.card {
@@ -674,7 +676,7 @@
 		border-radius: 12px;
 		background: #0f1115;
 		padding: 10px;
-		height: 100%;
+		flex: 1;
 		min-height: 0;
 		overflow: auto;
 		margin-top: 10px;

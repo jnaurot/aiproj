@@ -1,0 +1,79 @@
+/* Theme variables for light and dark modes */
+
+:root {
+	/* Light theme defaults */
+	--bg: rgba(255, 255, 255, 0.8);
+	--bg-contrast: rgba(255, 255, 255, 0.03);
+	--border: rgba(0, 0, 0, 0.1);
+	--border-contrast: rgba(255, 255, 255, 0.08);
+	--text: #000;
+	--text-muted: rgba(0, 0, 0, 0.6);
+	--accent: #1e90ff;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: rgba(0, 0, 0, 0.3);
+		--bg-contrast: rgba(255, 255, 255, 0.03);
+		--border: rgba(255, 255, 255, 0.1);
+		--border-contrast: rgba(255, 255, 255, 0.08);
+		--text: #fff;
+		--text-muted: rgba(255, 255, 255, 0.6);
+		--accent: #1e90ff;
+	}
+}
+
+/* Utility classes */
+.section {
+	border: 1px solid var(--border-contrast);
+	border-radius: 12px;
+	padding: 12px;
+	background: var(--bg-contrast);
+}
+
+.sectionTitle {
+	font-weight: 650;
+	font-size: 14px;
+	margin-bottom: 10px;
+	opacity: 0.9;
+}
+
+.field {
+	display: grid;
+	grid-template-columns: 100px minmax(0, 1fr);
+	gap: 8px;
+	align-items: start;
+	margin-bottom: 10px;
+}
+
+.k {
+	font-size: 14px;
+	opacity: 0.85;
+	padding-top: 8px;
+}
+
+input, textarea, select {
+	width: 100%;
+	box-sizing: border-box;
+	border-radius: 10px;
+	border: 1px solid var(--border-contrast);
+	background: var(--bg-contrast);
+	color: var(--text);
+	padding: 8px 10px;
+	font-size: 14px;
+}
+
+button {
+	border: none;
+	border-radius: 10px;
+	background: var(--accent);
+	color: #fff;
+	padding: 8px 12px;
+	font-size: 14px;
+	cursor: pointer;
+}
+
+button:disabled {
+	background: var(--border-contrast);
+	cursor: not-allowed;
+}

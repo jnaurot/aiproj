@@ -1,34 +1,69 @@
 <script lang="ts">
-	// lib/flow/components/editors/SourceEditor/SourceFileEditor.svelte
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import BoolSelect from '$lib/flow/components/BoolSelect.svelte';
-	import NumberInput from '$lib/flow/components/NumberInput.svelte';
+	import type { SourceFileParams } from '$lib/flow/schema/source';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+
+	type FileFormat = SourceFileParams['file_format'];
+	type EditorParams = Partial<SourceFileParams> & {
+		file_name?: string;
+		file_size?: number;
+		file_mime?: string;
+	};
 
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
-
-	export let params: any;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
+	export let params: EditorParams;
+	export let onDraft: (patch: Record<string, unknown>) => void;
+	export let onCommit: (patch: Record<string, unknown>) => void;
 
 	let fileEl: HTMLInputElement | null = null;
 
-	function draft(patch: Record<string, any>) {
+	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
+
+	const asString = (value: unknown, fallback = ''): string =>
+		typeof value === 'string' ? value : fallback;
+
+	const asBoolean = (value: unknown, fallback: boolean): boolean =>
+		typeof value === 'boolean' ? value : fallback;
+
+	const asNumberOrEmpty = (value: unknown): string =>
+		typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+
+	$: file_path = asString(params?.file_path, '');
+	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
+	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
+	$: sheet_name = asString(params?.sheet_name, '');
+	$: sample_size = asNumberOrEmpty(params?.sample_size);
+	$: encoding = asString(params?.encoding, 'utf-8');
+	$: cache_enabled = asBoolean(params?.cache_enabled, true);
+	$: selected_file_name = asString(params?.file_name, 'No file selected');
+
+	function draft(patch: Record<string, unknown>): void {
 		onDraft?.(patch);
 	}
 
-	function commit(patch: Record<string, any>) {
+	function commit(patch: Record<string, unknown>): void {
 		onCommit?.(patch);
 	}
 
-	function setFileFormat(ff: string) {
-		const next: Record<string, any> = { file_format: ff };
+	function parsePositiveInt(raw: string): number | undefined {
+		if (raw.trim() === '') return undefined;
+		const value = Number.parseInt(raw, 10);
+		return Number.isFinite(value) && value > 0 ? value : undefined;
+	}
+
+	function setFileFormat(nextFormat: string): void {
+		if (!fileFormatOptions.includes(nextFormat as FileFormat)) return;
+		const ff = nextFormat as FileFormat;
+		const next: Record<string, unknown> = { file_format: ff };
 
 		if (ff === 'csv' || ff === 'tsv') {
-			next.delimiter = params.delimiter ?? (ff === 'tsv' ? '\t' : ',');
+			next.delimiter = params?.delimiter ?? (ff === 'tsv' ? '\t' : ',');
 			next.sheet_name = undefined;
 		} else if (ff === 'excel') {
-			next.sheet_name = params.sheet_name ?? '';
+			next.sheet_name = params?.sheet_name ?? '';
 			next.delimiter = undefined;
 		} else {
 			next.delimiter = undefined;
@@ -37,185 +72,130 @@
 
 		commit(next);
 	}
+
+	function onFilePicked(event: Event): void {
+		const input = event.currentTarget as HTMLInputElement | null;
+		const file = input?.files?.[0];
+		if (!file) return;
+
+		commit({
+			file_path: `localfile://${encodeURIComponent(file.name)}`,
+			file_name: file.name,
+			file_size: file.size,
+			file_mime: file.type
+		});
+	}
 </script>
 
 {#if selectedNode}
-	<div class="section">
-		<div class="sectionTitle">File</div>
-
-		<div class="group">
-			<!-- 1) File chooser row -->
-			<div class="field">
-				<div class="k">file</div>
-				<div class="v">
-					<!-- hidden native input -->
-					<input
-						bind:this={fileEl}
-						type="file"
-						accept=".csv,.tsv,.xlsx,.json,.txt,.parquet,.pdf"
-						style="display:none"
-						on:change={(e) => {
-							const input = e.currentTarget as HTMLInputElement;
-							const f = input.files?.[0];
-							if (!f) return;
-
-							commit({
-								file_path: `localfile://${encodeURIComponent(f.name)}`,
-								file_name: f.name,
-								file_size: f.size,
-								file_mime: f.type
-							});
-						}}
-					/>
-
-					<!-- visible, controlled UI -->
-					<div style="display:flex; align-items:center; gap:10px;">
-						<button type="button" on:click={() => fileEl?.click()}> Choose file </button>
-						<span style="opacity:.8;">
-							{params.file_name ?? 'No file selected'}
-						</span>
-					</div>
-				</div>
+	<Section title="File">
+		<Field label="file">
+			<div class="fileRow">
+				<input
+					bind:this={fileEl}
+					type="file"
+					accept=".csv,.tsv,.xlsx,.json,.txt,.parquet,.pdf"
+					style="display:none"
+					on:change={onFilePicked}
+				/>
+				<button type="button" on:click={() => fileEl?.click()}>Choose file</button>
+				<span class="fileName">{selected_file_name}</span>
 			</div>
+		</Field>
 
-			<!-- 2) File path row -->
-			<div class="field">
-				<div class="k">file path</div>
-				<div class="v">
-					<input
-						value={params.file_path ?? ''}
-						placeholder="C:/path/to/file.csv"
-						on:input={(e) => draft({ file_path: (e.currentTarget as HTMLInputElement).value })}
-					/>
-				</div>
-			</div>
+		<Field label="file path">
+			<Input
+				value={file_path}
+				placeholder="C:/path/to/file.csv"
+				onInput={(event) => draft({ file_path: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) => commit({ file_path: (event.currentTarget as HTMLInputElement).value })}
+			/>
+		</Field>
 
-			<!-- 3) File format row (dropdown = immediate commit) -->
-			<div class="field">
-				<div class="k">file_format</div>
-				<div class="v">
-					<select
-						value={params.file_format ?? 'csv'}
-						on:change={(e) => setFileFormat((e.currentTarget as HTMLSelectElement).value)}
-					>
-						<option value="csv">csv</option>
-						<option value="tsv">tsv</option>
-						<option value="parquet">parquet</option>
-						<option value="json">json</option>
-						<option value="excel">excel</option>
-						<option value="txt">txt</option>
-						<option value="pdf">pdf</option>
-					</select>
-				</div>
-			</div>
+		<Field label="file_format">
+			<select value={file_format} on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}>
+				{#each fileFormatOptions as option}
+					<option value={option}>{option}</option>
+				{/each}
+			</select>
+		</Field>
 
-			{#if (params.file_format ?? 'csv') === 'csv' || (params.file_format ?? 'csv') === 'tsv'}
-				<div class="field">
-					<div class="k">delimiter</div>
-					<div class="v">
-						<input
-							value={params.delimiter ?? ((params.file_format ?? 'csv') === 'tsv' ? '\t' : ',')}
-							placeholder={(params.file_format ?? 'csv') === 'tsv' ? '\\t' : ','}
-							on:input={(e) => draft({ delimiter: (e.currentTarget as HTMLInputElement).value })}
-						/>
-					</div>
-				</div>
-			{/if}
+		{#if file_format === 'csv' || file_format === 'tsv'}
+			<Field label="delimiter">
+				<Input
+					value={delimiter}
+					placeholder={file_format === 'tsv' ? '\\t' : ','}
+					onInput={(event) => draft({ delimiter: (event.currentTarget as HTMLInputElement).value })}
+					onBlur={(event) => commit({ delimiter: (event.currentTarget as HTMLInputElement).value })}
+				/>
+			</Field>
+		{/if}
 
-			{#if (params.file_format ?? 'csv') === 'excel'}
-				<div class="field">
-					<div class="k">sheet_name</div>
-					<div class="v">
-						<input
-							value={params.sheet_name ?? ''}
-							placeholder="Sheet1 (blank = first sheet)"
-							on:input={(e) => {
-								const v = (e.currentTarget as HTMLInputElement).value.trim();
-								draft({ sheet_name: v === '' ? undefined : v });
-							}}
-						/>
-					</div>
-				</div>
-			{/if}
+		{#if file_format === 'excel'}
+			<Field label="sheet_name">
+				<Input
+					value={sheet_name}
+					placeholder="Sheet1 (blank = first sheet)"
+					onInput={(event) => {
+						const value = (event.currentTarget as HTMLInputElement).value;
+						draft({ sheet_name: value.trim() === '' ? undefined : value });
+					}}
+					onBlur={(event) => {
+						const value = (event.currentTarget as HTMLInputElement).value;
+						commit({ sheet_name: value.trim() === '' ? undefined : value });
+					}}
+				/>
+			</Field>
+		{/if}
 
-			<div class="field">
-				<div class="k">sample_size</div>
-				<div class="v">
-					<NumberInput
-						label=""
-						value={params.sample_size}
-						placeholder="e.g. 1000"
-						min={1}
-						onChange={(v) => draft({ sample_size: v })}
-					/>
-				</div>
-			</div>
+		<Field label="sample_size">
+			<input
+				type="number"
+				min="1"
+				step="1"
+				value={sample_size}
+				placeholder="e.g. 1000"
+				on:input={(event) => draft({ sample_size: parsePositiveInt((event.currentTarget as HTMLInputElement).value) })}
+				on:blur={(event) => commit({ sample_size: parsePositiveInt((event.currentTarget as HTMLInputElement).value) })}
+			/>
+		</Field>
 
-			<div class="field">
-				<div class="k">encoding</div>
-				<div class="v">
-					<input
-						value={params.encoding ?? 'utf-8'}
-						placeholder="utf-8"
-						on:input={(e) => draft({ encoding: (e.currentTarget as HTMLInputElement).value })}
-					/>
-				</div>
-			</div>
+		<Field label="encoding">
+			<Input
+				value={encoding}
+				placeholder="utf-8"
+				onInput={(event) => draft({ encoding: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) => commit({ encoding: (event.currentTarget as HTMLInputElement).value })}
+			/>
+		</Field>
 
-			<div class="field">
-				<div class="k">cache_enabled</div>
-				<div class="v">
-					<BoolSelect
-						label=""
-						value={params.cache_enabled ?? true}
-						onChange={(v) => draft({ cache_enabled: v })}
-					/>
-				</div>
-			</div>
-		</div>
-	</div>
+		<Field label="cache_enabled">
+			<input
+				type="checkbox"
+				checked={cache_enabled}
+				on:change={(event) => {
+					const checked = (event.currentTarget as HTMLInputElement).checked;
+					draft({ cache_enabled: checked });
+					commit({ cache_enabled: checked });
+				}}
+			/>
+		</Field>
+	</Section>
 {/if}
 
 <style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-	}
-
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-
-	.group {
+	.fileRow {
 		display: flex;
-		flex-direction: column;
+		align-items: center;
 		gap: 10px;
 	}
 
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		align-items: start;
-		gap: 8px;
+	.fileName {
+		opacity: 0.8;
 	}
 
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-
-	.v {
-		min-width: 0;
-	}
-
-	input,
-	select {
+	select,
+	input[type='number'] {
 		width: 100%;
 		box-sizing: border-box;
 		border-radius: 10px;
@@ -228,8 +208,8 @@
 		min-height: 40px;
 	}
 
-	input:focus,
-	select:focus {
+	select:focus,
+	input[type='number']:focus {
 		border-color: rgba(255, 255, 255, 0.25);
 	}
 
