@@ -1275,40 +1275,52 @@ async def run_graph(
                             execution_time_ms=0.0
                         )
                 elif kind == "llm":
-                    print("[run_graph] LLM up_nodes:", up_nodes)
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] node_to_artifact keys:", list(node_to_artifact.keys()))
+
                     llm_in_contract = str((ports.get("in") or "text"))
                     llm_allowed_in = _allowed_ports("llm", "in")
+
                     if llm_in_contract not in llm_allowed_in:
                         raise ContractMismatchError(
-                            f"LLM output contract mismatch: unsupported input port '{llm_in_contract}'",
+                            f"LLM input contract mismatch: unsupported input port '{llm_in_contract}'",
                             details=_contract_details(
                                 expected={"allowedInPortTypes": sorted(llm_allowed_in)},
                                 actual={"inPortType": llm_in_contract},
                             ),
                         )
-                    for upstream_id in upstream_ids:
+
+                    # Canonical upstream artifact list (preserve port mapping order if present)
+                    llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
+
+                    for upstream_id in llm_upstream_ids:
                         upstream_art = await context.artifact_store.get(upstream_id)
                         upstream_pt = _infer_artifact_port_type(upstream_art)
+
                         if upstream_pt not in llm_allowed_in:
                             raise ContractMismatchError(
-                                f"LLM output contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
+                                f"LLM input contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
                                 details=_contract_details(
                                     expected={"allowedInPortTypes": sorted(llm_allowed_in)},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
                                 ),
                             )
+
                         if upstream_pt != llm_in_contract:
                             raise ContractMismatchError(
-                                "LLM output contract mismatch: upstream artifact port_type does not match node in port",
+                                "LLM input contract mismatch: upstream artifact port_type does not match node in port",
                                 details=_contract_details(
                                     expected={"inPortType": llm_in_contract},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
                                 ),
                             )
-                    llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
-                    output = await exec_llm(run_id, n, context, upstream_artifact_ids=llm_upstream_ids)
+
+                    output = await exec_llm(
+                        run_id,
+                        n,
+                        context,
+                        upstream_artifact_ids=llm_upstream_ids,
+                    )
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")

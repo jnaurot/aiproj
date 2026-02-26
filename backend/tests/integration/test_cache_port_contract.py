@@ -152,3 +152,11 @@ async def test_cache_hit_with_incompatible_declared_out_fails_contract(monkeypat
 
     # Recompute occurs because exec_key changed with contract change.
     assert call_count["tool"] == 2
+
+    # Validation failed on miss path, so no new artifact should be committed/bound.
+    conn = store._index._conn
+    committed = conn.execute(
+        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
+        ("graph-cache-port-mismatch", "tool_1"),
+    ).fetchone()[0]
+    assert committed == 1
