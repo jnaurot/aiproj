@@ -179,6 +179,36 @@ class RuntimeManager:
                     q.append(nxt)
         return seen
 
+    def invalidate_node(
+        self,
+        handle: RunHandle,
+        node_id: str,
+        *,
+        reason: str,
+        graph: Optional[Dict[str, Any]] = None,
+    ) -> set[str]:
+        graph_ref = graph if isinstance(graph, dict) else (handle.graph or {})
+        candidate_ids = {node_id} | self._downstream_nodes(graph_ref, node_id)
+        invalidated: set[str] = set()
+        for nid in sorted(candidate_ids):
+            b = handle.node_bindings.get(nid)
+            if not isinstance(b, dict):
+                continue
+            had_artifact = bool(b.get("currentArtifactId") or b.get("lastArtifactId"))
+            if not had_artifact:
+                continue
+            b["status"] = "stale"
+            b["isUpToDate"] = False
+            b["cacheValid"] = False
+            b["currentArtifactId"] = None
+            b["currentRunId"] = None
+            b["currentExecKey"] = None
+            b["staleReason"] = reason if nid == node_id else "UPSTREAM_CHANGED"
+            handle.node_status[nid] = "stale"
+            handle.node_outputs.pop(nid, None)
+            invalidated.add(nid)
+        return invalidated
+
     async def list_runs(self, include_deleted: bool = False) -> list[Dict[str, Any]]:
         persisted = await self.artifact_store.list_runs(include_deleted=include_deleted)
         out: Dict[str, Dict[str, Any]] = {r["run_id"]: dict(r) for r in persisted}
@@ -367,17 +397,7 @@ class RuntimeManager:
         data["params"] = dict(params or {})
         handle.graph = g
 
-        affected = {node_id} | self._downstream_nodes(g, node_id)
-        for nid in sorted(affected):
-            b = self._binding_for(handle, nid)
-            b["status"] = "stale"
-            b["isUpToDate"] = False
-            b["cacheValid"] = False
-            b["currentArtifactId"] = None
-            b["currentRunId"] = None
-            b["staleReason"] = "PARAMS_CHANGED" if nid == node_id else "UPSTREAM_CHANGED"
-            handle.node_status[nid] = "stale"
-            handle.node_outputs.pop(nid, None)
+        affected = self.invalidate_node(handle, node_id, reason="PARAMS_CHANGED", graph=g)
 
         return {
             "runId": run_id,
@@ -423,17 +443,7 @@ class RuntimeManager:
             await self.cache.delete_artifact_ids(removed_ids)
             for aid in removed_ids:
                 self._artifact_owner.pop(aid, None)
-        affected = {node_id} | self._downstream_nodes(graph_ref, node_id)
-        for nid in sorted(affected):
-            b = self._binding_for(handle, nid)
-            b["status"] = "stale"
-            b["isUpToDate"] = False
-            b["cacheValid"] = False
-            b["currentArtifactId"] = None
-            b["currentRunId"] = None
-            b["staleReason"] = "NODE_DELETED" if nid == node_id else "UPSTREAM_CHANGED"
-            handle.node_status[nid] = "stale"
-            handle.node_outputs.pop(nid, None)
+        affected = self.invalidate_node(handle, node_id, reason="NODE_DELETED", graph=graph_ref)
         result["affectedNodeIds"] = sorted(affected)
         return result
 
@@ -563,9 +573,13 @@ class RuntimeManager:
                         b["currentArtifactId"] = aid
                         b["currentRunId"] = handle.run_id
                 elif decision == "cache_hit_contract_mismatch":
-                    b["cacheValid"] = False
-                    b["isUpToDate"] = False
-                    b["staleReason"] = "CONTRACT_MISMATCH"
+                    self.invalidate_node(
+                        handle,
+                        str(nid),
+                        reason="CONTRACT_MISMATCH",
+                        graph=handle.graph,
+                    )
+                    b = self._binding_for(handle, nid)
                 elif decision == "cache_miss":
                     b["cacheValid"] = False
                     # cache_miss means compute required; do not force staleness.

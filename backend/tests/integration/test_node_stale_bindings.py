@@ -85,7 +85,7 @@ async def test_accept_params_marks_only_node_and_descendants_stale(monkeypatch):
 
     graph = _graph()
     with TestClient(app) as client:
-        create = client.post("/runs", json={"runFrom": None, "graph": graph})
+        create = client.post("/runs", json={"graphId": "graph-stale-1", "runFrom": None, "graph": graph})
         assert create.status_code == 200, create.text
         run_id = create.json()["runId"]
 
@@ -168,7 +168,7 @@ async def test_partial_rerun_keeps_sibling_binding_sticky(monkeypatch):
     graph = _graph()
 
     rt.create_run(run_id)
-    await rt.start_run(run_id, graph, run_from=None)
+    await rt.start_run(run_id, graph, run_from=None, graph_id="graph-stale-2")
     await rt.get_run(run_id).task
 
     h = rt.get_run(run_id)
@@ -176,7 +176,7 @@ async def test_partial_rerun_keeps_sibling_binding_sticky(monkeypatch):
     before_events = await rt.list_run_events(run_id)
     before_last_event_id = int(before_events[-1].get("id") if before_events else 0)
 
-    await rt.start_run(run_id, graph, run_from="tool_mid", run_mode="from_selected_onward")
+    await rt.start_run(run_id, graph, run_from="tool_mid", run_mode="from_selected_onward", graph_id="graph-stale-2")
     await rt.get_run(run_id).task
 
     h_after = rt.get_run(run_id)
@@ -194,3 +194,70 @@ async def test_partial_rerun_keeps_sibling_binding_sticky(monkeypatch):
         if (row.get("payload") or {}).get("nodeId") == "tool_side"
     ]
     assert not side_node_events
+
+
+@pytest.mark.asyncio
+async def test_accept_params_does_not_create_stale_binding_for_new_downstream_node(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setenv("ARTIFACT_STORE", "memory")
+
+    from app.main import app
+
+    graph = _graph()
+    with TestClient(app) as client:
+        create = client.post("/runs", json={"graphId": "graph-stale-3", "runFrom": None, "graph": graph})
+        assert create.status_code == 200, create.text
+        run_id = create.json()["runId"]
+
+        status = None
+        for _ in range(80):
+            res = client.get(f"/runs/{run_id}")
+            assert res.status_code == 200, res.text
+            status = res.json()
+            if status.get("status") in {"succeeded", "failed", "cancelled"}:
+                break
+            time.sleep(0.05)
+        assert status and status.get("status") == "succeeded"
+
+        updated_graph = _graph()
+        updated_graph["nodes"].append(
+            {
+                "id": "tool_new",
+                "data": {
+                    "kind": "tool",
+                    "label": "New",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 77}}},
+                    "ports": {"in": "json", "out": "json"},
+                },
+            }
+        )
+        updated_graph["edges"].append({"id": "e_new", "source": "tool_mid", "target": "tool_new"})
+
+        accept = client.post(
+            f"/runs/{run_id}/nodes/tool_mid/accept-params",
+            json={"graph": updated_graph, "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 999}}}},
+        )
+        assert accept.status_code == 200, accept.text
+        payload = accept.json()
+
+        # New downstream node has no historical artifact and must not be invalidated or materialized.
+        assert payload.get("affectedNodeIds") == ["tool_end", "tool_mid"]
+
+        after = client.get(f"/runs/{run_id}")
+        assert after.status_code == 200, after.text
+        bindings = (after.json().get("nodeBindings") or {})
+        assert "tool_new" not in bindings
