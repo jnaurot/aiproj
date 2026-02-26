@@ -36,3 +36,15 @@ def test_source_node_state_hash_includes_source_fingerprint():
     h1 = build_node_state_hash(node=source_node, params=p1, execution_version="v1")
     h2 = build_node_state_hash(node=source_node, params=p2, execution_version="v1")
     assert h1 != h2
+
+
+def test_source_node_state_hash_changes_when_file_stat_changes(tmp_path):
+    source_node = _node(kind="source", ports={"in": None, "out": "text"})
+    file_path = tmp_path / "state.txt"
+    file_path.write_text("a", encoding="utf-8")
+    params = {"source_type": "file", "file_path": str(file_path), "file_format": "txt"}
+    h1 = build_node_state_hash(node=source_node, params=params, execution_version="v1")
+
+    file_path.write_text("abc", encoding="utf-8")
+    h2 = build_node_state_hash(node=source_node, params=params, execution_version="v1")
+    assert h1 != h2

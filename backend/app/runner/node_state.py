@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -69,6 +71,35 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
     p = params or {}
     fp: Dict[str, Any] = {"source_kind": source_kind}
     if source_kind == "file":
+        file_path_raw = p.get("file_path")
+        file_stat: Dict[str, Any] = {
+            "exists": False,
+            "resolved_path": None,
+            "size_bytes": None,
+            "mtime_ns": None,
+            "ctime_ns": None,
+            "inode": None,
+        }
+        if isinstance(file_path_raw, str) and file_path_raw.strip():
+            candidate = Path(file_path_raw).expanduser()
+            try:
+                resolved = str(candidate.resolve())
+            except Exception:
+                resolved = str(candidate)
+            file_stat["resolved_path"] = resolved
+            try:
+                st = os.stat(candidate)
+                file_stat.update(
+                    {
+                        "exists": True,
+                        "size_bytes": int(st.st_size),
+                        "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
+                        "ctime_ns": int(getattr(st, "st_ctime_ns", int(st.st_ctime * 1_000_000_000))),
+                        "inode": int(getattr(st, "st_ino", 0)),
+                    }
+                )
+            except Exception:
+                pass
         fp.update(
             {
                 "file_path": p.get("file_path"),
@@ -77,6 +108,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "delimiter": p.get("delimiter"),
                 "sheet_name": p.get("sheet_name"),
                 "sample_size": p.get("sample_size"),
+                "file_stat": file_stat,
             }
         )
     elif source_kind == "database":
