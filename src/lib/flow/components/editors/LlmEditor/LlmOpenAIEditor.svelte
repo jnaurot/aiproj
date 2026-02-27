@@ -7,8 +7,10 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import {
 		asNumber,
+		asNumberOrEmpty,
 		asString,
 		parseOptionalFloat,
+		parseOptionalInt,
 		stringifyJson,
 		tryParseJson
 	} from '$lib/flow/components/editors/shared';
@@ -21,7 +23,13 @@
 	export let onCommit: (patch: LlmPatch) => void;
 
 	const jsonSchemaPlaceholder = `{"type":"object","properties":{}}`;
-	const outputModes: LlmOutputMode[] = ['text', 'markdown', 'json'];
+	const outputModes: LlmOutputMode[] = ['text', 'json', 'embeddings'];
+	const thinkingModes = ['off', 'auto', 'on'] as const;
+	const inputEncodings = ['text', 'json_canonical', 'table_canonical'] as const;
+	const embeddingDtypes = ['float32', 'float16', 'float64'] as const;
+	const embeddingLayouts = ['1d', '2d'] as const;
+
+	let jsonSchemaDraftText = jsonSchemaPlaceholder;
 
 	$: void selectedNode?.id;
 	$: baseUrl = asString(params?.baseUrl, 'https://api.openai.com');
@@ -30,8 +38,26 @@
 	$: system_prompt = asString(params?.system_prompt, '');
 	$: user_prompt = asString(params?.user_prompt, 'Summarize the input data.');
 	$: temperature = asNumber(params?.temperature, 0.7);
+	$: top_p = asNumberOrEmpty(params?.top_p);
+	$: max_tokens = asNumberOrEmpty(params?.max_tokens);
+	$: seed = asNumberOrEmpty(params?.seed);
+	$: presence_penalty = asNumberOrEmpty(params?.presence_penalty);
+	$: frequency_penalty = asNumberOrEmpty(params?.frequency_penalty);
+	$: repeat_penalty = asNumberOrEmpty(params?.repeat_penalty);
+	$: thinking = asString(params?.thinking, 'off');
+	$: inputEncoding = asString(params?.inputEncoding, 'text');
 	$: outputMode = (asString(params?.output?.mode, 'text') as LlmOutputMode) ?? 'text';
+	$: outputStrict = params?.output?.strict ?? true;
+	$: stopText = Array.isArray(params?.stop) ? params.stop.join('\n') : '';
 	$: jsonSchemaText = stringifyJson(params?.output?.jsonSchema, jsonSchemaPlaceholder);
+	$: embeddingDims = asNumberOrEmpty(params?.output?.embedding?.dims);
+	$: embeddingDtype = asString(params?.output?.embedding?.dtype, 'float32');
+	$: embeddingLayout = asString(params?.output?.embedding?.layout, '1d');
+	$: {
+		if (jsonSchemaDraftText !== jsonSchemaText && params?.output?.jsonSchema !== undefined) {
+			jsonSchemaDraftText = jsonSchemaText;
+		}
+	}
 
 	function draft(patch: LlmPatch): void {
 		onDraft?.(patch);
@@ -41,18 +67,63 @@
 		onCommit?.(patch);
 	}
 
-	function setOutputMode(next: LlmOutputMode): void {
-		const output =
-			next === 'json'
-				? { mode: next, jsonSchema: params?.output?.jsonSchema ?? {} }
-				: { mode: next };
-		commit({ output });
+	function parseStopLines(raw: string): string[] | undefined {
+		const parsed = raw
+			.split(/\r?\n/g)
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0);
+		return parsed.length > 0 ? parsed : undefined;
 	}
 
-	function setJsonSchema(raw: string): void {
+	function setOutputMode(next: LlmOutputMode): void {
+		if (next === 'json') {
+			const jsonSchema = params?.output?.jsonSchema ?? { type: 'object', properties: {} };
+			commit({ output: { mode: 'json', strict: true, jsonSchema } });
+			jsonSchemaDraftText = stringifyJson(jsonSchema, jsonSchemaPlaceholder);
+			return;
+		}
+		if (next === 'embeddings') {
+			commit({
+				output: {
+					mode: 'embeddings',
+					strict: true,
+					embedding: {
+						dims: params?.output?.embedding?.dims ?? 1536,
+						dtype: params?.output?.embedding?.dtype ?? 'float32',
+						layout: params?.output?.embedding?.layout ?? '1d'
+					}
+				}
+			});
+			return;
+		}
+		commit({ output: { mode: 'text', strict: true } });
+	}
+
+	function setJsonSchemaDraft(raw: string): void {
+		jsonSchemaDraftText = raw;
 		const parsed = tryParseJson(raw);
 		if (parsed === undefined) return;
-		draft({ output: { ...(params?.output ?? { mode: 'json' }), mode: 'json', jsonSchema: parsed } });
+		draft({
+			output: {
+				...(params?.output ?? { mode: 'json' }),
+				mode: 'json',
+				strict: outputStrict,
+				jsonSchema: parsed
+			}
+		});
+	}
+
+	function commitJsonSchema(raw: string): void {
+		const parsed = tryParseJson(raw);
+		if (parsed === undefined) return;
+		commit({
+			output: {
+				...(params?.output ?? { mode: 'json' }),
+				mode: 'json',
+				strict: outputStrict,
+				jsonSchema: parsed
+			}
+		});
 	}
 </script>
 
@@ -98,20 +169,200 @@
 			step="0.1"
 			value={temperature}
 			onInput={(event) =>
-				draft({ temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2) })}
+				draft({
+					temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2)
+				})}
 			onBlur={(event) =>
-				commit({ temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2) })}
+				commit({
+					temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2)
+				})}
 		/>
+	</Field>
+
+	<Field label="top_p">
+		<Input
+			type="number"
+			min="0"
+			max="1"
+			step="0.01"
+			value={top_p}
+			onInput={(event) =>
+				draft({ top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1) })}
+			onBlur={(event) =>
+				commit({
+					top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1)
+				})}
+		/>
+	</Field>
+
+	<Field label="max_tokens">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={max_tokens}
+			onInput={(event) =>
+				draft({ max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+			onBlur={(event) =>
+				commit({
+					max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+				})}
+		/>
+	</Field>
+
+	<Field label="seed">
+		<Input
+			type="number"
+			step="1"
+			value={seed}
+			onInput={(event) =>
+				draft({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
+			onBlur={(event) =>
+				commit({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
+		/>
+	</Field>
+
+	<Field label="stop">
+		<Input
+			multiline={true}
+			rows={3}
+			value={stopText}
+			placeholder="One stop sequence per line"
+			onInput={(event) =>
+				draft({ stop: parseStopLines((event.currentTarget as HTMLTextAreaElement).value) })}
+			onBlur={(event) =>
+				commit({ stop: parseStopLines((event.currentTarget as HTMLTextAreaElement).value) })}
+		/>
+	</Field>
+
+	<Field label="presence_penalty">
+		<Input
+			type="number"
+			min="-2"
+			max="2"
+			step="0.1"
+			value={presence_penalty}
+			onInput={(event) =>
+				draft({
+					presence_penalty: parseOptionalFloat(
+						(event.currentTarget as HTMLInputElement).value,
+						-2,
+						2
+					)
+				})}
+			onBlur={(event) =>
+				commit({
+					presence_penalty: parseOptionalFloat(
+						(event.currentTarget as HTMLInputElement).value,
+						-2,
+						2
+					)
+				})}
+		/>
+	</Field>
+
+	<Field label="frequency_penalty">
+		<Input
+			type="number"
+			min="-2"
+			max="2"
+			step="0.1"
+			value={frequency_penalty}
+			onInput={(event) =>
+				draft({
+					frequency_penalty: parseOptionalFloat(
+						(event.currentTarget as HTMLInputElement).value,
+						-2,
+						2
+					)
+				})}
+			onBlur={(event) =>
+				commit({
+					frequency_penalty: parseOptionalFloat(
+						(event.currentTarget as HTMLInputElement).value,
+						-2,
+						2
+					)
+				})}
+		/>
+	</Field>
+
+	<Field label="repeat_penalty">
+		<Input
+			type="number"
+			min="0"
+			step="0.1"
+			value={repeat_penalty}
+			onInput={(event) =>
+				draft({
+					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+				})}
+			onBlur={(event) =>
+				commit({
+					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+				})}
+		/>
+	</Field>
+
+	<Field label="thinking">
+		<select
+			value={thinking}
+			on:change={(event) => {
+				const value = (event.currentTarget as HTMLSelectElement)
+					.value as (typeof thinkingModes)[number];
+				draft({ thinking: value });
+				commit({ thinking: value });
+			}}
+		>
+			{#each thinkingModes as mode}
+				<option value={mode}>{mode}</option>
+			{/each}
+		</select>
+	</Field>
+
+	<Field label="inputEncoding">
+		<select
+			value={inputEncoding}
+			on:change={(event) => {
+				const value = (event.currentTarget as HTMLSelectElement)
+					.value as (typeof inputEncodings)[number];
+				draft({ inputEncoding: value });
+				commit({ inputEncoding: value });
+			}}
+		>
+			{#each inputEncodings as encoding}
+				<option value={encoding}>{encoding}</option>
+			{/each}
+		</select>
 	</Field>
 
 	<Field label="output">
 		<select
 			value={outputMode}
-			on:change={(event) => setOutputMode((event.currentTarget as HTMLSelectElement).value as LlmOutputMode)}
+			on:change={(event) =>
+				setOutputMode((event.currentTarget as HTMLSelectElement).value as LlmOutputMode)}
 		>
 			{#each outputModes as mode}
 				<option value={mode}>{mode}</option>
 			{/each}
+		</select>
+	</Field>
+
+	<Field label="output.strict">
+		<select
+			value={String(outputStrict)}
+			on:change={(event) => {
+				const value = (event.currentTarget as HTMLSelectElement).value === 'true';
+				draft({
+					output: { ...(params?.output ?? { mode: outputMode }), mode: outputMode, strict: value }
+				});
+				commit({
+					output: { ...(params?.output ?? { mode: outputMode }), mode: outputMode, strict: value }
+				});
+			}}
+		>
+			<option value="true">true</option>
+			<option value="false">false</option>
 		</select>
 	</Field>
 </Section>
@@ -123,8 +374,10 @@
 			rows={3}
 			value={system_prompt}
 			placeholder="(optional)"
-			onInput={(event) => draft({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
-			onBlur={(event) => commit({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+			onInput={(event) =>
+				draft({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+			onBlur={(event) =>
+				commit({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
 		/>
 	</Field>
 
@@ -135,8 +388,10 @@
 				rows={6}
 				value={user_prompt}
 				placeholder="Summarize the input data."
-				onInput={(event) => draft({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
-				onBlur={(event) => commit({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+				onInput={(event) =>
+					draft({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+				onBlur={(event) =>
+					commit({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
 			/>
 			<div class="hint">
 				Tip: you can reserve <code>{'{input}'}</code> as a placeholder for upstream text.
@@ -152,14 +407,107 @@
 				<Input
 					multiline={true}
 					rows={8}
-					value={jsonSchemaText}
+					value={jsonSchemaDraftText}
 					placeholder={jsonSchemaPlaceholder}
-					onInput={(event) => setJsonSchema((event.currentTarget as HTMLTextAreaElement).value)}
+					onInput={(event) =>
+						setJsonSchemaDraft((event.currentTarget as HTMLTextAreaElement).value)}
+					onBlur={(event) => commitJsonSchema((event.currentTarget as HTMLTextAreaElement).value)}
 				/>
 				<div class="hint">
 					JSON mode is enabled. Paste a JSON schema stored as <code>output.jsonSchema</code>.
 				</div>
 			</div>
+		</Field>
+	</Section>
+{/if}
+
+{#if outputMode === 'embeddings'}
+	<Section title="Embedding Contract">
+		<Field label="embedding.dims">
+			<Input
+				type="number"
+				min="1"
+				step="1"
+				value={embeddingDims}
+				onInput={(event) =>
+					draft({
+						output: {
+							...(params?.output ?? { mode: 'embeddings', strict: true }),
+							mode: 'embeddings',
+							embedding: {
+								dims: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1,
+								dtype: params?.output?.embedding?.dtype ?? 'float32',
+								layout: params?.output?.embedding?.layout ?? '1d'
+							}
+						}
+					})}
+				onBlur={(event) =>
+					commit({
+						output: {
+							...(params?.output ?? { mode: 'embeddings', strict: true }),
+							mode: 'embeddings',
+							embedding: {
+								dims: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1,
+								dtype: params?.output?.embedding?.dtype ?? 'float32',
+								layout: params?.output?.embedding?.layout ?? '1d'
+							}
+						}
+					})}
+			/>
+		</Field>
+
+		<Field label="embedding.dtype">
+			<select
+				value={embeddingDtype}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement)
+						.value as (typeof embeddingDtypes)[number];
+					const patch = {
+						output: {
+							...(params?.output ?? { mode: 'embeddings', strict: true }),
+							mode: 'embeddings' as const,
+							embedding: {
+								dims: params?.output?.embedding?.dims ?? 1536,
+								dtype: value,
+								layout: params?.output?.embedding?.layout ?? '1d'
+							}
+						}
+					};
+					draft(patch);
+					commit(patch);
+				}}
+			>
+				{#each embeddingDtypes as dtype}
+					<option value={dtype}>{dtype}</option>
+				{/each}
+			</select>
+		</Field>
+
+		<Field label="embedding.layout">
+			<select
+				value={embeddingLayout}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement)
+						.value as (typeof embeddingLayouts)[number];
+					const patch = {
+						output: {
+							...(params?.output ?? { mode: 'embeddings', strict: true }),
+							mode: 'embeddings' as const,
+							embedding: {
+								dims: params?.output?.embedding?.dims ?? 1536,
+								dtype: params?.output?.embedding?.dtype ?? 'float32',
+								layout: value
+							}
+						}
+					};
+					draft(patch);
+					commit(patch);
+				}}
+			>
+				{#each embeddingLayouts as layout}
+					<option value={layout}>{layout}</option>
+				{/each}
+			</select>
 		</Field>
 	</Section>
 {/if}

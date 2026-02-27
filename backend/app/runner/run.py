@@ -221,6 +221,15 @@ def _source_payload_schema(out_contract: Optional[str], data_value: Any) -> Opti
 
 def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, Any]]:
     mt = (mime_type or "").lower()
+    if isinstance(data_value, dict) and str(data_value.get("mode") or "").lower() == "embeddings":
+        out = {"schema_version": 1, "type": "embeddings"}
+        if "dims" in data_value:
+            out["dims"] = data_value.get("dims")
+        if "dtype" in data_value:
+            out["dtype"] = data_value.get("dtype")
+        if "layout" in data_value:
+            out["layout"] = data_value.get("layout")
+        return out
     if "application/json" in mt:
         parsed = data_value
         if isinstance(parsed, str):
@@ -357,13 +366,19 @@ def _infer_artifact_port_type(artifact: Artifact) -> str:
 
 def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     ports = (node.get("data", {}).get("ports", {}) or {})
+    if kind == "llm":
+        params = (node.get("data", {}).get("params", {}) or {})
+        output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
+        if output_mode == "json":
+            return "json"
+        if output_mode == "embeddings":
+            return "embeddings"
+        return "text"
     declared = ports.get("out")
     if declared:
         return str(declared)
     if kind == "transform":
         return "table"
-    if kind == "llm":
-        return "text"
     if kind == "tool":
         return "json"
     return None
@@ -417,8 +432,10 @@ def _env_bool(name: str, default: bool) -> bool:
 def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if kind == "llm":
         output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
+        input_encoding = str((params.get("input_encoding") or params.get("inputEncoding") or "text"))
         return {
-            "llm_input_format": "artifact_text_v1",
+            "llm_input_format": "artifact_input_v2",
+            "llm_input_encoding": input_encoding,
             "llm_table_format": "csv_v1",
             "llm_table_max_rows": _env_int("LLM_TABLE_MAX_ROWS", 200),
             "llm_table_max_cols": _env_int("LLM_TABLE_MAX_COLS", 50),
@@ -1247,6 +1264,12 @@ async def run_graph(
                         # 5) store artifact bytes + cache
                         artifact_id = exec_key  # keep your convention
 
+                        llm_output_mode = str((norm_params.get("output_mode") or ((norm_params.get("output") or {}).get("mode")) or "text")) if kind == "llm" else ""
+                        llm_port_type = "text"
+                        if llm_output_mode == "json":
+                            llm_port_type = "json"
+                        elif llm_output_mode == "embeddings":
+                            llm_port_type = "embeddings"
                         artifact = Artifact(
                             artifact_id=artifact_id,
                             node_kind=kind,
@@ -1483,10 +1506,17 @@ async def run_graph(
                             )
 
                     elif kind == "llm":
-                        ports = (n.get("data", {}).get("ports", {}) or {})
-                        out_contract = ports.get("out") or "text"
                         output_cfg = params.get("output") if isinstance(params, dict) else {}
-                        output_mode = output_cfg.get("mode") if isinstance(output_cfg, dict) else None
+                        output_mode = str(
+                            (params.get("output_mode") if isinstance(params, dict) else None)
+                            or (output_cfg.get("mode") if isinstance(output_cfg, dict) else None)
+                            or "text"
+                        )
+                        out_contract = "text"
+                        if output_mode == "json":
+                            out_contract = "json"
+                        elif output_mode == "embeddings":
+                            out_contract = "embeddings"
 
                         if out_contract == "json":
                             if data_value is None:
@@ -1505,6 +1535,38 @@ async def run_graph(
                             payload_bytes = json.dumps(parsed_json, ensure_ascii=False).encode("utf-8")
                             mime_type = "application/json"
                             data_value = parsed_json
+                        elif out_contract == "embeddings":
+                            if data_value is None:
+                                raise RuntimeError("LLM output contract mismatch: out=embeddings expects JSON payload")
+                            if isinstance(data_value, bytes):
+                                try:
+                                    raw_json = data_value.decode("utf-8")
+                                except Exception:
+                                    raise RuntimeError(
+                                        "LLM output contract mismatch: out=embeddings requires utf-8 decodable bytes"
+                                    )
+                                try:
+                                    parsed_embeddings = json.loads(raw_json)
+                                except Exception:
+                                    raise RuntimeError(
+                                        "LLM output contract mismatch: out=embeddings expects valid JSON payload"
+                                    )
+                            elif isinstance(data_value, str):
+                                try:
+                                    parsed_embeddings = json.loads(data_value)
+                                except Exception:
+                                    raise RuntimeError(
+                                        "LLM output contract mismatch: out=embeddings expects valid JSON payload"
+                                    )
+                            elif isinstance(data_value, dict):
+                                parsed_embeddings = data_value
+                            else:
+                                raise RuntimeError(
+                                    f"LLM output contract mismatch: out=embeddings expects object/string, got {type(data_value)}"
+                                )
+                            payload_bytes = json.dumps(parsed_embeddings, ensure_ascii=False).encode("utf-8")
+                            mime_type = "application/json"
+                            data_value = parsed_embeddings
                         elif out_contract == "text":
                             if data_value is None:
                                 raise RuntimeError("LLM output contract mismatch: out=text expects str content")
@@ -1518,11 +1580,7 @@ async def run_graph(
                             else:
                                 raise RuntimeError(f"LLM output contract mismatch: out=text expects str, got {type(data_value)}")
                             payload_bytes = text_value.encode("utf-8")
-                            mime_type = (
-                                "text/markdown; charset=utf-8"
-                                if output_mode == "markdown"
-                                else "text/plain; charset=utf-8"
-                            )
+                            mime_type = "text/plain; charset=utf-8"
                             data_value = text_value
                         else:
                             raise RuntimeError(
@@ -1594,6 +1652,15 @@ async def run_graph(
                     artifact_params_hash = (
                         node_state_hash
                     )
+                    artifact_port_type = ((n.get("data", {}).get("ports", {}) or {}).get("out"))
+                    if kind == "llm":
+                        llm_output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
+                        if llm_output_mode == "json":
+                            artifact_port_type = "json"
+                        elif llm_output_mode == "embeddings":
+                            artifact_port_type = "embeddings"
+                        else:
+                            artifact_port_type = "text"
 
                     artifact = Artifact(
                         artifact_id=artifact_id,
@@ -1603,7 +1670,7 @@ async def run_graph(
                         created_at=datetime.now(timezone.utc),
                         execution_version=context.execution_version,
                         mime_type=mime_type,
-                        port_type=((n.get("data", {}).get("ports", {}) or {}).get("out")),
+                        port_type=artifact_port_type,
                         size_bytes=len(payload_bytes),
                         storage_uri=f"artifact://{artifact_id}",
                         payload_schema=(

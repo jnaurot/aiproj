@@ -4,7 +4,7 @@
   "nodes": {
     "llm": {
       "in": ["text", "json", "table"],
-      "out": ["text", "json"]
+      "out": ["text", "json", "embeddings"]
     },
     "transform": {
       "in": ["table"],

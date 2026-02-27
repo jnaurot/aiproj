@@ -1,6 +1,8 @@
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
+from app.runner.nodes.transform import load_table_from_artifact_bytes
 from ..runner.metadata import GraphContext, NodeOutput
 from datetime import datetime, timezone
 
@@ -34,6 +36,15 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
+        if "strict" in out and "output_strict" not in p:
+            p["output_strict"] = out.get("strict")
+        if "embedding" in out and "embedding_contract" not in p:
+            p["embedding_contract"] = out.get("embedding")
+
+    if "stop" in p and "stop_sequences" not in p:
+        p["stop_sequences"] = p.pop("stop")
+    if "inputEncoding" in p and "input_encoding" not in p:
+        p["input_encoding"] = p.pop("inputEncoding")
 
     return p
 
@@ -41,6 +52,71 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def iso_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _canon_json(obj: Any) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _is_table_artifact(art: Any) -> bool:
+    mime = str(getattr(art, "mime_type", "") or "").lower()
+    payload_schema = getattr(art, "payload_schema", None) or {}
+    payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
+    port_type = str(getattr(art, "port_type", "") or "").lower()
+    return (
+        port_type == "table"
+        or payload_type == "table"
+        or "csv" in mime
+        or "tab-separated-values" in mime
+        or "parquet" in mime
+        or "spreadsheet" in mime
+        or "excel" in mime
+    )
+
+
+def _is_json_artifact(art: Any) -> bool:
+    mime = str(getattr(art, "mime_type", "") or "").lower()
+    payload_schema = getattr(art, "payload_schema", None) or {}
+    payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
+    port_type = str(getattr(art, "port_type", "") or "").lower()
+    return port_type == "json" or payload_type == "json" or "application/json" in mime or "json" in mime
+
+
+async def _serialize_artifact_input(context: GraphContext, artifact_id: str, input_encoding: str) -> str:
+    if input_encoding == "text":
+        return await materialize_text(context, artifact_id)
+
+    art = await context.artifact_store.get(artifact_id)
+    payload = await context.artifact_store.read(artifact_id)
+    mime = str(getattr(art, "mime_type", "") or "")
+
+    if input_encoding == "json_canonical":
+        if not _is_json_artifact(art):
+            raise ValueError(f"inputEncoding=json_canonical requires JSON artifact input (artifact_id={artifact_id})")
+        try:
+            obj = json.loads(payload.decode("utf-8", errors="replace"))
+        except Exception as e:
+            raise ValueError(f"Failed parsing JSON input artifact {artifact_id}: {e}") from e
+        return _canon_json(obj)
+
+    if input_encoding == "table_canonical":
+        if not _is_table_artifact(art):
+            raise ValueError(
+                f"inputEncoding=table_canonical requires table artifact input (artifact_id={artifact_id})"
+            )
+        try:
+            df = load_table_from_artifact_bytes(mime, payload)
+        except Exception as e:
+            raise ValueError(
+                f"inputEncoding=table_canonical is not supported for mime_type={mime!r} (artifact_id={artifact_id})"
+            ) from e
+        cols = sorted(str(c) for c in list(df.columns))
+        records = []
+        for row in df.to_dict(orient="records"):
+            records.append({k: row.get(k) for k in cols})
+        return _canon_json({"format": "table_canonical_v1", "columns": cols, "rows": records})
+
+    raise ValueError(f"Unsupported input_encoding: {input_encoding}")
 
 async def exec_llm(
     run_id: str,
@@ -68,19 +144,21 @@ async def exec_llm(
 
     llm_kind = node.get("data", {}).get("llmKind") or "ollama"
 
-    text_parts: list[str] = []
+    input_encoding = llm_params.input_encoding or "text"
+    serialized_inputs: List[str] = []
     if not upstream_artifact_ids:
         text = ""
     elif len(upstream_artifact_ids) == 1:
-        text = await materialize_text(context, upstream_artifact_ids[0])
+        text = await _serialize_artifact_input(context, upstream_artifact_ids[0], input_encoding)
+        serialized_inputs = [text]
     else:
-        # Deterministic multi-input combine: stable order from upstream_artifact_ids,
-        # explicit provenance headers, and fixed separators.
+        text_parts: List[str] = []
         for idx, aid in enumerate(upstream_artifact_ids, start=1):
-            payload = await materialize_text(context, aid)
+            payload = await _serialize_artifact_input(context, aid, input_encoding)
+            serialized_inputs.append(payload)
             text_parts.append(f"### INPUT {idx} artifact={aid}\n{payload}")
         text = "\n\n---\n\n".join(text_parts)
-    print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
+    print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text), "input_encoding:", input_encoding)
 
 
     await context.bus.emit(
@@ -102,6 +180,8 @@ async def exec_llm(
             context,
             None,
             llm_params,
+            input_text=text,
+            input_items=serialized_inputs,
             upstream_artifact_ids=upstream_artifact_ids,
         )
 
@@ -113,6 +193,8 @@ async def exec_llm(
             context,
             None,
             llm_params,
+            input_text=text,
+            input_items=serialized_inputs,
             upstream_artifact_ids=upstream_artifact_ids,
         )
 

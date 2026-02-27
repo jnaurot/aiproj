@@ -9,6 +9,8 @@ import hashlib
 import re
 
 import httpx
+from jsonschema import ValidationError
+from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 
@@ -195,6 +197,8 @@ async def exec_llm_ollama(
     # bus: RunEventBus,
     input_metadata: Optional[FileMetadata],
     params: LLMParams,
+    input_text: Optional[str] = None,
+    input_items: Optional[list[str]] = None,
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """
@@ -233,7 +237,7 @@ async def exec_llm_ollama(
             metadata=None
             )
     
-    text = await materialize_text(context, upstream_artifact_ids[0])
+    text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
     print("TEXT: ",text)
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
 
@@ -276,10 +280,19 @@ async def exec_llm_ollama(
         payload["options"]["seed"] = params.seed
     if params.stop_sequences:
         payload["options"]["stop"] = params.stop_sequences
+    if params.repeat_penalty is not None:
+        payload["options"]["repeat_penalty"] = params.repeat_penalty
 
     # Structured output (Ollama supports `format: "json"` for JSON mode)
     if params.output_mode == "json":
         payload["format"] = "json"
+    elif params.output_mode == "embeddings":
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+            error="embeddings mode not supported for ollama executor yet",
+        )
 
     await context.bus.emit(
         {
@@ -465,14 +478,20 @@ async def exec_llm_ollama(
                         execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
                         error="LLM output_mode=json but response was not valid JSON",
                     )
+                if params.output_strict:
+                    try:
+                        jsonschema_validate(instance=json_data, schema=params.output_schema or {})
+                    except ValidationError as e:
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error=f"LLM strict JSON schema validation failed: {e.message}",
+                        )
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
                 file_type = "json"
                 mime_type = "application/json"
-            elif params.output_mode == "markdown":
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.md"
-                file_type = "txt"
-                mime_type = "text/markdown; charset=utf-8"
             else: # text
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
                 file_type = "txt"

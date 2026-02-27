@@ -33,13 +33,21 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
+        if "strict" in out and "output_strict" not in p:
+            p["output_strict"] = out.get("strict")
+        if "embedding" in out and "embedding_contract" not in p:
+            p["embedding_contract"] = out.get("embedding")
 
     # frontend may send stopSequences, inputMapping (if you add later)
     if "stopSequences" in p and "stop_sequences" not in p:
         p["stop_sequences"] = p.pop("stopSequences")
+    if "stop" in p and "stop_sequences" not in p:
+        p["stop_sequences"] = p.pop("stop")
 
     if "inputMapping" in p and "input_mapping" not in p:
         p["input_mapping"] = p.pop("inputMapping")
+    if "inputEncoding" in p and "input_encoding" not in p:
+        p["input_encoding"] = p.pop("inputEncoding")
 
     return p
 
@@ -295,7 +303,6 @@ class LLMDialect(str, Enum):
     OLLAMA = "ollama"
 
 class LLMParams(NodeParamSchema):
-    # kind: LLMDialect
     # llm_type: LLMType = LLMType.COMPLETION
     
     base_url: Optional[str] = None
@@ -314,15 +321,17 @@ class LLMParams(NodeParamSchema):
     top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
     seed: Optional[int] = None
     stop_sequences: List[str] = Field(default_factory=list)
-    
-    # # Processing mode
-    # batch_size: int = Field(1, ge=1, description="Rows to process at once")
-    # apply_to_column: Optional[str] = None
-    # output_column: str = "llm_output"
+    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
+    repeat_penalty: Optional[float] = Field(None, ge=0.0)
+    thinking: Optional[Literal["off", "auto", "on"]] = None
+    input_encoding: Optional[Literal["text", "json_canonical", "table_canonical"]] = None
     
     # output
-    output_mode: Literal["text", "markdown", "json"] = "text"
+    output_mode: Literal["text", "json", "embeddings"] = "text"
     output_schema: Optional[Dict[str, Any]] = None
+    output_strict: bool = True
+    embedding_contract: Optional[Dict[str, Any]] = None
     
     # Error handling
     retry_on_error: bool = True
@@ -331,22 +340,29 @@ class LLMParams(NodeParamSchema):
     
     input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/ports
 
-    # @model_validator(mode="after")
-    # def _validate_contract(self):
-    #     llm_kind = node.get("data", {}).get("llmKind") or "ollama"
-    #     llm_params = LLMParams.model_validate(norm)
-    #     # optional extra checks by kind:
-    #     if llm_kind == "openai_compat":
-    #         # only required if you want to enforce auth at validation time
-    #         if not llm_params.connection_ref and not llm_params.api_key_ref:
-    #             raise ValueError("api_key_ref required for openai_compat when no connection_ref")
-    #     return self
     @model_validator(mode="after")
     def _validate_contract(self):
         if not self.base_url and not self.connection_ref:
             raise ValueError("Either base_url or connection_ref is required")
         if self.output_mode == "json" and not self.output_schema:
             raise ValueError("output_schema required when output_mode='json'")
+        if self.output_mode == "embeddings":
+            contract = self.embedding_contract
+            if not isinstance(contract, dict):
+                raise ValueError("embedding_contract required when output_mode='embeddings'")
+            dims = contract.get("dims")
+            if not isinstance(dims, int) or dims <= 0:
+                raise ValueError("embedding_contract.dims must be a positive integer")
+            dtype = contract.get("dtype")
+            layout = contract.get("layout")
+            if dtype is None:
+                contract["dtype"] = "float32"
+            elif dtype not in {"float32", "float16", "float64"}:
+                raise ValueError("embedding_contract.dtype must be one of: float32, float16, float64")
+            if layout is None:
+                contract["layout"] = "1d"
+            elif layout not in {"1d", "2d"}:
+                raise ValueError("embedding_contract.layout must be one of: 1d, 2d")
         return self
 
 # ============================================================================

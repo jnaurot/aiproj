@@ -7,6 +7,7 @@ dependencies = [
   "uvicorn[standard]>=0.27",
   "pydantic>=2.6",
   "httpx>=0.26",
+  "jsonschema>=4.23",
   "pandas>=2.2",
   "orjson>=3.9",
   "fastmcp>=2.0",   # FastMCP client/server

@@ -19,9 +19,15 @@ _SENSITIVE_PARAM_KEYS = {
     "credentials",
 }
 
+_NON_SENSITIVE_TOKEN_KEYS = {
+    "max_tokens",
+}
+
 
 def _is_sensitive_key(key: str) -> bool:
     k = (key or "").lower()
+    if k in _NON_SENSITIVE_TOKEN_KEYS:
+        return False
     return any(s in k for s in _SENSITIVE_PARAM_KEYS)
 
 
@@ -143,6 +149,42 @@ def build_node_state_hash(
 ) -> str:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     kind = str(data.get("kind") or "")
+    if kind == "llm":
+        output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}
+        output_mode = str(params.get("output_mode") or output_obj.get("mode") or "text")
+        output_strict = (
+            params.get("output_strict")
+            if "output_strict" in params
+            else (output_obj.get("strict") if "strict" in output_obj else True)
+        )
+        output_schema = params.get("output_schema")
+        if output_schema is None and "jsonSchema" in output_obj:
+            output_schema = output_obj.get("jsonSchema")
+        embedding_contract = params.get("embedding_contract")
+        if embedding_contract is None and "embedding" in output_obj:
+            embedding_contract = output_obj.get("embedding")
+
+        llm_out_port = "text"
+        if output_mode == "json":
+            llm_out_port = "json"
+        elif output_mode == "embeddings":
+            llm_out_port = "embeddings"
+
+        state = {
+            "execution_version": execution_version,
+            "node_kind": kind,
+            "ports": {"out": llm_out_port},
+            "schema": {
+                "output_mode": output_mode,
+                "output_strict": bool(output_strict),
+                "output_schema": _sanitize(output_schema),
+                "embedding_contract": _sanitize(embedding_contract),
+            },
+            "settings": {},
+            "params": _sanitize(params or {}),
+        }
+        return _sha256_text(_canon_json(state))
+
     state: Dict[str, Any] = {
         "execution_version": execution_version,
         "node_kind": kind,

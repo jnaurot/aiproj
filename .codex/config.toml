@@ -1,0 +1,6 @@
+# Put this at the top level of ~/.codex/config.toml
+approval_policy      = "never"
+sandbox_mode         = "danger-full-access"     # or "workspace-write" if you want to stay somewhat contained
+
+# Optional extras people combine for maximum no-prompt behavior
+network_access       = true                     # if danger-full-access doesn't imply it already

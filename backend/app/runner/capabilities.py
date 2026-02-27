@@ -9,7 +9,7 @@ _DEFAULT_CAPABILITIES: Dict[str, Any] = {
     "schemaVersion": 1,
     "allowedPortTypes": ["table", "json", "text", "binary", "embeddings"],
     "nodes": {
-        "llm": {"in": ["text", "json", "table"], "out": ["text", "json"]},
+        "llm": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "transform": {"in": ["table"], "out": ["table"]},
         "source": {"in": [], "out": ["table", "json", "text", "binary"]},
         "tool": {
@@ -88,4 +88,3 @@ def capability_signature() -> str:
     import hashlib
 
     return hashlib.sha256(payload).hexdigest()
-

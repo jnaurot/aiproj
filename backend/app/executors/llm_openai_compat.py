@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
+from jsonschema import ValidationError
+from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
@@ -88,6 +90,8 @@ async def exec_llm_openai_compat(
     context: GraphContext,
     input_metadata: Optional[FileMetadata],
     params: LLMParams,
+    input_text: Optional[str] = None,
+    input_items: Optional[list[str]] = None,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     node_id = node.get("id", "<missing-node-id>")
@@ -115,7 +119,8 @@ async def exec_llm_openai_compat(
             execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
         )
 
-    upstream_text = await materialize_text(context, upstream_artifact_ids[0])
+    upstream_text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
+    input_items = input_items or ([upstream_text] if upstream_text else [])
     base_url = (params.base_url or "").rstrip("/")
     if not base_url:
         return NodeOutput(
@@ -144,6 +149,10 @@ async def exec_llm_openai_compat(
         payload["seed"] = params.seed
     if params.stop_sequences:
         payload["stop"] = params.stop_sequences
+    if params.presence_penalty is not None:
+        payload["presence_penalty"] = params.presence_penalty
+    if params.frequency_penalty is not None:
+        payload["frequency_penalty"] = params.frequency_penalty
     if params.output_mode == "json":
         payload["response_format"] = {"type": "json_object"}
 
@@ -159,6 +168,8 @@ async def exec_llm_openai_compat(
     )
 
     url = f"{base_url}/v1/chat/completions"
+    if params.output_mode == "embeddings":
+        url = f"{base_url}/v1/embeddings"
     attempt = 0
     last_err: Optional[str] = None
 
@@ -171,78 +182,133 @@ async def exec_llm_openai_compat(
                 pool=10.0,
             )
 
-            chunks: List[str] = []
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream("POST", url, json=payload, headers=headers) as resp:
-                    resp.raise_for_status()
-
-                    async for raw_line in resp.aiter_lines():
-                        if not raw_line:
-                            continue
-
-                        line = raw_line.strip()
-                        if line.startswith("data:"):
-                            line = line[5:].strip()
-                        if not line:
-                            continue
-                        if line == "[DONE]":
-                            break
-
-                        try:
-                            obj = json.loads(line)
-                        except json.JSONDecodeError:
-                            await context.bus.emit(
-                                {
-                                    "type": "log",
-                                    "runId": run_id,
-                                    "nodeId": node_id,
-                                    "at": iso_now(),
-                                    "level": "warn",
-                                    "message": f"openai_compat stream: non-JSON line: {line[:200]}",
-                                }
-                            )
-                            continue
-
-                        delta = ""
-                        choices = obj.get("choices")
-                        if isinstance(choices, list) and choices:
-                            c0 = choices[0] if isinstance(choices[0], dict) else {}
-                            d = c0.get("delta")
-                            if isinstance(d, dict):
-                                delta = d.get("content") or ""
-
-                        if delta:
-                            chunks.append(delta)
-                            await context.bus.emit(
-                                {
-                                    "type": "llm_delta",
-                                    "runId": run_id,
-                                    "nodeId": node_id,
-                                    "at": iso_now(),
-                                    "delta": delta,
-                                }
-                            )
-
-            data = "".join(chunks).strip()
-            if not data:
-                await context.bus.emit(
-                    {
-                        "type": "log",
-                        "runId": run_id,
-                        "nodeId": node_id,
-                        "at": iso_now(),
-                        "level": "warn",
-                        "message": "openai_compat stream returned empty content; retrying once with stream=false",
-                    }
-                )
-
-                payload_non_stream = dict(payload)
-                payload_non_stream["stream"] = False
+            if params.output_mode == "embeddings":
+                embed_payload: Dict[str, Any] = {
+                    "model": params.model,
+                    "input": input_items if len(input_items) > 1 else (input_items[0] if input_items else upstream_text),
+                }
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(url, json=payload_non_stream, headers=headers)
+                    resp = await client.post(url, json=embed_payload, headers=headers)
                     resp.raise_for_status()
                     obj = resp.json()
-                data = _extract_chat_content(obj).strip()
+                rows = obj.get("data")
+                if not isinstance(rows, list) or not rows:
+                    return NodeOutput(
+                        status="failed",
+                        metadata=None,
+                        execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                        error="Embeddings response missing data[]",
+                    )
+                vectors: List[List[float]] = []
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get("embedding"), list):
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error="Embeddings response missing embedding vectors",
+                        )
+                    vec = row.get("embedding")
+                    vectors.append([float(x) for x in vec])
+                contract = params.embedding_contract or {}
+                dims = int(contract.get("dims") or 0)
+                layout = str(contract.get("layout") or "1d")
+                for vec in vectors:
+                    if len(vec) != dims:
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error=f"Embedding dims mismatch: expected {dims}, got {len(vec)}",
+                        )
+                if layout == "1d" and len(vectors) != 1:
+                    return NodeOutput(
+                        status="failed",
+                        metadata=None,
+                        execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                        error=f"Embedding layout 1d requires exactly one vector, got {len(vectors)}",
+                    )
+                output_obj = {
+                    "mode": "embeddings",
+                    "dims": dims,
+                    "dtype": str(contract.get("dtype") or "float32"),
+                    "layout": layout,
+                    "data": vectors[0] if layout == "1d" else vectors,
+                }
+                data = json.dumps(output_obj, separators=(",", ":"), sort_keys=True)
+            else:
+                chunks: List[str] = []
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                        resp.raise_for_status()
+
+                        async for raw_line in resp.aiter_lines():
+                            if not raw_line:
+                                continue
+
+                            line = raw_line.strip()
+                            if line.startswith("data:"):
+                                line = line[5:].strip()
+                            if not line:
+                                continue
+                            if line == "[DONE]":
+                                break
+
+                            try:
+                                obj = json.loads(line)
+                            except json.JSONDecodeError:
+                                await context.bus.emit(
+                                    {
+                                        "type": "log",
+                                        "runId": run_id,
+                                        "nodeId": node_id,
+                                        "at": iso_now(),
+                                        "level": "warn",
+                                        "message": f"openai_compat stream: non-JSON line: {line[:200]}",
+                                    }
+                                )
+                                continue
+
+                            delta = ""
+                            choices = obj.get("choices")
+                            if isinstance(choices, list) and choices:
+                                c0 = choices[0] if isinstance(choices[0], dict) else {}
+                                d = c0.get("delta")
+                                if isinstance(d, dict):
+                                    delta = d.get("content") or ""
+
+                            if delta:
+                                chunks.append(delta)
+                                await context.bus.emit(
+                                    {
+                                        "type": "llm_delta",
+                                        "runId": run_id,
+                                        "nodeId": node_id,
+                                        "at": iso_now(),
+                                        "delta": delta,
+                                    }
+                                )
+
+                data = "".join(chunks).strip()
+                if not data:
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "at": iso_now(),
+                            "level": "warn",
+                            "message": "openai_compat stream returned empty content; retrying once with stream=false",
+                        }
+                    )
+
+                    payload_non_stream = dict(payload)
+                    payload_non_stream["stream"] = False
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        resp = await client.post(url, json=payload_non_stream, headers=headers)
+                        resp.raise_for_status()
+                        obj = resp.json()
+                    data = _extract_chat_content(obj).strip()
 
             mime_type = "text/plain; charset=utf-8"
             file_type = "txt"
@@ -268,15 +334,25 @@ async def exec_llm_openai_compat(
                         execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
                         error="LLM output_mode=json but response was not valid JSON",
                     )
+                if params.output_strict:
+                    try:
+                        jsonschema_validate(instance=json_data, schema=params.output_schema or {})
+                    except ValidationError as e:
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error=f"LLM strict JSON schema validation failed: {e.message}",
+                        )
 
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
                 mime_type = "application/json"
                 file_type = "json"
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
-            elif params.output_mode == "markdown":
-                mime_type = "text/markdown; charset=utf-8"
-                file_type = "txt"
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.md"
+            elif params.output_mode == "embeddings":
+                mime_type = "application/json"
+                file_type = "json"
+                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.embeddings.json"
 
             payload_bytes = (data or "").encode("utf-8")
             content_hash = _sha256_text(data or "")

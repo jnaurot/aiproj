@@ -42,7 +42,8 @@ class TestLLMParams:
             "user_prompt": "Hello",
             "output": {
                 "mode": "json",
-                "jsonSchema": {"type": "object"}
+                "jsonSchema": {"type": "object"},
+                "strict": True,
             }
         }
         
@@ -50,6 +51,7 @@ class TestLLMParams:
         
         assert result["output_mode"] == "json"
         assert result["output_schema"] == {"type": "object"}
+        assert result["output_strict"] is True
     
     def test_normalize_stop_sequences(self):
         """Test stop_sequences normalization"""
@@ -60,6 +62,18 @@ class TestLLMParams:
         result = normalize_llm_params_frontend(input_params)
         
         assert result["stop_sequences"] == ["\n", "END"]
+
+    def test_normalize_new_llm_frontend_keys(self):
+        input_params = {
+            "stop": ["A", "B"],
+            "inputEncoding": "json_canonical",
+            "output": {"mode": "embeddings", "embedding": {"dims": 1536}},
+        }
+        result = normalize_llm_params_frontend(input_params)
+        assert result["stop_sequences"] == ["A", "B"]
+        assert result["input_encoding"] == "json_canonical"
+        assert result["output_mode"] == "embeddings"
+        assert result["embedding_contract"] == {"dims": 1536}
     
     def test_success_with_base_url(self):
         """Test successful validation with base_url"""
@@ -103,6 +117,40 @@ class TestLLMParams:
                 "base_url": "http://api.example.com",
                 "output_mode": "json"
             })
+
+    def test_requires_embedding_contract_for_embeddings_mode(self):
+        with pytest.raises(ValueError, match="embedding_contract required when output_mode='embeddings'"):
+            LLMParams.model_validate(
+                {
+                    "model": "gpt-4",
+                    "user_prompt": "Test",
+                    "base_url": "http://api.example.com",
+                    "output_mode": "embeddings",
+                }
+            )
+
+    def test_embeddings_contract_defaults_and_validation(self):
+        params = LLMParams.model_validate(
+            {
+                "model": "gpt-4",
+                "user_prompt": "Test",
+                "base_url": "http://api.example.com",
+                "output_mode": "embeddings",
+                "embedding_contract": {"dims": 1536},
+            }
+        )
+        assert params.embedding_contract == {"dims": 1536, "dtype": "float32", "layout": "1d"}
+
+    def test_output_mode_rejects_markdown(self):
+        with pytest.raises(ValueError):
+            LLMParams.model_validate(
+                {
+                    "model": "gpt-4",
+                    "user_prompt": "Test",
+                    "base_url": "http://api.example.com",
+                    "output_mode": "markdown",
+                }
+            )
     
     def test_temperature_validation(self):
         """Test temperature is constrained to [0, 2]"""
