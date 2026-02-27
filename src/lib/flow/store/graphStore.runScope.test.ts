@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphState } from './graphStore';
-import { __applyRunEventForTest, __hardResetGraphForTest, __hydrateFromRunSnapshotForTest } from './graphStore';
+import {
+	__applyRunEventForTest,
+	__hardResetGraphForTest,
+	__hydrateFromRunSnapshotForTest,
+	__markStaleFromNodeForTest
+} from './graphStore';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import { displayStatusFromBinding } from './runScope';
 
@@ -37,6 +42,34 @@ function makeState(): GraphState {
 			llm_b: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-b' }
 		},
 		activeRunId: 'run-1'
+	};
+}
+
+function makeArtistBranchState(): GraphState {
+	return {
+		graphId: 'graph-test',
+		nodes: [{ id: 'src' }, { id: 'llm_artist' }, { id: 'llm' }] as any,
+		edges: [
+			{ id: 'e1', source: 'src', target: 'llm_artist', data: { exec: 'idle' } },
+			{ id: 'e2', source: 'src', target: 'llm', data: { exec: 'idle' } }
+		] as any,
+		selectedNodeId: null,
+		inspector: { nodeId: null, draftParams: {}, dirty: false },
+		logs: [],
+		runStatus: 'running',
+		lastRunStatus: 'succeeded',
+		freshness: 'stale',
+		staleNodeCount: 3,
+		activeRunMode: 'from_selected_onward',
+		activeRunFrom: 'llm',
+		activeRunNodeSet: new Set<string>(['src', 'llm_artist', 'llm']),
+		nodeOutputs: {},
+		nodeBindings: {
+			src: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-src' },
+			llm_artist: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-artist' },
+			llm: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-llm' }
+		},
+		activeRunId: 'run-artist'
 	};
 }
 
@@ -230,5 +263,218 @@ describe('graphStore partial run scope events', () => {
 			}
 		});
 		expect(afterForeignSnapshot).toEqual(reset);
+	});
+
+	it('snapshot switch marks downstream stale while keeping stale previews visible', () => {
+		const state = makeState();
+		const withPreviews: GraphState = {
+			...state,
+			nodeOutputs: {
+				xfm: { preview: 'xfm old preview', cacheDecision: 'cache_hit', cached: true },
+				llm_a: { preview: 'llm_a old preview', cacheDecision: 'cache_hit', cached: true },
+				llm_b: { preview: 'llm_b old preview', cacheDecision: 'cache_hit', cached: true }
+			}
+		};
+		const next = __markStaleFromNodeForTest(withPreviews, 'src');
+
+		expect(next.nodeBindings.src.status).toBe('stale');
+		expect(next.nodeBindings.xfm.status).toBe('stale');
+		expect(next.nodeBindings.llm_a.status).toBe('stale');
+		expect(next.nodeBindings.llm_b.status).toBe('stale');
+		expect(next.nodeBindings.xfm.staleReason).toBe('UPSTREAM_CHANGED');
+		expect(next.nodeBindings.src.staleReason).toBe('PARAMS_CHANGED');
+
+		expect(next.nodeBindings.xfm.lastArtifactId).toBe('art-xfm');
+		expect(next.nodeBindings.llm_a.lastArtifactId).toBe('art-a');
+		expect(next.nodeBindings.llm_b.lastArtifactId).toBe('art-b');
+
+		expect(next.nodeOutputs.xfm.preview).toBe('xfm old preview');
+		expect(next.nodeOutputs.llm_a.preview).toBe('llm_a old preview');
+		expect(next.nodeOutputs.llm_b.preview).toBe('llm_b old preview');
+	});
+
+	it('stale downstream can fast-reuse cached artifacts on selected-onward run', () => {
+		const runId = 'run-2';
+		let state = __markStaleFromNodeForTest(makeState(), 'src');
+		expect(state.nodeBindings.xfm.status).toBe('stale');
+		expect(state.nodeBindings.llm_b.status).toBe('stale');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-03-01T00:00:00Z',
+				runFrom: 'llm_b',
+				runMode: 'from_selected_onward',
+				plannedNodeIds: ['src', 'xfm', 'llm_b']
+			},
+			runId
+		);
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId,
+				at: '2026-03-01T00:00:01Z',
+				nodeId: 'xfm',
+				nodeKind: 'transform',
+				decision: 'cache_hit',
+				execKey: 'xfm-key-new',
+				artifactId: 'art-xfm-cached'
+			},
+			runId
+		);
+		state = __applyRunEventForTest(
+			state,
+			{ type: 'node_finished', runId, at: '2026-03-01T00:00:01Z', nodeId: 'xfm', status: 'succeeded' },
+			runId
+		);
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId,
+				at: '2026-03-01T00:00:02Z',
+				nodeId: 'llm_b',
+				nodeKind: 'llm',
+				decision: 'cache_hit',
+				execKey: 'llm-b-key-new',
+				artifactId: 'art-b-cached'
+			},
+			runId
+		);
+		state = __applyRunEventForTest(
+			state,
+			{ type: 'node_finished', runId, at: '2026-03-01T00:00:02Z', nodeId: 'llm_b', status: 'succeeded' },
+			runId
+		);
+		state = __applyRunEventForTest(
+			state,
+			{ type: 'run_finished', runId, at: '2026-03-01T00:00:03Z', status: 'succeeded' },
+			runId
+		);
+
+		expect(state.nodeBindings.xfm.currentArtifactId).toBe('art-xfm-cached');
+		expect(state.nodeBindings.llm_b.currentArtifactId).toBe('art-b-cached');
+		expect(state.nodeBindings.xfm.cacheValid).toBe(true);
+		expect(state.nodeBindings.llm_b.cacheValid).toBe(true);
+		expect(state.nodeBindings.xfm.isUpToDate).toBe(true);
+		expect(state.nodeBindings.llm_b.isUpToDate).toBe(true);
+		expect(displayStatusFromBinding(state.nodeBindings.xfm as any)).toBe('succeeded');
+		expect(displayStatusFromBinding(state.nodeBindings.llm_b as any)).toBe('succeeded');
+	});
+
+	it('source stays succeeded after finish while downstream continues running', () => {
+		const runId = 'run-3';
+		let state = __markStaleFromNodeForTest(makeState(), 'src');
+		expect(state.nodeBindings.src.status).toBe('stale');
+		expect(state.nodeBindings.xfm.status).toBe('stale');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-03-01T01:00:00Z',
+				runFrom: 'llm_b',
+				runMode: 'from_selected_onward',
+				plannedNodeIds: ['xfm', 'llm_b']
+			},
+			runId
+		);
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_started',
+				runId,
+				at: '2026-03-01T01:00:01Z',
+				nodeId: 'src',
+				nodeKind: 'source'
+			} as any,
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.src as any)).toBe('running');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_finished',
+				runId,
+				at: '2026-03-01T01:00:02Z',
+				nodeId: 'src',
+				status: 'succeeded'
+			},
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.src as any)).toBe('succeeded');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_started',
+				runId,
+				at: '2026-03-01T01:00:03Z',
+				nodeId: 'llm_b',
+				nodeKind: 'llm'
+			} as any,
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.llm_b as any)).toBe('running');
+		expect(displayStatusFromBinding(state.nodeBindings.src as any)).toBe('succeeded');
+		expect(state.nodeBindings.src.status).toBe('succeeded_up_to_date');
+	});
+
+	it('LLM_artist stays succeeded after finish even if stale marking runs while sibling LLM is running', () => {
+		const runId = 'run-artist';
+		let state = makeArtistBranchState();
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_started',
+				runId,
+				at: '2026-03-01T02:00:00Z',
+				nodeId: 'llm_artist',
+				nodeKind: 'llm'
+			} as any,
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.llm_artist as any)).toBe('running');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_finished',
+				runId,
+				at: '2026-03-01T02:00:01Z',
+				nodeId: 'llm_artist',
+				status: 'succeeded'
+			},
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.llm_artist as any)).toBe('succeeded');
+
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_started',
+				runId,
+				at: '2026-03-01T02:00:02Z',
+				nodeId: 'llm',
+				nodeKind: 'llm'
+			} as any,
+			runId
+		);
+		expect(displayStatusFromBinding(state.nodeBindings.llm as any)).toBe('running');
+
+		state = __markStaleFromNodeForTest(state, 'src');
+
+		expect(displayStatusFromBinding(state.nodeBindings.llm_artist as any)).toBe('succeeded');
+		expect(state.nodeBindings.llm_artist.status).toBe('succeeded_up_to_date');
+		expect(displayStatusFromBinding(state.nodeBindings.llm as any)).toBe('running');
+		expect(state.nodeBindings.llm.status).toBe('running');
 	});
 });

@@ -45,6 +45,10 @@
 	function onCommit(patch: Record<string, any>) {
 		graphStore.commitInspectorImmediate(patch);
 	}
+
+	function onSnapshotCommit(patch: Record<string, any>) {
+		graphStore.commitSnapshotSelection(patch);
+	}
 </script>
 
 {#if selectedNode}
@@ -77,6 +81,7 @@
 			{params}
 			{onDraft}
 			{onCommit}
+			onSnapshotCommit={onSnapshotCommit}
 		/>
 	{:else if isLlm}
 		<!-- LLM -->

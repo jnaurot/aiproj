@@ -7,21 +7,22 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
 	import { asBoolean, asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
+	import {
+		type RecentSnapshot,
+		mergeRecentSnapshotOnUpload,
+		normalizeRecentSnapshots,
+		optionLabel as recentOptionLabel,
+		sortRecentSnapshotsForDisplay,
+		updateRecentSnapshotInPlace
+	} from './sourceFileSnapshots';
 
 	type FileFormat = SourceFileParams['file_format'];
 	type SourceFilePatch = Partial<SourceFileParams>;
-	type RecentSnapshot = {
-		id: string;
-		filename?: string;
-		importedAt?: string;
-		size?: number;
-		mimeType?: string;
-	};
-
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
 	export let params: Partial<SourceFileParams>;
 	export let onDraft: (patch: SourceFilePatch) => void;
 	export let onCommit: (patch: SourceFilePatch) => void;
+	export let onSnapshotCommit: ((patch: SourceFilePatch) => void | Promise<unknown>) | undefined = undefined;
 
 	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
 	const RECENT_LIMIT = 10;
@@ -35,6 +36,7 @@
 
 	$: snapshotId = asString(params?.snapshotId, '').toLowerCase();
 	$: recentSnapshots = normalizeRecentSnapshots((params as any)?.recentSnapshots, (params as any)?.recentSnapshotIds);
+	$: displayRecentSnapshots = sortRecentSnapshotsForDisplay(recentSnapshots);
 	$: snapshotMetadata = (params?.snapshotMetadata as Record<string, unknown> | undefined) ?? undefined;
 	$: currentSnapshot = recentSnapshots.find((s) => s.id === snapshotId);
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
@@ -53,6 +55,14 @@
 		onCommit?.(patch);
 	}
 
+	function commitSnapshot(patch: SourceFilePatch): void {
+		if (onSnapshotCommit) {
+			void onSnapshotCommit(patch);
+			return;
+		}
+		commit(patch);
+	}
+
 	function bytesLabel(size: unknown): string {
 		const n = Number(size);
 		if (!Number.isFinite(n) || n < 0) return '-';
@@ -66,40 +76,6 @@
 		return h ? `${h.slice(0, 8)}...` : '-';
 	}
 
-	function isSnapshotId(value: unknown): value is string {
-		const id = asString(value, '').toLowerCase();
-		return /^[a-f0-9]{64}$/.test(id);
-	}
-
-	function normalizeRecentSnapshots(rawEntries: unknown, rawIds: unknown): RecentSnapshot[] {
-		const out: RecentSnapshot[] = [];
-		const seen = new Set<string>();
-		if (Array.isArray(rawEntries)) {
-			for (const item of rawEntries) {
-				if (!item || typeof item !== 'object') continue;
-				const id = asString((item as any).id, '').toLowerCase();
-				if (!isSnapshotId(id) || seen.has(id)) continue;
-				seen.add(id);
-				out.push({
-					id,
-					filename: asString((item as any).filename, '') || undefined,
-					importedAt: asString((item as any).importedAt, '') || undefined,
-					size: Number.isFinite(Number((item as any).size)) ? Number((item as any).size) : undefined,
-					mimeType: asString((item as any).mimeType, '') || undefined
-				});
-			}
-		}
-		if (Array.isArray(rawIds)) {
-			for (const idRaw of rawIds) {
-				const id = asString(idRaw, '').toLowerCase();
-				if (!isSnapshotId(id) || seen.has(id)) continue;
-				seen.add(id);
-				out.push({ id });
-			}
-		}
-		return out.slice(0, RECENT_LIMIT);
-	}
-
 	function withRecentPatch(entries: RecentSnapshot[]): SourceFilePatch {
 		const normalized = normalizeRecentSnapshots(entries, []);
 		return {
@@ -108,24 +84,8 @@
 		};
 	}
 
-	function nextRecentEntries(incoming: RecentSnapshot, current: RecentSnapshot[]): RecentSnapshot[] {
-		const id = asString(incoming.id, '').toLowerCase();
-		if (!isSnapshotId(id)) return current;
-		const merged: RecentSnapshot = {
-			id,
-			filename: incoming.filename,
-			importedAt: incoming.importedAt,
-			size: incoming.size,
-			mimeType: incoming.mimeType
-		};
-		const rest = current.filter((s) => s.id !== id);
-		return [merged, ...rest].slice(0, RECENT_LIMIT);
-	}
-
 	function optionLabel(entry: RecentSnapshot): string {
-		const prefix = shortHash(entry.id);
-		if (entry.filename) return `${entry.filename} ( ${prefix})`;
-		return loadingIds.includes(entry.id) ? `${prefix} (loading...)` : prefix;
+		return recentOptionLabel(entry, loadingIds.includes(entry.id), shortHash);
 	}
 
 	async function hydrateMissingRecentSnapshots(entries: RecentSnapshot[]): Promise<void> {
@@ -160,21 +120,13 @@
 
 		loadingIds = [];
 		const map = new Map(fetched.map((f) => [f.id, f]));
-		const updated = entries.map((entry) => {
-			const incoming = map.get(entry.id);
-			if (!incoming) return entry;
-			return {
-				...entry,
-				filename: entry.filename ?? incoming.filename,
-				importedAt: entry.importedAt ?? incoming.importedAt,
-				size: entry.size ?? incoming.size,
-				mimeType: entry.mimeType ?? incoming.mimeType
-			};
-		});
+		let updated = entries;
+		for (const [id, incoming] of map.entries()) {
+			updated = updateRecentSnapshotInPlace(updated, id, incoming);
+		}
 		if (JSON.stringify(updated) !== JSON.stringify(entries)) {
 			const patch = withRecentPatch(updated);
-			draft(patch);
-			commit(patch);
+			commitSnapshot(patch);
 		}
 	}
 
@@ -192,14 +144,13 @@
 					: undefined,
 				mimeType: asString(result.metadata?.mimeType, '') || undefined
 			};
-			const nextRecent = nextRecentEntries(incoming, recentSnapshots);
+			const nextRecent = mergeRecentSnapshotOnUpload(incoming, recentSnapshots, RECENT_LIMIT);
 			const patch: SourceFilePatch = {
 				snapshotId: incoming.id,
 				snapshotMetadata: result.metadata,
 				...withRecentPatch(nextRecent)
 			};
-			draft(patch);
-			commit(patch);
+			commitSnapshot(patch);
 		} catch (err) {
 			uploadError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -234,25 +185,43 @@
 		isDragOver = false;
 	}
 
-	function onSelectPrevious(event: Event): void {
+	async function onSelectPrevious(event: Event): Promise<void> {
 		const value = (event.currentTarget as HTMLSelectElement).value;
 		const sid = asString(value, '').trim().toLowerCase();
-		if (!isSnapshotId(sid)) return;
+		if (!/^[a-f0-9]{64}$/.test(sid)) return;
 		const selected = recentSnapshots.find((s) => s.id === sid);
-		const nextRecent = nextRecentEntries(selected ?? { id: sid }, recentSnapshots);
+		let nextRecent = recentSnapshots;
+		let resolved = selected;
+		if (!selected?.filename) {
+			try {
+				const meta = await getSnapshotMeta(sid);
+				const incoming: RecentSnapshot = {
+					id: sid,
+					filename: asString(meta?.metadata?.originalFilename, '') || undefined,
+					importedAt: asString(meta?.metadata?.importedAt, '') || undefined,
+					size: Number.isFinite(Number(meta?.metadata?.byteSize))
+						? Number(meta?.metadata?.byteSize)
+						: undefined,
+					mimeType: asString(meta?.metadata?.mimeType, '') || undefined
+				};
+				nextRecent = updateRecentSnapshotInPlace(recentSnapshots, sid, incoming);
+				resolved = nextRecent.find((s) => s.id === sid) ?? selected;
+			} catch {
+				resolved = selected;
+			}
+		}
 		const patch: SourceFilePatch = {
 			snapshotId: sid,
 			snapshotMetadata: {
 				snapshotId: sid,
-				originalFilename: selected?.filename,
-				importedAt: selected?.importedAt,
-				byteSize: selected?.size,
-				mimeType: selected?.mimeType
+				originalFilename: resolved?.filename,
+				importedAt: resolved?.importedAt,
+				byteSize: resolved?.size,
+				mimeType: resolved?.mimeType
 			},
 			...withRecentPatch(nextRecent)
 		};
-		draft(patch);
-		commit(patch);
+		commitSnapshot(patch);
 	}
 
 	function setFileFormat(nextFormat: string): void {
@@ -316,7 +285,7 @@
 		<Field label="previous uploads">
 			<select value="" on:change={onSelectPrevious}>
 				<option value="" disabled selected>Previous uploads (snapshots)</option>
-				{#each recentSnapshots as entry}
+				{#each displayRecentSnapshots as entry}
 					<option value={entry.id}>{optionLabel(entry)}</option>
 				{/each}
 			</select>

@@ -29,7 +29,6 @@ import {
 	displayStatusFromBinding,
 	getStaleFlipNodeIds,
 	mergeBindingsSticky,
-	shouldUpdateBinding,
 	type ActiveRunMode,
 	type GraphFreshness as ScopeFreshness
 } from './runScope';
@@ -299,8 +298,25 @@ function withGraphMeta(state: GraphState): GraphState {
 	return { ...state, freshness, staleNodeCount, lastRunStatus };
 }
 
-function canApplyNodeEvent(state: GraphState, nodeId: string): boolean {
-	return shouldUpdateBinding(state.activeRunId, state.activeRunNodeSet, nodeId);
+function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string): boolean {
+	if (!nodeId) return false;
+	if (!state.activeRunId) return true;
+	if (evtRunId && evtRunId !== state.activeRunId) return false;
+	// Event streams are run-scoped by runId; do not drop valid per-node events based on
+	// planned sets because scheduler/runtime may execute additional upstream nodes.
+	return true;
+}
+
+function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NodeBindingInfo): boolean {
+	if (!cur.activeRunId) return false;
+	if (binding.currentRunId !== cur.activeRunId) return false;
+	const status = String(binding.status ?? '').toLowerCase();
+	return (
+		status === 'running' ||
+		status === 'succeeded' ||
+		status === 'succeeded_up_to_date' ||
+		binding.isUpToDate === true
+	);
 }
 
 function changedBindingNodeIds(
@@ -362,6 +378,47 @@ function stableJson(value: unknown): string {
 	} catch {
 		return '';
 	}
+}
+
+function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
+	const out = new Set<string>([nodeId]);
+	const q = [nodeId];
+	while (q.length > 0) {
+		const cur = q.shift()!;
+		for (const e of edges) {
+			if (e.source !== cur) continue;
+			const nxt = String(e.target ?? '');
+			if (!nxt || out.has(nxt)) continue;
+			out.add(nxt);
+			q.push(nxt);
+		}
+	}
+	return out;
+}
+
+export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): GraphState {
+	const candidateIds = downstreamNodeIds(state.edges, nodeId);
+	const nodeBindings = { ...state.nodeBindings };
+	let changed = false;
+	for (const affectedId of candidateIds) {
+		const prev = nodeBindings[affectedId] ?? {};
+		const hadArtifact = Boolean(prev.currentArtifactId || prev.lastArtifactId);
+		if (!hadArtifact) continue;
+		if (isNodeStateFromActiveRunAndFresh(state, prev)) continue;
+		nodeBindings[affectedId] = {
+			...prev,
+			status: 'stale',
+			isUpToDate: false,
+			cacheValid: false,
+			currentArtifactId: null,
+			currentRunId: null,
+			currentExecKey: null,
+			staleReason: affectedId === nodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
+		};
+		changed = true;
+	}
+	if (!changed) return state;
+	return withGraphMeta({ ...state, nodeBindings });
 }
 
 function effectiveExecParamsForNode(node: Node<PipelineNodeData> | undefined): Record<string, unknown> {
@@ -441,7 +498,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 	}
 	switch (evt.type) {
 		case 'node_output': {
-			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
 			const nodeBindings = {
 				...state.nodeBindings,
@@ -471,7 +528,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			});
 		}
 		case 'cache_decision': {
-			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
 			const nextIsUpToDate =
 				evt.decision === 'cache_hit'
@@ -537,12 +594,13 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			);
 		}
 		case 'node_started': {
-			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const nodeBindings = {
 				...state.nodeBindings,
 				[evt.nodeId]: {
 					...(state.nodeBindings?.[evt.nodeId] ?? {}),
-					status: 'running'
+					status: 'running',
+					currentRunId: evt.runId ?? runId
 				}
 			};
 			return withGraphMeta(logPush({ ...state, nodeBindings }, 'info', 'Node started', evt.nodeId));
@@ -556,19 +614,32 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		case 'log':
 			return logPush(state, evt.level, evt.message, evt.nodeId);
 		case 'node_finished': {
-			if (!canApplyNodeEvent(state, evt.nodeId)) return state;
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const succeeded = evt.status === 'succeeded';
 			const nextBinding: NodeBindingInfo = {
 				...prevBinding,
-				status: evt.status === 'succeeded' ? 'succeeded_up_to_date' : evt.status
+				status: succeeded ? 'succeeded_up_to_date' : evt.status,
+				currentRunId: evt.runId ?? runId,
+				isUpToDate: succeeded ? true : false,
+				cacheValid: succeeded ? true : false,
+				staleReason: succeeded ? null : prevBinding.staleReason
 			};
 			const nodeBindings = {
 				...state.nodeBindings,
 				[evt.nodeId]: nextBinding
 			};
+			const prevOut = state.nodeOutputs?.[evt.nodeId];
+			const nodeOutputs = {
+				...state.nodeOutputs,
+				[evt.nodeId]: {
+					...prevOut,
+					cacheDecision: prevOut?.cacheDecision ?? (succeeded ? 'cache_miss' : prevOut?.cacheDecision)
+				}
+			};
 			return withGraphMeta(
 				logPush(
-					{ ...state, nodeBindings },
+					{ ...state, nodeBindings, nodeOutputs },
 					'info',
 					`Node finished (${displayStatusFromBinding(nextBinding)})`,
 					evt.nodeId
@@ -1073,32 +1144,47 @@ export const graphStore = (() => {
 		return result;
 	}
 
-	function collectDownstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
-		const out = new Set<string>([nodeId]);
-		const q = [nodeId];
-		while (q.length > 0) {
-			const cur = q.shift()!;
-			for (const e of edges) {
-				if (e.source !== cur) continue;
-				const nxt = String(e.target ?? '');
-				if (!nxt || out.has(nxt)) continue;
-				out.add(nxt);
-				q.push(nxt);
-			}
-		}
-		return out;
+	async function commitSnapshotSelection(patch: Record<string, any>) {
+		const s = get({ subscribe } as any) as GraphState;
+		const nodeId = s.inspector.nodeId;
+		if (!nodeId) return { ok: false, error: 'No node selected' };
+		const beforeNode = s.nodes.find((x) => x.id === nodeId);
+		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
+		const wasDirty = Boolean(s.inspector.dirty);
+
+		// Commit only the provided snapshot-related patch; do not merge with pending draft.
+		const result = updateNodeConfigImpl(nodeId, { params: patch });
+		if (!result.ok) return result;
+
+		update((cur) => {
+			if (cur.inspector.nodeId !== nodeId) return cur;
+			return {
+				...cur,
+				inspector: {
+					...cur.inspector,
+					draftParams: { ...cur.inspector.draftParams, ...patch },
+					dirty: wasDirty
+				}
+			};
+		});
+
+		const afterState = get({ subscribe } as any) as GraphState;
+		const committedNode = afterState.nodes.find((x) => x.id === nodeId);
+		const paramsForSubmit = { ...((committedNode?.data?.params ?? {}) as Record<string, any>) };
+		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
+		return result;
 	}
 
 	function applyLocalStaleInvalidation(nodeId: string): void {
 		update((cur) => {
-			const candidateIds = collectDownstreamNodeIds(cur.edges, nodeId);
+			const candidateIds = downstreamNodeIds(cur.edges, nodeId);
 			const nodeBindings = { ...cur.nodeBindings };
-			const nodeOutputs = { ...cur.nodeOutputs };
 			let changed = false;
 			for (const affectedId of candidateIds) {
 				const prev = nodeBindings[affectedId] ?? {};
 				const hadArtifact = Boolean(prev.currentArtifactId || prev.lastArtifactId);
 				if (!hadArtifact) continue;
+				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
 				nodeBindings[affectedId] = {
 					...prev,
 					status: 'stale',
@@ -1106,23 +1192,24 @@ export const graphStore = (() => {
 					cacheValid: false,
 					currentArtifactId: null,
 					currentRunId: null,
-					currentExecKey: null
+					currentExecKey: null,
+					staleReason: affectedId === nodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
 				};
-				delete nodeOutputs[affectedId];
 				changed = true;
 			}
 			if (!changed) return cur;
-			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
+			// Keep existing previews while stale so users can compare last known outputs.
+			return withGraphMeta({ ...cur, nodeBindings });
 		}, { source: 'accept_params', expectedDirtyTransition: true });
 	}
 
-	function applyBackendAffectedStale(affectedNodeIds: string[]): void {
+	function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string): void {
 		if (!Array.isArray(affectedNodeIds) || affectedNodeIds.length === 0) return;
 		update((cur) => {
 			const nodeBindings = { ...cur.nodeBindings };
-			const nodeOutputs = { ...cur.nodeOutputs };
 			for (const affectedId of affectedNodeIds) {
 				const prev = nodeBindings[affectedId] ?? {};
+				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
 				nodeBindings[affectedId] = {
 					...prev,
 					status: 'stale',
@@ -1130,11 +1217,11 @@ export const graphStore = (() => {
 					cacheValid: false,
 					currentArtifactId: null,
 					currentRunId: null,
-					currentExecKey: null
+					currentExecKey: null,
+					staleReason: affectedId === rootNodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
 				};
-				delete nodeOutputs[affectedId];
 			}
-			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
+			return withGraphMeta({ ...cur, nodeBindings });
 		}, { source: 'accept_params', allowedNodeIds: new Set(affectedNodeIds), expectedDirtyTransition: true });
 	}
 
@@ -1160,7 +1247,7 @@ export const graphStore = (() => {
 					lastArtifactId: resolved.artifactId
 				}
 			};
-			const prevOut = cur.nodeOutputs?.[nodeId] ?? {};
+			const prevOut: NodeOutputInfo | undefined = cur.nodeOutputs?.[nodeId];
 			const nodeOutputs = {
 				...cur.nodeOutputs,
 				[nodeId]: {
@@ -1169,7 +1256,7 @@ export const graphStore = (() => {
 					portType: resolved.artifact?.portType ?? prevOut.portType,
 					preview: undefined,
 					cached: true,
-					cacheDecision: 'cache_hit'
+					cacheDecision: 'cache_hit' as const
 				}
 			};
 			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
@@ -1216,7 +1303,7 @@ export const graphStore = (() => {
 				graph: { version: 1, nodes: st.nodes, edges: st.edges },
 				params: paramsForSubmit
 			});
-			applyBackendAffectedStale(resp.affectedNodeIds ?? []);
+			applyBackendAffectedStale(resp.affectedNodeIds ?? [], nodeId);
 			const snap = await getRun(st.activeRunId);
 			update((cur) => hydrateFromRunSnapshot(cur, snap), {
 				source: 'hydrate_snapshot',
@@ -1303,6 +1390,7 @@ export const graphStore = (() => {
 		subscribe,
 		patchInspectorDraft,
 		commitInspectorImmediate,
+		commitSnapshotSelection,
 		applyInspectorDraft,
 		revertInspectorDraft,
 		updateNodeConfig: updateNodeConfigImpl,
