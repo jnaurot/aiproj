@@ -57,6 +57,16 @@ type NodeBindingInfo = {
 	cacheValid?: boolean;
 	staleReason?: string | null;
 };
+type BindingPair = { execKey: string | null; artifactId: string | null };
+export type NormalizedNodeBinding = NodeBindingInfo & {
+	status: string;
+	isUpToDate: boolean;
+	cacheValid: boolean;
+	currentRunId: string | null;
+	staleReason: string | null;
+	current: BindingPair;
+	last: BindingPair;
+};
 type EdgeExec = 'idle' | 'active' | 'done';
 type LogLevel = 'info' | 'warn' | 'error';
 type RunLog = {
@@ -133,18 +143,22 @@ function _pairFromLegacy(binding: NodeBindingInfo | undefined, which: 'current' 
 	};
 }
 
-function _withPair(binding: NodeBindingInfo, which: 'current' | 'last', pair: { execKey?: string | null; artifactId?: string | null }) {
-	const next: NodeBindingInfo = { ...binding };
+function _withPair(binding: NormalizedNodeBinding, which: 'current' | 'last', pair: BindingPair): NormalizedNodeBinding {
+	const next: NormalizedNodeBinding = { ...binding };
 	if (which === 'current') {
 		next.current = {
-			execKey: pair.execKey ?? null,
-			artifactId: pair.artifactId ?? null
+			execKey: pair.execKey,
+			artifactId: pair.artifactId
 		};
+		next.currentExecKey = pair.execKey;
+		next.currentArtifactId = pair.artifactId;
 	} else {
 		next.last = {
-			execKey: pair.execKey ?? null,
-			artifactId: pair.artifactId ?? null
+			execKey: pair.execKey,
+			artifactId: pair.artifactId
 		};
+		next.lastExecKey = pair.execKey;
+		next.lastArtifactId = pair.artifactId;
 	}
 	return next;
 }
@@ -170,7 +184,7 @@ export function __assertBindingPairForTest(binding: NodeBindingInfo, nodeId = 't
 	_assertBindingPairInvariant(binding, nodeId, context, true);
 }
 
-function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string): NodeBindingInfo {
+function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string): NormalizedNodeBinding {
 	const b = { ...(binding ?? {}) };
 	const hasCurrentFields =
 		Object.prototype.hasOwnProperty.call(b, 'current') ||
@@ -182,8 +196,37 @@ function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string
 		Object.prototype.hasOwnProperty.call(b, 'lastArtifactId');
 	if (hasCurrentFields) b.current = _pairFromLegacy(b, 'current');
 	if (hasLastFields) b.last = _pairFromLegacy(b, 'last');
-	if (nodeId) _assertBindingPairInvariant(b, nodeId, 'normalize');
-	return b;
+	const current = (b.current as BindingPair | undefined) ?? { execKey: null, artifactId: null };
+	const last = (b.last as BindingPair | undefined) ?? { execKey: null, artifactId: null };
+	const normalized: NormalizedNodeBinding = {
+		...b,
+		status: String(b.status ?? 'idle'),
+		isUpToDate: Boolean(b.isUpToDate ?? false),
+		cacheValid: Boolean(b.cacheValid ?? false),
+		currentRunId: (b.currentRunId ?? null) as string | null,
+		staleReason: (b.staleReason ?? null) as string | null,
+		current: {
+			execKey: current.execKey ?? null,
+			artifactId: current.artifactId ?? null
+		},
+		last: {
+			execKey: last.execKey ?? null,
+			artifactId: last.artifactId ?? null
+		}
+	};
+	normalized.currentExecKey = normalized.current.execKey;
+	normalized.currentArtifactId = normalized.current.artifactId;
+	normalized.lastExecKey = normalized.last.execKey;
+	normalized.lastArtifactId = normalized.last.artifactId;
+	if (nodeId) _assertBindingPairInvariant(normalized, nodeId, 'normalize');
+	return normalized;
+}
+
+export function __normalizeBindingForTest(
+	binding: NodeBindingInfo | undefined,
+	nodeId = 'test'
+): NormalizedNodeBinding {
+	return _normalizeBinding(binding, nodeId);
 }
 
 export type GraphState = {
@@ -201,9 +244,21 @@ export type GraphState = {
 	activeRunFrom: string | null;
 	activeRunNodeSet: Set<string>;
 	nodeOutputs: Record<string, NodeOutputInfo>;
-	nodeBindings: Record<string, NodeBindingInfo>;
+	nodeBindings: Record<string, NormalizedNodeBinding>;
 	activeRunId: string | null;
 };
+
+function ensureNormalizedBindingsForNodes(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	nodeBindings: Record<string, NormalizedNodeBinding>
+): Record<string, NormalizedNodeBinding> {
+	const next: Record<string, NormalizedNodeBinding> = { ...(nodeBindings ?? {}) };
+	for (const node of nodes ?? []) {
+		if (!node?.id) continue;
+		next[node.id] = _normalizeBinding(next[node.id], node.id);
+	}
+	return next;
+}
 
 function mintGraphId(): string {
 	try {
@@ -367,13 +422,14 @@ function auditStateTransition(prev: GraphState, next: GraphState, ctx: AuditCont
 }
 
 function withGraphMeta(state: GraphState): GraphState {
-	const { freshness, staleNodeCount } = computeGraphFreshness(state.nodeBindings ?? {});
+	const normalizedBindings = ensureNormalizedBindingsForNodes(state.nodes, state.nodeBindings ?? {});
+	const { freshness, staleNodeCount } = computeGraphFreshness(normalizedBindings ?? {});
 	let lastRunStatus = state.lastRunStatus;
 	if (state.runStatus === 'succeeded') lastRunStatus = 'succeeded';
 	if (state.runStatus === 'failed') lastRunStatus = 'failed';
 	if (state.runStatus === 'canceled' || state.runStatus === 'cancelled') lastRunStatus = 'cancelled';
 	if (freshness === 'never_run') lastRunStatus = 'never_run';
-	return { ...state, freshness, staleNodeCount, lastRunStatus };
+	return { ...state, freshness, staleNodeCount, lastRunStatus, nodeBindings: normalizedBindings };
 }
 
 function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string): boolean {
@@ -385,7 +441,7 @@ function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string)
 	return true;
 }
 
-function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NodeBindingInfo): boolean {
+function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NormalizedNodeBinding): boolean {
 	if (!cur.activeRunId) return false;
 	if (binding.currentRunId !== cur.activeRunId) return false;
 	const status = String(binding.status ?? '').toLowerCase();
@@ -397,8 +453,8 @@ function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NodeBindingI
 }
 
 function changedBindingNodeIds(
-	prev: Record<string, NodeBindingInfo>,
-	next: Record<string, NodeBindingInfo>
+	prev: Record<string, NormalizedNodeBinding>,
+	next: Record<string, NormalizedNodeBinding>
 ): string[] {
 	const ids = new Set([...Object.keys(prev ?? {}), ...Object.keys(next ?? {})]);
 	const changed: string[] = [];
@@ -559,11 +615,11 @@ function assertRunStartedNoBindingTouch(prev: GraphState, next: GraphState): voi
 		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : [],
 		bindingsBefore: changed.reduce(
 			(acc, id) => ({ ...acc, [id]: prev.nodeBindings?.[id] ?? null }),
-			{} as Record<string, NodeBindingInfo | null>
+			{} as Record<string, NormalizedNodeBinding | null>
 		),
 		bindingsAfter: changed.reduce(
 			(acc, id) => ({ ...acc, [id]: next.nodeBindings?.[id] ?? null }),
-			{} as Record<string, NodeBindingInfo | null>
+			{} as Record<string, NormalizedNodeBinding | null>
 		)
 	});
 }
@@ -577,11 +633,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		case 'node_output': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
-			let nextForNode: NodeBindingInfo = {
+			let nextForNode: NormalizedNodeBinding = {
 				...prevBinding,
 				currentRunId: runId,
 				lastRunId: runId,
-				isUpToDate: typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true
+				isUpToDate: prevBinding.isUpToDate
 			};
 			const currentPair = _pairFromLegacy(prevBinding, 'current');
 			const boundExecKey = currentPair.execKey ?? _pairFromLegacy(prevBinding, 'last').execKey ?? evt.artifactId;
@@ -617,7 +673,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					: evt.decision === 'cache_hit_contract_mismatch'
 						? false
 						: (typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true);
-			let nextBinding: NodeBindingInfo = {
+			let nextBinding: NormalizedNodeBinding = {
 				...prevBinding,
 				cacheValid: evt.decision === 'cache_hit',
 				isUpToDate: nextIsUpToDate,
@@ -696,10 +752,17 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		}
 		case 'node_started': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
+			if (
+				prevBinding.currentRunId === (evt.runId ?? runId) &&
+				(prevBinding.status.startsWith('succeeded') || prevBinding.isUpToDate === true)
+			) {
+				return state;
+			}
 			const nodeBindings = {
 				...state.nodeBindings,
 				[evt.nodeId]: {
-					..._normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId),
+					...prevBinding,
 					status: 'running',
 					currentRunId: evt.runId ?? runId
 				}
@@ -718,7 +781,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
 			const succeeded = evt.status === 'succeeded';
-			let nextBinding: NodeBindingInfo = {
+			let nextBinding: NormalizedNodeBinding = {
 				...prevBinding,
 				status: succeeded ? 'succeeded_up_to_date' : evt.status,
 				currentRunId: evt.runId ?? runId,
@@ -778,7 +841,7 @@ function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): 
 	if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== state.graphId) {
 		return state;
 	}
-	const nodeBindingsPatch: Record<string, NodeBindingInfo> = {};
+	const nodeBindingsPatch: Record<string, NormalizedNodeBinding> = {};
 	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
 	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
 		const b = _normalizeBinding(raw as NodeBindingInfo, nodeId);
@@ -1065,7 +1128,7 @@ const initialState: GraphState = {
 	activeRunFrom: null,
 	activeRunNodeSet: new Set<string>(),
 	nodeOutputs: {},
-	nodeBindings: {},
+	nodeBindings: ensureNormalizedBindingsForNodes(loaded.nodes, {}),
 	activeRunId: null
 };
 
@@ -1343,7 +1406,7 @@ export const graphStore = (() => {
 		if (!resolved.artifactId) return;
 		update((cur) => {
 			const prevBinding = _normalizeBinding(cur.nodeBindings?.[nodeId], nodeId);
-			let nextBinding: NodeBindingInfo = {
+			let nextBinding: NormalizedNodeBinding = {
 				...prevBinding,
 				status: 'succeeded_up_to_date',
 				cacheValid: true,
@@ -1686,7 +1749,12 @@ export const graphStore = (() => {
 			update((s) => {
 				// avoid needless churn if same references
 				if (s.nodes === nodes && s.edges === edges) return s;
-				const next = { ...s, nodes, edges };
+				const next = {
+					...s,
+					nodes,
+					edges,
+					nodeBindings: ensureNormalizedBindingsForNodes(nodes, s.nodeBindings ?? {})
+				};
 				persist(next);
 				return next;
 			});
@@ -1727,8 +1795,12 @@ export const graphStore = (() => {
 			};
 
 			update((s) => {
+				const nodeBindings = {
+					...s.nodeBindings,
+					[id]: _normalizeBinding(s.nodeBindings?.[id], id)
+				};
 				const next = logPush(
-					{ ...s, nodes: [...s.nodes, node], selectedNodeId: id },
+					{ ...s, nodes: [...s.nodes, node], selectedNodeId: id, nodeBindings },
 					'info',
 					`Added node ${id} (${kind})`,
 					id

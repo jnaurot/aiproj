@@ -6,10 +6,15 @@ import {
 	__assertBindingPairForTest,
 	__hardResetGraphForTest,
 	__hydrateFromRunSnapshotForTest,
-	__markStaleFromNodeForTest
+	__markStaleFromNodeForTest,
+	__normalizeBindingForTest
 } from './graphStore';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import { displayStatusFromBinding } from './runScope';
+
+function nb(binding: Record<string, unknown>, nodeId: string) {
+	return __normalizeBindingForTest(binding as any, nodeId);
+}
 
 function makeState(): GraphState {
 	return {
@@ -37,10 +42,10 @@ function makeState(): GraphState {
 		activeRunNodeSet: new Set<string>(),
 		nodeOutputs: {},
 		nodeBindings: {
-			src: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-src' },
-			xfm: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-xfm' },
-			llm_a: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-a' },
-			llm_b: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-b' }
+			src: nb({ status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-src' }, 'src'),
+			xfm: nb({ status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-xfm' }, 'xfm'),
+			llm_a: nb({ status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-a' }, 'llm_a'),
+			llm_b: nb({ status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-b' }, 'llm_b')
 		},
 		activeRunId: 'run-1'
 	};
@@ -66,9 +71,9 @@ function makeArtistBranchState(): GraphState {
 		activeRunNodeSet: new Set<string>(['src', 'llm_artist', 'llm']),
 		nodeOutputs: {},
 		nodeBindings: {
-			src: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-src' },
-			llm_artist: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-artist' },
-			llm: { status: 'stale', isUpToDate: false, lastArtifactId: 'art-llm' }
+			src: nb({ status: 'stale', isUpToDate: false, lastArtifactId: 'art-src' }, 'src'),
+			llm_artist: nb({ status: 'stale', isUpToDate: false, lastArtifactId: 'art-artist' }, 'llm_artist'),
+			llm: nb({ status: 'stale', isUpToDate: false, lastArtifactId: 'art-llm' }, 'llm')
 		},
 		activeRunId: 'run-artist'
 	};
@@ -513,7 +518,7 @@ describe('graphStore partial run scope events', () => {
 			},
 			runId
 		);
-		expect(next.nodeBindings.src.current).toBeUndefined();
+		expect(next.nodeBindings.src.current).toEqual({ execKey: null, artifactId: null });
 		expect(next.nodeBindings.src.isUpToDate).toBe(true);
 	});
 
