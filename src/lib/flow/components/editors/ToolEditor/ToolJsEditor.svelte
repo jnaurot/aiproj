@@ -1,63 +1,26 @@
 <script lang="ts">
-	export let params: Record<string, any>;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
+	import type { ToolParams } from '$lib/flow/schema/tool';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+
+	type JsParams = Extract<ToolParams, { provider: 'js' }>;
+
+	export let params: Partial<JsParams>;
+	export let onDraft: (patch: Partial<JsParams>) => void;
+	export let onCommit: (patch: Partial<JsParams>) => void;
+
 	$: js = params?.js ?? { code: '' };
 </script>
 
-<div class="section">
-	<div class="sectionTitle">JavaScript</div>
-	<div class="field">
-		<div class="k">code</div>
-		<div class="v">
-			<textarea
-				rows="10"
-				value={js?.code ?? ''}
-				on:input={(e) =>
-					onDraft({ js: { ...js, code: (e.currentTarget as HTMLTextAreaElement).value } })}
-				on:blur={(e) =>
-					onCommit({ js: { ...js, code: (e.currentTarget as HTMLTextAreaElement).value } })}
-			></textarea>
-		</div>
-	</div>
-</div>
-
-<style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-		margin-top: 8px;
-	}
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		gap: 8px;
-		align-items: start;
-		margin-bottom: 10px;
-	}
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-	textarea {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		min-height: 120px;
-		resize: vertical;
-	}
-</style>
+<Section title="JavaScript">
+	<Field label="code">
+		<Input
+			multiline={true}
+			rows={10}
+			value={js.code ?? ''}
+			onInput={(event) => onDraft({ js: { ...js, code: (event.currentTarget as HTMLTextAreaElement).value } })}
+			onBlur={(event) => onCommit({ js: { ...js, code: (event.currentTarget as HTMLTextAreaElement).value } })}
+		/>
+	</Field>
+</Section>

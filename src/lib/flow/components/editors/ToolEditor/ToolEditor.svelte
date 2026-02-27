@@ -1,304 +1,190 @@
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
+	import type { ToolParams } from '$lib/flow/schema/tool';
 	import { ToolEditorByProvider } from './ToolEditor';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
+
+	type Provider = ToolParams['provider'];
+	type ToolPatch = Partial<ToolParams>;
 
 	export let selectedNode: Node<PipelineNodeData>;
-	export let params: Record<string, any>;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
+	export let params: Partial<ToolParams>;
+	export let onDraft: (patch: ToolPatch) => void;
+	export let onCommit: (patch: ToolPatch) => void;
 
-	$: provider = (params?.provider ?? 'mcp') as keyof typeof ToolEditorByProvider;
-	$: name = typeof params?.name === 'string' ? params.name : '';
-	$: toolVersion = typeof params?.toolVersion === 'string' ? params.toolVersion : 'v1';
+	$: void selectedNode?.id;
+	$: provider = (params?.provider ?? 'mcp') as Provider;
+	$: name = asString(params?.name, '');
+	$: toolVersion = asString(params?.toolVersion, 'v1');
 	$: sideEffectMode = (params?.side_effect_mode ?? 'pure') as 'pure' | 'idempotent' | 'effectful';
 	$: armed = Boolean(params?.armed ?? false);
-	$: connectionRef = typeof params?.connectionRef === 'string' ? params.connectionRef : '';
-	$: timeoutMs = params?.timeoutMs;
+	$: connectionRef = asString(params?.connectionRef, '');
+	$: timeoutMs = asNumberOrEmpty(params?.timeoutMs);
 	$: retry = params?.retry ?? {};
-	$: maxAttempts = Number(retry?.max_attempts ?? 1);
-	$: backoffMs = Number(retry?.backoff_ms ?? 0);
+	$: maxAttempts = asNumberOrEmpty(retry?.max_attempts ?? 1);
+	$: backoffMs = asNumberOrEmpty(retry?.backoff_ms ?? 0);
 	$: permissions = params?.permissions ?? {};
 	$: canNet = Boolean(permissions?.net ?? false);
 	$: canFs = Boolean(permissions?.fs ?? false);
 	$: canEnv = Boolean(permissions?.env ?? false);
 	$: canSubprocess = Boolean(permissions?.subprocess ?? false);
-
-	function patch(p: Record<string, any>) {
-		onDraft(p);
-	}
-
-	function commit(p: Record<string, any>) {
-		onCommit(p);
-	}
 </script>
 
-<div class="section">
-	<div class="sectionTitle">Tool Config</div>
+<Section title="Tool Config">
+	<Field label="name">
+		<Input
+			value={name}
+			placeholder="http.request"
+			onInput={(event) => onDraft({ name: (event.currentTarget as HTMLInputElement).value })}
+			onBlur={(event) => onCommit({ name: (event.currentTarget as HTMLInputElement).value })}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">name</div>
-		<div class="v">
-			<input
-				type="text"
-				value={name}
-				placeholder="http.request"
-				on:input={(e) => patch({ name: (e.currentTarget as HTMLInputElement).value })}
-				on:blur={(e) => commit({ name: (e.currentTarget as HTMLInputElement).value })}
-			/>
-		</div>
-	</div>
+	<Field label="toolVersion">
+		<Input
+			value={toolVersion}
+			placeholder="v1"
+			onInput={(event) => onDraft({ toolVersion: (event.currentTarget as HTMLInputElement).value })}
+			onBlur={(event) => onCommit({ toolVersion: (event.currentTarget as HTMLInputElement).value })}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">toolVersion</div>
-		<div class="v">
-			<input
-				type="text"
-				value={toolVersion}
-				placeholder="v1"
-				on:input={(e) => patch({ toolVersion: (e.currentTarget as HTMLInputElement).value })}
-				on:blur={(e) => commit({ toolVersion: (e.currentTarget as HTMLInputElement).value })}
-			/>
-		</div>
-	</div>
+	<Field label="side_effect_mode">
+		<select
+			value={sideEffectMode}
+			on:change={(event) => {
+				const value = (event.currentTarget as HTMLSelectElement).value as ToolParams['side_effect_mode'];
+				onDraft({ side_effect_mode: value });
+				onCommit({ side_effect_mode: value });
+			}}
+		>
+			<option value="pure">pure</option>
+			<option value="idempotent">idempotent</option>
+			<option value="effectful">effectful</option>
+		</select>
+	</Field>
 
-	<div class="field">
-		<div class="k">side_effect_mode</div>
-		<div class="v">
-			<select
-				value={sideEffectMode}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLSelectElement).value;
-					patch({ side_effect_mode: v });
-					commit({ side_effect_mode: v });
-				}}
-			>
-				<option value="pure">pure</option>
-				<option value="idempotent">idempotent</option>
-				<option value="effectful">effectful</option>
-			</select>
-		</div>
-	</div>
+	<Field label="armed">
+		<Input
+			type="checkbox"
+			checked={armed}
+			onChange={(event) => {
+				const checked = (event.currentTarget as HTMLInputElement).checked;
+				onDraft({ armed: checked });
+				onCommit({ armed: checked });
+			}}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">armed</div>
-		<div class="v">
-			<input
-				type="checkbox"
-				checked={armed}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).checked;
-					patch({ armed: v });
-					commit({ armed: v });
-				}}
-			/>
-		</div>
-	</div>
+	<Field label="connectionRef">
+		<Input
+			value={connectionRef}
+			placeholder="conn:default"
+			onInput={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).value.trim();
+				onDraft({ connectionRef: value === '' ? undefined : value });
+			}}
+			onBlur={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).value.trim();
+				onCommit({ connectionRef: value === '' ? undefined : value });
+			}}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">connectionRef</div>
-		<div class="v">
-			<input
-				type="text"
-				value={connectionRef}
-				placeholder="conn:default"
-				on:input={(e) => patch({ connectionRef: (e.currentTarget as HTMLInputElement).value })}
-				on:blur={(e) => commit({ connectionRef: (e.currentTarget as HTMLInputElement).value })}
-			/>
-		</div>
-	</div>
+	<Field label="timeoutMs">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={timeoutMs}
+			onInput={(event) => onDraft({ timeoutMs: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+			onBlur={(event) => onCommit({ timeoutMs: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">timeoutMs</div>
-		<div class="v">
-			<input
-				type="number"
-				min="1"
-				value={timeoutMs ?? ''}
-				on:input={(e) =>
-					patch({ timeoutMs: Number((e.currentTarget as HTMLInputElement).value) || undefined })}
-				on:blur={(e) =>
-					commit({ timeoutMs: Number((e.currentTarget as HTMLInputElement).value) || undefined })}
-			/>
-		</div>
-	</div>
+	<Field label="retry.max_attempts">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={maxAttempts}
+			onInput={(event) =>
+				onDraft({ retry: { ...retry, max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1 } })}
+			onBlur={(event) =>
+				onCommit({ retry: { ...retry, max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1 } })}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">retry.max_attempts</div>
-		<div class="v">
-			<input
-				type="number"
-				min="1"
-				value={maxAttempts}
-				on:input={(e) =>
-					patch({
-						retry: {
-							...(retry ?? {}),
-							max_attempts: Number((e.currentTarget as HTMLInputElement).value) || 1
-						}
-					})}
-				on:blur={(e) =>
-					commit({
-						retry: {
-							...(retry ?? {}),
-							max_attempts: Number((e.currentTarget as HTMLInputElement).value) || 1
-						}
-					})}
-			/>
-		</div>
-	</div>
+	<Field label="retry.backoff_ms">
+		<Input
+			type="number"
+			min="0"
+			step="1"
+			value={backoffMs}
+			onInput={(event) =>
+				onDraft({ retry: { ...retry, backoff_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) ?? 0 } })}
+			onBlur={(event) =>
+				onCommit({ retry: { ...retry, backoff_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) ?? 0 } })}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">retry.backoff_ms</div>
-		<div class="v">
-			<input
-				type="number"
-				min="0"
-				value={backoffMs}
-				on:input={(e) =>
-					patch({
-						retry: {
-							...(retry ?? {}),
-							backoff_ms: Number((e.currentTarget as HTMLInputElement).value) || 0
-						}
-					})}
-				on:blur={(e) =>
-					commit({
-						retry: {
-							...(retry ?? {}),
-							backoff_ms: Number((e.currentTarget as HTMLInputElement).value) || 0
-						}
-					})}
-			/>
-		</div>
-	</div>
+	<Field label="perm.net">
+		<Input
+			type="checkbox"
+			checked={canNet}
+			onChange={(event) => {
+				const checked = (event.currentTarget as HTMLInputElement).checked;
+				const next = { ...permissions, net: checked };
+				onDraft({ permissions: next });
+				onCommit({ permissions: next });
+			}}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">perm.net</div>
-		<div class="v">
-			<input
-				type="checkbox"
-				checked={canNet}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).checked;
-					const next = { ...(permissions ?? {}), net: v };
-					patch({ permissions: next });
-					commit({ permissions: next });
-				}}
-			/>
-		</div>
-	</div>
+	<Field label="perm.fs">
+		<Input
+			type="checkbox"
+			checked={canFs}
+			onChange={(event) => {
+				const checked = (event.currentTarget as HTMLInputElement).checked;
+				const next = { ...permissions, fs: checked };
+				onDraft({ permissions: next });
+				onCommit({ permissions: next });
+			}}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">perm.fs</div>
-		<div class="v">
-			<input
-				type="checkbox"
-				checked={canFs}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).checked;
-					const next = { ...(permissions ?? {}), fs: v };
-					patch({ permissions: next });
-					commit({ permissions: next });
-				}}
-			/>
-		</div>
-	</div>
+	<Field label="perm.env">
+		<Input
+			type="checkbox"
+			checked={canEnv}
+			onChange={(event) => {
+				const checked = (event.currentTarget as HTMLInputElement).checked;
+				const next = { ...permissions, env: checked };
+				onDraft({ permissions: next });
+				onCommit({ permissions: next });
+			}}
+		/>
+	</Field>
 
-	<div class="field">
-		<div class="k">perm.env</div>
-		<div class="v">
-			<input
-				type="checkbox"
-				checked={canEnv}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).checked;
-					const next = { ...(permissions ?? {}), env: v };
-					patch({ permissions: next });
-					commit({ permissions: next });
-				}}
-			/>
-		</div>
-	</div>
-
-	<div class="field">
-		<div class="k">perm.subprocess</div>
-		<div class="v">
-			<input
-				type="checkbox"
-				checked={canSubprocess}
-				on:change={(e) => {
-					const v = (e.currentTarget as HTMLInputElement).checked;
-					const next = { ...(permissions ?? {}), subprocess: v };
-					patch({ permissions: next });
-					commit({ permissions: next });
-				}}
-			/>
-		</div>
-	</div>
-</div>
+	<Field label="perm.subprocess">
+		<Input
+			type="checkbox"
+			checked={canSubprocess}
+			onChange={(event) => {
+				const checked = (event.currentTarget as HTMLInputElement).checked;
+				const next = { ...permissions, subprocess: checked };
+				onDraft({ permissions: next });
+				onCommit({ permissions: next });
+			}}
+		/>
+	</Field>
+</Section>
 
 {#if ToolEditorByProvider[provider]}
-	<svelte:component
-		this={ToolEditorByProvider[provider]}
-		{selectedNode}
-		{params}
-		{onDraft}
-		{onCommit}
-	/>
+	<svelte:component this={ToolEditorByProvider[provider]} {params} {onDraft} {onCommit} />
 {/if}
-
-<style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-		margin-top: 8px;
-	}
-
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		align-items: start;
-		gap: 8px;
-		margin-bottom: 10px;
-	}
-
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-
-	.v {
-		min-width: 0;
-	}
-
-	input,
-	select {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		outline: none;
-		min-height: 40px;
-	}
-
-	input[type='checkbox'] {
-		width: auto;
-		min-height: 0;
-		padding: 0;
-	}
-</style>

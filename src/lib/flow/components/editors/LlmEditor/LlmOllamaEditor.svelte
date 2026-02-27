@@ -1,386 +1,318 @@
-<!-- src/lib/flow/components/editors/LlmEditor/LlmOllamaEditor.svelte -->
 <script lang="ts">
-import { onDestroy } from "svelte";
-import type { Node } from "@xyflow/svelte";
-import type { PipelineNodeData } from "$lib/flow/types";
-import type { LlmParams } from "$lib/flow/schema/llm";
+	import { onDestroy } from 'svelte';
+	import type { Node } from '@xyflow/svelte';
+	import type { PipelineNodeData } from '$lib/flow/types';
+	import type { LlmOutputMode, LlmParams } from '$lib/flow/schema/llm';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+	import {
+		asNumber,
+		asNumberOrEmpty,
+		asString,
+		parseOptionalFloat,
+		parseOptionalInt,
+		stringifyJson,
+		tryParseJson
+	} from '$lib/flow/components/editors/shared';
 
-// Parent (NodeInspector) passes these
-export let selectedNode: Node<PipelineNodeData>;
-export let params: Record<string, any>; // draft params from inspector
-export let onDraft: (patch: Record<string, any>) => void;
-export let onCommit: (patch: Record<string, any>) => void;
+	type LlmPatch = Partial<LlmParams>;
 
-const jsonSchemaPlaceholder = `{"type":"object","properties":{}}`;
+	export let selectedNode: Node<PipelineNodeData>;
+	export let params: Partial<LlmParams>;
+	export let onDraft: (patch: LlmPatch) => void;
+	export let onCommit: (patch: LlmPatch) => void;
 
-// ---- Helpers ----
-const asString = (v: unknown, fallback = ""): string =>
-typeof v === "string" ? v : fallback;
+	const jsonSchemaPlaceholder = `{"type":"object","properties":{}}`;
+	const outputModes: LlmOutputMode[] = ['text', 'markdown', 'json'];
 
-const asNumber = (v: unknown, fallback: number): number =>
-typeof v === "number" && !Number.isNaN(v) ? v : fallback;
+	let modelOptions: string[] = [];
+	let modelLoading = false;
+	let modelError = '';
+	let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
+	let modelAbort: AbortController | null = null;
+	let lastModelBaseUrl = '';
 
-// ---- Derived draft fields (with sane defaults) ----
-$: baseUrl = asString(params?.baseUrl, "http://localhost:11434");
-$: model = asString(params?.model, "llama3.1:8b");
-$: system_prompt = asString(params?.system_prompt, "");
-$: user_prompt = asString(params?.user_prompt, "Summarize the input data.");
-$: temperature = asNumber(params?.temperature, 0.7);
+	$: void selectedNode?.id;
+	$: baseUrl = asString(params?.baseUrl, 'http://localhost:11434');
+	$: connectionRef = asString(params?.connectionRef, '');
+	$: model = asString(params?.model, 'llama3.1:8b');
+	$: system_prompt = asString(params?.system_prompt, '');
+	$: user_prompt = asString(params?.user_prompt, 'Summarize the input data.');
+	$: temperature = asNumber(params?.temperature, 0.7);
+	$: top_p = asNumberOrEmpty(params?.top_p);
+	$: max_tokens = asNumberOrEmpty(params?.max_tokens);
+	$: seed = asNumberOrEmpty(params?.seed);
+	$: outputMode = (asString(params?.output?.mode, 'text') as LlmOutputMode) ?? 'text';
+	$: jsonSchemaText = stringifyJson(params?.output?.jsonSchema, jsonSchemaPlaceholder);
 
-// Optional fields that exist in schema but not in your defaults yet
-$: top_p = params?.top_p;
-$: max_tokens = params?.max_tokens;
-$: seed = params?.seed;
-
-$: outputMode = asString(params?.output?.mode, "text") as "text" | "markdown" | "json";
-$: jsonSchema = params?.output?.jsonSchema;
-
-let modelOptions: string[] = [];
-let modelLoading = false;
-let modelError = "";
-let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
-let modelAbort: AbortController | null = null;
-let lastModelBaseUrl = "";
-
-function normalizeBaseUrl(url: string): string {
-return url.trim().replace(/\/+$/, "");
-}
-
-function mapModelsFromTags(payload: any): string[] {
-const raw = Array.isArray(payload?.models) ? payload.models : [];
-const out = raw
-	.map((m: any) => (typeof m?.name === "string" ? m.name : typeof m?.model === "string" ? m.model : ""))
-	.filter((x: string) => x.length > 0);
-return Array.from(new Set(out));
-}
-
-async function fetchOllamaModels(baseUrlInput: string): Promise<void> {
-const base = normalizeBaseUrl(baseUrlInput);
-if (!base) {
-	modelOptions = [];
-	modelError = "";
-	modelLoading = false;
-	return;
-}
-
-try {
-	modelAbort?.abort();
-	modelAbort = new AbortController();
-	modelLoading = true;
-	modelError = "";
-
-	const res = await fetch(`${base}/api/tags`, {
-	method: "GET",
-	signal: modelAbort.signal,
-	});
-
-	if (!res.ok) {
-	throw new Error(`HTTP ${res.status}`);
+	function draft(patch: LlmPatch): void {
+		onDraft?.(patch);
 	}
 
-	const body = await res.json();
-	modelOptions = mapModelsFromTags(body);
-} catch (err: any) {
-	if (err?.name === "AbortError") return;
-	modelOptions = [];
-	modelError = `Could not load models from ${base}/api/tags`;
-} finally {
-	modelLoading = false;
-}
-}
+	function commit(patch: LlmPatch): void {
+		onCommit?.(patch);
+	}
 
-$: {
-const normalized = normalizeBaseUrl(baseUrl);
-if (normalized !== lastModelBaseUrl) {
-	lastModelBaseUrl = normalized;
-	if (modelFetchTimer) clearTimeout(modelFetchTimer);
-	modelFetchTimer = setTimeout(() => {
-	void fetchOllamaModels(normalized);
-	}, 250);
-}
-}
+	function normalizeBaseUrl(url: string): string {
+		return url.trim().replace(/\/+$/, '');
+	}
 
-onDestroy(() => {
-if (modelFetchTimer) clearTimeout(modelFetchTimer);
-modelAbort?.abort();
-});
+	function mapModelsFromTags(payload: unknown): string[] {
+		const raw = Array.isArray((payload as { models?: unknown[] } | undefined)?.models)
+			? (payload as { models: unknown[] }).models
+			: [];
 
-// ---- Setters (draft + commit) ----
-function setStr(key: string, value: string) {
-onDraft({ [key]: value });
-}
+		const models = raw
+			.map((entry) => {
+				if (typeof (entry as { name?: unknown })?.name === 'string') return (entry as { name: string }).name;
+				if (typeof (entry as { model?: unknown })?.model === 'string') return (entry as { model: string }).model;
+				return '';
+			})
+			.filter((value) => value.length > 0);
 
-function commitStr(key: string, value: string) {
-onCommit({ [key]: value });
-}
+		return Array.from(new Set(models));
+	}
 
-function setNum(key: string, value: number | undefined) {
-onDraft({ [key]: value });
-}
+	async function fetchOllamaModels(baseUrlInput: string): Promise<void> {
+		const base = normalizeBaseUrl(baseUrlInput);
+		if (!base) {
+			modelOptions = [];
+			modelError = '';
+			modelLoading = false;
+			return;
+		}
 
-function commitNum(key: string, value: number | undefined) {
-onCommit({ [key]: value });
-}
+		try {
+			modelAbort?.abort();
+			modelAbort = new AbortController();
+			modelLoading = true;
+			modelError = '';
 
-function setOutputMode(next: "text" | "markdown" | "json") {
-const nextOutput =
-	next === "json"
-	? { mode: next, jsonSchema: jsonSchema ?? {} }
-	: { mode: next };
+			const response = await fetch(`${base}/api/tags`, {
+				method: 'GET',
+				signal: modelAbort.signal
+			});
 
-onCommit({ output: nextOutput });
-}
+			if (!response.ok) throw new Error(`HTTP ${response.status}`);
+			modelOptions = mapModelsFromTags(await response.json());
+		} catch (error) {
+			if ((error as { name?: string } | undefined)?.name === 'AbortError') return;
+			modelOptions = [];
+			modelError = `Could not load models from ${base}/api/tags`;
+		} finally {
+			modelLoading = false;
+		}
+	}
 
-function setJsonSchema(value: string) {
-// keep jsonSchema as raw text until you decide a schema format
-// store as unknown object if it parses, otherwise keep string in draft area
-try {
-	const parsed = JSON.parse(value);
-	onDraft({ output: { ...(params?.output ?? { mode: "json" }), mode: "json", jsonSchema: parsed } });
-} catch {
-	// Don't overwrite with invalid JSON; just leave draft alone.
-	// If you want UX feedback, you can add a local error state.
-}
-}
+	function setOutputMode(next: LlmOutputMode): void {
+		const output =
+			next === 'json'
+				? { mode: next, jsonSchema: params?.output?.jsonSchema ?? {} }
+				: { mode: next };
+		commit({ output });
+	}
+
+	function setJsonSchema(raw: string): void {
+		const parsed = tryParseJson(raw);
+		if (parsed === undefined) return;
+		draft({ output: { ...(params?.output ?? { mode: 'json' }), mode: 'json', jsonSchema: parsed } });
+	}
+
+	$: {
+		const normalized = normalizeBaseUrl(baseUrl);
+		if (normalized !== lastModelBaseUrl) {
+			lastModelBaseUrl = normalized;
+			if (modelFetchTimer) clearTimeout(modelFetchTimer);
+			modelFetchTimer = setTimeout(() => {
+				void fetchOllamaModels(normalized);
+			}, 250);
+		}
+	}
+
+	onDestroy(() => {
+		if (modelFetchTimer) clearTimeout(modelFetchTimer);
+		modelAbort?.abort();
+	});
 </script>
 
-<div class="editor">
-<div class="section">
-<div class="sectionTitle">Ollama</div>
-
-<div class="grid">
-	<div class="row">
-	<div class="k">baseUrl</div>
-	<div class="v">
-		<input
-		type="text"
-		value={baseUrl}
-		placeholder="http://localhost:11434"
-		on:input={(e) => setStr("baseUrl", (e.currentTarget as HTMLInputElement).value)}
-		on:blur={(e) => commitStr("baseUrl", (e.currentTarget as HTMLInputElement).value)}
+<Section title="Ollama">
+	<Field label="baseUrl">
+		<Input
+			value={baseUrl}
+			placeholder="http://localhost:11434"
+			onInput={(event) => draft({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
+			onBlur={(event) => commit({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
 		/>
-	</div>
-	</div>
+	</Field>
 
-	<div class="row">
-	<div class="k">model</div>
-	<div class="v">
-		<div class="modelControl">
-		<select
-			value={model}
-			on:change={(e) => {
-			const v = (e.currentTarget as HTMLSelectElement).value;
-			setStr("model", v);
-			commitStr("model", v);
+	<Field label="connectionRef">
+		<Input
+			value={connectionRef}
+			placeholder="(optional) conn:ollama"
+			onInput={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).value.trim();
+				draft({ connectionRef: value === '' ? undefined : value });
 			}}
+			onBlur={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).value.trim();
+				commit({ connectionRef: value === '' ? undefined : value });
+			}}
+		/>
+	</Field>
+
+	<Field label="model">
+		<div class="stack">
+			<select
+				value={model}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement).value;
+					draft({ model: value });
+					commit({ model: value });
+				}}
+			>
+				{#if model && !modelOptions.includes(model)}
+					<option value={model}>{model} (current)</option>
+				{/if}
+				{#if modelOptions.length > 0}
+					{#each modelOptions as option}
+						<option value={option}>{option}</option>
+					{/each}
+				{:else}
+					<option value={model || ''} disabled>{modelLoading ? 'Loading models...' : 'No models found'}</option>
+				{/if}
+			</select>
+			{#if modelError}
+				<div class="hint">{modelError}</div>
+			{/if}
+		</div>
+	</Field>
+
+	<Field label="temperature">
+		<Input
+			type="number"
+			min="0"
+			max="2"
+			step="0.1"
+			value={temperature}
+			onInput={(event) =>
+				draft({ temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2) })}
+			onBlur={(event) =>
+				commit({ temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2) })}
+		/>
+	</Field>
+
+	<Field label="top_p">
+		<Input
+			type="number"
+			min="0"
+			max="1"
+			step="0.01"
+			value={top_p}
+			onInput={(event) =>
+				draft({ top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1) })}
+			onBlur={(event) =>
+				commit({ top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1) })}
+		/>
+	</Field>
+
+	<Field label="max_tokens">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={max_tokens}
+			onInput={(event) =>
+				draft({ max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+			onBlur={(event) =>
+				commit({ max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+		/>
+	</Field>
+
+	<Field label="seed">
+		<Input
+			type="number"
+			step="1"
+			value={seed}
+			onInput={(event) => draft({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
+			onBlur={(event) => commit({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
+		/>
+	</Field>
+
+	<Field label="output">
+		<select
+			value={outputMode}
+			on:change={(event) => setOutputMode((event.currentTarget as HTMLSelectElement).value as LlmOutputMode)}
 		>
-			{#if model && !modelOptions.includes(model)}
-			<option value={model}>{model} (current)</option>
-			{/if}
-
-			{#if modelOptions.length > 0}
-			{#each modelOptions as m}
-				<option value={m}>{m}</option>
+			{#each outputModes as mode}
+				<option value={mode}>{mode}</option>
 			{/each}
-			{:else}
-			<option value={model || ""} disabled>
-				{modelLoading ? "Loading models..." : "No models found"}
-			</option>
-			{/if}
 		</select>
-		</div>
-		{#if modelError}
-		<div class="hint">{modelError}</div>
-		{/if}
-	</div>
-	</div>
+	</Field>
+</Section>
 
-	<div class="row">
-	<div class="k">temperature</div>
-	<div class="v">
-		<input
-		type="number"
-		step="0.1"
-		min="0"
-		max="2"
-		value={temperature}
-		on:input={(e) => setNum("temperature", Number((e.currentTarget as HTMLInputElement).value))}
-		on:blur={(e) => commitNum("temperature", Number((e.currentTarget as HTMLInputElement).value))}
+<Section title="Prompt">
+	<Field label="system_prompt">
+		<Input
+			multiline={true}
+			rows={3}
+			value={system_prompt}
+			placeholder="(optional)"
+			onInput={(event) => draft({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+			onBlur={(event) => commit({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
 		/>
-	</div>
-	</div>
+	</Field>
 
-	<div class="row">
-	<div class="k">output</div>
-	<div class="v">
-		<select value={outputMode} on:change={(e) => setOutputMode((e.currentTarget as HTMLSelectElement).value as any)}>
-		<option value="text">text</option>
-		<option value="markdown">markdown</option>
-		<option value="json">json</option>
-		</select>
-	</div>
-	</div>
-</div>
-</div>
-
-<div class="section">
-<div class="sectionTitle">Prompt</div>
-
-<div class="grid">
-	<div class="row promptRow">
-	<div class="k">system_prompt</div>
-	<div class="v">
-		<textarea
-		rows="3"
-		value={system_prompt}
-		placeholder="(optional)"
-		on:input={(e) => setStr("system_prompt", (e.currentTarget as HTMLTextAreaElement).value)}
-		on:blur={(e) => commitStr("system_prompt", (e.currentTarget as HTMLTextAreaElement).value)}
-		/>
-	</div>
-	</div>
-
-	<div class="row promptRow">
-	<div class="k">user_prompt</div>
-	<div class="v">
-		<textarea
-		rows="6"
-		value={user_prompt}
-		placeholder="Summarize the input data."
-		on:input={(e) => setStr("user_prompt", (e.currentTarget as HTMLTextAreaElement).value)}
-		on:blur={(e) => commitStr("user_prompt", (e.currentTarget as HTMLTextAreaElement).value)}
-		/>
-		<div class="hint">
-		Tip: you can reserve <code>{"{input}"}</code> as a placeholder for upstream text (backend wiring pending).
+	<Field label="user_prompt">
+		<div class="stack">
+			<Input
+				multiline={true}
+				rows={6}
+				value={user_prompt}
+				placeholder="Summarize the input data."
+				onInput={(event) => draft({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+				onBlur={(event) => commit({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+			/>
+			<div class="hint">
+				Tip: you can reserve <code>{'{input}'}</code> as a placeholder for upstream text.
+			</div>
 		</div>
-	</div>
-	</div>
-</div>
-</div>
+	</Field>
+</Section>
 
-{#if outputMode === "json"}
-<div class="section">
-	<div class="sectionTitle">JSON Schema</div>
-	<div class="grid">
-	<div class="row">
-		<div class="k">jsonSchema</div>
-		<div class="v">
-		<textarea
-			rows="8"
-			placeholder={jsonSchemaPlaceholder}
-			value={typeof jsonSchema === "string" ? jsonSchema : JSON.stringify(jsonSchema ?? {}, null, 2)}
-			on:input={(e) => setJsonSchema((e.currentTarget as HTMLTextAreaElement).value)}
-		/>
-		<div class="hint">
-			JSON mode is enabled. Paste a JSON schema (stored as <code>output.jsonSchema</code>).
-		</div>
-		</div>
-	</div>
-	</div>
-</div>
+{#if outputMode === 'json'}
+	<Section title="JSON Schema">
+		<Field label="jsonSchema">
+			<div class="stack">
+				<Input
+					multiline={true}
+					rows={8}
+					value={jsonSchemaText}
+					placeholder={jsonSchemaPlaceholder}
+					onInput={(event) => setJsonSchema((event.currentTarget as HTMLTextAreaElement).value)}
+				/>
+				<div class="hint">
+					JSON mode is enabled. Paste a JSON schema stored as <code>output.jsonSchema</code>.
+				</div>
+			</div>
+		</Field>
+	</Section>
 {/if}
-</div>
 
 <style>
-.editor {
-display: flex;
-flex-direction: column;
-gap: 12px;
-}
+	.stack {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
 
-.section {
-border: 1px solid rgba(255, 255, 255, 0.08);
-border-radius: 12px;
-padding: 12px;
-background: rgba(255, 255, 255, 0.03);
-}
+	.hint {
+		font-size: 12px;
+		opacity: 0.75;
+	}
 
-.sectionTitle {
-font-weight: 650;
-font-size: 14px;
-margin-bottom: 10px;
-opacity: 0.9;
-}
-
-.grid {
-display: flex;
-flex-direction: column;
-gap: 10px;
-}
-
-.row {
-display: grid;
-grid-template-columns: 100px minmax(0, 1fr);
-align-items: start;
-gap: 8px;
-}
-
-.promptRow {
-grid-template-columns: 1fr;
-gap: 8px;
-}
-
-.k {
-font-size: 14px;
-opacity: 0.85;
-padding-top: 8px;
-}
-
-.promptRow .k {
-padding-top: 0;
-}
-
-.v {
-min-width: 0;
-}
-
-.modelControl {
-display: grid;
-grid-template-columns: minmax(0, 1fr);
-gap: 8px;
-align-items: center;
-}
-
-input,
-select,
-textarea {
-width: 100%;
-box-sizing: border-box;
-border-radius: 10px;
-border: 1px solid rgba(255, 255, 255, 0.10);
-background: rgba(0, 0, 0, 0.20);
-color: inherit;
-padding: 8px 10px;
-font-size: 14px;
-outline: none;
-min-height: 40px;
-}
-
-textarea {
-resize: vertical;
-line-height: 1.35;
-min-height: 96px;
-}
-
-.row:not(.promptRow) input,
-.row:not(.promptRow) select {
-min-width: 0;
-}
-
-input:focus,
-select:focus,
-textarea:focus {
-border-color: rgba(255, 255, 255, 0.25);
-}
-
-.hint {
-margin-top: 6px;
-font-size: 12px;
-opacity: 0.7;
-}
-
-code {
-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-font-size: 12px;
-}
+	code {
+		font-family: ui-monospace, Menlo, Consolas, monospace;
+		font-size: 12px;
+	}
 </style>

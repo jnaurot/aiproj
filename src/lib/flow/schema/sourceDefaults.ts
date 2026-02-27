@@ -3,6 +3,7 @@ import type { SourceFileParams, SourceDatabaseParams, SourceAPIParams } from "$l
 
 export const defaultSourceFileParams: SourceFileParams = {
     file_path: "data.csv",
+    file_name: "data.csv",
     file_format: "csv",
     delimiter: ",",
     sheet_name: "Sheet1",

@@ -5,72 +5,54 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import { asBoolean, asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type FileFormat = SourceFileParams['file_format'];
-	type EditorParams = Partial<SourceFileParams> & {
-		file_name?: string;
-		file_size?: number;
-		file_mime?: string;
-	};
+	type SourceFilePatch = Partial<SourceFileParams>;
 
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
-	export let params: EditorParams;
-	export let onDraft: (patch: Record<string, unknown>) => void;
-	export let onCommit: (patch: Record<string, unknown>) => void;
+	export let params: Partial<SourceFileParams>;
+	export let onDraft: (patch: SourceFilePatch) => void;
+	export let onCommit: (patch: SourceFilePatch) => void;
 
 	let fileEl: HTMLInputElement | null = null;
 
 	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
 
-	const asString = (value: unknown, fallback = ''): string =>
-		typeof value === 'string' ? value : fallback;
-
-	const asBoolean = (value: unknown, fallback: boolean): boolean =>
-		typeof value === 'boolean' ? value : fallback;
-
-	const asNumberOrEmpty = (value: unknown): string =>
-		typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
-
 	$: file_path = asString(params?.file_path, '');
+	$: file_name = asString(params?.file_name, 'No file selected');
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
 	$: sheet_name = asString(params?.sheet_name, '');
 	$: sample_size = asNumberOrEmpty(params?.sample_size);
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
-	$: selected_file_name = asString(params?.file_name, 'No file selected');
 
-	function draft(patch: Record<string, unknown>): void {
+	function draft(patch: SourceFilePatch): void {
 		onDraft?.(patch);
 	}
 
-	function commit(patch: Record<string, unknown>): void {
+	function commit(patch: SourceFilePatch): void {
 		onCommit?.(patch);
-	}
-
-	function parsePositiveInt(raw: string): number | undefined {
-		if (raw.trim() === '') return undefined;
-		const value = Number.parseInt(raw, 10);
-		return Number.isFinite(value) && value > 0 ? value : undefined;
 	}
 
 	function setFileFormat(nextFormat: string): void {
 		if (!fileFormatOptions.includes(nextFormat as FileFormat)) return;
-		const ff = nextFormat as FileFormat;
-		const next: Record<string, unknown> = { file_format: ff };
+		const next = nextFormat as FileFormat;
+		const patch: SourceFilePatch = { file_format: next };
 
-		if (ff === 'csv' || ff === 'tsv') {
-			next.delimiter = params?.delimiter ?? (ff === 'tsv' ? '\t' : ',');
-			next.sheet_name = undefined;
-		} else if (ff === 'excel') {
-			next.sheet_name = params?.sheet_name ?? '';
-			next.delimiter = undefined;
+		if (next === 'csv' || next === 'tsv') {
+			patch.delimiter = params?.delimiter ?? (next === 'tsv' ? '\t' : ',');
+			patch.sheet_name = undefined;
+		} else if (next === 'excel') {
+			patch.sheet_name = params?.sheet_name ?? '';
+			patch.delimiter = undefined;
 		} else {
-			next.delimiter = undefined;
-			next.sheet_name = undefined;
+			patch.delimiter = undefined;
+			patch.sheet_name = undefined;
 		}
 
-		commit(next);
+		commit(patch);
 	}
 
 	function onFilePicked(event: Event): void {
@@ -99,7 +81,7 @@
 					on:change={onFilePicked}
 				/>
 				<button type="button" on:click={() => fileEl?.click()}>Choose file</button>
-				<span class="fileName">{selected_file_name}</span>
+				<span class="fileName">{file_name}</span>
 			</div>
 		</Field>
 
@@ -113,7 +95,10 @@
 		</Field>
 
 		<Field label="file_format">
-			<select value={file_format} on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}>
+			<select
+				value={file_format}
+				on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}
+			>
 				{#each fileFormatOptions as option}
 					<option value={option}>{option}</option>
 				{/each}
@@ -149,14 +134,16 @@
 		{/if}
 
 		<Field label="sample_size">
-			<input
+			<Input
 				type="number"
 				min="1"
 				step="1"
 				value={sample_size}
 				placeholder="e.g. 1000"
-				on:input={(event) => draft({ sample_size: parsePositiveInt((event.currentTarget as HTMLInputElement).value) })}
-				on:blur={(event) => commit({ sample_size: parsePositiveInt((event.currentTarget as HTMLInputElement).value) })}
+				onInput={(event) =>
+					draft({ sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+				onBlur={(event) =>
+					commit({ sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
 			/>
 		</Field>
 
@@ -170,10 +157,10 @@
 		</Field>
 
 		<Field label="cache_enabled">
-			<input
+			<Input
 				type="checkbox"
 				checked={cache_enabled}
-				on:change={(event) => {
+				onChange={(event) => {
 					const checked = (event.currentTarget as HTMLInputElement).checked;
 					draft({ cache_enabled: checked });
 					commit({ cache_enabled: checked });
@@ -192,34 +179,5 @@
 
 	.fileName {
 		opacity: 0.8;
-	}
-
-	select,
-	input[type='number'] {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		outline: none;
-		min-height: 40px;
-	}
-
-	select:focus,
-	input[type='number']:focus {
-		border-color: rgba(255, 255, 255, 0.25);
-	}
-
-	button {
-		border: 1px solid rgba(255, 255, 255, 0.16);
-		background: rgba(255, 255, 255, 0.06);
-		color: inherit;
-		padding: 6px 10px;
-		border-radius: 10px;
-		cursor: pointer;
-		font-size: 13px;
 	}
 </style>

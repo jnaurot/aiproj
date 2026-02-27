@@ -1,82 +1,36 @@
-﻿<script lang="ts">
-	export let params: Record<string, any>;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
-	$: b = params?.builtin ?? { toolId: '', args: {} };
-	$: argsText = JSON.stringify(b?.args ?? {}, null, 2);
-	function commitArgs(text: string) {
-		try {
-			onCommit({ builtin: { ...b, args: JSON.parse(text) } });
-		} catch {}
+<script lang="ts">
+	import type { ToolParams } from '$lib/flow/schema/tool';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+	import { stringifyJson, tryParseJson } from '$lib/flow/components/editors/shared';
+
+	type BuiltinParams = Extract<ToolParams, { provider: 'builtin' }>;
+
+	export let params: Partial<BuiltinParams>;
+	export let onDraft: (patch: Partial<BuiltinParams>) => void;
+	export let onCommit: (patch: Partial<BuiltinParams>) => void;
+
+	$: builtin = params?.builtin ?? { toolId: '', args: {} };
+	$: argsText = stringifyJson(builtin.args ?? {}, '{}');
+
+	function commitArgs(text: string): void {
+		const parsed = tryParseJson(text);
+		if (parsed === undefined) return;
+		onCommit({ builtin: { ...builtin, args: parsed as Record<string, unknown> } });
 	}
 </script>
 
-<div class="section">
-	<div class="sectionTitle">Builtin</div>
-	<div class="field">
-		<div class="k">toolId</div>
-		<div class="v">
-			<input
-				value={b?.toolId ?? ''}
-				on:input={(e) =>
-					onDraft({ builtin: { ...b, toolId: (e.currentTarget as HTMLInputElement).value } })}
-				on:blur={(e) =>
-					onCommit({ builtin: { ...b, toolId: (e.currentTarget as HTMLInputElement).value } })}
-			/>
-		</div>
-	</div>
-	<div class="field">
-		<div class="k">args</div>
-		<div class="v">
-			<textarea
-				rows="6"
-				value={argsText}
-				on:blur={(e) => commitArgs((e.currentTarget as HTMLTextAreaElement).value)}
-			></textarea>
-		</div>
-	</div>
-</div>
+<Section title="Builtin">
+	<Field label="toolId">
+		<Input
+			value={builtin.toolId ?? ''}
+			onInput={(event) => onDraft({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
+			onBlur={(event) => onCommit({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
+		/>
+	</Field>
 
-<style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-		margin-top: 8px;
-	}
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		gap: 8px;
-		align-items: start;
-		margin-bottom: 10px;
-	}
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-	input,
-	textarea {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		min-height: 40px;
-	}
-	textarea {
-		resize: vertical;
-		min-height: 96px;
-	}
-</style>
+	<Field label="args">
+		<Input multiline={true} rows={6} value={argsText} onBlur={(event) => commitArgs((event.currentTarget as HTMLTextAreaElement).value)} />
+	</Field>
+</Section>

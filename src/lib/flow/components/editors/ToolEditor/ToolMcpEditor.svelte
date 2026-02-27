@@ -1,99 +1,44 @@
 <script lang="ts">
-	export let params: Record<string, any>;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
+	import type { ToolParams } from '$lib/flow/schema/tool';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
+	import { stringifyJson, tryParseJson } from '$lib/flow/components/editors/shared';
+
+	type McpParams = Extract<ToolParams, { provider: 'mcp' }>;
+
+	export let params: Partial<McpParams>;
+	export let onDraft: (patch: Partial<McpParams>) => void;
+	export let onCommit: (patch: Partial<McpParams>) => void;
 
 	$: mcp = params?.mcp ?? { serverId: 'local', toolName: '', args: {} };
-	$: argsText = JSON.stringify(mcp?.args ?? {}, null, 2);
+	$: argsText = stringifyJson(mcp.args ?? {}, '{}');
 
-	function commitArgs(text: string) {
-		try {
-			const parsed = JSON.parse(text);
-			onCommit({ mcp: { ...mcp, args: parsed } });
-		} catch {
-			// ignore invalid JSON until corrected
-		}
+	function commitArgs(text: string): void {
+		const parsed = tryParseJson(text);
+		if (parsed === undefined) return;
+		onCommit({ mcp: { ...mcp, args: parsed as Record<string, unknown> } });
 	}
 </script>
 
-<div class="section">
-	<div class="sectionTitle">MCP</div>
-	<div class="field">
-		<div class="k">serverId</div>
-		<div class="v">
-			<input
-				value={mcp?.serverId ?? ''}
-				on:input={(e) =>
-					onDraft({ mcp: { ...mcp, serverId: (e.currentTarget as HTMLInputElement).value } })}
-				on:blur={(e) =>
-					onCommit({ mcp: { ...mcp, serverId: (e.currentTarget as HTMLInputElement).value } })}
-			/>
-		</div>
-	</div>
-	<div class="field">
-		<div class="k">toolName</div>
-		<div class="v">
-			<input
-				value={mcp?.toolName ?? ''}
-				on:input={(e) =>
-					onDraft({ mcp: { ...mcp, toolName: (e.currentTarget as HTMLInputElement).value } })}
-				on:blur={(e) =>
-					onCommit({ mcp: { ...mcp, toolName: (e.currentTarget as HTMLInputElement).value } })}
-			/>
-		</div>
-	</div>
-	<div class="field">
-		<div class="k">args</div>
-		<div class="v">
-			<textarea
-				rows="6"
-				value={argsText}
-				on:blur={(e) => commitArgs((e.currentTarget as HTMLTextAreaElement).value)}
-			></textarea>
-		</div>
-	</div>
-</div>
+<Section title="MCP">
+	<Field label="serverId">
+		<Input
+			value={mcp.serverId ?? ''}
+			onInput={(event) => onDraft({ mcp: { ...mcp, serverId: (event.currentTarget as HTMLInputElement).value } })}
+			onBlur={(event) => onCommit({ mcp: { ...mcp, serverId: (event.currentTarget as HTMLInputElement).value } })}
+		/>
+	</Field>
 
-<style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-		margin-top: 8px;
-	}
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		gap: 8px;
-		align-items: start;
-		margin-bottom: 10px;
-	}
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-	input,
-	textarea {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		min-height: 40px;
-	}
-	textarea {
-		resize: vertical;
-		min-height: 96px;
-	}
-</style>
+	<Field label="toolName">
+		<Input
+			value={mcp.toolName ?? ''}
+			onInput={(event) => onDraft({ mcp: { ...mcp, toolName: (event.currentTarget as HTMLInputElement).value } })}
+			onBlur={(event) => onCommit({ mcp: { ...mcp, toolName: (event.currentTarget as HTMLInputElement).value } })}
+		/>
+	</Field>
+
+	<Field label="args">
+		<Input multiline={true} rows={6} value={argsText} onBlur={(event) => commitArgs((event.currentTarget as HTMLTextAreaElement).value)} />
+	</Field>
+</Section>

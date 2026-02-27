@@ -1,9 +1,9 @@
 <script lang="ts">
 	export let label: string = '';
-	export let disabled: boolean = false;
+	export let className: string = '';
 </script>
 
-<div class="field">
+<div class={`field ${className}`.trim()}>
 	{#if label}
 		<div class="k">{label}</div>
 	{/if}

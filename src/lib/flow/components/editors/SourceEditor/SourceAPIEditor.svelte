@@ -1,190 +1,129 @@
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import NumberInput from '$lib/flow/components/NumberInput.svelte';
+	import type { SourceAPIParams } from '$lib/flow/schema/source';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
+	import Input from '$lib/flow/components/ui/Input.svelte';
 	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
+	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
+
+	type Method = SourceAPIParams['method'];
+	type AuthType = SourceAPIParams['auth_type'];
+	type SourceAPIPatch = Partial<SourceAPIParams>;
 
 	export let selectedNode: Node<PipelineNodeData> | null;
-	export let params: Record<string, any>;
-	export let onDraft: (patch: Record<string, any>) => void;
-	export let onCommit: (patch: Record<string, any>) => void;
+	export let params: Partial<SourceAPIParams>;
+	export let onDraft: (patch: SourceAPIPatch) => void;
+	export let onCommit: (patch: SourceAPIPatch) => void;
 
-	function draft(patch: Record<string, any>) {
+	const methods: Method[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+	const authTypes: AuthType[] = ['none', 'bearer', 'basic', 'api_key'];
+
+	$: url = asString(params?.url, '');
+	$: method = (asString(params?.method, 'GET') as Method) ?? 'GET';
+	$: auth_type = (asString(params?.auth_type, 'none') as AuthType) ?? 'none';
+	$: auth_token_ref = asString(params?.auth_token_ref, '');
+	$: timeout_seconds = asNumberOrEmpty(params?.timeout_seconds ?? 30);
+	$: headers = params?.headers ?? {};
+	$: body = params?.body ?? {};
+
+	function draft(patch: SourceAPIPatch): void {
 		onDraft?.(patch);
 	}
 
-	function commit(patch: Record<string, any>) {
+	function commit(patch: SourceAPIPatch): void {
 		onCommit?.(patch);
 	}
 </script>
 
 {#if selectedNode}
-	<div class="section">
-		<div class="sectionTitle">API</div>
-		<div class="group">
-			<div class="field">
-				<div class="k">url</div>
-				<div class="v">
-					<input
-						value={params.url ?? ''}
-						placeholder="https://api.example.com/data"
-						on:input={(e) => draft({ url: (e.currentTarget as HTMLInputElement).value })}
-						on:blur={(e) => commit({ url: (e.currentTarget as HTMLInputElement).value })}
-					/>
-				</div>
-			</div>
+	<Section title="API">
+		<Field label="url">
+			<Input
+				value={url}
+				placeholder="https://api.example.com/data"
+				onInput={(event) => draft({ url: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) => commit({ url: (event.currentTarget as HTMLInputElement).value })}
+			/>
+		</Field>
 
-			<div class="field">
-				<div class="k">method</div>
-				<div class="v">
-					<select
-						value={params.method ?? 'GET'}
-						on:change={(e) => {
-							const v = (e.currentTarget as HTMLSelectElement).value;
-							draft({ method: v });
-							commit({ method: v });
-						}}
-					>
-						<option value="GET">GET</option>
-						<option value="POST">POST</option>
-						<option value="PUT">PUT</option>
-						<option value="PATCH">PATCH</option>
-						<option value="DELETE">DELETE</option>
-					</select>
-				</div>
-			</div>
+		<Field label="method">
+			<select
+				value={method}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement).value as Method;
+					draft({ method: value });
+					commit({ method: value });
+				}}
+			>
+				{#each methods as option}
+					<option value={option}>{option}</option>
+				{/each}
+			</select>
+		</Field>
 
-			<div class="field">
-				<div class="k">auth_type</div>
-				<div class="v">
-					<select
-						value={params.auth_type ?? 'none'}
-						on:change={(e) => {
-							const v = (e.currentTarget as HTMLSelectElement).value;
-							draft({ auth_type: v });
-							commit({ auth_type: v });
-						}}
-					>
-						<option value="none">none</option>
-						<option value="bearer">bearer</option>
-						<option value="basic">basic</option>
-						<option value="api_key">api_key</option>
-					</select>
-				</div>
-			</div>
+		<Field label="auth_type">
+			<select
+				value={auth_type}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement).value as AuthType;
+					draft({ auth_type: value });
+					commit({ auth_type: value });
+				}}
+			>
+				{#each authTypes as option}
+					<option value={option}>{option}</option>
+				{/each}
+			</select>
+		</Field>
 
-			<div class="field">
-				<div class="k">auth_token_ref</div>
-				<div class="v">
-					<input
-						value={params.auth_token_ref ?? ''}
-						placeholder="ENV_VAR_NAME (required if auth_type != none)"
-						on:input={(e) => {
-							const v = (e.currentTarget as HTMLInputElement).value.trim();
-							draft({ auth_token_ref: v === '' ? undefined : v });
-						}}
-						on:blur={(e) => {
-							const v = (e.currentTarget as HTMLInputElement).value.trim();
-							commit({ auth_token_ref: v === '' ? undefined : v });
-						}}
-					/>
-				</div>
-			</div>
-			<div class="field">
-				<div class="k">timeout_seconds</div>
-				<div class="v">
-					<NumberInput
-						value={params.timeout_seconds ?? 30}
-						min={1}
-						onChange={(v) => draft({ timeout_seconds: v ?? 30 })}
-					/>
-				</div>
-			</div>
-		</div>
-		<div class="field">
-			<div class="k">headers</div>
-			<div class="v">
-				<KeyValueEditor
-					label=""
-					value={params.headers ?? {}}
-					allowTypes={false}
-					onChange={(next) => draft({ headers: next as any })}
-				/>
-			</div>
-		</div>
+		<Field label="auth_token_ref">
+			<Input
+				value={auth_token_ref}
+				placeholder="ENV_VAR_NAME (required if auth_type != none)"
+				onInput={(event) => {
+					const value = (event.currentTarget as HTMLInputElement).value.trim();
+					draft({ auth_token_ref: value === '' ? undefined : value });
+				}}
+				onBlur={(event) => {
+					const value = (event.currentTarget as HTMLInputElement).value.trim();
+					commit({ auth_token_ref: value === '' ? undefined : value });
+				}}
+			/>
+		</Field>
 
-		<div class="field">
-			<div class="k">body</div>
-			<div class="v">
-				<KeyValueEditor
-					label=""
-					value={params.body ?? {}}
-					allowTypes={true}
-					defaultType="string"
-					onChange={(next) => {
-						const keys = next ? Object.keys(next) : [];
-						draft({ body: keys.length ? (next as any) : undefined });
-					}}
-				/>
-			</div>
-		</div>
-	</div>
+		<Field label="timeout_seconds">
+			<Input
+				type="number"
+				min="1"
+				step="1"
+				value={timeout_seconds}
+				onInput={(event) =>
+					draft({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
+			/>
+		</Field>
+
+		<Field label="headers">
+			<KeyValueEditor
+				label=""
+				value={headers}
+				allowTypes={false}
+				onChange={(next) => draft({ headers: next as Record<string, string> })}
+			/>
+		</Field>
+
+		<Field label="body">
+			<KeyValueEditor
+				label=""
+				value={body as Record<string, unknown>}
+				allowTypes={true}
+				defaultType="string"
+				onChange={(next) => {
+					const keys = Object.keys(next ?? {});
+					draft({ body: keys.length > 0 ? (next as Record<string, unknown>) : undefined });
+				}}
+			/>
+		</Field>
+	</Section>
 {/if}
-
-<style>
-	.section {
-		border: 1px solid rgba(255, 255, 255, 0.08);
-		border-radius: 12px;
-		padding: 12px;
-		background: rgba(255, 255, 255, 0.03);
-	}
-
-	.sectionTitle {
-		font-weight: 650;
-		font-size: 14px;
-		margin-bottom: 10px;
-		opacity: 0.9;
-	}
-
-	.group {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.field {
-		display: grid;
-		grid-template-columns: 100px minmax(0, 1fr);
-		align-items: start;
-		gap: 8px;
-	}
-
-	.k {
-		font-size: 14px;
-		opacity: 0.85;
-		padding-top: 8px;
-	}
-
-	.v {
-		min-width: 0;
-	}
-
-	input,
-	select {
-		width: 100%;
-		box-sizing: border-box;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(0, 0, 0, 0.2);
-		color: inherit;
-		padding: 8px 10px;
-		font-size: 14px;
-		outline: none;
-		min-height: 40px;
-	}
-
-	input:focus,
-	select:focus {
-		border-color: rgba(255, 255, 255, 0.25);
-	}
-</style>

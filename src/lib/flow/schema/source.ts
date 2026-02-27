@@ -7,6 +7,9 @@ const SourceKindSchema = z.enum(["file", "database", "api"]);
 // ---- schemas ----
 export const SourceFileParamsSchema = z.object({
   file_path: z.string().min(1),
+  file_name: z.string().optional(),
+  file_size: z.number().int().nonnegative().optional(),
+  file_mime: z.string().optional(),
   file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),
   delimiter: z.string().optional(),
   sheet_name: z.string().optional(),
