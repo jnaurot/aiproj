@@ -279,9 +279,15 @@ class TestSourceFileParams:
             assert SourceFileParams.model_validate(params).file_format == fmt
     
     def test_missing_file_path(self):
-        """Test validation error when root/rel path are missing"""
-        with pytest.raises(ValueError):
-            SourceFileParams.model_validate({})
+        """Test validation_required flags missing snapshot/path"""
+        params = SourceFileParams.model_validate({})
+        errors = params.validate_required()
+        assert "rel_path is required" in errors
+        assert "filename is required" in errors
+
+    def test_snapshot_id_satisfies_required(self):
+        params = SourceFileParams.model_validate({"snapshot_id": "a" * 64})
+        assert params.validate_required() == []
     
     def test_validate_required_method(self):
         """Test custom validation_required method"""

@@ -77,6 +77,21 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
     p = params or {}
     fp: Dict[str, Any] = {"source_kind": source_kind}
     if source_kind == "file":
+        snapshot_id = p.get("snapshot_id") or p.get("snapshotId")
+        if isinstance(snapshot_id, str) and snapshot_id.strip():
+            fp.update(
+                {
+                    "snapshot_id": str(snapshot_id).strip().lower(),
+                    "file_format": p.get("file_format"),
+                    "encoding": p.get("encoding"),
+                    "delimiter": p.get("delimiter"),
+                    "sheet_name": p.get("sheet_name"),
+                    "sample_size": p.get("sample_size"),
+                    "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                    "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+                }
+            )
+            return _sanitize(fp)
         rel_path = p.get("rel_path") or p.get("rootId") or "."
         filename = p.get("filename") or p.get("relPath")
         if not filename and isinstance(p.get("file_path"), str):

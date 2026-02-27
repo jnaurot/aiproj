@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .runner.capabilities import capabilities_response, capability_signature
 from .routes.maintenance import router as maintenance_router
 from .routes.runs import router as runs_router
+from .routes.snapshots import router as snapshots_router
 from .runtime import RuntimeManager
 
 app = FastAPI(title="Flow Runner")
@@ -24,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(runs_router, prefix="/runs")
+app.include_router(snapshots_router, prefix="/snapshots")
 app.include_router(maintenance_router, prefix="/maintenance")
 
 

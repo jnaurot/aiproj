@@ -2,7 +2,11 @@
 import type { SourceFileParams, SourceDatabaseParams, SourceAPIParams } from "$lib/flow/schema/source";
 
 export const defaultSourceFileParams: SourceFileParams = {
-    rel_path: "c:/users/owner/desktop/aiproj",
+    snapshotId: undefined,
+    recentSnapshotIds: [],
+    recentSnapshots: [],
+    snapshotMetadata: undefined,
+    rel_path: ".",
     filename: "data.csv",
     file_format: "csv",
     delimiter: ",",

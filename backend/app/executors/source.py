@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import os
 import time
@@ -166,6 +167,7 @@ async def exec_source(
                 context.bus,
                 run_id,
                 context.graph_id,
+                artifact_store=context.artifact_store,
                 forced_output_mode=_source_out_mode_from_node(node),
             )
         elif source_type == "database":
@@ -191,6 +193,7 @@ async def _handle_file_source(
     bus: RunEventBus,
     run_id: str,
     graph_id: str,
+    artifact_store: Any,
     forced_output_mode: Optional[str] = None,
 ) -> NodeOutput:
     if isinstance(params.get("file_path"), str) and not params.get("filename"):
@@ -200,20 +203,39 @@ async def _handle_file_source(
     schema = SourceFileParams.model_validate(params)
     output_mode = forced_output_mode or _get_output_mode(params, _default_file_output_mode(schema.file_format))
 
-    file_path = _resolve_file_path(schema.rel_path, schema.filename)
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-
-    await bus.emit(
-        {
-            "type": "log",
-            "runId": run_id,
-            "at": _iso_now(),
-            "level": "info",
-            "message": f"Reading file {schema.filename}",
-            "nodeId": node_id,
-        }
-    )
+    file_bytes: Optional[bytes] = None
+    file_path: Optional[Path] = None
+    if schema.snapshot_id:
+        sid = str(schema.snapshot_id).strip().lower()
+        if not sid:
+            raise ValueError("snapshot_id is empty")
+        if not await artifact_store.exists(sid):
+            raise FileNotFoundError(f"Snapshot not found: {sid}")
+        file_bytes = await artifact_store.read(sid)
+        await bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": _iso_now(),
+                "level": "info",
+                "message": f"Using snapshotId={sid}",
+                "nodeId": node_id,
+            }
+        )
+    else:
+        file_path = _resolve_file_path(schema.rel_path or ".", schema.filename or "")
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        await bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": _iso_now(),
+                "level": "info",
+                "message": f"Reading file {schema.filename}",
+                "nodeId": node_id,
+            }
+        )
 
     rows: list[dict[str, Any]] | None = None
     text_data: str | None = None
@@ -221,36 +243,48 @@ async def _handle_file_source(
     binary_data: bytes | None = None
 
     if schema.file_format in {"csv", "tsv"}:
+        csv_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pd.read_csv(
-            file_path,
+            csv_input,
             delimiter=schema.delimiter or ("\t" if schema.file_format == "tsv" else ","),
             encoding=schema.encoding,
             nrows=schema.sample_size,
         )
         rows = df.to_dict(orient="records")
     elif schema.file_format == "parquet":
-        df = pq.read_table(file_path).to_pandas()
+        parquet_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+        df = pq.read_table(parquet_input).to_pandas()
         if schema.sample_size:
             df = df.head(schema.sample_size)
         rows = df.to_dict(orient="records")
     elif schema.file_format == "json":
-        with open(file_path, "r", encoding=schema.encoding) as f:
-            json_data = json.load(f)
+        raw_json = (
+            (file_bytes or b"").decode(schema.encoding, errors="replace")
+            if file_bytes is not None
+            else Path(file_path).read_text(encoding=schema.encoding)
+        )
+        json_data = json.loads(raw_json)
         if isinstance(json_data, list):
             rows = json_data
     elif schema.file_format == "excel":
-        df = pd.read_excel(file_path, sheet_name=schema.sheet_name or 0, nrows=schema.sample_size)
+        excel_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+        df = pd.read_excel(excel_input, sheet_name=schema.sheet_name or 0, nrows=schema.sample_size)
         rows = df.to_dict(orient="records")
     elif schema.file_format == "txt":
-        text_data = file_path.read_text(encoding=schema.encoding)
+        text_data = (
+            (file_bytes or b"").decode(schema.encoding, errors="replace")
+            if file_bytes is not None
+            else Path(file_path).read_text(encoding=schema.encoding)
+        )
     elif schema.file_format == "pdf":
         if not HAS_PDF:
             raise ImportError("PDF support requires PyPDF2 and pdfplumber")
-        with pdfplumber.open(file_path) as pdf:
+        pdf_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+        with pdfplumber.open(pdf_input) as pdf:
             max_pages = schema.sample_size or len(pdf.pages)
             text_data = "\n\n".join((page.extract_text() or "") for page in pdf.pages[:max_pages])
     else:
-        binary_data = file_path.read_bytes()
+        binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 
     if output_mode == "table":
         if rows is not None:

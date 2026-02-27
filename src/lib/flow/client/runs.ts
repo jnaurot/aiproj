@@ -109,6 +109,39 @@ export async function acceptNodeParams(req: {
   };
 }
 
+export async function resolveSourceNode(req: {
+	graphId: string;
+	graph: any;
+	nodeId: string;
+	params?: Record<string, unknown>;
+}) {
+	const res = await fetch('/api/runs/resolve/source', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`resolveSourceNode failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		graphId: string;
+		nodeId: string;
+		execKey: string;
+		artifactId: string | null;
+		cacheHit: boolean;
+		artifact?: {
+			artifactId: string;
+			mimeType?: string;
+			portType?: string;
+			sizeBytes?: number;
+			createdAt?: string;
+			contentHash?: string;
+		};
+		snapshotId?: string;
+	};
+}
+
 
 export function streamRunEvents(
   runId: string,
@@ -131,4 +164,70 @@ export function streamRunEvents(
   };
 
   return { close: () => es.close() };
+}
+
+export async function uploadSnapshot(file: File) {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch("/api/snapshots", {
+    method: "POST",
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`uploadSnapshot failed: ${res.status} ${text}`);
+  }
+  return (await res.json()) as {
+    snapshotId: string;
+    metadata: {
+      snapshotId: string;
+      originalFilename?: string;
+      byteSize?: number;
+      mimeType?: string;
+      importedAt?: string;
+      graphId?: string;
+    };
+  };
+}
+
+export async function getSnapshotMeta(snapshotId: string) {
+	const sid = String(snapshotId ?? '').trim();
+	if (!sid) throw new Error('snapshotId is required');
+	const res = await fetch(`/api/snapshots/${encodeURIComponent(sid)}/meta`);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getSnapshotMeta failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		snapshotId: string;
+		metadata?: {
+			snapshotId?: string;
+			originalFilename?: string;
+			byteSize?: number;
+			mimeType?: string;
+			importedAt?: string;
+			graphId?: string;
+		};
+	};
+}
+
+export async function getSnapshot(snapshotId: string) {
+	const sid = String(snapshotId ?? '').trim();
+	if (!sid) throw new Error('snapshotId is required');
+	const res = await fetch(`/api/snapshots/${encodeURIComponent(sid)}`);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getSnapshot failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		snapshotId: string;
+		metadata?: {
+			snapshotId?: string;
+			originalFilename?: string;
+			byteSize?: number;
+			mimeType?: string;
+			importedAt?: string;
+			graphId?: string;
+		};
+	};
 }

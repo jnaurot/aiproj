@@ -23,8 +23,34 @@ const FILE_TO_DEFAULT_OUTPUT_MODE: Record<string, z.infer<typeof SourceOutputMod
 
 export const SourceFileParamsSchema = z
 	.object({
-		rel_path: z.string().min(1),
-		filename: z.string().min(1),
+		snapshotId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+		recentSnapshotIds: z.array(z.string().regex(/^[a-f0-9]{64}$/)).optional(),
+		recentSnapshots: z
+			.array(
+				z
+					.object({
+						id: z.string().regex(/^[a-f0-9]{64}$/),
+						filename: z.string().optional(),
+						importedAt: z.string().optional(),
+						size: z.number().int().nonnegative().optional(),
+						mimeType: z.string().optional()
+					})
+					.strip()
+			)
+			.optional(),
+		snapshotMetadata: z
+			.object({
+				snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
+				originalFilename: z.string().optional(),
+				byteSize: z.number().int().nonnegative().optional(),
+				mimeType: z.string().optional(),
+				importedAt: z.string().optional(),
+				graphId: z.string().optional()
+			})
+			.strip()
+			.optional(),
+		rel_path: z.string().min(1).optional(),
+		filename: z.string().min(1).optional(),
 		file_size: z.number().int().nonnegative().optional(),
 		file_mime: z.string().optional(),
 		file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),

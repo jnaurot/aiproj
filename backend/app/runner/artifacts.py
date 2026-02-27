@@ -117,6 +117,15 @@ class ArtifactStore(Protocol):
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]: ...
     async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]: ...
+    async def write_snapshot_from_file(
+        self,
+        *,
+        snapshot_id: str,
+        file_path: str | Path,
+        metadata: Dict[str, Any],
+        mime_type: Optional[str] = None,
+    ) -> str: ...
+    async def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]: ...
 
 
 # ----------------------------
@@ -134,6 +143,7 @@ class MemoryArtifactStore:
         self._blob: Dict[str, bytes] = {}
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._consumers: Dict[str, List[Dict[str, Any]]] = {}
+        self._snapshots: Dict[str, Dict[str, Any]] = {}
 
     def _prune_node_artifacts(self, *, graph_id: str, node_id: str, keep_last: int = 5) -> List[str]:
         if not graph_id or not node_id:
@@ -365,6 +375,49 @@ class MemoryArtifactStore:
                 self._consumers.pop(input_id, None)
         return {"graphId": graph_id, "nodeId": node_id, "artifactsRemoved": len(ids), "artifactIdsRemoved": ids}
 
+    async def write_snapshot_from_file(
+        self,
+        *,
+        snapshot_id: str,
+        file_path: str | Path,
+        metadata: Dict[str, Any],
+        mime_type: Optional[str] = None,
+    ) -> str:
+        sid = str(snapshot_id or "").strip().lower()
+        if not sid:
+            raise ValueError("snapshot_id is required")
+        path = Path(file_path)
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != sid:
+            raise ValueError("snapshot_id must equal SHA-256(file_bytes)")
+        art = Artifact(
+            artifact_id=sid,
+            node_kind="snapshot",
+            params_hash="snapshot",
+            upstream_ids=[],
+            created_at=datetime.now(timezone.utc),
+            execution_version="snapshot_v1",
+            mime_type=mime_type or str(metadata.get("mimeType") or "application/octet-stream"),
+            port_type="binary",
+            size_bytes=len(data),
+            storage_uri=f"memory://snapshots/{sid}",
+            payload_schema={"schema_version": 1, "type": "binary", "snapshot": True},
+            graph_id="__snapshots__",
+            node_id=None,
+            run_id=None,
+            exec_key=None,
+        )
+        await self.write(art, data)
+        self._snapshots[sid] = dict(metadata or {})
+        return sid
+
+    async def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        sid = str(snapshot_id or "").strip().lower()
+        if not sid:
+            return None
+        meta = self._snapshots.get(sid)
+        return dict(meta) if isinstance(meta, dict) else None
+
 
 class _SqliteArtifactIndex:
     def __init__(self, db_path: Path, *, blob_root: Optional[Path] = None) -> None:
@@ -484,6 +537,16 @@ class _SqliteArtifactIndex:
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    metadata_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_created_at ON snapshots(created_at)")
             self._conn.commit()
 
     def exists(self, artifact_id: str) -> bool:
@@ -877,6 +940,44 @@ class _SqliteArtifactIndex:
             "artifactIdsRemoved": artifact_ids,
         }
 
+    def upsert_snapshot_metadata(self, snapshot_id: str, metadata: Dict[str, Any]) -> None:
+        sid = str(snapshot_id or "").strip().lower()
+        if not sid:
+            raise ValueError("snapshot_id is required")
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO snapshots (snapshot_id, metadata_json, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(snapshot_id) DO UPDATE SET metadata_json=excluded.metadata_json
+                """,
+                (
+                    sid,
+                    json.dumps(metadata or {}, ensure_ascii=False),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            self._conn.commit()
+
+    def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        sid = str(snapshot_id or "").strip().lower()
+        if not sid:
+            return None
+        with self._lock:
+            cur = self._conn.cursor()
+            row = cur.execute(
+                "SELECT metadata_json FROM snapshots WHERE snapshot_id=?",
+                (sid,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            meta = json.loads(row[0]) if row[0] else {}
+            return meta if isinstance(meta, dict) else None
+        except Exception:
+            return None
+
     def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -1100,6 +1201,55 @@ class DiskArtifactStore:
 
     async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]:
         return self._index.delete_node_artifacts(graph_id=graph_id, node_id=node_id)
+
+    async def write_snapshot_from_file(
+        self,
+        *,
+        snapshot_id: str,
+        file_path: str | Path,
+        metadata: Dict[str, Any],
+        mime_type: Optional[str] = None,
+    ) -> str:
+        sid = str(snapshot_id or "").strip().lower()
+        if not sid:
+            raise ValueError("snapshot_id is required")
+        src = Path(file_path)
+        if not src.exists():
+            raise FileNotFoundError(f"snapshot source file not found: {src}")
+        blob_path = self._blob_path(sid)
+        blob_path.parent.mkdir(parents=True, exist_ok=True)
+        if not blob_path.exists():
+            os.replace(str(src), str(blob_path))
+        else:
+            try:
+                src.unlink(missing_ok=True)
+            except Exception:
+                pass
+        size_bytes = blob_path.stat().st_size
+        art = Artifact(
+            artifact_id=sid,
+            node_kind="snapshot",
+            params_hash="snapshot",
+            upstream_ids=[],
+            created_at=datetime.now(timezone.utc),
+            execution_version="snapshot_v1",
+            mime_type=mime_type or str(metadata.get("mimeType") or "application/octet-stream"),
+            port_type="binary",
+            size_bytes=int(size_bytes),
+            storage_uri=str(blob_path),
+            payload_schema={"schema_version": 1, "type": "binary", "snapshot": True},
+            content_hash=sid,
+            graph_id="__snapshots__",
+            node_id=None,
+            run_id=None,
+            exec_key=None,
+        )
+        self._index.put(art)
+        self._index.upsert_snapshot_metadata(sid, dict(metadata or {}))
+        return sid
+
+    async def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
+        return self._index.get_snapshot_metadata(snapshot_id)
 
 
 # ----------------------------

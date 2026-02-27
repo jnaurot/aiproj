@@ -128,6 +128,15 @@ def _normalized_params_for_exec_key(
         from .schemas import normalize_source_params_frontend
 
         p = normalize_source_params_frontend(p)
+        for ui_key in (
+            "recentSnapshotIds",
+            "recent_snapshot_ids",
+            "snapshotMetadata",
+            "snapshot_metadata",
+            "recentSnapshots",
+            "snapshotHistory",
+        ):
+            p.pop(ui_key, None)
         source_kind = (node.get("data", {}).get("sourceKind") or p.get("source_type") or "file")
         p["source_type"] = source_kind
         if source_kind == "file" and isinstance(p.get("file_path"), str) and not p.get("filename"):
@@ -698,6 +707,14 @@ async def run_graph(
                 node=n,
                 params=params,
             )
+            if kind == "source":
+                debug_payload = {
+                    "nodeId": node_id,
+                    "sourceKind": source_kind,
+                    "snapshotId": normalized_params_for_hash.get("snapshot_id"),
+                    "keys": sorted(list(normalized_params_for_hash.keys())),
+                }
+                print("[debug-exec-inputs]", json.dumps(debug_payload, sort_keys=True))
             source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
             node_state_hash = build_node_state_hash(
                 node=n,

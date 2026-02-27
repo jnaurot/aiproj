@@ -10,6 +10,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
 from ..runner.nodes.transform import load_table_from_artifact_bytes
+from ..runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
+from ..runner.run import _determinism_env_for_node, _normalized_params_for_exec_key
 
 router = APIRouter()
 
@@ -67,6 +69,12 @@ class RunCreated(BaseModel):
 class AcceptNodeParamsRequest(BaseModel):
     graph: Dict[str, Any]
     params: Dict[str, Any]
+
+class ResolveSourceRequest(BaseModel):
+    graphId: str
+    graph: Dict[str, Any]
+    nodeId: str
+    params: Optional[Dict[str, Any]] = None
 
 
 @router.get("")
@@ -135,6 +143,90 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
         raise HTTPException(400, str(ex))
     except RuntimeError as ex:
         raise HTTPException(409, str(ex))
+
+@router.post("/resolve/source")
+async def resolve_source_node(req: ResolveSourceRequest, request: Request):
+    graph_id = str(req.graphId or "").strip()
+    if not graph_id:
+        raise HTTPException(400, "graphId is required")
+
+    nodes = (req.graph or {}).get("nodes", []) if isinstance(req.graph, dict) else []
+    target = None
+    for n in nodes:
+        if str(n.get("id")) == str(req.nodeId):
+            target = n
+            break
+    if not isinstance(target, dict):
+        raise HTTPException(404, "node not found")
+
+    kind = str(((target.get("data") or {}).get("kind")) or "")
+    source_kind = str(((target.get("data") or {}).get("sourceKind")) or "file")
+    if kind != "source" or source_kind != "file":
+        raise HTTPException(400, "resolve/source supports source:file nodes only")
+
+    params_raw = dict(((target.get("data") or {}).get("params")) or {})
+    if isinstance(req.params, dict):
+        params_raw.update(req.params)
+
+    normalized = _normalized_params_for_exec_key(
+        kind="source",
+        node=target,
+        params=params_raw,
+    )
+    determinism_env = _determinism_env_for_node("source", normalized)
+    source_fingerprint = build_source_fingerprint(target, normalized)
+    node_state_hash = build_node_state_hash(
+        node=target,
+        params=normalized,
+        execution_version="v1",
+        source_fingerprint=source_fingerprint,
+    )
+    exec_key = build_exec_key(
+        graph_id=graph_id,
+        node_id=str(req.nodeId),
+        node_kind="source",
+        node_state_hash=node_state_hash,
+        upstream_artifact_ids=[],
+        input_refs=[],
+        determinism_env=determinism_env,
+        execution_version="v1",
+    )
+
+    store = request.app.state.runtime.artifact_store
+    artifact_id: Optional[str] = None
+    artifact_meta: Optional[Dict[str, Any]] = None
+    if await store.exists(exec_key):
+        art = await store.get(exec_key)
+        if getattr(art, "graph_id", None) and str(art.graph_id) == graph_id:
+            artifact_id = exec_key
+            artifact_meta = {
+                "artifactId": art.artifact_id,
+                "mimeType": art.mime_type,
+                "portType": art.port_type,
+                "sizeBytes": art.size_bytes,
+                "createdAt": art.created_at.isoformat() if getattr(art, "created_at", None) else None,
+                "contentHash": art.content_hash,
+            }
+
+    print(
+        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s exec_key=%s artifact=%s"
+        % (
+            graph_id,
+            str(req.nodeId),
+            str(normalized.get("snapshot_id") or ""),
+            exec_key,
+            str(artifact_id or ""),
+        )
+    )
+    return {
+        "graphId": graph_id,
+        "nodeId": str(req.nodeId),
+        "execKey": exec_key,
+        "artifactId": artifact_id,
+        "cacheHit": bool(artifact_id),
+        "artifact": artifact_meta,
+        "snapshotId": normalized.get("snapshot_id"),
+    }
 
 
 @router.delete("/{run_id}")

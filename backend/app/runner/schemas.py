@@ -68,6 +68,12 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(raw or {})
+    if "snapshotId" in p and "snapshot_id" not in p:
+        p["snapshot_id"] = p.pop("snapshotId")
+    if "recentSnapshotIds" in p and "recent_snapshot_ids" not in p:
+        p["recent_snapshot_ids"] = p.pop("recentSnapshotIds")
+    if "snapshotMetadata" in p and "snapshot_metadata" not in p:
+        p["snapshot_metadata"] = p.pop("snapshotMetadata")
     if "rootId" in p and "rel_path" not in p:
         p["rel_path"] = p.pop("rootId")
     if "relPath" in p and "filename" not in p:
@@ -143,9 +149,12 @@ class SourceKind(str, Enum):
     API = "api"
 
 class SourceFileParams(NodeParamSchema):
-    rel_path: str = Field(..., description="Directory path")
-    filename: str = Field(..., description="File name/path under rel_path")
+    snapshot_id: Optional[str] = None
+    rel_path: Optional[str] = Field(None, description="Directory path")
+    filename: Optional[str] = Field(None, description="File name/path under rel_path")
     file_path: Optional[str] = None  # compatibility shim (legacy FE)
+    recent_snapshot_ids: List[str] = Field(default_factory=list)
+    snapshot_metadata: Optional[Dict[str, Any]] = None
     file_format: Literal["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"] = "csv"
     delimiter: Optional[str] = None  # for CSV
     sheet_name: Optional[str] = None  # for Excel
@@ -171,10 +180,11 @@ class SourceFileParams(NodeParamSchema):
     
     def validate_required(self) -> List[str]:
         errors = []
-        if not self.rel_path:
-            errors.append("rel_path is required")
-        if not self.filename:
-            errors.append("filename is required")
+        if not self.snapshot_id:
+            if not self.rel_path:
+                errors.append("rel_path is required")
+            if not self.filename:
+                errors.append("filename is required")
         if self.file_format == "csv" and self.delimiter is None:
             # Auto-detect or use default
             pass

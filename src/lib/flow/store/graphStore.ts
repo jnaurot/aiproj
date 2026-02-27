@@ -18,7 +18,7 @@ import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
-import { acceptNodeParams, createRun, getRun, streamRunEvents } from '$lib/flow/client/runs';
+import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
 import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
@@ -70,6 +70,7 @@ type AuditContext = {
 	evt?: KnownRunEvent;
 	allowedNodeIds?: Set<string>;
 	snapshotNodeIds?: Set<string>;
+	expectedDirtyTransition?: boolean;
 };
 type InspectorState = {
 	nodeId: string | null;
@@ -157,6 +158,7 @@ function captureStack(label: string): string {
 
 function isAllowedSucceededRegression(nodeId: string, ctx: AuditContext): boolean {
 	if (ctx.source === 'accept_params') {
+		if (ctx.expectedDirtyTransition) return true;
 		return Boolean(ctx.allowedNodeIds?.has(nodeId));
 	}
 	if (ctx.source === 'hydrate_snapshot') return false;
@@ -234,6 +236,18 @@ function auditSucceededRegressions(prev: GraphState, next: GraphState, ctx: Audi
 		if (nextDisplay === 'running') continue;
 		if (nextDisplay === 'idle' && !next.nodeBindings?.[nodeId]) continue;
 		const allowed = isAllowedSucceededRegression(nodeId, ctx);
+		if (allowed) {
+			if (DEV_MODE) {
+				console.debug('[graphStore] EXPECTED_DIRTY_TRANSITION', {
+					nodeId,
+					source: ctx.source,
+					eventType: ctx.evt?.type ?? ctx.source,
+					prevDisplay,
+					nextDisplay
+				});
+			}
+			continue;
+		}
 		logSucceededRegression('binding', nodeId, prev, next, ctx, prevDisplay, nextDisplay);
 		if (DEV_MODE && !allowed) {
 			throw new Error(`SUCCEEDED_REGRESSION(binding): node=${nodeId}, source=${ctx.source}`);
@@ -340,6 +354,29 @@ function debugLogStaleFlips(prev: GraphState, next: GraphState, context: string)
 		activeRunId: next.activeRunId,
 		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : []
 	});
+}
+
+function stableJson(value: unknown): string {
+	try {
+		return JSON.stringify(value ?? null);
+	} catch {
+		return '';
+	}
+}
+
+function effectiveExecParamsForNode(node: Node<PipelineNodeData> | undefined): Record<string, unknown> {
+	const raw = { ...(node?.data?.params ?? {}) } as Record<string, unknown>;
+	for (const key of [
+		'recentSnapshotIds',
+		'recent_snapshot_ids',
+		'snapshotMetadata',
+		'snapshot_metadata',
+		'recentSnapshots',
+		'snapshotHistory'
+	]) {
+		delete raw[key];
+	}
+	return raw;
 }
 
 function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, context: string): void {
@@ -1017,22 +1054,200 @@ export const graphStore = (() => {
 	}
 
 	// optional: dropdown commit (keeps draft consistent + commits)
-	function commitInspectorImmediate(patch: Record<string, any>) {
+	async function commitInspectorImmediate(patch: Record<string, any>) {
 		const s = get({ subscribe } as any) as GraphState;
 		const nodeId = s.inspector.nodeId;
 		if (!nodeId) return { ok: false, error: 'No node selected' };
+		const beforeNode = s.nodes.find((x) => x.id === nodeId);
+		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
+		const paramsForSubmit = { ...(s.inspector.draftParams ?? {}), ...(patch ?? {}) };
 
 		// 1) update draft (so Apply is non-detrimental)
 		patchInspectorDraft(patch);
 
 		// 2) commit patch (validated/stripped)
-		return updateNodeConfigImpl(nodeId, { params: patch });
+		const result = updateNodeConfigImpl(nodeId, { params: patch });
+		if (!result.ok) return result;
+
+		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
+		return result;
+	}
+
+	function collectDownstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
+		const out = new Set<string>([nodeId]);
+		const q = [nodeId];
+		while (q.length > 0) {
+			const cur = q.shift()!;
+			for (const e of edges) {
+				if (e.source !== cur) continue;
+				const nxt = String(e.target ?? '');
+				if (!nxt || out.has(nxt)) continue;
+				out.add(nxt);
+				q.push(nxt);
+			}
+		}
+		return out;
+	}
+
+	function applyLocalStaleInvalidation(nodeId: string): void {
+		update((cur) => {
+			const candidateIds = collectDownstreamNodeIds(cur.edges, nodeId);
+			const nodeBindings = { ...cur.nodeBindings };
+			const nodeOutputs = { ...cur.nodeOutputs };
+			let changed = false;
+			for (const affectedId of candidateIds) {
+				const prev = nodeBindings[affectedId] ?? {};
+				const hadArtifact = Boolean(prev.currentArtifactId || prev.lastArtifactId);
+				if (!hadArtifact) continue;
+				nodeBindings[affectedId] = {
+					...prev,
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentArtifactId: null,
+					currentRunId: null,
+					currentExecKey: null
+				};
+				delete nodeOutputs[affectedId];
+				changed = true;
+			}
+			if (!changed) return cur;
+			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
+		}, { source: 'accept_params', expectedDirtyTransition: true });
+	}
+
+	function applyBackendAffectedStale(affectedNodeIds: string[]): void {
+		if (!Array.isArray(affectedNodeIds) || affectedNodeIds.length === 0) return;
+		update((cur) => {
+			const nodeBindings = { ...cur.nodeBindings };
+			const nodeOutputs = { ...cur.nodeOutputs };
+			for (const affectedId of affectedNodeIds) {
+				const prev = nodeBindings[affectedId] ?? {};
+				nodeBindings[affectedId] = {
+					...prev,
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentArtifactId: null,
+					currentRunId: null,
+					currentExecKey: null
+				};
+				delete nodeOutputs[affectedId];
+			}
+			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
+		}, { source: 'accept_params', allowedNodeIds: new Set(affectedNodeIds), expectedDirtyTransition: true });
+	}
+
+	function applySourceRehydration(nodeId: string, resolved: {
+		execKey: string;
+		artifactId: string | null;
+		artifact?: { mimeType?: string; portType?: string };
+	}): void {
+		if (!resolved.artifactId) return;
+		update((cur) => {
+			const prevBinding = cur.nodeBindings?.[nodeId] ?? {};
+			const nodeBindings = {
+				...cur.nodeBindings,
+				[nodeId]: {
+					...prevBinding,
+					status: 'succeeded_up_to_date',
+					cacheValid: true,
+					isUpToDate: true,
+					staleReason: null,
+					currentExecKey: resolved.execKey,
+					lastExecKey: resolved.execKey,
+					currentArtifactId: resolved.artifactId,
+					lastArtifactId: resolved.artifactId
+				}
+			};
+			const prevOut = cur.nodeOutputs?.[nodeId] ?? {};
+			const nodeOutputs = {
+				...cur.nodeOutputs,
+				[nodeId]: {
+					...prevOut,
+					mimeType: resolved.artifact?.mimeType ?? prevOut.mimeType,
+					portType: resolved.artifact?.portType ?? prevOut.portType,
+					preview: undefined,
+					cached: true,
+					cacheDecision: 'cache_hit'
+				}
+			};
+			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
+		}, { source: 'accept_params', expectedDirtyTransition: true, allowedNodeIds: new Set([nodeId]) });
+	}
+
+	async function syncAcceptParamsForNode(
+		nodeId: string,
+		paramsForSubmit: Record<string, any>,
+		beforeExecParams: Record<string, unknown>
+	): Promise<void> {
+		const st = get({ subscribe } as any) as GraphState;
+		const afterNode = st.nodes.find((x) => x.id === nodeId);
+		const afterExecParams = effectiveExecParamsForNode(afterNode);
+		const execInputsChanged = stableJson(beforeExecParams) !== stableJson(afterExecParams);
+		if (!execInputsChanged) return;
+		const isSourceFile =
+			String((afterNode as any)?.data?.kind ?? '') === 'source' &&
+			String((afterNode as any)?.data?.sourceKind ?? 'file') === 'file';
+
+		// Even when no active backend run handle exists, keep local UI and previews honest.
+		if (!st.activeRunId) {
+			applyLocalStaleInvalidation(nodeId);
+			if (isSourceFile) {
+				try {
+					const resolved = await resolveSourceNode({
+						graphId: st.graphId,
+						graph: { version: 1, nodes: st.nodes, edges: st.edges },
+						nodeId,
+						params: paramsForSubmit
+					});
+					applySourceRehydration(nodeId, resolved);
+				} catch {
+					// keep stale state on resolve failure
+				}
+			}
+			return;
+		}
+
+		try {
+			const resp = await acceptNodeParams({
+				runId: st.activeRunId,
+				nodeId,
+				graph: { version: 1, nodes: st.nodes, edges: st.edges },
+				params: paramsForSubmit
+			});
+			applyBackendAffectedStale(resp.affectedNodeIds ?? []);
+			const snap = await getRun(st.activeRunId);
+			update((cur) => hydrateFromRunSnapshot(cur, snap), {
+				source: 'hydrate_snapshot',
+				snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+			});
+			if (isSourceFile) {
+				try {
+					const resolved = await resolveSourceNode({
+						graphId: st.graphId,
+						graph: { version: 1, nodes: st.nodes, edges: st.edges },
+						nodeId,
+						params: paramsForSubmit
+					});
+					applySourceRehydration(nodeId, resolved);
+				} catch {
+					// keep stale state on resolve failure
+				}
+			}
+		} catch (e) {
+			// Backend sync failed; still keep local UX in stale state for changed effective inputs.
+			applyLocalStaleInvalidation(nodeId);
+			update((cur) => logPush(cur, 'warn', `accept-params sync failed: ${String(e)}`, nodeId));
+		}
 	}
 
 	async function applyInspectorDraft() {
 		const s = get({ subscribe } as any) as GraphState;
 		const nodeId = s.inspector.nodeId;
 		if (!nodeId) return { ok: false, error: 'No node selected' };
+		const beforeNode = s.nodes.find((x) => x.id === nodeId);
+		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
 
 		const r = updateNodeConfigImpl(nodeId, { params: s.inspector.draftParams });
 
@@ -1050,43 +1265,7 @@ export const graphStore = (() => {
 				};
 			});
 
-			const st = get({ subscribe } as any) as GraphState;
-			if (st.activeRunId) {
-				try {
-					const resp = await acceptNodeParams({
-						runId: st.activeRunId,
-						nodeId,
-						graph: { version: 1, nodes: st.nodes, edges: st.edges },
-						params: s.inspector.draftParams
-					});
-					if (Array.isArray(resp.affectedNodeIds) && resp.affectedNodeIds.length > 0) {
-						update((cur) => {
-							const nodeBindings = { ...cur.nodeBindings };
-							for (const affectedId of resp.affectedNodeIds) {
-								const prev = nodeBindings[affectedId] ?? {};
-								nodeBindings[affectedId] = {
-									...prev,
-									status: 'stale',
-									isUpToDate: false,
-									currentArtifactId: null,
-									currentRunId: null,
-									currentExecKey: null
-								};
-							}
-							return withGraphMeta({ ...cur, nodeBindings });
-						}, { source: 'accept_params', allowedNodeIds: new Set(resp.affectedNodeIds) });
-					}
-					const snap = await getRun(st.activeRunId);
-					update((cur) => hydrateFromRunSnapshot(cur, snap), {
-						source: 'hydrate_snapshot',
-						snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
-					});
-				} catch (e) {
-					update((cur) =>
-						logPush(cur, 'warn', `accept-params sync failed: ${String(e)}`, nodeId)
-					);
-				}
-			}
+			await syncAcceptParamsForNode(nodeId, s.inspector.draftParams, beforeExecParams);
 		}
 		return r;
 	}
