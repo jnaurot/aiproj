@@ -270,6 +270,7 @@ def build_exec_key(
     input_refs: Optional[list[tuple[str, str]]] = None,
     determinism_env: Optional[Dict[str, Any]] = None,
     execution_version: str,
+    node_impl_version: str = "1",
 ) -> str:
     if not str(graph_id or "").strip():
         raise ValueError("graph_id is required for exec_key generation")
@@ -282,6 +283,7 @@ def build_exec_key(
         "graph_id": str(graph_id or ""),
         "node_id": str(node_id or ""),
         "node_kind": str(node_kind or ""),
+        "node_impl_version": str(node_impl_version or "1"),
         "node_state_hash": str(node_state_hash or ""),
         "upstream_artifact_keys": sorted(str(aid) for aid in (upstream_artifact_ids or [])),
         "input_bindings": _normalize_input_refs(input_refs),

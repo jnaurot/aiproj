@@ -39,14 +39,19 @@ type NodeOutputInfo = {
 	preview?: string;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
+	expectedContractFingerprint?: string;
+	actualContractFingerprint?: string;
+	mismatchKind?: string;
 };
 type NodeBindingInfo = {
 	status?: string;
-	lastArtifactId?: string | null;
+	current?: { execKey?: string | null; artifactId?: string | null } | null;
+	last?: { execKey?: string | null; artifactId?: string | null } | null;
+	lastArtifactId?: string | null; // legacy
 	lastRunId?: string | null;
-	lastExecKey?: string | null;
-	currentExecKey?: string | null;
-	currentArtifactId?: string | null;
+	lastExecKey?: string | null; // legacy
+	currentExecKey?: string | null; // legacy
+	currentArtifactId?: string | null; // legacy
 	currentRunId?: string | null;
 	isUpToDate?: boolean;
 	cacheValid?: boolean;
@@ -107,6 +112,79 @@ const DEV_MODE = (() => {
 		return false;
 	}
 })();
+
+function _pairFromLegacy(binding: NodeBindingInfo | undefined, which: 'current' | 'last') {
+	const b = binding ?? {};
+	if (which === 'current') {
+		const hasStructured = Boolean(b.current && typeof b.current === 'object');
+		let execKey = (b.current?.execKey ?? b.currentExecKey) ?? null;
+		let artifactId = (b.current?.artifactId ?? b.currentArtifactId) ?? null;
+		return {
+			execKey: hasStructured ? execKey : (execKey ?? artifactId),
+			artifactId: hasStructured ? artifactId : (artifactId ?? execKey)
+		};
+	}
+	const hasStructured = Boolean(b.last && typeof b.last === 'object');
+	let execKey = (b.last?.execKey ?? b.lastExecKey) ?? null;
+	let artifactId = (b.last?.artifactId ?? b.lastArtifactId) ?? null;
+	return {
+		execKey: hasStructured ? execKey : (execKey ?? artifactId),
+		artifactId: hasStructured ? artifactId : (artifactId ?? execKey)
+	};
+}
+
+function _withPair(binding: NodeBindingInfo, which: 'current' | 'last', pair: { execKey?: string | null; artifactId?: string | null }) {
+	const next: NodeBindingInfo = { ...binding };
+	if (which === 'current') {
+		next.current = {
+			execKey: pair.execKey ?? null,
+			artifactId: pair.artifactId ?? null
+		};
+	} else {
+		next.last = {
+			execKey: pair.execKey ?? null,
+			artifactId: pair.artifactId ?? null
+		};
+	}
+	return next;
+}
+
+function _assertBindingPairInvariant(
+	binding: NodeBindingInfo | undefined,
+	nodeId: string,
+	context: string,
+	force = false
+): void {
+	if ((!DEV_MODE && !force) || !binding) return;
+	for (const which of ['current', 'last'] as const) {
+		const pair = _pairFromLegacy(binding, which);
+		const hasExec = Boolean(pair.execKey);
+		const hasArt = Boolean(pair.artifactId);
+		if (hasExec !== hasArt) {
+			throw new Error(`[graphStore] INVALID_BINDING_PAIR ${context} node=${nodeId} pair=${which}`);
+		}
+	}
+}
+
+export function __assertBindingPairForTest(binding: NodeBindingInfo, nodeId = 'test', context = 'test'): void {
+	_assertBindingPairInvariant(binding, nodeId, context, true);
+}
+
+function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string): NodeBindingInfo {
+	const b = { ...(binding ?? {}) };
+	const hasCurrentFields =
+		Object.prototype.hasOwnProperty.call(b, 'current') ||
+		Object.prototype.hasOwnProperty.call(b, 'currentExecKey') ||
+		Object.prototype.hasOwnProperty.call(b, 'currentArtifactId');
+	const hasLastFields =
+		Object.prototype.hasOwnProperty.call(b, 'last') ||
+		Object.prototype.hasOwnProperty.call(b, 'lastExecKey') ||
+		Object.prototype.hasOwnProperty.call(b, 'lastArtifactId');
+	if (hasCurrentFields) b.current = _pairFromLegacy(b, 'current');
+	if (hasLastFields) b.last = _pairFromLegacy(b, 'last');
+	if (nodeId) _assertBindingPairInvariant(b, nodeId, 'normalize');
+	return b;
+}
 
 export type GraphState = {
 	graphId: string;
@@ -313,8 +391,7 @@ function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NodeBindingI
 	const status = String(binding.status ?? '').toLowerCase();
 	return (
 		status === 'running' ||
-		status === 'succeeded' ||
-		status === 'succeeded_up_to_date' ||
+		status.startsWith('succeeded') ||
 		binding.isUpToDate === true
 	);
 }
@@ -401,20 +478,20 @@ export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): G
 	const nodeBindings = { ...state.nodeBindings };
 	let changed = false;
 	for (const affectedId of candidateIds) {
-		const prev = nodeBindings[affectedId] ?? {};
-		const hadArtifact = Boolean(prev.currentArtifactId || prev.lastArtifactId);
+		const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
+		const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 		if (!hadArtifact) continue;
 		if (isNodeStateFromActiveRunAndFresh(state, prev)) continue;
-		nodeBindings[affectedId] = {
+		let next = {
 			...prev,
 			status: 'stale',
 			isUpToDate: false,
 			cacheValid: false,
-			currentArtifactId: null,
 			currentRunId: null,
-			currentExecKey: null,
 			staleReason: affectedId === nodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
 		};
+		next = _withPair(next, 'current', { execKey: null, artifactId: null });
+		nodeBindings[affectedId] = next;
 		changed = true;
 	}
 	if (!changed) return state;
@@ -499,17 +576,21 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 	switch (evt.type) {
 		case 'node_output': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
-			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
+			let nextForNode: NodeBindingInfo = {
+				...prevBinding,
+				currentRunId: runId,
+				lastRunId: runId,
+				isUpToDate: typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true
+			};
+			const currentPair = _pairFromLegacy(prevBinding, 'current');
+			const boundExecKey = currentPair.execKey ?? _pairFromLegacy(prevBinding, 'last').execKey ?? evt.artifactId;
+			nextForNode = _withPair(nextForNode, 'current', { execKey: boundExecKey, artifactId: evt.artifactId });
+			nextForNode = _withPair(nextForNode, 'last', { execKey: boundExecKey, artifactId: evt.artifactId });
+			_assertBindingPairInvariant(nextForNode, evt.nodeId, 'node_output');
 			const nodeBindings = {
 				...state.nodeBindings,
-				[evt.nodeId]: {
-					...prevBinding,
-					currentArtifactId: evt.artifactId,
-					lastArtifactId: evt.artifactId,
-					currentRunId: runId,
-					lastRunId: runId,
-					isUpToDate: typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true
-				}
+				[evt.nodeId]: nextForNode
 			};
 			const nodeOutputs = {
 				...state.nodeOutputs,
@@ -529,36 +610,56 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		}
 		case 'cache_decision': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
-			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
 			const nextIsUpToDate =
 				evt.decision === 'cache_hit'
 					? true
 					: evt.decision === 'cache_hit_contract_mismatch'
 						? false
 						: (typeof prevBinding.isUpToDate === 'boolean' ? prevBinding.isUpToDate : true);
+			let nextBinding: NodeBindingInfo = {
+				...prevBinding,
+				cacheValid: evt.decision === 'cache_hit',
+				isUpToDate: nextIsUpToDate,
+				status: evt.decision === 'cache_hit_contract_mismatch' ? 'stale' : prevBinding.status,
+				staleReason: evt.decision === 'cache_hit_contract_mismatch' ? 'CONTRACT_MISMATCH' : prevBinding.staleReason
+			};
+			if (evt.decision === 'cache_hit_contract_mismatch' && isNodeStateFromActiveRunAndFresh(state, prevBinding)) {
+				nextBinding = {
+					...prevBinding,
+					cacheValid: false
+				};
+			}
+			if (evt.decision === 'cache_hit') {
+				const aid = evt.artifactId ?? prevBinding.current?.artifactId ?? prevBinding.last?.artifactId ?? null;
+				nextBinding = _withPair(nextBinding, 'current', { execKey: evt.execKey, artifactId: aid });
+			} else {
+				nextBinding = _withPair(nextBinding, 'current', { execKey: null, artifactId: null });
+			}
+			_assertBindingPairInvariant(nextBinding, evt.nodeId, 'cache_decision');
 			const nodeBindings = {
 				...state.nodeBindings,
-				[evt.nodeId]: {
-					...prevBinding,
-					currentExecKey: evt.execKey,
-					cacheValid: evt.decision === 'cache_hit',
-					isUpToDate: nextIsUpToDate,
-					currentArtifactId:
-						evt.decision === 'cache_hit'
-							? (evt.artifactId ?? prevBinding.currentArtifactId ?? prevBinding.lastArtifactId)
-							: null
-				}
+				[evt.nodeId]: nextBinding
 			};
 			const prev = state.nodeOutputs?.[evt.nodeId];
 			const nextForNode: NodeOutputInfo = {
 				mimeType: prev?.mimeType,
 				portType: prev?.portType,
 				preview: prev?.preview,
-				cached:
-					evt.decision === 'cache_hit' || evt.decision === 'cache_hit_contract_mismatch'
-						? true
-						: (prev?.cached ?? false),
-				cacheDecision: evt.decision
+				cached: evt.decision === 'cache_hit' ? true : (prev?.cached ?? false),
+				cacheDecision: evt.decision,
+				expectedContractFingerprint:
+					evt.decision === 'cache_hit_contract_mismatch'
+						? String((evt as any).expectedContractFingerprint ?? '')
+						: prev?.expectedContractFingerprint,
+				actualContractFingerprint:
+					evt.decision === 'cache_hit_contract_mismatch'
+						? String((evt as any).actualContractFingerprint ?? '')
+						: prev?.actualContractFingerprint,
+				mismatchKind:
+					evt.decision === 'cache_hit_contract_mismatch'
+						? String((evt as any).mismatchKind ?? '')
+						: prev?.mismatchKind
 			};
 			return withGraphMeta({
 				...state,
@@ -598,7 +699,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const nodeBindings = {
 				...state.nodeBindings,
 				[evt.nodeId]: {
-					...(state.nodeBindings?.[evt.nodeId] ?? {}),
+					..._normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId),
 					status: 'running',
 					currentRunId: evt.runId ?? runId
 				}
@@ -615,9 +716,9 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return logPush(state, evt.level, evt.message, evt.nodeId);
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
-			const prevBinding = state.nodeBindings?.[evt.nodeId] ?? {};
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
 			const succeeded = evt.status === 'succeeded';
-			const nextBinding: NodeBindingInfo = {
+			let nextBinding: NodeBindingInfo = {
 				...prevBinding,
 				status: succeeded ? 'succeeded_up_to_date' : evt.status,
 				currentRunId: evt.runId ?? runId,
@@ -625,6 +726,13 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				cacheValid: succeeded ? true : false,
 				staleReason: succeeded ? null : prevBinding.staleReason
 			};
+			if (succeeded) {
+				const current = _pairFromLegacy(nextBinding, 'current');
+				if (current.execKey && current.artifactId) {
+					nextBinding = _withPair(nextBinding, 'last', current);
+				}
+			}
+			_assertBindingPairInvariant(nextBinding, evt.nodeId, 'node_finished');
 			const nodeBindings = {
 				...state.nodeBindings,
 				[evt.nodeId]: nextBinding
@@ -673,7 +781,7 @@ function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): 
 	const nodeBindingsPatch: Record<string, NodeBindingInfo> = {};
 	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
 	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
-		const b = raw as NodeBindingInfo;
+		const b = _normalizeBinding(raw as NodeBindingInfo, nodeId);
 		nodeBindingsPatch[nodeId] = b;
 	}
 	const nodeBindings = mergeBindingsSticky(state.nodeBindings ?? {}, nodeBindingsPatch);
@@ -1181,20 +1289,21 @@ export const graphStore = (() => {
 			const nodeBindings = { ...cur.nodeBindings };
 			let changed = false;
 			for (const affectedId of candidateIds) {
-				const prev = nodeBindings[affectedId] ?? {};
-				const hadArtifact = Boolean(prev.currentArtifactId || prev.lastArtifactId);
+				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
+				const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 				if (!hadArtifact) continue;
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
-				nodeBindings[affectedId] = {
+				let next = {
 					...prev,
 					status: 'stale',
 					isUpToDate: false,
 					cacheValid: false,
-					currentArtifactId: null,
 					currentRunId: null,
-					currentExecKey: null,
 					staleReason: affectedId === nodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
 				};
+				next = _withPair(next, 'current', { execKey: null, artifactId: null });
+				_assertBindingPairInvariant(next, affectedId, 'applyLocalStaleInvalidation');
+				nodeBindings[affectedId] = next;
 				changed = true;
 			}
 			if (!changed) return cur;
@@ -1208,18 +1317,19 @@ export const graphStore = (() => {
 		update((cur) => {
 			const nodeBindings = { ...cur.nodeBindings };
 			for (const affectedId of affectedNodeIds) {
-				const prev = nodeBindings[affectedId] ?? {};
+				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
-				nodeBindings[affectedId] = {
+				let next = {
 					...prev,
 					status: 'stale',
 					isUpToDate: false,
 					cacheValid: false,
-					currentArtifactId: null,
 					currentRunId: null,
-					currentExecKey: null,
 					staleReason: affectedId === rootNodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
 				};
+				next = _withPair(next, 'current', { execKey: null, artifactId: null });
+				_assertBindingPairInvariant(next, affectedId, 'applyBackendAffectedStale');
+				nodeBindings[affectedId] = next;
 			}
 			return withGraphMeta({ ...cur, nodeBindings });
 		}, { source: 'accept_params', allowedNodeIds: new Set(affectedNodeIds), expectedDirtyTransition: true });
@@ -1232,20 +1342,26 @@ export const graphStore = (() => {
 	}): void {
 		if (!resolved.artifactId) return;
 		update((cur) => {
-			const prevBinding = cur.nodeBindings?.[nodeId] ?? {};
+			const prevBinding = _normalizeBinding(cur.nodeBindings?.[nodeId], nodeId);
+			let nextBinding: NodeBindingInfo = {
+				...prevBinding,
+				status: 'succeeded_up_to_date',
+				cacheValid: true,
+				isUpToDate: true,
+				staleReason: null
+			};
+			nextBinding = _withPair(nextBinding, 'current', {
+				execKey: resolved.execKey,
+				artifactId: resolved.artifactId
+			});
+			nextBinding = _withPair(nextBinding, 'last', {
+				execKey: resolved.execKey,
+				artifactId: resolved.artifactId
+			});
+			_assertBindingPairInvariant(nextBinding, nodeId, 'applySourceRehydration');
 			const nodeBindings = {
 				...cur.nodeBindings,
-				[nodeId]: {
-					...prevBinding,
-					status: 'succeeded_up_to_date',
-					cacheValid: true,
-					isUpToDate: true,
-					staleReason: null,
-					currentExecKey: resolved.execKey,
-					lastExecKey: resolved.execKey,
-					currentArtifactId: resolved.artifactId,
-					lastArtifactId: resolved.artifactId
-				}
+				[nodeId]: nextBinding
 			};
 			const prevOut: NodeOutputInfo | undefined = cur.nodeOutputs?.[nodeId];
 			const nodeOutputs = {

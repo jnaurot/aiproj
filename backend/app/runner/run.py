@@ -178,6 +178,7 @@ def _tool_exec_key(
         input_refs=input_refs,
         determinism_env=determinism_env,
         execution_version=execution_version,
+        node_impl_version="TOOL@1",
     )
 
 
@@ -205,7 +206,18 @@ def _transform_exec_key(
         input_refs=input_refs,
         determinism_env=determinism_env,
         execution_version=execution_version,
+        node_impl_version="TRANSFORM@1",
     )
+
+
+def _node_impl_version(kind: str) -> str:
+    mapping = {
+        "source": "SOURCE@1",
+        "transform": "TRANSFORM@1",
+        "llm": "LLM@1",
+        "tool": "TOOL@1",
+    }
+    return mapping.get(str(kind or ""), "GENERIC@1")
 
 
 def _tool_is_armed(params: Dict[str, Any]) -> bool:
@@ -289,6 +301,38 @@ def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str,
     if envelope_kind == "binary":
         return {"schema_version": 1, "type": "binary"}
     return None
+
+
+def _artifact_metadata_v1(
+    *,
+    exec_key: str,
+    node_id: str,
+    node_type: str,
+    node_impl_version: str,
+    params_fingerprint: str,
+    upstream_artifact_ids: list[str],
+    contract_fingerprint: str,
+    mime_type: str,
+    port_type: Optional[str],
+    created_at_iso: str,
+    run_id: Optional[str],
+    graph_id: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "metadataVersion": 1,
+        "execKey": exec_key,
+        "nodeId": node_id,
+        "nodeType": node_type,
+        "nodeImplVersion": node_impl_version,
+        "paramsFingerprint": params_fingerprint,
+        "upstreamArtifactIds": list(upstream_artifact_ids),
+        "contractFingerprint": contract_fingerprint,
+        "mimeType": mime_type,
+        "portType": str(port_type or ""),
+        "createdAt": created_at_iso,
+        "runId": run_id,
+        "graphId": graph_id,
+    }
 
 
 def _is_contract_mismatch_error(message: str) -> bool:
@@ -413,6 +457,12 @@ def _cached_artifact_contract_mismatch(kind: str, node: Dict[str, Any], artifact
         return None
     artifact_pt = _infer_artifact_port_type(artifact)
     if declared != artifact_pt:
+        expected_contract = {"portType": declared}
+        actual_contract = {
+            "portType": artifact_pt,
+            "mimeType": artifact.mime_type,
+            "payloadSchema": artifact.payload_schema or {},
+        }
         return {
             "message": (
                 "Contract mismatch (cache hit): "
@@ -422,6 +472,9 @@ def _cached_artifact_contract_mismatch(kind: str, node: Dict[str, Any], artifact
             "actualPortType": artifact_pt,
             "artifactId": artifact.artifact_id,
             "producerExecKey": artifact.exec_key,
+            "mismatchKind": "port_type",
+            "expectedContractFingerprint": sha256_hex(canonical_json(expected_contract).encode("utf-8")),
+            "actualContractFingerprint": sha256_hex(canonical_json(actual_contract).encode("utf-8")),
         }
     return None
 
@@ -567,6 +620,9 @@ async def run_graph(
         expected_port_type: Optional[str] = None,
         actual_port_type: Optional[str] = None,
         producer_exec_key: Optional[str] = None,
+        expected_contract_fingerprint: Optional[str] = None,
+        actual_contract_fingerprint: Optional[str] = None,
+        mismatch_kind: Optional[str] = None,
         reason: Optional[str] = None,
     ) -> None:
         d = decision if decision in _CACHE_DECISIONS else "cache_miss"
@@ -595,6 +651,12 @@ async def run_graph(
             evt["actualPortType"] = actual_port_type
         if producer_exec_key is not None:
             evt["producerExecKey"] = producer_exec_key
+        if expected_contract_fingerprint:
+            evt["expectedContractFingerprint"] = expected_contract_fingerprint
+        if actual_contract_fingerprint:
+            evt["actualContractFingerprint"] = actual_contract_fingerprint
+        if mismatch_kind:
+            evt["mismatchKind"] = mismatch_kind
         await context.bus.emit(evt)
 
     async def _emit_cache_summary_once() -> None:
@@ -731,6 +793,7 @@ async def run_graph(
                 input_refs=input_refs,
                 determinism_env=determinism_env,
                 execution_version=context.execution_version,
+                node_impl_version=_node_impl_version(kind),
             )
             cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
             cache_resolution = "CACHE_HIT" if cached_artifact_id else "CACHE_MISS"
@@ -899,6 +962,9 @@ async def run_graph(
                         expected_port_type=mismatch_error["expectedPortType"],
                         actual_port_type=mismatch_error["actualPortType"],
                         producer_exec_key=mismatch_error.get("producerExecKey"),
+                        expected_contract_fingerprint=mismatch_error.get("expectedContractFingerprint"),
+                        actual_contract_fingerprint=mismatch_error.get("actualContractFingerprint"),
+                        mismatch_kind=mismatch_error.get("mismatchKind"),
                         reason="CONTRACT_MISMATCH",
                     )
                     await context.bus.emit({
@@ -913,6 +979,9 @@ async def run_graph(
                         "actualPortType": mismatch_error["actualPortType"],
                         "artifactId": mismatch_error["artifactId"],
                         "producerExecKey": mismatch_error.get("producerExecKey"),
+                        "expectedContractFingerprint": mismatch_error.get("expectedContractFingerprint"),
+                        "actualContractFingerprint": mismatch_error.get("actualContractFingerprint"),
+                        "mismatchKind": mismatch_error.get("mismatchKind"),
                     })
                     # Continue as a miss; do not emit node_output/node_finished here.
                     cache_stats["miss"] += 1
@@ -1306,22 +1375,39 @@ async def run_graph(
                             llm_port_type = "json"
                         elif llm_output_mode == "embeddings":
                             llm_port_type = "embeddings"
+                        created_at_dt = datetime.now(timezone.utc)
+                        base_payload_schema = {
+                            "schema_version": 1,
+                            "type": "table",
+                            "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
+                        }
+                        contract_fingerprint = sha256_hex(canonical_json(base_payload_schema).encode("utf-8"))
+                        base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
+                            exec_key=exec_key,
+                            node_id=node_id,
+                            node_type=kind,
+                            node_impl_version=_node_impl_version(kind),
+                            params_fingerprint=node_state_hash,
+                            upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
+                            contract_fingerprint=contract_fingerprint,
+                            mime_type=res.mime_type,
+                            port_type="table",
+                            created_at_iso=created_at_dt.isoformat(),
+                            run_id=run_id,
+                            graph_id=context.graph_id,
+                        )
                         artifact = Artifact(
                             artifact_id=artifact_id,
                             node_kind=kind,
                             params_hash=node_state_hash,
                             upstream_ids=sorted([aid for _, aid in input_refs]),
-                            created_at=datetime.now(timezone.utc),
+                            created_at=created_at_dt,
                             execution_version=context.execution_version,
                             mime_type=res.mime_type,
                             port_type="table",
                             size_bytes=len(res.payload_bytes),
                             storage_uri=f"artifact://{artifact_id}",
-                            payload_schema={
-                                "schema_version": 1,
-                                "type": "table",
-                                "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
-                            },
+                            payload_schema=base_payload_schema,
                             run_id=run_id,
                             graph_id=context.graph_id,
                             node_id=node_id,
@@ -1720,32 +1806,50 @@ async def run_graph(
                         else:
                             artifact_port_type = "text"
 
+                    base_payload_schema = (
+                        _source_payload_schema(
+                            str(artifact_port_type or "table"),
+                            data_value,
+                        )
+                        if kind == "source"
+                        else _llm_payload_schema(mime_type, data_value)
+                        if kind == "llm"
+                        else _tool_payload_schema(
+                            str(data_value.get("kind") or "json") if isinstance(data_value, dict) else "json",
+                            data_value.get("payload") if isinstance(data_value, dict) else data_value,
+                        )
+                        if kind == "tool"
+                        else None
+                    ) or {}
+                    created_at_dt = datetime.now(timezone.utc)
+                    contract_fingerprint = sha256_hex(canonical_json(base_payload_schema).encode("utf-8"))
+                    base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
+                        exec_key=exec_key,
+                        node_id=node_id,
+                        node_type=kind,
+                        node_impl_version=_node_impl_version(kind),
+                        params_fingerprint=artifact_params_hash,
+                        upstream_artifact_ids=sorted(upstream_ids),
+                        contract_fingerprint=contract_fingerprint,
+                        mime_type=mime_type,
+                        port_type=artifact_port_type,
+                        created_at_iso=created_at_dt.isoformat(),
+                        run_id=run_id,
+                        graph_id=context.graph_id,
+                    )
+
                     artifact = Artifact(
                         artifact_id=artifact_id,
                         node_kind=kind,
                         params_hash=artifact_params_hash,
                         upstream_ids=sorted(upstream_ids),
-                        created_at=datetime.now(timezone.utc),
+                        created_at=created_at_dt,
                         execution_version=context.execution_version,
                         mime_type=mime_type,
                         port_type=artifact_port_type,
                         size_bytes=len(payload_bytes),
                         storage_uri=f"artifact://{artifact_id}",
-                        payload_schema=(
-                            _source_payload_schema(
-                                str(artifact_port_type or "table"),
-                                data_value,
-                            )
-                            if kind == "source"
-                            else _llm_payload_schema(mime_type, data_value)
-                            if kind == "llm"
-                            else _tool_payload_schema(
-                                str(data_value.get("kind") or "json") if isinstance(data_value, dict) else "json",
-                                data_value.get("payload") if isinstance(data_value, dict) else data_value,
-                            )
-                            if kind == "tool"
-                            else None
-                        ),
+                        payload_schema=base_payload_schema,
                         run_id=run_id,
                         graph_id=context.graph_id,
                         node_id=node_id,

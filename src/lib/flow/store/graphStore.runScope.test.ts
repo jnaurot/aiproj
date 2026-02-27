@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphState } from './graphStore';
 import {
 	__applyRunEventForTest,
+	__assertBindingPairForTest,
 	__hardResetGraphForTest,
 	__hydrateFromRunSnapshotForTest,
 	__markStaleFromNodeForTest
@@ -356,8 +357,8 @@ describe('graphStore partial run scope events', () => {
 			runId
 		);
 
-		expect(state.nodeBindings.xfm.currentArtifactId).toBe('art-xfm-cached');
-		expect(state.nodeBindings.llm_b.currentArtifactId).toBe('art-b-cached');
+		expect(state.nodeBindings.xfm.current?.artifactId).toBe('art-xfm-cached');
+		expect(state.nodeBindings.llm_b.current?.artifactId).toBe('art-b-cached');
 		expect(state.nodeBindings.xfm.cacheValid).toBe(true);
 		expect(state.nodeBindings.llm_b.cacheValid).toBe(true);
 		expect(state.nodeBindings.xfm.isUpToDate).toBe(true);
@@ -476,5 +477,176 @@ describe('graphStore partial run scope events', () => {
 		expect(state.nodeBindings.llm_artist.status).toBe('succeeded_up_to_date');
 		expect(displayStatusFromBinding(state.nodeBindings.llm as any)).toBe('running');
 		expect(state.nodeBindings.llm.status).toBe('running');
+	});
+
+	it('node_finished from another run_id is ignored during active run', () => {
+		const runId = 'run-1';
+		const state = makeState();
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_finished',
+				runId: 'run-old',
+				at: '2026-03-01T03:00:00Z',
+				nodeId: 'llm_b',
+				status: 'failed'
+			},
+			runId
+		);
+		expect(next.nodeBindings.llm_b.status).toBe(state.nodeBindings.llm_b.status);
+	});
+
+	it('cache_hit from another run_id cannot flip active run node state', () => {
+		const runId = 'run-1';
+		const state = makeState();
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId: 'run-old',
+				at: '2026-03-01T03:00:01Z',
+				nodeId: 'src',
+				nodeKind: 'source',
+				decision: 'cache_hit',
+				execKey: 'old-key',
+				artifactId: 'old-art'
+			},
+			runId
+		);
+		expect(next.nodeBindings.src.current).toBeUndefined();
+		expect(next.nodeBindings.src.isUpToDate).toBe(true);
+	});
+
+	it('binding pair invariant rejects partial pairs', () => {
+		expect(() =>
+			__assertBindingPairForTest({
+				current: { execKey: 'only-exec', artifactId: null },
+				last: { execKey: null, artifactId: null }
+			} as any)
+		).toThrow(/INVALID_BINDING_PAIR/);
+	});
+
+	it('node_finished keeps current/last pairs atomic on cache hit path', () => {
+		const runId = 'run-1';
+		let state = makeState();
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId,
+				at: '2026-03-01T04:00:00Z',
+				nodeId: 'src',
+				nodeKind: 'source',
+				decision: 'cache_hit',
+				execKey: 'src-key-4',
+				artifactId: 'art-src-4'
+			},
+			runId
+		);
+		state = __applyRunEventForTest(
+			state,
+			{ type: 'node_finished', runId, at: '2026-03-01T04:00:01Z', nodeId: 'src', status: 'succeeded' },
+			runId
+		);
+		expect(state.nodeBindings.src.current).toEqual({ execKey: 'src-key-4', artifactId: 'art-src-4' });
+		expect(state.nodeBindings.src.last).toEqual({ execKey: 'src-key-4', artifactId: 'art-src-4' });
+	});
+
+	it('stale propagation never mutates last pair', () => {
+		const state: GraphState = {
+			...makeState(),
+			nodeBindings: {
+				...makeState().nodeBindings,
+				src: {
+					status: 'succeeded_up_to_date',
+					isUpToDate: true,
+					current: { execKey: 'k1', artifactId: 'a1' },
+					last: { execKey: 'k1', artifactId: 'a1' }
+				}
+			}
+		};
+		const next = __markStaleFromNodeForTest(state, 'src');
+		expect(next.nodeBindings.src.current).toEqual({ execKey: null, artifactId: null });
+		expect(next.nodeBindings.src.last).toEqual({ execKey: 'k1', artifactId: 'a1' });
+	});
+
+	it('contract mismatch marks stale without wiping preview or last pair', () => {
+		const runId = 'run-1';
+		let state: GraphState = {
+			...makeState(),
+			nodeBindings: {
+				...makeState().nodeBindings,
+				src: {
+					status: 'succeeded_up_to_date',
+					isUpToDate: true,
+					cacheValid: true,
+					current: { execKey: 'k1', artifactId: 'a1' },
+					last: { execKey: 'k1', artifactId: 'a1' }
+				}
+			},
+			nodeOutputs: {
+				src: { preview: 'old', cached: true, cacheDecision: 'cache_hit' }
+			}
+		};
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId,
+				at: '2026-03-01T05:00:00Z',
+				nodeId: 'src',
+				nodeKind: 'source',
+				decision: 'cache_hit_contract_mismatch',
+				execKey: 'k1',
+				artifactId: 'a1',
+				expectedContractFingerprint: 'expfp',
+				actualContractFingerprint: 'actfp',
+				mismatchKind: 'port_type'
+			},
+			runId
+		);
+		expect(state.nodeBindings.src.status).toBe('stale');
+		expect(state.nodeBindings.src.staleReason).toBe('CONTRACT_MISMATCH');
+		expect(state.nodeBindings.src.cacheValid).toBe(false);
+		expect(state.nodeBindings.src.isUpToDate).toBe(false);
+		expect(state.nodeBindings.src.last).toEqual({ execKey: 'k1', artifactId: 'a1' });
+		expect(state.nodeOutputs.src.preview).toBe('old');
+		expect(state.nodeOutputs.src.expectedContractFingerprint).toBe('expfp');
+		expect(state.nodeOutputs.src.actualContractFingerprint).toBe('actfp');
+		expect(state.nodeOutputs.src.mismatchKind).toBe('port_type');
+	});
+
+	it('contract mismatch cannot override running/succeeded node in active run', () => {
+		const runId = 'run-1';
+		let state: GraphState = {
+			...makeState(),
+			nodeBindings: {
+				...makeState().nodeBindings,
+				src: {
+					status: 'running',
+					currentRunId: runId,
+					isUpToDate: true,
+					cacheValid: true,
+					current: { execKey: 'k2', artifactId: 'a2' },
+					last: { execKey: 'k2', artifactId: 'a2' }
+				}
+			}
+		};
+		state = __applyRunEventForTest(
+			state,
+			{
+				type: 'cache_decision',
+				runId,
+				at: '2026-03-01T05:00:01Z',
+				nodeId: 'src',
+				nodeKind: 'source',
+				decision: 'cache_hit_contract_mismatch',
+				execKey: 'k2',
+				artifactId: 'a2'
+			},
+			runId
+		);
+		expect(state.nodeBindings.src.status).toBe('running');
+		expect(state.nodeBindings.src.cacheValid).toBe(false);
 	});
 });

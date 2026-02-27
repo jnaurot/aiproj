@@ -28,7 +28,11 @@
 		const binding = state.nodeBindings?.[nodeId];
 		const info = state.nodeOutputs?.[nodeId];
 		const graphId = state.graphId;
-		const artifactId = binding?.currentArtifactId ?? binding?.lastArtifactId;
+		const artifactId =
+			binding?.current?.artifactId ??
+			binding?.currentArtifactId ??
+			binding?.last?.artifactId ??
+			binding?.lastArtifactId;
 		const mimeType = info?.mimeType;
 		if (!artifactId || !graphId) {
 			loaded = { kind: 'empty' };

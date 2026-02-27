@@ -7,11 +7,13 @@ export type ActiveRunMode = 'from_start' | 'from_selected_onward' | 'selected_on
 export type NodeBindingLike = {
 	isUpToDate?: boolean;
 	status?: unknown;
-	currentArtifactId?: string | null;
-	lastArtifactId?: string | null;
-	currentExecKey?: string | null;
+	current?: { execKey?: string | null; artifactId?: string | null } | null;
+	last?: { execKey?: string | null; artifactId?: string | null } | null;
+	currentArtifactId?: string | null; // legacy
+	lastArtifactId?: string | null; // legacy
+	currentExecKey?: string | null; // legacy
 	lastRunId?: string | null;
-	lastExecKey?: string | null;
+	lastExecKey?: string | null; // legacy
 	[key: string]: unknown;
 };
 
@@ -26,14 +28,17 @@ export function isBindingStale(binding: NodeBindingLike | null | undefined): boo
 
 export function displayStatusFromBinding(binding: NodeBindingLike | null | undefined): NodeStatus {
 	if (!binding) return 'idle';
-	const hasArtifact = Boolean(binding.currentArtifactId || binding.lastArtifactId);
+	const currentArtifactId = binding.current?.artifactId ?? binding.currentArtifactId;
+	const lastArtifactId = binding.last?.artifactId ?? binding.lastArtifactId;
+	const currentExecKey = binding.current?.execKey ?? binding.currentExecKey;
+	const lastExecKey = binding.last?.execKey ?? binding.lastExecKey;
+	const hasArtifact = Boolean(currentArtifactId || lastArtifactId);
 	const raw = String(binding.status ?? '').toLowerCase();
 	if (raw === 'running') return 'running';
 	if (isBindingStale(binding)) return 'stale';
-	const currentExecKey =
-		typeof binding.currentExecKey === 'string' ? binding.currentExecKey : undefined;
-	const lastExecKey = typeof binding.lastExecKey === 'string' ? binding.lastExecKey : undefined;
-	if (currentExecKey && lastExecKey && currentExecKey !== lastExecKey) return 'stale';
+	if (typeof currentExecKey === 'string' && typeof lastExecKey === 'string' && currentExecKey !== lastExecKey) {
+		return 'stale';
+	}
 	if (raw === 'succeeded_up_to_date' || raw === 'succeeded') return 'succeeded';
 	if (hasArtifact && raw === '') return 'succeeded';
 	if (raw === 'failed') return 'failed';
@@ -175,7 +180,7 @@ export function computeGraphFreshness(bindings: Record<string, NodeBindingLike>)
 	staleNodeCount: number;
 } {
 	const values = Object.values(bindings);
-	const hasRun = values.some((b) => !!b.lastArtifactId || !!b.lastRunId);
+	const hasRun = values.some((b) => !!(b.last?.artifactId ?? b.lastArtifactId) || !!b.lastRunId);
 	if (!hasRun) return { freshness: 'never_run', staleNodeCount: 0 };
 	const staleNodeCount = values.filter((b) => isBindingStale(b)).length;
 	return {

@@ -17,6 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 _PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
+_ARTIFACT_METADATA_VERSION = 1
+_REQUIRED_ARTIFACT_META_KEYS = {
+    "metadataVersion",
+    "execKey",
+    "nodeId",
+    "nodeType",
+    "nodeImplVersion",
+    "paramsFingerprint",
+    "upstreamArtifactIds",
+    "contractFingerprint",
+    "mimeType",
+    "portType",
+    "createdAt",
+}
 
 
 def _normalize_payload_schema(payload_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -51,6 +65,20 @@ def _infer_port_type(
     if node_kind == "transform":
         return "table"
     return "binary"
+
+
+def _validate_artifact_metadata_v1(artifact: "Artifact") -> None:
+    if not artifact.run_id:
+        return
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    meta = ps.get("artifactMetadataV1") if isinstance(ps, dict) else None
+    if not isinstance(meta, dict):
+        raise ValueError("Runtime artifact writes require payload_schema.artifactMetadataV1")
+    missing = [k for k in _REQUIRED_ARTIFACT_META_KEYS if k not in meta]
+    if missing:
+        raise ValueError(f"ArtifactMetadataV1 missing required keys: {','.join(sorted(missing))}")
+    if int(meta.get("metadataVersion") or -1) != _ARTIFACT_METADATA_VERSION:
+        raise ValueError("ArtifactMetadataV1.metadataVersion must be 1")
 
 
 # ----------------------------
@@ -188,6 +216,7 @@ class MemoryArtifactStore:
             yield data[i : i + chunk_size]
 
     async def write(self, artifact: Artifact, data: bytes) -> str:
+        _validate_artifact_metadata_v1(artifact)
         if artifact.run_id and (
             not artifact.graph_id or not artifact.node_id or not artifact.exec_key
         ):
@@ -1101,6 +1130,7 @@ class DiskArtifactStore:
                 yield chunk
 
     async def write(self, artifact: Artifact, data: bytes) -> str:
+        _validate_artifact_metadata_v1(artifact)
         if artifact.run_id and (
             not artifact.graph_id or not artifact.node_id or not artifact.exec_key
         ):

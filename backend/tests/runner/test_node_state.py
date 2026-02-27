@@ -1,4 +1,4 @@
-from app.runner.node_state import build_node_state_hash, build_source_fingerprint
+from app.runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 import pytest
 
 
@@ -160,3 +160,29 @@ def test_source_api_fingerprint_redacts_auth_header_and_body_secrets():
     fp_b = build_source_fingerprint(node, params_b)
     assert fp_a == fp_b
     assert "authorization" not in {str(k).lower() for k in fp_a.get("headers", {}).keys()}
+
+
+def test_exec_key_changes_when_node_impl_version_changes():
+    key_a = build_exec_key(
+        graph_id="g1",
+        node_id="n1",
+        node_kind="source",
+        node_state_hash="h1",
+        upstream_artifact_ids=[],
+        input_refs=[],
+        determinism_env={},
+        execution_version="v1",
+        node_impl_version="SOURCE@1",
+    )
+    key_b = build_exec_key(
+        graph_id="g1",
+        node_id="n1",
+        node_kind="source",
+        node_state_hash="h1",
+        upstream_artifact_ids=[],
+        input_refs=[],
+        determinism_env={},
+        execution_version="v1",
+        node_impl_version="SOURCE@2",
+    )
+    assert key_a != key_b
