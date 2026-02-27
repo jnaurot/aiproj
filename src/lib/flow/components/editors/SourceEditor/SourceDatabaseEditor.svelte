@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import type { SourceDatabaseParams } from '$lib/flow/schema/source';
+	import type { SourceDatabaseParams, SourceOutputMode } from '$lib/flow/schema/source';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
@@ -20,9 +20,15 @@
 	$: query = asString(params?.query, '');
 	$: table_name = asString(params?.table_name, '');
 	$: limit = asNumberOrEmpty(params?.limit);
+	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
+	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 
 	function draft(patch: SourceDatabasePatch): void {
 		onDraft?.(patch);
+	}
+
+	function commit(patch: SourceDatabasePatch): void {
+		onCommit?.(patch);
 	}
 </script>
 
@@ -34,6 +40,8 @@
 				placeholder="postgresql://user:pass@host:5432/db"
 				onInput={(event) =>
 					draft({ connection_string: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) =>
+					commit({ connection_string: (event.currentTarget as HTMLInputElement).value })}
 			/>
 		</Field>
 
@@ -44,6 +52,10 @@
 				onInput={(event) => {
 					const value = (event.currentTarget as HTMLInputElement).value.trim();
 					draft({ connection_ref: value === '' ? undefined : value });
+				}}
+				onBlur={(event) => {
+					const value = (event.currentTarget as HTMLInputElement).value.trim();
+					commit({ connection_ref: value === '' ? undefined : value });
 				}}
 			/>
 		</Field>
@@ -58,6 +70,10 @@
 					const value = (event.currentTarget as HTMLTextAreaElement).value;
 					draft({ query: value, table_name: value.trim() ? undefined : params?.table_name });
 				}}
+				onBlur={(event) => {
+					const value = (event.currentTarget as HTMLTextAreaElement).value;
+					commit({ query: value, table_name: value.trim() ? undefined : params?.table_name });
+				}}
 			/>
 		</Field>
 
@@ -68,6 +84,10 @@
 				onInput={(event) => {
 					const value = (event.currentTarget as HTMLInputElement).value.trim();
 					draft({ table_name: value === '' ? undefined : value, query: value ? undefined : params?.query });
+				}}
+				onBlur={(event) => {
+					const value = (event.currentTarget as HTMLInputElement).value.trim();
+					commit({ table_name: value === '' ? undefined : value, query: value ? undefined : params?.query });
 				}}
 			/>
 		</Field>
@@ -81,7 +101,24 @@
 				placeholder="e.g. 5000"
 				onInput={(event) =>
 					draft({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+				onBlur={(event) =>
+					commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
 			/>
+		</Field>
+
+		<Field label="output mode">
+			<select
+				value={outputMode}
+				on:change={(event) => {
+					const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					draft({ output: { ...(params?.output ?? {}), mode } });
+					commit({ output: { ...(params?.output ?? {}), mode } });
+				}}
+			>
+				{#each outputModes as mode}
+					<option value={mode}>{mode}</option>
+				{/each}
+			</select>
 		</Field>
 
 		<p class="hint">

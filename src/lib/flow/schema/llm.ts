@@ -24,8 +24,15 @@ export const LlmParamsSchema = z
 		stop: z.array(z.string().min(1)).optional(),
 		presence_penalty: z.number().min(-2).max(2).optional(),
 		frequency_penalty: z.number().min(-2).max(2).optional(),
-		repeat_penalty: z.number().min(0).optional(),
-		thinking: z.enum(['off', 'auto', 'on']).optional(),
+		repeat_penalty: z.number().min(0.5).max(2).optional(),
+		thinking: z
+			.object({
+				enabled: z.boolean().optional(),
+				mode: z.enum(['none', 'hidden', 'visible']).optional(),
+				budget_tokens: z.number().int().positive().optional()
+			})
+			.strip()
+			.optional(),
 		inputEncoding: z.enum(['text', 'json_canonical', 'table_canonical']).optional(),
 
 		output: z
@@ -39,8 +46,8 @@ export const LlmParamsSchema = z
 						dtype: z.enum(['float32', 'float16', 'float64']).optional().default('float32'),
 						layout: z.enum(['1d', '2d']).optional().default('1d')
 					})
-					.optional()
 					.strip()
+					.optional()
 			})
 			.strip()
 	})
@@ -52,6 +59,12 @@ export const LlmParamsSchema = z
 			ctx.addIssue({
 				code: 'custom',
 				message: "output.jsonSchema required when output.mode='json'"
+			});
+		}
+		if (v.output.mode !== 'json' && v.output.jsonSchema !== undefined) {
+			ctx.addIssue({
+				code: 'custom',
+				message: "output.jsonSchema is only allowed when output.mode='json'"
 			});
 		}
 		if (v.output.mode === 'embeddings' && v.output.embedding === undefined) {

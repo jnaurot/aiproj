@@ -1,4 +1,4 @@
-from app.runner.node_state import build_node_state_hash
+from app.runner.node_state import build_node_state_hash, build_source_fingerprint
 import pytest
 
 
@@ -32,18 +32,18 @@ def test_node_state_hash_changes_when_execution_version_changes():
 
 def test_source_node_state_hash_includes_source_fingerprint():
     source_node = _node(kind="source", ports={"in": None, "out": "text"})
-    p1 = {"source_type": "file", "file_path": "/tmp/a.txt", "file_format": "txt"}
-    p2 = {"source_type": "file", "file_path": "/tmp/b.txt", "file_format": "txt"}
+    p1 = {"source_type": "file", "rel_path": ".", "filename": "a.txt", "file_format": "txt"}
+    p2 = {"source_type": "file", "rel_path": ".", "filename": "b.txt", "file_format": "txt"}
     h1 = build_node_state_hash(node=source_node, params=p1, execution_version="v1")
     h2 = build_node_state_hash(node=source_node, params=p2, execution_version="v1")
     assert h1 != h2
 
 
-def test_source_node_state_hash_changes_when_file_stat_changes(tmp_path):
+def test_source_node_state_hash_changes_when_file_stat_changes(tmp_path, monkeypatch):
     source_node = _node(kind="source", ports={"in": None, "out": "text"})
     file_path = tmp_path / "state.txt"
     file_path.write_text("a", encoding="utf-8")
-    params = {"source_type": "file", "file_path": str(file_path), "file_format": "txt"}
+    params = {"source_type": "file", "rel_path": str(tmp_path), "filename": "state.txt", "file_format": "txt"}
     h1 = build_node_state_hash(node=source_node, params=params, execution_version="v1")
 
     file_path.write_text("abc", encoding="utf-8")
@@ -80,7 +80,7 @@ def _llm_params():
         "presence_penalty": 0.1,
         "frequency_penalty": 0.2,
         "repeat_penalty": 1.1,
-        "thinking": "off",
+        "thinking": {"enabled": False, "mode": "none"},
         "input_encoding": "text",
     }
 
@@ -124,7 +124,7 @@ def test_llm_node_state_hash_ignores_ui_only_ports_schema_settings():
         ("presence_penalty", 0.1, 0.2),
         ("frequency_penalty", 0.1, 0.2),
         ("repeat_penalty", 1.0, 1.1),
-        ("thinking", "off", "auto"),
+        ("thinking", {"enabled": False, "mode": "none"}, {"enabled": True, "mode": "visible"}),
         ("input_encoding", "text", "json_canonical"),
         ("output_strict", True, False),
     ],
@@ -137,3 +137,26 @@ def test_llm_node_state_hash_changes_for_execution_params(key, a, b):
     h1 = build_node_state_hash(node=_llm_node(), params=p1, execution_version="v1")
     h2 = build_node_state_hash(node=_llm_node(), params=p2, execution_version="v1")
     assert h1 != h2
+
+
+def test_source_api_fingerprint_redacts_auth_header_and_body_secrets():
+    node = _node(kind="source")
+    params_a = {
+        "source_type": "api",
+        "url": "https://api.example.com/v1/data",
+        "method": "POST",
+        "headers": {"Authorization": "Bearer a", "X-Custom": "ok"},
+        "body": {"token": "aaa", "query": "x"},
+        "timeout_seconds": 30,
+        "auth_token_ref": "TOKEN_A",
+    }
+    params_b = {
+        **params_a,
+        "headers": {"Authorization": "Bearer b", "X-Custom": "ok"},
+        "body": {"token": "bbb", "query": "x"},
+        "auth_token_ref": "TOKEN_B",
+    }
+    fp_a = build_source_fingerprint(node, params_a)
+    fp_b = build_source_fingerprint(node, params_b)
+    assert fp_a == fp_b
+    assert "authorization" not in {str(k).lower() for k in fp_a.get("headers", {}).keys()}

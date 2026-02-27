@@ -125,8 +125,17 @@ def _normalized_params_for_exec_key(
 
         return normalize_llm_params_frontend(p)
     if kind == "source":
+        from .schemas import normalize_source_params_frontend
+
+        p = normalize_source_params_frontend(p)
         source_kind = (node.get("data", {}).get("sourceKind") or p.get("source_type") or "file")
         p["source_type"] = source_kind
+        if source_kind == "file" and isinstance(p.get("file_path"), str) and not p.get("filename"):
+            from pathlib import Path as _P
+
+            _fp = _P(str(p.get("file_path")))
+            p.setdefault("rel_path", str(_fp.parent) if str(_fp.parent) not in {"", "."} else ".")
+            p.setdefault("filename", _fp.name or str(_fp))
         return p
     if kind == "transform":
         return normalize_transform_params(
@@ -288,6 +297,7 @@ _CACHE_REASONS = {
     "ENV_CHANGED",
     "BUILD_CHANGED",
     "UNCACHEABLE_EFFECTFUL_TOOL",
+    "SOURCE_CACHE_POLICY_NEVER",
     "CONTRACT_MISMATCH",
 }
 _DEFAULT_REASON_BY_DECISION = {
@@ -670,7 +680,14 @@ async def run_graph(
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
-            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful")
+            source_kind = str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "")
+            cache_policy = params.get("cache_policy") if isinstance(params.get("cache_policy"), dict) else {}
+            source_force_miss = (
+                kind == "source"
+                and source_kind == "api"
+                and str(cache_policy.get("mode") or "default").lower() == "never"
+            )
+            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful") and not source_force_miss
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
@@ -715,6 +732,7 @@ async def run_graph(
                 "tool_provider": tool_provider,
                 "determinism_env": determinism_env,
                 "tool_mode": tool_mode,
+                "source_force_miss": source_force_miss,
                 "use_cache_for_node": use_cache_for_node,
                 "upstream_ids": upstream_ids,
                 "input_refs": input_refs,
@@ -753,6 +771,7 @@ async def run_graph(
             tool_provider = resolved["tool_provider"]
             determinism_env = resolved["determinism_env"]
             tool_mode = resolved["tool_mode"]
+            source_force_miss = resolved["source_force_miss"]
             use_cache_for_node = resolved["use_cache_for_node"]
             upstream_ids = resolved["upstream_ids"]
             input_refs = resolved["input_refs"]
@@ -804,19 +823,19 @@ async def run_graph(
                 run_mode,
             )
             print(f"[debug-exec-key] graphId={context.graph_id} nodeId={node_id} exec_key={exec_key}")
-
             if not use_cache_for_node:
+                miss_reason = "SOURCE_CACHE_POLICY_NEVER" if source_force_miss else "UNCACHEABLE_EFFECTFUL_TOOL"
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
                     decision="cache_miss",
                     exec_key=exec_key,
-                    reason="UNCACHEABLE_EFFECTFUL_TOOL",
+                    reason=miss_reason,
                 )
                 if cache_only:
                     msg = (
                         "Selected-only run requires cache for ancestor nodes, "
-                        f"but node '{node_id}' is uncacheable (effectful tool)."
+                        f"but node '{node_id}' cannot use cache in this run."
                     )
                     await context.bus.emit({
                         "type": "node_finished",
@@ -1119,8 +1138,8 @@ async def run_graph(
                             except Exception:
                                 pass
 
-                        # 2) node state hash + exec_key (centralized hashing)
-                        norm = normalized_params_for_hash
+                        # Reuse the same normalized transform params contract used for hashing.
+                        norm = _normalized_params_for_exec_key(kind=kind, node=n, params=params)
 
                         # 3) execute (cache resolve already happened before node execution)
                         op = str(norm.get("op") or "")
@@ -1461,8 +1480,17 @@ async def run_graph(
                     data_value = getattr(output, "data", None)
 
                     if kind == "source":
-                        ports = (n.get("data", {}).get("ports", {}) or {})
-                        out_contract = ports.get("out")  # "table" or "text"/"binary"/etc
+                        declared_source_out = (((n.get("data", {}) or {}).get("ports", {}) or {}).get("out"))
+                        out_contract = str(
+                            (declared_source_out if declared_source_out else None)
+                            or (params.get("output_mode") if isinstance(params, dict) else None)
+                            or (
+                                (params.get("output") or {}).get("mode")
+                                if isinstance(params, dict) and isinstance(params.get("output"), dict)
+                                else None
+                            )
+                            or "table"
+                        )
 
                         if out_contract == "table":
                             rows = data_value
@@ -1653,6 +1681,19 @@ async def run_graph(
                         node_state_hash
                     )
                     artifact_port_type = ((n.get("data", {}).get("ports", {}) or {}).get("out"))
+                    if kind == "source":
+                        declared_source_out = (((n.get("data", {}) or {}).get("ports", {}) or {}).get("out"))
+                        artifact_port_type = str(
+                            (declared_source_out if declared_source_out else None)
+                            or (params.get("output_mode") if isinstance(params, dict) else None)
+                            or (
+                                (params.get("output") or {}).get("mode")
+                                if isinstance(params, dict) and isinstance(params.get("output"), dict)
+                                else None
+                            )
+                            or artifact_port_type
+                            or "table"
+                        )
                     if kind == "llm":
                         llm_output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
                         if llm_output_mode == "json":
@@ -1675,7 +1716,7 @@ async def run_graph(
                         storage_uri=f"artifact://{artifact_id}",
                         payload_schema=(
                             _source_payload_schema(
-                                (n.get("data", {}).get("ports", {}) or {}).get("out"),
+                                str(artifact_port_type or "table"),
                                 data_value,
                             )
                             if kind == "source"

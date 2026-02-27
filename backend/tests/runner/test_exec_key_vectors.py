@@ -13,11 +13,11 @@ def test_exec_key_golden_vectors():
 
     source_v1 = cache.execution_key(
         node_kind="source",
-        normalized_params={"source_type": "file", "file_path": "a.txt", "file_format": "txt"},
+        normalized_params={"source_type": "file", "rel_path": ".", "filename": "a.txt", "file_format": "txt"},
         upstream_artifact_ids=[],
         execution_version="v1",
     )
-    assert source_v1 == "3a1e1e7f2b18dd49f701ab862bc0f528530dede4c891bb26c5ab285afc04c3e0"
+    assert source_v1 == "58f056d885b23129077dc86165d2a3860f3f247d503026c7c8a526b86f021729"
 
     llm_v1 = cache.execution_key(
         node_kind="llm",
@@ -61,13 +61,13 @@ def test_exec_key_params_key_order_is_canonical():
     cache = ExecutionCache()
     a = cache.execution_key(
         node_kind="source",
-        normalized_params={"file_path": "a.txt", "source_type": "file", "file_format": "txt"},
+        normalized_params={"rel_path": ".", "filename": "a.txt", "source_type": "file", "file_format": "txt"},
         upstream_artifact_ids=[],
         execution_version="v1",
     )
     b = cache.execution_key(
         node_kind="source",
-        normalized_params={"source_type": "file", "file_format": "txt", "file_path": "a.txt"},
+        normalized_params={"source_type": "file", "file_format": "txt", "filename": "a.txt", "rel_path": "."},
         upstream_artifact_ids=[],
         execution_version="v1",
     )

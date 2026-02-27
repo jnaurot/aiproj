@@ -7,7 +7,7 @@
 	export let selected: boolean = false;
 
 	function summary(sourceKind: SourceNodeData['sourceKind'], params: Record<string, any>): string {
-		if (sourceKind === 'file') return params.file_path ?? params.file_name ?? '—';
+		if (sourceKind === 'file') return params.filename ?? '—';
 		if (sourceKind === 'api') return params.url ?? '—';
 		// database
 		return params.query ?? params.table_name ?? '—';

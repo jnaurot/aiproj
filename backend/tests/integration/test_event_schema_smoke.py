@@ -98,6 +98,7 @@ async def test_event_schema_smoke(monkeypatch, tmp_path):
         bus=bus,
         artifact_store=DiskArtifactStore(artifact_root),
         cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-event-schema-1",
     )
 
     assert events, "Expected emitted runtime events"

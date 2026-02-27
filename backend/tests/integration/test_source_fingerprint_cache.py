@@ -17,6 +17,7 @@ from app.runner.metadata import NodeOutput
 
 
 def _source_graph(file_path: str) -> dict:
+    p = Path(file_path)
     return {
         "nodes": [
             {
@@ -25,7 +26,7 @@ def _source_graph(file_path: str) -> dict:
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
-                    "params": {"file_path": file_path, "file_format": "txt"},
+                    "params": {"rel_path": str(p.parent), "filename": p.name, "file_format": "txt", "output_mode": "text"},
                     "ports": {"in": None, "out": "text"},
                 },
             }
@@ -38,10 +39,12 @@ def _source_graph(file_path: str) -> dict:
 async def test_source_file_fingerprint_drives_cache_hit_and_miss(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     calls = {"source": 0}
+    monkeypatch.setenv("WORKSPACE_ROOT_WORKSPACE", str(tmp_path))
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
         calls["source"] += 1
-        p = Path(node["data"]["params"]["file_path"])
+        params = node["data"]["params"]
+        p = (Path(params["rel_path"]) / params["filename"]).resolve()
         return NodeOutput(
             status="succeeded",
             metadata=None,
@@ -114,3 +117,50 @@ async def test_source_file_fingerprint_drives_cache_hit_and_miss(monkeypatch, tm
     assert out_3 and out_3[-1]["artifactId"] != first_artifact_id
     assert calls["source"] == 2
 
+
+@pytest.mark.asyncio
+async def test_source_api_cache_policy_never_forces_execution(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"source": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        calls["source"] += 1
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data={"ok": True})
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+
+    graph = {
+        "nodes": [
+            {
+                "id": "source_api",
+                "data": {
+                    "kind": "source",
+                    "label": "Source API",
+                    "sourceKind": "api",
+                    "params": {
+                        "url": "https://api.example.com/data",
+                        "method": "GET",
+                        "output_mode": "json",
+                        "cache_policy": {"mode": "never"},
+                    },
+                    "ports": {"in": None, "out": "json"},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    artifact_root = tmp_path / "artifact-root-never"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    for i in range(2):
+        await run_mod.run_graph(
+            run_id=f"run-source-never-{i}",
+            graph=graph,
+            run_from=None,
+            bus=RunEventBus(f"run-source-never-{i}"),
+            artifact_store=store,
+            cache=cache,
+            graph_id="graph-source-never",
+        )
+    assert calls["source"] == 2

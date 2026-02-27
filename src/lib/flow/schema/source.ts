@@ -1,61 +1,110 @@
-// src/lib/flow/schema/source.ts
 import { z } from "zod";
+import { BaseNodeDataSchema } from "./base";
 
-// ---- shared enums ----
-const SourceKindSchema = z.enum(["file", "database", "api"]);
+export const SourceKindSchema = z.enum(["file", "database", "api"]);
+export const SourceOutputModeSchema = z.enum(["table", "text", "json", "binary"]);
 
-// ---- schemas ----
-export const SourceFileParamsSchema = z.object({
-  file_path: z.string().min(1),
-  file_name: z.string().optional(),
-  file_size: z.number().int().nonnegative().optional(),
-  file_mime: z.string().optional(),
-  file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),
-  delimiter: z.string().optional(),
-  sheet_name: z.string().optional(),
-  sample_size: z.number().int().positive().optional(),
-  encoding: z.string().default("utf-8"),
-  cache_enabled: z.boolean().default(true)
-}).strip();
+export const SourceOutputSchema = z
+	.object({
+		mode: SourceOutputModeSchema,
+		schema: z.unknown().optional()
+	})
+	.strip();
 
-export const SourceDatabaseParamsSchema = z.object({
-  connection_string: z.string().optional(),
-  connection_ref: z.string().optional(),
-  query: z.string().optional(),
-  table_name: z.string().optional(),
-  limit: z.number().int().positive().optional()
-}).superRefine((v, ctx) => {
-  if (!v.connection_string && !v.connection_ref) {
-    ctx.addIssue({ code: "custom", message: "Either connection_string or connection_ref required" });
-  }
-  if (!v.query && !v.table_name) {
-    ctx.addIssue({ code: "custom", message: "Either query or table_name required" });
-  }
-}).strip();
+const FILE_TO_DEFAULT_OUTPUT_MODE: Record<string, z.infer<typeof SourceOutputModeSchema>> = {
+	csv: "table",
+	tsv: "table",
+	parquet: "table",
+	excel: "table",
+	json: "json",
+	txt: "text",
+	pdf: "text"
+};
 
-export const SourceAPIParamsSchema = z.object({
-  url: z.string().url(),
-  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
-  headers: z.record(z.string(), z.string()).default({}),
-  body: z.record(z.string(), z.any()).optional(),
-  auth_type: z.enum(["none", "bearer", "basic", "api_key"]).default("none"),
-  auth_token_ref: z.string().optional(),
-  timeout_seconds: z.number().int().positive().default(30)
-}).superRefine((v, ctx) => {
-  if (v.auth_type !== "none" && !v.auth_token_ref) {
-    ctx.addIssue({ code: "custom", message: "auth_token_ref required when using authentication" });
-  }
-}).strip();
+export const SourceFileParamsSchema = z
+	.object({
+		rel_path: z.string().min(1),
+		filename: z.string().min(1),
+		file_size: z.number().int().nonnegative().optional(),
+		file_mime: z.string().optional(),
+		file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),
+		delimiter: z.string().optional(),
+		sheet_name: z.string().optional(),
+		sample_size: z.number().int().positive().optional(),
+		encoding: z.string().default("utf-8"),
+		cache_enabled: z.boolean().default(true),
+		output: SourceOutputSchema.optional()
+	})
+	.strip()
+	.transform((v) => {
+		const defaultMode = FILE_TO_DEFAULT_OUTPUT_MODE[v.file_format] ?? "binary";
+		return {
+			...v,
+			output: v.output ?? { mode: defaultMode }
+		};
+	});
 
-export const SourceParamsSchemaByKind  = {
-    file: SourceFileParamsSchema,
-    database: SourceDatabaseParamsSchema,
-    api: SourceAPIParamsSchema
+export const SourceDatabaseParamsSchema = z
+	.object({
+		connection_string: z.string().optional(),
+		connection_ref: z.string().optional(),
+		query: z.string().optional(),
+		table_name: z.string().optional(),
+		limit: z.number().int().positive().optional(),
+		output: SourceOutputSchema.default({ mode: "table" })
+	})
+	.superRefine((v, ctx) => {
+		if (!v.connection_string && !v.connection_ref) {
+			ctx.addIssue({ code: "custom", message: "Either connection_string or connection_ref required" });
+		}
+		if (!v.query && !v.table_name) {
+			ctx.addIssue({ code: "custom", message: "Either query or table_name required" });
+		}
+	})
+	.strip();
+
+export const SourceCachePolicySchema = z
+	.object({
+		mode: z.enum(["default", "never", "ttl"]).default("default"),
+		ttl_seconds: z.number().int().positive().optional()
+	})
+	.strip();
+
+export const SourceAPIParamsSchema = z
+	.object({
+		url: z.string().url(),
+		method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
+		headers: z.record(z.string(), z.string()).default({}),
+		body: z.record(z.string(), z.any()).optional(),
+		auth_type: z.enum(["none", "bearer", "basic", "api_key"]).default("none"),
+		auth_token_ref: z.string().optional(),
+		timeout_seconds: z.number().int().positive().default(30),
+		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
+		output: SourceOutputSchema.default({ mode: "json" })
+	})
+	.superRefine((v, ctx) => {
+		if (v.auth_type !== "none" && !v.auth_token_ref) {
+			ctx.addIssue({ code: "custom", message: "auth_token_ref required when using authentication" });
+		}
+	})
+	.strip();
+
+export const SourceParamsSchemaByKind = {
+	file: SourceFileParamsSchema,
+	database: SourceDatabaseParamsSchema,
+	api: SourceAPIParamsSchema
 } as const;
 
+export const SourceNodeDataSchema = BaseNodeDataSchema(
+	"source",
+	z.union([SourceFileParamsSchema, SourceDatabaseParamsSchema, SourceAPIParamsSchema])
+).extend({
+	sourceKind: SourceKindSchema
+});
 
-
-// ---- inferred types (single source of truth) ----
 export type SourceFileParams = z.infer<typeof SourceFileParamsSchema>;
 export type SourceDatabaseParams = z.infer<typeof SourceDatabaseParamsSchema>;
 export type SourceAPIParams = z.infer<typeof SourceAPIParamsSchema>;
+export type SourceOutputMode = z.infer<typeof SourceOutputModeSchema>;
+export type SourceKind = z.infer<typeof SourceKindSchema>;
+export type SourceNodeData = z.infer<typeof SourceNodeDataSchema>;

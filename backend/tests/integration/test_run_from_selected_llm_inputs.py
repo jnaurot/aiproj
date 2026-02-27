@@ -76,6 +76,7 @@ async def test_run_from_selected_llm_has_non_empty_upstream_and_succeeds(monkeyp
         bus=RunEventBus("run-llm-full", on_emit=lambda e: events_1.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-run-from-selected-llm",
     )
     assert seen["upstream_counts"] and seen["upstream_counts"][-1] >= 1
     run_finished_1 = [e for e in events_1 if e.get("type") == "run_finished"]
@@ -89,6 +90,7 @@ async def test_run_from_selected_llm_has_non_empty_upstream_and_succeeds(monkeyp
         bus=RunEventBus("run-llm-selected", on_emit=lambda e: events_2.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-run-from-selected-llm",
     )
 
     # No upstream-empty failure, no pydantic/node-output failure, succeeds via cache or execution.

@@ -48,7 +48,51 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_mapping"] = p.pop("inputMapping")
     if "inputEncoding" in p and "input_encoding" not in p:
         p["input_encoding"] = p.pop("inputEncoding")
+    if "presencePenalty" in p and "presence_penalty" not in p:
+        p["presence_penalty"] = p.pop("presencePenalty")
+    if "frequencyPenalty" in p and "frequency_penalty" not in p:
+        p["frequency_penalty"] = p.pop("frequencyPenalty")
+    if "repeatPenalty" in p and "repeat_penalty" not in p:
+        p["repeat_penalty"] = p.pop("repeatPenalty")
+    if isinstance(p.get("thinking"), str):
+        legacy = str(p.get("thinking"))
+        mapping = {
+            "off": {"enabled": False, "mode": "none"},
+            "auto": {"enabled": True, "mode": "hidden"},
+            "on": {"enabled": True, "mode": "visible"},
+        }
+        p["thinking"] = mapping.get(legacy, {"enabled": False, "mode": "none"})
 
+    return p
+
+
+def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
+    p = dict(raw or {})
+    if "rootId" in p and "rel_path" not in p:
+        p["rel_path"] = p.pop("rootId")
+    if "relPath" in p and "filename" not in p:
+        p["filename"] = p.pop("relPath")
+    if "root_id" in p and "rel_path" not in p:
+        p["rel_path"] = p.pop("root_id")
+    if "file_path" in p and ("rel_path" not in p or "filename" not in p):
+        try:
+            from pathlib import Path as _P
+
+            _fp = _P(str(p.get("file_path")))
+            p.setdefault("rel_path", str(_fp.parent) if str(_fp.parent) not in {"", "."} else ".")
+            p.setdefault("filename", _fp.name or str(_fp))
+        except Exception:
+            p.setdefault("rel_path", ".")
+            p.setdefault("filename", str(p.get("file_path")))
+    out = p.get("output")
+    if isinstance(out, dict):
+        if "mode" in out and "output_mode" not in p:
+            p["output_mode"] = out.get("mode")
+        if "schema" in out and "output_schema" not in p:
+            p["output_schema"] = out.get("schema")
+    cache_policy = p.get("cache_policy")
+    if isinstance(cache_policy, dict) and "ttlSeconds" in cache_policy and "ttl_seconds" not in cache_policy:
+        cache_policy["ttl_seconds"] = cache_policy.pop("ttlSeconds")
     return p
 
 
@@ -99,19 +143,38 @@ class SourceKind(str, Enum):
     API = "api"
 
 class SourceFileParams(NodeParamSchema):
-    # source_type: Literal[SourceKind.FILE] = SourceKind.FILE
-    file_path: str = Field(..., description="Path to file")
+    rel_path: str = Field(..., description="Directory path")
+    filename: str = Field(..., description="File name/path under rel_path")
+    file_path: Optional[str] = None  # compatibility shim (legacy FE)
     file_format: Literal["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"] = "csv"
     delimiter: Optional[str] = None  # for CSV
     sheet_name: Optional[str] = None  # for Excel
     sample_size: Optional[int] = None
     encoding: str = "utf-8"
     cache_enabled: bool = True
+    output_mode: Optional[Literal["table", "text", "json", "binary"]] = None
+    output_schema: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _derive_output_mode(self):
+        if self.output_mode is not None:
+            return self
+        if self.file_format in {"csv", "tsv", "parquet", "excel"}:
+            self.output_mode = "table"
+        elif self.file_format == "json":
+            self.output_mode = "json"
+        elif self.file_format in {"txt", "pdf"}:
+            self.output_mode = "text"
+        else:
+            self.output_mode = "binary"
+        return self
     
     def validate_required(self) -> List[str]:
         errors = []
-        if not self.file_path:
-            errors.append("file_path is required")
+        if not self.rel_path:
+            errors.append("rel_path is required")
+        if not self.filename:
+            errors.append("filename is required")
         if self.file_format == "csv" and self.delimiter is None:
             # Auto-detect or use default
             pass
@@ -124,6 +187,8 @@ class SourceDatabaseParams(NodeParamSchema):
     query: Optional[str] = None
     table_name: Optional[str] = None
     limit: Optional[int] = None
+    output_mode: Literal["table", "text", "json", "binary"] = "table"
+    output_schema: Optional[Dict[str, Any]] = None
     
     def validate_required(self) -> List[str]:
         errors = []
@@ -142,6 +207,9 @@ class SourceAPIParams(NodeParamSchema):
     auth_type: Literal["none", "bearer", "basic", "api_key"] = "none"
     auth_token_ref: Optional[str] = None
     timeout_seconds: int = 30
+    cache_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "default"})
+    output_mode: Literal["table", "text", "json", "binary"] = "json"
+    output_schema: Optional[Dict[str, Any]] = None
     
     def validate_required(self) -> List[str]:
         errors = []
@@ -302,6 +370,12 @@ class LLMDialect(str, Enum):
     OPENAI_COMPAT = "openai_compat"
     OLLAMA = "ollama"
 
+
+class LLMThinking(NodeParamSchema):
+    enabled: bool = False
+    mode: Literal["none", "hidden", "visible"] = "none"
+    budget_tokens: Optional[int] = Field(None, ge=1)
+
 class LLMParams(NodeParamSchema):
     # llm_type: LLMType = LLMType.COMPLETION
     
@@ -323,8 +397,8 @@ class LLMParams(NodeParamSchema):
     stop_sequences: List[str] = Field(default_factory=list)
     presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
     frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0)
-    repeat_penalty: Optional[float] = Field(None, ge=0.0)
-    thinking: Optional[Literal["off", "auto", "on"]] = None
+    repeat_penalty: Optional[float] = Field(None, ge=0.5, le=2.0)
+    thinking: Optional[LLMThinking] = None
     input_encoding: Optional[Literal["text", "json_canonical", "table_canonical"]] = None
     
     # output
@@ -567,15 +641,16 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
 
             llm_params = LLMParams.model_validate(norm)
         elif kind == "source":
-            source_kind = (node.get("data", {}).get("sourceKind") or params.get("source_type") or "file")
+            norm_source = normalize_source_params_frontend(params)
+            source_kind = (node.get("data", {}).get("sourceKind") or norm_source.get("source_type") or "file")
             if source_kind == "file":
-                model = SourceFileParams.model_validate(params)
+                model = SourceFileParams.model_validate(norm_source)
                 errors.extend(model.validate_required())
             elif source_kind == "database":
-                model = SourceDatabaseParams.model_validate(params)
+                model = SourceDatabaseParams.model_validate(norm_source)
                 errors.extend(model.validate_required())
             elif source_kind == "api":
-                model = SourceAPIParams.model_validate(params)
+                model = SourceAPIParams.model_validate(norm_source)
                 errors.extend(model.validate_required())
             else:
                 errors.append(f"Unsupported source kind: {source_kind}")

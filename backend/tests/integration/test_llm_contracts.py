@@ -84,7 +84,12 @@ def _graph(output_mode: str, params_patch: dict | None = None) -> dict:
 					"kind": "source",
 					"label": "Source",
 					"sourceKind": "file",
-					"params": {"file_path": "dummy.txt", "file_format": "txt"},
+					"params": {
+						"rel_path": ".",
+						"filename": "dummy.txt",
+						"file_format": "txt",
+						"output_mode": "text",
+					},
 					"ports": {"in": None, "out": "text"},
 				},
 			},
@@ -266,3 +271,81 @@ async def test_llm_embeddings_success_cache_reuse_and_endpoint(monkeypatch, tmp_
 	assert any(e.get("type") == "node_finished" and e.get("nodeId") == "llm_1" and e.get("cached") is True for e in events_2)
 	assert any(url.endswith("/v1/embeddings") for url in state["urls"])
 	assert state["post_calls"] == 1
+
+
+@pytest.mark.asyncio
+async def test_ollama_visible_thinking_emits_delta_but_output_is_final_only(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	ollama_mod = importlib.import_module("app.executors.llm_ollama")
+
+	class _OllamaClient:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		def stream(self, method, url, json=None):
+			lines = [
+				'{"message":{"content":"hello","thinking":"reason-1"}}',
+				'{"done":true}',
+			]
+			return _FakeStreamResponse(lines)
+
+		async def post(self, url, json=None):
+			return _FakeResponse({"message": {"content": "hello"}})
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(ollama_mod.httpx, "AsyncClient", lambda *args, **kwargs: _OllamaClient())
+
+	graph = {
+		"nodes": [
+			{
+				"id": "source_1",
+				"data": {
+					"kind": "source",
+					"label": "Source",
+					"sourceKind": "file",
+					"params": {"rel_path": ".", "filename": "dummy.txt", "file_format": "txt", "output_mode": "text"},
+					"ports": {"in": None, "out": "text"},
+				},
+			},
+			{
+				"id": "llm_1",
+				"data": {
+					"kind": "llm",
+					"label": "LLM",
+					"llmKind": "ollama",
+					"params": {
+						"base_url": "http://localhost:11434",
+						"model": "llama",
+						"user_prompt": "Say hi",
+						"output_mode": "text",
+						"thinking": {"enabled": True, "mode": "visible"},
+					},
+					"ports": {"in": "text", "out": "text"},
+				},
+			},
+		],
+		"edges": [{"id": "e1", "source": "source_1", "target": "llm_1"}],
+	}
+
+	events: list[dict] = []
+	artifact_root = tmp_path / "artifacts-ollama-thinking"
+	store = DiskArtifactStore(artifact_root)
+	cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+	await run_mod.run_graph(
+		run_id="run-ollama-thinking",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-ollama-thinking", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=store,
+		cache=cache,
+		graph_id="graph-ollama-thinking",
+	)
+
+	assert any(e.get("type") == "llm_thinking_delta" and e.get("nodeId") == "llm_1" for e in events)
+	out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "llm_1"]
+	assert out
+	payload = await store.read(out[-1]["artifactId"])
+	assert payload.decode("utf-8") == "hello"

@@ -56,7 +56,7 @@ async def test_cancel_run_is_idempotent_and_marks_cancelled(monkeypatch, tmp_pat
     rt = RuntimeManager()
     run_id = "run-cancel-1"
     rt.create_run(run_id)
-    await rt.start_run(run_id, graph, run_from=None)
+    await rt.start_run(run_id, graph, run_from=None, graph_id="graph-cancel-1")
 
     # Wait until run is active.
     for _ in range(40):
@@ -135,7 +135,7 @@ async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path)
     rt = RuntimeManager()
     run_id = "run-cancel-level1"
     rt.create_run(run_id)
-    await rt.start_run(run_id, graph, run_from=None)
+    await rt.start_run(run_id, graph, run_from=None, graph_id="graph-cancel-level1")
     await _wait_for_node_running(rt, run_id, "source_1")
     cancel = await rt.request_cancel(run_id)
     assert cancel["cancelRequested"] is True
@@ -204,7 +204,7 @@ async def test_cancel_inflight_llm_emits_node_cancelled_and_no_artifact(monkeypa
     rt = RuntimeManager()
     run_id = "run-cancel-llm"
     rt.create_run(run_id)
-    await rt.start_run(run_id, graph, run_from=None)
+    await rt.start_run(run_id, graph, run_from=None, graph_id="graph-cancel-llm")
     await _wait_for_node_running(rt, run_id, "llm_1")
     await rt.request_cancel(run_id)
     await rt.get_run(run_id).task

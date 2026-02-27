@@ -20,9 +20,17 @@
 		align-items: start;
 		margin-bottom: 10px;
 	}
+	/* For textarea editors, place control under label instead of side-by-side. */
+	.field:has(textarea) {
+		grid-template-columns: 1fr;
+		gap: 6px;
+	}
 	.k {
 		font-size: 14px;
 		opacity: 0.85;
 		padding-top: 8px;
+	}
+	.field:has(textarea) .k {
+		padding-top: 0;
 	}
 </style>

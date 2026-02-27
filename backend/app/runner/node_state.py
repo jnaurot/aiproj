@@ -77,14 +77,26 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
     p = params or {}
     fp: Dict[str, Any] = {"source_kind": source_kind}
     if source_kind == "file":
-        file_path_raw = p.get("file_path")
+        rel_path = p.get("rel_path") or p.get("rootId") or "."
+        filename = p.get("filename") or p.get("relPath")
+        if not filename and isinstance(p.get("file_path"), str):
+            legacy = Path(str(p.get("file_path")))
+            rel_path = str(legacy.parent) if str(legacy.parent) not in {"", "."} else "."
+            filename = legacy.name or str(legacy)
+        root_base = Path(str(rel_path or ".")).expanduser().resolve()
+        file_path_raw = None
+        if isinstance(filename, str) and filename.strip():
+            try:
+                leaf = Path(str(filename)).expanduser()
+                candidate = leaf.resolve() if leaf.is_absolute() else (root_base / leaf).resolve()
+                file_path_raw = str(candidate)
+            except Exception:
+                file_path_raw = None
         file_stat: Dict[str, Any] = {
             "exists": False,
             "resolved_path": None,
             "size_bytes": None,
             "mtime_ns": None,
-            "ctime_ns": None,
-            "inode": None,
         }
         if isinstance(file_path_raw, str) and file_path_raw.strip():
             candidate = Path(file_path_raw).expanduser()
@@ -100,41 +112,74 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                         "exists": True,
                         "size_bytes": int(st.st_size),
                         "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))),
-                        "ctime_ns": int(getattr(st, "st_ctime_ns", int(st.st_ctime * 1_000_000_000))),
-                        "inode": int(getattr(st, "st_ino", 0)),
                     }
                 )
             except Exception:
                 pass
         fp.update(
             {
-                "file_path": p.get("file_path"),
+                "rel_path": rel_path,
+                "filename": filename,
                 "file_format": p.get("file_format"),
                 "encoding": p.get("encoding"),
                 "delimiter": p.get("delimiter"),
                 "sheet_name": p.get("sheet_name"),
                 "sample_size": p.get("sample_size"),
+                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 "file_stat": file_stat,
             }
         )
     elif source_kind == "database":
+        connection_ref = p.get("connection_ref")
+        connection_string = str(p.get("connection_string") or "")
+        parsed_conn: Dict[str, Any] = {}
+        if connection_string:
+            try:
+                from urllib.parse import urlparse
+
+                u = urlparse(connection_string)
+                parsed_conn = {
+                    "scheme": u.scheme or None,
+                    "host": u.hostname or None,
+                    "port": u.port,
+                    "dbname": (u.path or "").lstrip("/") or None,
+                    "user": u.username or None,
+                }
+            except Exception:
+                parsed_conn = {"value": "redacted"}
         fp.update(
             {
-                "connection_ref": p.get("connection_ref"),
-                "connection_string": p.get("connection_string"),
+                "connection_ref": connection_ref,
+                "connection_redacted": parsed_conn if not connection_ref else None,
                 "table_name": p.get("table_name"),
                 "query": p.get("query"),
                 "limit": p.get("limit"),
+                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
             }
         )
     elif source_kind == "api":
+        headers = dict(p.get("headers") or {})
+        for key in list(headers.keys()):
+            if str(key).lower() == "authorization":
+                headers[key] = "[REDACTED]"
+        body = p.get("body")
+        if isinstance(body, dict):
+            body = {
+                k: ("[REDACTED]" if _is_sensitive_key(str(k)) else v)
+                for k, v in body.items()
+            }
         fp.update(
             {
                 "url": p.get("url"),
                 "method": p.get("method"),
-                "headers": p.get("headers"),
-                "body": p.get("body"),
+                "headers": headers,
+                "body": body,
                 "timeout_seconds": p.get("timeout_seconds"),
+                "cache_policy": p.get("cache_policy") or {"mode": "default"},
+                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
             }
         )
     return _sanitize(fp)

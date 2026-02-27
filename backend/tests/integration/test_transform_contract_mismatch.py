@@ -76,6 +76,7 @@ async def test_transform_select_missing_columns_emits_payload_mismatch_details(m
         bus=RunEventBus("run-transform-missing-cols", on_emit=lambda e: events.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-transform-contract-mismatch",
     )
 
     assert transform_calls["count"] == 0
@@ -84,12 +85,15 @@ async def test_transform_select_missing_columns_emits_payload_mismatch_details(m
     assert "payload schema mismatch" in str(finish[-1].get("error", "")).lower()
 
     out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
-    assert out
-    error_artifact_id = out[-1]["artifactId"]
-    payload = json.loads((await store.read(error_artifact_id)).decode("utf-8"))
-    assert payload.get("code") == "PAYLOAD_SCHEMA_MISMATCH"
-    assert payload.get("details", {}).get("missingColumns") == ["missing_col"]
-    assert payload.get("details", {}).get("expected", {}).get("requiredColumns") == ["missing_col"]
+    assert not out
+    details_logs = [
+        e for e in events if e.get("type") == "log" and e.get("nodeId") == "transform_1" and '"missingColumns"' in str(e.get("message", ""))
+    ]
+    assert details_logs
+    detail_payload = json.loads(str(details_logs[-1]["message"]))
+    assert detail_payload.get("code") == "PAYLOAD_SCHEMA_MISMATCH"
+    assert detail_payload.get("missingColumns") == ["missing_col"]
+    assert detail_payload.get("expected", {}).get("requiredColumns") == ["missing_col"]
     transform_logs = [
         e for e in events if e.get("type") == "log" and e.get("nodeId") == "transform_1"
     ]
@@ -137,17 +141,21 @@ async def test_transform_non_table_payload_schema_type_fails_with_expected_actua
         bus=RunEventBus("run-transform-schema-type", on_emit=lambda e: events.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-transform-contract-mismatch",
     )
 
     assert transform_calls["count"] == 0
     out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
-    assert out
-    payload = json.loads((await store.read(out[-1]["artifactId"])).decode("utf-8"))
-    details = payload.get("details", {})
-    assert payload.get("code") == "PAYLOAD_SCHEMA_MISMATCH"
-    assert details.get("expected", {}).get("payloadType") == "table"
-    assert details.get("actual", {}).get("payloadType") == "json"
-    assert isinstance(details.get("actual", {}).get("artifactId"), str)
+    assert not out
+    details_logs = [
+        e for e in events if e.get("type") == "log" and e.get("nodeId") == "transform_1" and '"payloadType"' in str(e.get("message", ""))
+    ]
+    assert details_logs
+    detail_payload = json.loads(str(details_logs[-1]["message"]))
+    assert detail_payload.get("code") == "PAYLOAD_SCHEMA_MISMATCH"
+    assert detail_payload.get("expected", {}).get("payloadType") == "table"
+    assert detail_payload.get("actual", {}).get("payloadType") == "json"
+    assert isinstance(detail_payload.get("actual", {}).get("artifactId"), str)
 
 
 @pytest.mark.asyncio
@@ -185,11 +193,18 @@ async def test_transform_derive_engine_error_emits_expr_invalid(monkeypatch, tmp
         bus=RunEventBus("run-transform-derive-expr-invalid", on_emit=lambda e: events.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-transform-contract-mismatch",
     )
 
+    finish = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "transform_1"]
+    assert finish and finish[-1].get("status") == "failed"
     out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
-    assert out
-    payload = json.loads((await store.read(out[-1]["artifactId"])).decode("utf-8"))
-    assert payload.get("code") == "EXPR_INVALID"
-    assert payload.get("details", {}).get("expected", {}).get("op") == "derive"
-    assert "column" in str(payload.get("details", {}).get("actual", {}).get("engineError", "")).lower()
+    assert not out
+    details_logs = [
+        e for e in events if e.get("type") == "log" and e.get("nodeId") == "transform_1" and '"EXPR_INVALID"' in str(e.get("message", ""))
+    ]
+    assert details_logs
+    detail_payload = json.loads(str(details_logs[-1]["message"]))
+    assert detail_payload.get("code") == "EXPR_INVALID"
+    assert detail_payload.get("expected", {}).get("op") == "derive"
+    assert "column" in str(detail_payload.get("actual", {}).get("engineError", "")).lower()

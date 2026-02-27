@@ -6,7 +6,7 @@ import type { LlmKind, LlmParams } from "$lib/flow/schema/llm";
  * Keep this file dumb: stable defaults only.
  */
 export const defaultLlmOllamaParams: LlmParams = {
-    baseUrl: "http://localhost:11434",
+    baseUrl: "http://192.168.12.251:11434",
     model: "llama3.1:8b",
     system_prompt: "",
     user_prompt: "Summarize the input data.",

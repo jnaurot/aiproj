@@ -25,7 +25,7 @@
 
 	const jsonSchemaPlaceholder = `{"type":"object","properties":{}}`;
 	const outputModes: LlmOutputMode[] = ['text', 'json', 'embeddings'];
-	const thinkingModes = ['off', 'auto', 'on'] as const;
+	const thinkingModes = ['none', 'hidden', 'visible'] as const;
 	const inputEncodings = ['text', 'json_canonical', 'table_canonical'] as const;
 	const embeddingDtypes = ['float32', 'float16', 'float64'] as const;
 	const embeddingLayouts = ['1d', '2d'] as const;
@@ -39,7 +39,7 @@
 	let jsonSchemaDraftText = jsonSchemaPlaceholder;
 
 	$: void selectedNode?.id;
-	$: baseUrl = asString(params?.baseUrl, 'http://localhost:11434');
+	$: baseUrl = asString(params?.baseUrl, 'http://192.168.12.251:11434');
 	$: connectionRef = asString(params?.connectionRef, '');
 	$: model = asString(params?.model, 'llama3.1:8b');
 	$: system_prompt = asString(params?.system_prompt, '');
@@ -51,7 +51,9 @@
 	$: presence_penalty = asNumberOrEmpty(params?.presence_penalty);
 	$: frequency_penalty = asNumberOrEmpty(params?.frequency_penalty);
 	$: repeat_penalty = asNumberOrEmpty(params?.repeat_penalty);
-	$: thinking = asString(params?.thinking, 'off');
+	$: thinkingEnabled = Boolean(params?.thinking?.enabled ?? false);
+	$: thinkingMode = asString(params?.thinking?.mode, 'none');
+	$: thinkingBudget = asNumberOrEmpty(params?.thinking?.budget_tokens);
 	$: inputEncoding = asString(params?.inputEncoding, 'text');
 	$: outputMode = (asString(params?.output?.mode, 'text') as LlmOutputMode) ?? 'text';
 	$: outputStrict = params?.output?.strict ?? true;
@@ -72,6 +74,15 @@
 
 	function commit(patch: LlmPatch): void {
 		onCommit?.(patch);
+	}
+
+	function thinkingPatch(patch: Partial<NonNullable<LlmParams['thinking']>>): LlmPatch {
+		return {
+			thinking: {
+				...(params?.thinking ?? {}),
+				...patch
+			}
+		};
 	}
 
 	function normalizeBaseUrl(url: string): string {
@@ -207,7 +218,6 @@
 	<Field label="baseUrl">
 		<Input
 			value={baseUrl}
-			placeholder="http://localhost:11434"
 			onInput={(event) => draft({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
 			onBlur={(event) => commit({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
 		/>
@@ -386,34 +396,68 @@
 	<Field label="repeat_penalty">
 		<Input
 			type="number"
-			min="0"
+			min="0.5"
+			max="2"
 			step="0.1"
 			value={repeat_penalty}
 			onInput={(event) =>
 				draft({
-					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0.5, 2)
 				})}
 			onBlur={(event) =>
 				commit({
-					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0.5, 2)
 				})}
 		/>
 	</Field>
 
-	<Field label="thinking">
+	<Field label="thinking.enabled">
+		<Input
+			type="checkbox"
+			checked={thinkingEnabled}
+			onChange={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).checked;
+				draft(thinkingPatch({ enabled: value }));
+				commit(thinkingPatch({ enabled: value }));
+			}}
+		/>
+	</Field>
+
+	<Field label="thinking.mode">
 		<select
-			value={thinking}
+			value={thinkingMode}
 			on:change={(event) => {
 				const value = (event.currentTarget as HTMLSelectElement)
 					.value as (typeof thinkingModes)[number];
-				draft({ thinking: value });
-				commit({ thinking: value });
+				draft(thinkingPatch({ mode: value }));
+				commit(thinkingPatch({ mode: value }));
 			}}
 		>
 			{#each thinkingModes as mode}
 				<option value={mode}>{mode}</option>
 			{/each}
 		</select>
+	</Field>
+
+	<Field label="thinking.budget_tokens">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={thinkingBudget}
+			onInput={(event) =>
+				draft(
+					thinkingPatch({
+						budget_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})
+				)}
+			onBlur={(event) =>
+				commit(
+					thinkingPatch({
+						budget_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})
+				)}
+		/>
 	</Field>
 
 	<Field label="inputEncoding">

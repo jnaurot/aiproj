@@ -390,10 +390,61 @@ async def get_artifact_preview(
     data = await store.read(artifact_id)
     mime = getattr(art, "mime_type", None) or "application/octet-stream"
 
+    warning: Optional[str] = None
     try:
         df = load_table_from_artifact_bytes(mime, data)
     except Exception as e:
-        raise HTTPException(400, f"Artifact preview supports table-like payloads only: {e}")
+        warning = f"table_parse_failed: {e}"
+        # Fallback preview for non-table payloads to avoid hard 400s in UI.
+        ct = str(mime or "").lower()
+        if "application/json" in ct:
+            try:
+                parsed = json.loads(data.decode("utf-8"))
+                if isinstance(parsed, list):
+                    rows = [r for r in parsed if isinstance(r, dict)]
+                    if rows:
+                        cols = sorted({str(k) for r in rows for k in r.keys()})
+                        page_rows = rows[offset : offset + limit]
+                        return {
+                            "artifactId": artifact_id,
+                            "mimeType": mime,
+                            "offset": offset,
+                            "limit": limit,
+                            "totalRows": len(rows),
+                            "columns": [{"name": c, "type": "unknown"} for c in cols],
+                            "rows": page_rows,
+                            "warning": warning,
+                        }
+                if isinstance(parsed, dict):
+                    return {
+                        "artifactId": artifact_id,
+                        "mimeType": mime,
+                        "offset": 0,
+                        "limit": 1,
+                        "totalRows": 1,
+                        "columns": [{"name": str(k), "type": "unknown"} for k in parsed.keys()],
+                        "rows": [parsed],
+                        "warning": warning,
+                    }
+            except Exception:
+                pass
+
+        try:
+            text = data.decode("utf-8", errors="replace")
+        except Exception:
+            text = ""
+        lines = text.splitlines() if text else []
+        page_lines = lines[offset : offset + limit]
+        return {
+            "artifactId": artifact_id,
+            "mimeType": mime,
+            "offset": offset,
+            "limit": limit,
+            "totalRows": len(lines),
+            "columns": [{"name": "text", "type": "string"}],
+            "rows": [{"text": line} for line in page_lines],
+            "warning": warning,
+        }
 
     total_rows = int(len(df))
     page_df = df.iloc[offset : offset + limit]
@@ -418,7 +469,7 @@ async def get_artifact_preview(
             for name, dtype in zip(page_df.columns.tolist(), page_df.dtypes.tolist())
         ]
 
-    return {
+    out = {
         "artifactId": artifact_id,
         "mimeType": mime,
         "offset": offset,
@@ -427,6 +478,9 @@ async def get_artifact_preview(
         "columns": schema_cols,
         "rows": rows,
     }
+    if warning:
+        out["warning"] = warning
+    return out
 
 
 @router.get("/{run_id}")

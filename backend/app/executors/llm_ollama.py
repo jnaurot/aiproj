@@ -242,6 +242,9 @@ async def exec_llm_ollama(
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
 
     base_url = (params.base_url or "").rstrip("/")
+    thinking_mode = "none"
+    if params.thinking and params.thinking.enabled:
+        thinking_mode = params.thinking.mode
     if not base_url:
         return NodeOutput(
             status="failed",
@@ -268,7 +271,7 @@ async def exec_llm_ollama(
         "model": params.model,
         "messages": messages,
         "stream": True,
-        "think": False,
+        "think": thinking_mode in {"hidden", "visible"},
         "options": {
             "temperature": params.temperature,
             "num_predict": params.max_tokens,
@@ -365,6 +368,14 @@ async def exec_llm_ollama(
                             })
                         if thinking_delta:
                             thinking_chunks.append(thinking_delta)
+                            if thinking_mode == "visible":
+                                await context.bus.emit({
+                                    "type": "llm_thinking_delta",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "delta": thinking_delta,
+                                })
 
                         if obj.get("done") is True:
                             break

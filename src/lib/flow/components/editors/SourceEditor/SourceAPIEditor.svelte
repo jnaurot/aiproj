@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import type { SourceAPIParams } from '$lib/flow/schema/source';
+	import type { SourceAPIParams, SourceOutputMode } from '$lib/flow/schema/source';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
@@ -19,6 +19,8 @@
 
 	const methods: Method[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 	const authTypes: AuthType[] = ['none', 'bearer', 'basic', 'api_key'];
+	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
+	const cacheModes = ['default', 'never', 'ttl'] as const;
 
 	$: url = asString(params?.url, '');
 	$: method = (asString(params?.method, 'GET') as Method) ?? 'GET';
@@ -27,6 +29,19 @@
 	$: timeout_seconds = asNumberOrEmpty(params?.timeout_seconds ?? 30);
 	$: headers = params?.headers ?? {};
 	$: body = params?.body ?? {};
+	$: outputMode = (asString(params?.output?.mode, 'json') as SourceOutputMode) ?? 'json';
+	$: cacheMode = asString(params?.cache_policy?.mode, 'default');
+	$: cacheTtl = asNumberOrEmpty(params?.cache_policy?.ttl_seconds);
+
+	let headersDraft: Record<string, string> = headers;
+	let bodyDraft: Record<string, unknown> = body as Record<string, unknown>;
+
+	$: if (JSON.stringify(headersDraft) !== JSON.stringify(headers)) {
+		headersDraft = { ...headers };
+	}
+	$: if (JSON.stringify(bodyDraft) !== JSON.stringify(body)) {
+		bodyDraft = { ...(body as Record<string, unknown>) };
+	}
 
 	function draft(patch: SourceAPIPatch): void {
 		onDraft?.(patch);
@@ -101,29 +116,117 @@
 				value={timeout_seconds}
 				onInput={(event) =>
 					draft({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
+				onBlur={(event) =>
+					commit({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
 			/>
 		</Field>
 
 		<Field label="headers">
 			<KeyValueEditor
 				label=""
-				value={headers}
+				value={headersDraft}
 				allowTypes={false}
-				onChange={(next) => draft({ headers: next as Record<string, string> })}
+				onChange={(next) => {
+					headersDraft = next as Record<string, string>;
+					draft({ headers: headersDraft });
+				}}
 			/>
+			<button
+				type="button"
+				on:click={() => commit({ headers: headersDraft })}
+			>
+				Apply headers
+			</button>
 		</Field>
 
 		<Field label="body">
 			<KeyValueEditor
 				label=""
-				value={body as Record<string, unknown>}
+				value={bodyDraft}
 				allowTypes={true}
 				defaultType="string"
 				onChange={(next) => {
 					const keys = Object.keys(next ?? {});
-					draft({ body: keys.length > 0 ? (next as Record<string, unknown>) : undefined });
+					bodyDraft = next as Record<string, unknown>;
+					draft({ body: keys.length > 0 ? (bodyDraft as Record<string, unknown>) : undefined });
 				}}
 			/>
+			<button
+				type="button"
+				on:click={() => {
+					const keys = Object.keys(bodyDraft ?? {});
+					commit({ body: keys.length > 0 ? bodyDraft : undefined });
+				}}
+			>
+				Apply body
+			</button>
 		</Field>
+
+		<Field label="output mode">
+			<select
+				value={outputMode}
+				on:change={(event) => {
+					const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					draft({ output: { ...(params?.output ?? {}), mode } });
+					commit({ output: { ...(params?.output ?? {}), mode } });
+				}}
+			>
+				{#each outputModes as mode}
+					<option value={mode}>{mode}</option>
+				{/each}
+			</select>
+		</Field>
+
+		<Field label="cache_policy.mode">
+			<select
+				value={cacheMode}
+				on:change={(event) => {
+					const mode = (event.currentTarget as HTMLSelectElement).value as (typeof cacheModes)[number];
+					const patch = {
+						cache_policy: {
+							...(params?.cache_policy ?? {}),
+							mode,
+							ttl_seconds:
+								mode === 'ttl'
+									? (params?.cache_policy?.ttl_seconds ?? 60)
+									: undefined
+						}
+					};
+					draft(patch);
+					commit(patch);
+				}}
+			>
+				{#each cacheModes as mode}
+					<option value={mode}>{mode}</option>
+				{/each}
+			</select>
+		</Field>
+
+		{#if cacheMode === 'ttl'}
+			<Field label="cache_policy.ttl_seconds">
+				<Input
+					type="number"
+					min="1"
+					step="1"
+					value={cacheTtl}
+					onInput={(event) =>
+						draft({
+							cache_policy: {
+								...(params?.cache_policy ?? { mode: 'ttl' }),
+								mode: 'ttl',
+								ttl_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							cache_policy: {
+								...(params?.cache_policy ?? { mode: 'ttl' }),
+								mode: 'ttl',
+								ttl_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+							}
+						})}
+				/>
+			</Field>
+		{/if}
 	</Section>
 {/if}

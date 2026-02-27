@@ -9,6 +9,7 @@ from app.runner.schemas import (
     SourceFileParams,
     SourceDatabaseParams,
     SourceAPIParams,
+    TransformParamsCurrent,
     FilterTransformParams,
     MapTransformParams,
     AggregateTransformParams,
@@ -67,11 +68,19 @@ class TestLLMParams:
         input_params = {
             "stop": ["A", "B"],
             "inputEncoding": "json_canonical",
+            "presencePenalty": 0.2,
+            "frequencyPenalty": -0.1,
+            "repeatPenalty": 1.1,
+            "thinking": "on",
             "output": {"mode": "embeddings", "embedding": {"dims": 1536}},
         }
         result = normalize_llm_params_frontend(input_params)
         assert result["stop_sequences"] == ["A", "B"]
         assert result["input_encoding"] == "json_canonical"
+        assert result["presence_penalty"] == 0.2
+        assert result["frequency_penalty"] == -0.1
+        assert result["repeat_penalty"] == 1.1
+        assert result["thinking"] == {"enabled": True, "mode": "visible"}
         assert result["output_mode"] == "embeddings"
         assert result["embedding_contract"] == {"dims": 1536}
     
@@ -223,11 +232,13 @@ class TestSourceFileParams:
     def test_success_with_defaults(self):
         """Test successful validation with defaults"""
         params = {
-            "file_path": "/path/to/file.csv"
+            "rel_path": ".",
+            "filename": "file.csv"
         }
         
         source_params = SourceFileParams.model_validate(params)
-        assert source_params.file_path == "/path/to/file.csv"
+        assert source_params.rel_path == "."
+        assert source_params.filename == "file.csv"
         assert source_params.file_format == "csv"
         assert source_params.encoding == "utf-8"
         assert source_params.cache_enabled is True
@@ -235,7 +246,8 @@ class TestSourceFileParams:
     def test_custom_file_format(self):
         """Test custom file format selection"""
         params = {
-            "file_path": "/data/data.parquet",
+            "rel_path": ".",
+            "filename": "data.parquet",
             "file_format": "parquet"
         }
         
@@ -245,7 +257,8 @@ class TestSourceFileParams:
     def test_custom_delimiter(self):
         """Test custom CSV delimiter"""
         params = {
-            "file_path": "/data/data.csv",
+            "rel_path": ".",
+            "filename": "data.csv",
             "file_format": "csv",
             "delimiter": "|"
         }
@@ -258,21 +271,23 @@ class TestSourceFileParams:
         formats = ["csv", "parquet", "json", "excel", "txt"]
         for fmt in formats:
             params = {
-                "file_path": f"/data/test.{fmt}",
+                "rel_path": ".",
+                "filename": f"test.{fmt}",
                 "file_format": fmt
             }
             SourceFileParams.model_validate(params)
             assert SourceFileParams.model_validate(params).file_format == fmt
     
     def test_missing_file_path(self):
-        """Test validation error when file_path is missing"""
-        with pytest.raises(ValueError, match="file_path is required"):
+        """Test validation error when root/rel path are missing"""
+        with pytest.raises(ValueError):
             SourceFileParams.model_validate({})
     
     def test_validate_required_method(self):
         """Test custom validation_required method"""
         params = {
-            "file_path": "/test.csv"
+            "rel_path": ".",
+            "filename": "test.csv"
         }
         
         source_params = SourceFileParams.model_validate(params)
@@ -307,16 +322,16 @@ class TestSourceDatabaseParams:
         assert db_params.table_name == "users"
     
     def test_requires_connection_string_or_ref(self):
-        """Test validation error when neither connection_string nor connection_ref provided"""
-        with pytest.raises(ValueError, match="Either connection_string or connection_ref required"):
-            SourceDatabaseParams.model_validate({})
+        """Test validation_required flags missing connection"""
+        params = SourceDatabaseParams.model_validate({"query": "select 1"})
+        errors = params.validate_required()
+        assert "Either connection_string or connection_ref required" in errors
     
     def test_requires_query_or_table_name(self):
-        """Test validation error when neither query nor table_name provided"""
-        with pytest.raises(ValueError, match="Either query or table_name required"):
-            SourceDatabaseParams.model_validate({
-                "connection_string": "postgresql://test"
-            })
+        """Test validation_required flags missing query/table"""
+        params = SourceDatabaseParams.model_validate({"connection_string": "postgresql://test"})
+        errors = params.validate_required()
+        assert "Either query or table_name required" in errors
     
     def test_query_overrides_table_name(self):
         """Test query parameter works independently"""
@@ -400,16 +415,19 @@ class TestSourceAPIParams:
     
     def test_requires_url(self):
         """Test validation error when url is missing"""
-        with pytest.raises(ValueError, match="url is required"):
+        with pytest.raises(ValueError):
             SourceAPIParams.model_validate({})
     
     def test_requires_auth_token_for_bearer(self):
-        """Test validation error when auth_type is bearer but no auth_token_ref"""
-        with pytest.raises(ValueError, match="auth_token_ref required when using authentication"):
-            SourceAPIParams.model_validate({
+        """Test validation_required flags missing auth token for bearer"""
+        params = SourceAPIParams.model_validate(
+            {
                 "url": "https://api.example.com/data",
                 "auth_type": "bearer"
-            })
+            }
+        )
+        errors = params.validate_required()
+        assert "auth_token_ref required when using authentication" in errors
     
     def test_timeout_validation(self):
         """Test timeout_seconds is valid"""
@@ -438,7 +456,7 @@ class TestFilterTransformParams:
     
     def test_missing_filter_expression(self):
         """Test validation error when filter_expression is missing"""
-        with pytest.raises(ValueError, match="filter_expression is required"):
+        with pytest.raises(ValueError):
             FilterTransformParams.model_validate({})
     
     def test_optional_columns(self):
@@ -465,17 +483,16 @@ class TestMapTransformParams:
     
     def test_requires_function(self):
         """Test validation error when function is missing"""
-        with pytest.raises(ValueError, match="function is required"):
+        with pytest.raises(ValueError):
             MapTransformParams.model_validate({
                 "target_columns": ["name"]
             })
     
     def test_requires_target_columns(self):
-        """Test validation error when target_columns is missing"""
-        with pytest.raises(ValueError, match="target_columns is required"):
-            MapTransformParams.model_validate({
-                "function": "upper"
-            })
+        """Test validation_required flags missing target_columns"""
+        params = MapTransformParams.model_validate({"function": "upper"})
+        errors = params.validate_required()
+        assert "target_columns is required" in errors
     
     def test_function_types(self):
         """Test different function types"""
@@ -520,9 +537,10 @@ class TestAggregateTransformParams:
         }
     
     def test_requires_aggregations(self):
-        """Test validation error when aggregations is missing"""
-        with pytest.raises(ValueError, match="aggregations is required"):
-            AggregateTransformParams.model_validate({})
+        """Test validation_required flags missing aggregations"""
+        params = AggregateTransformParams.model_validate({})
+        errors = params.validate_required()
+        assert "aggregations is required" in errors
     
     def test_optional_group_by(self):
         """Test group_by is optional"""
@@ -552,7 +570,7 @@ class TestCustomTransformParams:
     
     def test_requires_code(self):
         """Test validation error when code is missing"""
-        with pytest.raises(ValueError, match="code is required"):
+        with pytest.raises(ValueError):
             CustomTransformParams.model_validate({})
 
 
@@ -623,7 +641,7 @@ class TestGetSchemaForNode:
         assert schema is None
     
     def test_transform_no_schema(self):
-        """Test None returned for transform node"""
+        """Test transform schema is returned"""
         node = {
             "data": {
                 "kind": "transform",
@@ -632,7 +650,7 @@ class TestGetSchemaForNode:
         }
         
         schema = get_schema_for_node(node)
-        assert schema is None
+        assert schema == TransformParamsCurrent
 
 
 class TestSCHEMA_REGISTRY:
@@ -644,12 +662,12 @@ class TestSCHEMA_REGISTRY:
         assert "source:database" in SCHEMA_REGISTRY
         assert "source:api" in SCHEMA_REGISTRY
         assert "llm" in SCHEMA_REGISTRY
-        assert "transform:filter" in SCHEMA_REGISTRY
-        assert "transform:map" in SCHEMA_REGISTRY
-        assert "mcp" in SCHEMA_REGISTRY  # Assuming tool:mcp
+        assert "transform" in SCHEMA_REGISTRY
+        assert "tool:mcp" in SCHEMA_REGISTRY
+        assert "tool" in SCHEMA_REGISTRY
     
     def test_schema_types(self):
         """Test correct schema types in registry"""
         assert SCHEMA_REGISTRY["source:file"] == SourceFileParams
         assert SCHEMA_REGISTRY["llm"] == LLMParams
-        assert SCHEMA_REGISTRY["mcp"] is not None  # Tool params type
+        assert SCHEMA_REGISTRY["tool:mcp"] is not None  # Tool params type

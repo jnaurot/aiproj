@@ -45,6 +45,20 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["stop_sequences"] = p.pop("stop")
     if "inputEncoding" in p and "input_encoding" not in p:
         p["input_encoding"] = p.pop("inputEncoding")
+    if "presencePenalty" in p and "presence_penalty" not in p:
+        p["presence_penalty"] = p.pop("presencePenalty")
+    if "frequencyPenalty" in p and "frequency_penalty" not in p:
+        p["frequency_penalty"] = p.pop("frequencyPenalty")
+    if "repeatPenalty" in p and "repeat_penalty" not in p:
+        p["repeat_penalty"] = p.pop("repeatPenalty")
+    if isinstance(p.get("thinking"), str):
+        legacy = str(p.get("thinking"))
+        mapping = {
+            "off": {"enabled": False, "mode": "none"},
+            "auto": {"enabled": True, "mode": "hidden"},
+            "on": {"enabled": True, "mode": "visible"},
+        }
+        p["thinking"] = mapping.get(legacy, {"enabled": False, "mode": "none"})
 
     return p
 

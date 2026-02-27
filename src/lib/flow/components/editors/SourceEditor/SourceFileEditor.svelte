@@ -15,12 +15,10 @@
 	export let onDraft: (patch: SourceFilePatch) => void;
 	export let onCommit: (patch: SourceFilePatch) => void;
 
-	let fileEl: HTMLInputElement | null = null;
-
 	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
 
-	$: file_path = asString(params?.file_path, '');
-	$: file_name = asString(params?.file_name, 'No file selected');
+	$: rel_path = asString(params?.rel_path, '');
+	$: filename = asString(params?.filename, '');
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
 	$: sheet_name = asString(params?.sheet_name, '');
@@ -54,43 +52,25 @@
 
 		commit(patch);
 	}
-
-	function onFilePicked(event: Event): void {
-		const input = event.currentTarget as HTMLInputElement | null;
-		const file = input?.files?.[0];
-		if (!file) return;
-
-		commit({
-			file_path: `localfile://${encodeURIComponent(file.name)}`,
-			file_name: file.name,
-			file_size: file.size,
-			file_mime: file.type
-		});
-	}
 </script>
 
 {#if selectedNode}
 	<Section title="File">
-		<Field label="file">
-			<div class="fileRow">
-				<input
-					bind:this={fileEl}
-					type="file"
-					accept=".csv,.tsv,.xlsx,.json,.txt,.parquet,.pdf"
-					style="display:none"
-					on:change={onFilePicked}
-				/>
-				<button type="button" on:click={() => fileEl?.click()}>Choose file</button>
-				<span class="fileName">{file_name}</span>
-			</div>
+		<Field label="rel_path">
+			<Input
+				value={rel_path}
+				placeholder="c:/users/owner/desktop/aiproj"
+				onInput={(event) => draft({ rel_path: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) => commit({ rel_path: (event.currentTarget as HTMLInputElement).value })}
+			/>
 		</Field>
 
-		<Field label="file path">
+		<Field label="filename">
 			<Input
-				value={file_path}
-				placeholder="C:/path/to/file.csv"
-				onInput={(event) => draft({ file_path: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ file_path: (event.currentTarget as HTMLInputElement).value })}
+				value={filename}
+				placeholder="data.csv"
+				onInput={(event) => draft({ filename: (event.currentTarget as HTMLInputElement).value })}
+				onBlur={(event) => commit({ filename: (event.currentTarget as HTMLInputElement).value })}
 			/>
 		</Field>
 
@@ -169,15 +149,3 @@
 		</Field>
 	</Section>
 {/if}
-
-<style>
-	.fileRow {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-	}
-
-	.fileName {
-		opacity: 0.8;
-	}
-</style>

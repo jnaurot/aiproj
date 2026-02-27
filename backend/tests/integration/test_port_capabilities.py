@@ -40,9 +40,9 @@ async def test_run_fails_fast_on_removed_chat_port(tmp_path):
         bus=RunEventBus("run-chat-port-invalid", on_emit=lambda e: events.append(dict(e))),
         artifact_store=store,
         cache=cache,
+        graph_id="graph-chat-port-invalid",
     )
     finish = [e for e in events if e.get("type") == "run_finished"]
     assert finish and finish[-1].get("status") == "failed"
     logs = [e for e in events if e.get("type") == "log"]
     assert any("Unsupported output port type 'chat'" in str(x.get("message", "")) for x in logs)
-

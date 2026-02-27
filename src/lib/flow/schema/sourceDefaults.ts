@@ -2,20 +2,22 @@
 import type { SourceFileParams, SourceDatabaseParams, SourceAPIParams } from "$lib/flow/schema/source";
 
 export const defaultSourceFileParams: SourceFileParams = {
-    file_path: "data.csv",
-    file_name: "data.csv",
+    rel_path: "c:/users/owner/desktop/aiproj",
+    filename: "data.csv",
     file_format: "csv",
     delimiter: ",",
     sheet_name: "Sheet1",
     sample_size: 1000,
     encoding: "utf-8",
-    cache_enabled: true
+    cache_enabled: true,
+    output: { mode: "table" }
 };
 
 export const defaultSourceDatabaseParams: SourceDatabaseParams = {
     connection_ref: "conn:default",
     table_name: "my_table",
     limit: 1000,
+    output: { mode: "table" },
 };
 
 export const defaultSourceAPIParams: SourceAPIParams = {
@@ -25,7 +27,9 @@ export const defaultSourceAPIParams: SourceAPIParams = {
     body: undefined,
     auth_type: "none",
     auth_token_ref: undefined,
-    timeout_seconds: 30
+    timeout_seconds: 30,
+    cache_policy: { mode: "default" },
+    output: { mode: "json" }
 };
 
 export const defaultSourceParamsByKind = {
