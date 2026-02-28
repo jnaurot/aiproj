@@ -6,7 +6,12 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
-	import { asBoolean, asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
+	import {
+		asBoolean,
+		asNumberOrEmpty,
+		asString,
+		parseOptionalInt
+	} from '$lib/flow/components/editors/shared';
 	import {
 		type RecentSnapshot,
 		mergeRecentSnapshotOnUpload,
@@ -22,7 +27,8 @@
 	export let params: Partial<SourceFileParams>;
 	export let onDraft: (patch: SourceFilePatch) => void;
 	export let onCommit: (patch: SourceFilePatch) => void;
-	export let onSnapshotCommit: ((patch: SourceFilePatch) => void | Promise<unknown>) | undefined = undefined;
+	export let onSnapshotCommit: ((patch: SourceFilePatch) => void | Promise<unknown>) | undefined =
+		undefined;
 
 	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
 	const RECENT_LIMIT = 10;
@@ -35,10 +41,16 @@
 	let hydrationSignature = '';
 
 	$: snapshotId = asString(params?.snapshotId, '').toLowerCase();
-	$: recentSnapshots = normalizeRecentSnapshots((params as any)?.recentSnapshots, (params as any)?.recentSnapshotIds);
+	$: recentSnapshots = normalizeRecentSnapshots(
+		(params as any)?.recentSnapshots,
+		(params as any)?.recentSnapshotIds
+	);
 	$: displayRecentSnapshots = sortRecentSnapshotsForDisplay(recentSnapshots);
-	$: snapshotMetadata = (params?.snapshotMetadata as Record<string, unknown> | undefined) ?? undefined;
+	$: snapshotMetadata =
+		(params?.snapshotMetadata as Record<string, unknown> | undefined) ?? undefined;
 	$: currentSnapshot = recentSnapshots.find((s) => s.id === snapshotId);
+	$: currentFilename = asString(snapshotMetadata?.originalFilename, currentSnapshot?.filename ?? '-');
+	$: currentShortId = snapshotId ? shortHash(snapshotId) : '-';
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
 	$: sheet_name = asString(params?.sheet_name, '');
@@ -245,6 +257,7 @@
 </script>
 
 {#if selectedNode}
+	<div class="sourceFileEditor">
 	<Section title="File">
 		<Field>
 			<div
@@ -262,10 +275,8 @@
 					}
 				}}
 			>
-				<div class="dropTitle">{isUploading ? 'Uploading...' : 'Drop file here'}</div>
-				<button type="button" class="small" disabled={isUploading} on:click={() => fileInputEl?.click()}>
-					Choose File
-				</button>
+				<div class="dropTitle">{isUploading ? 'Uploading...' : 'Choose a file'}</div>
+				<div class="dropHint">or drag & drop here</div>
 				<input bind:this={fileInputEl} type="file" hidden on:change={onFileInputChange} />
 			</div>
 			{#if uploadError}
@@ -273,18 +284,30 @@
 			{/if}
 		</Field>
 
-		<Field label="current snapshot">
-			<div class="snapshotMeta">
-				<div><b>id</b> {snapshotId ? shortHash(snapshotId) : '-'}</div>
-				<div><b>file</b> {asString(snapshotMetadata?.originalFilename, currentSnapshot?.filename ?? '-')}</div>
-				<div><b>size</b> {bytesLabel(snapshotMetadata?.byteSize ?? currentSnapshot?.size)}</div>
-				<div><b>imported</b> {asString(snapshotMetadata?.importedAt, currentSnapshot?.importedAt ?? '-')}</div>
+		<Field label="current snapshot" stacked>
+			<div class="snapshotKv">
+				<div class="kvRow">
+					<div class="kvKey">id</div>
+					<div class="kvVal mono">{currentShortId}</div>
+				</div>
+				<div class="kvRow">
+					<div class="kvKey">file</div>
+					<div class="kvVal">{currentFilename}</div>
+				</div>
+				<div class="kvRow">
+					<div class="kvKey">size</div>
+					<div class="kvVal">{bytesLabel(snapshotMetadata?.byteSize ?? currentSnapshot?.size)}</div>
+				</div>
+				<div class="kvRow">
+					<div class="kvKey">imported</div>
+					<div class="kvVal">{asString(snapshotMetadata?.importedAt, currentSnapshot?.importedAt ?? '-')}</div>
+				</div>
 			</div>
 		</Field>
 
-		<Field label="previous uploads">
-			<select value="" on:change={onSelectPrevious}>
-				<option value="" disabled selected>Previous uploads (snapshots)</option>
+		<Field label="previous uploads" stacked>
+			<select class="full" value="" on:change={onSelectPrevious}>
+				<option value="" disabled selected>Choose a previous upload...</option>
 				{#each displayRecentSnapshots as entry}
 					<option value={entry.id}>{optionLabel(entry)}</option>
 				{/each}
@@ -292,7 +315,11 @@
 		</Field>
 
 		<Field label="file_format">
-			<select value={file_format} on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}>
+			<select
+				class="full"
+				value={file_format}
+				on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}
+			>
 				{#each fileFormatOptions as option}
 					<option value={option}>{option}</option>
 				{/each}
@@ -335,19 +362,34 @@
 				value={sample_size}
 				placeholder="e.g. 1000"
 				onInput={(event) =>
-					draft({ sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+					draft({
+						sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})}
 				onBlur={(event) =>
-					commit({ sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+					commit({
+						sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})}
 			/>
 		</Field>
 
 		<Field label="encoding">
-			<Input
-				value={encoding}
-				placeholder="utf-8"
-				onInput={(event) => draft({ encoding: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ encoding: (event.currentTarget as HTMLInputElement).value })}
-			/>
+			<select
+				class="full"
+				value={encoding || 'utf-8'}
+				on:change={(event) => {
+					const value = (event.currentTarget as HTMLSelectElement).value;
+					draft({ encoding: value });
+					commit({ encoding: value });
+				}}
+			>
+				<option value="utf-8">utf-8</option>
+				<option value="windows-1252">windows-1252</option>
+				<option value="iso-8859-1">iso-8859-1</option>
+				<option value="iso-8859-15">iso-8859-15</option>
+				<option value="utf-16le">utf-16le</option>
+				<option value="utf-16be">utf-16be</option>
+				<option value="us-ascii">us-ascii</option>
+			</select>
 		</Field>
 
 		<Field label="cache_enabled">
@@ -362,31 +404,54 @@
 			/>
 		</Field>
 	</Section>
+	</div>
 {/if}
 
 <style>
-	.dropzone {
+	.sourceFileEditor .dropzone {
 		border: 1px dashed rgba(148, 163, 184, 0.7);
 		border-radius: 10px;
 		padding: 10px;
 		display: grid;
 		gap: 6px;
 	}
-	.dropzone.dragOver {
+	.sourceFileEditor .dropzone.dragOver {
 		border-color: rgba(56, 189, 248, 0.9);
 		background: rgba(15, 23, 42, 0.35);
 	}
-	.dropTitle {
+	.sourceFileEditor .dropTitle {
 		font-weight: 600;
 	}
-	.error {
+	.sourceFileEditor .dropHint {
+		font-size: 12px;
+		opacity: 0.9;
+	}
+	.sourceFileEditor .error {
 		margin-top: 6px;
 		font-size: 12px;
 		color: #f87171;
 	}
-	.snapshotMeta {
+	.sourceFileEditor .snapshotKv {
 		display: grid;
-		gap: 4px;
 		font-size: 12px;
+	}
+	.sourceFileEditor .kvRow {
+		display: grid;
+		grid-template-columns: max-content minmax(0, 1fr);
+		gap: 8px;
+		align-items: start;
+	}
+	.sourceFileEditor .kvKey {
+		opacity: 0.7;
+	}
+	.sourceFileEditor .kvVal {
+		overflow-wrap: anywhere;
+		word-break: normal;
+	}
+	.sourceFileEditor .mono {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	}
+	.sourceFileEditor .full {
+		width: 100%;
 	}
 </style>

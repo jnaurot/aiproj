@@ -766,6 +766,12 @@
 		gap: 12px;
 		margin: 8px 0;
 	}
+	:global(.inspector .field.stacked) {
+		display: grid;
+		grid-template-columns: 1fr;
+		align-items: start;
+		gap: 6px;
+	}
 
 	:global(.inspector .k) {
 		flex: 0 0 140px;
@@ -778,6 +784,14 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 	}
+	:global(.inspector .field.stacked .k) {
+		flex: none;
+		min-width: 0;
+		padding-left: 0;
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
 
 	:global(.inspector .v) {
 		flex: 1;
@@ -785,6 +799,9 @@
 		padding-left: 0;
 		margin-top: 0;
 		font-size: 13px;
+	}
+	:global(.inspector .field.stacked .v) {
+		padding-left: 12px;
 	}
 
 	:global(.inspector select) {
