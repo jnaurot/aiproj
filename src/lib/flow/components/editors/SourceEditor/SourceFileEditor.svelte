@@ -408,6 +408,8 @@
 {/if}
 
 <style>
+	@import '../../../styles/editorCommon.css';
+
 	.sourceFileEditor .dropzone {
 		border: 1px dashed rgba(148, 163, 184, 0.7);
 		border-radius: 10px;
@@ -447,11 +449,5 @@
 	.sourceFileEditor .kvVal {
 		overflow-wrap: anywhere;
 		word-break: normal;
-	}
-	.sourceFileEditor .mono {
-		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-	}
-	.sourceFileEditor .full {
-		width: 100%;
 	}
 </style>

@@ -1,0 +1,82 @@
+/* ---------------------------
+Canonical inspector k/v form layout
+--------------------------- */
+:global(.inspector .field) {
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	gap: 12px;
+	margin: 8px 0;
+}
+:global(.inspector .field.stacked) {
+	display: grid;
+	grid-template-columns: 1fr;
+	align-items: start;
+	gap: 6px;
+}
+
+:global(.inspector .k) {
+	flex: 0 0 140px;
+	min-width: 140px;
+	font-family: ui-monospace, Menlo, Consolas, monospace;
+	font-size: 12.5px;
+	opacity: 0.8;
+	padding-left: 6px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+:global(.inspector .field.stacked .k) {
+	flex: none;
+	min-width: 0;
+	padding-left: 0;
+	white-space: normal;
+	overflow: visible;
+	text-overflow: clip;
+}
+
+:global(.inspector .v) {
+	flex: 1;
+	min-width: 0;
+	padding-left: 0;
+	margin-top: 0;
+	font-size: 13px;
+}
+:global(.inspector .field.stacked .v) {
+	padding-left: 12px;
+}
+
+:global(.inspector select) {
+	background: #0b0c10;
+	color: #e6e6e6;
+	border: 1px solid #283044;
+}
+
+/* options inside dropdown */
+:global(.inspector select option) {
+	background-color: #0b0c10;
+	color: #e6e6e6;
+}
+
+/* highlighted option */
+:global(.inspector select option:checked),
+:global(.inspector select option:hover) {
+	background-color: #283044;
+}
+
+.inspector .v :global(input),
+.inspector .v :global(select),
+.inspector .v :global(textarea) {
+	width: 100%;
+	box-sizing: border-box;
+	font-size: 13px;
+	padding: 6px 8px;
+	border-radius: 8px;
+	background: #0b0c10;
+	color: #e6e6e6;
+	border: 1px solid #283044;
+}
+
+.inspector .v :global(*) {
+	min-width: 0;
+}

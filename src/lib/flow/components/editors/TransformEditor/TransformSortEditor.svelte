@@ -4,6 +4,7 @@
 	import type { TransformSortParams } from '$lib/flow/schema/transform';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import Row from '$lib/flow/components/ui/Row.svelte';
 
 	type SortItem = NonNullable<TransformSortParams['by']>[number];
 	type SortDir = SortItem['dir'];
@@ -31,7 +32,7 @@
 	<div class="hint">Sort rows by one or more columns. Order is applied left-to-right.</div>
 
 	{#each items as item, index}
-		<div class="row">
+		<Row>
 			<Input
 				value={item.col}
 				placeholder="column"
@@ -62,7 +63,7 @@
 			<button class="small danger" type="button" on:click={() => onDraft({ by: items.filter((_, current) => current !== index) })}>
 				x
 			</button>
-		</div>
+		</Row>
 	{/each}
 
 	<div class="actions">

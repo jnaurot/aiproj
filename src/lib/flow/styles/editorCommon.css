@@ -1,0 +1,7 @@
+.sourceFileEditor .mono {
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.sourceFileEditor .full {
+	width: 100%;
+}
