@@ -6,6 +6,9 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
     plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
+    build: {
+        sourcemap:true,
+    },
     test: {
         environment: 'node',
         include: ['src/**/*.test.ts']
