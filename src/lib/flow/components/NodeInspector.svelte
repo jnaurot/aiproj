@@ -4,15 +4,13 @@
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
-	import Section from '$lib/flow/components/ui/Section.svelte';
-	import Field from '$lib/flow/components/ui/Field.svelte';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
-	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
+	import type { LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 	// import type { LlmKind } from '$lib/flow/types/paramsMap'; // adjust path if yours differs
 	// import type { TransformKind } from '$lib/flow/types/paramsMap';
 
@@ -38,7 +36,6 @@
 	$: toolProvider = ((params as any)?.provider ??
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
-	let configError: string | null = null;
 
 	function onDraft(patch: Record<string, any>) {
 		graphStore.patchInspectorDraft(patch);
@@ -52,23 +49,6 @@
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
 	{#if isSource}
-		<!-- SOURCE -->
-		<Section>
-			<Field label="Source">
-					<select
-						value={sourceKind}
-						on:change={(e) => {
-							const nextKind = (e.currentTarget as HTMLSelectElement).value as SourceKind;
-							graphStore.setSourceKind(selectedNode.id, nextKind);
-						}}
-					>
-						<option value="file">file</option>
-						<option value="database">database</option>
-						<option value="api">api</option>
-					</select>
-			</Field>
-		</Section>
-
 		<svelte:component
 			this={SourceEditorByKind[sourceKind] ?? SourceEditorByKind.file}
 			{selectedNode}
@@ -77,22 +57,6 @@
 			{onCommit}
 		/>
 	{:else if isLlm}
-		<!-- LLM -->
-		<Section title="LLM">
-			<Field label="llm kind">
-					<select
-						value={llmKind}
-						on:change={(e) => {
-							const nextKind = (e.currentTarget as HTMLSelectElement).value as LlmKind;
-							graphStore.setLlmKind(selectedNode.id, nextKind);
-						}}
-					>
-						<option selected value="ollama">ollama</option>
-						<option value="openai_compat">openai_compat</option>
-					</select>
-			</Field>
-		</Section>
-
 		<svelte:component
 			this={LlmEditorByKind[llmKind] ?? LlmEditorByKind.ollama}
 			{selectedNode}
@@ -101,56 +65,8 @@
 			{onCommit}
 		/>
 	{:else if isTool}
-		<!-- TOOL -->
-		<Section title="Tool">
-			<Field label="provider">
-					<select
-						value={toolProvider}
-						on:change={(e) => {
-							const nextProvider = (e.currentTarget as HTMLSelectElement).value as ToolProvider;
-							graphStore.setToolProvider(selectedNode.id, nextProvider);
-						}}
-					>
-						<option value="mcp">mcp</option>
-						<option value="http">http</option>
-						<option value="function">function</option>
-						<option value="python">python</option>
-						<option value="js">js</option>
-						<option value="shell">shell</option>
-						<option value="db">db</option>
-						<option value="builtin">builtin</option>
-					</select>
-			</Field>
-		</Section>
 		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
 	{:else if isTransform}
-		<Section>
-			<Field label="transform op">
-					<select
-						value={transformKind}
-						on:change={(e) => {
-							const nextKind = (e.currentTarget as HTMLSelectElement).value as TransformKind;
-							const result = graphStore.setTransformKind(selectedNode.id, nextKind);
-							if (!result.ok) {
-								configError = result.error ?? 'Failed to update transform op';
-							} else {
-								configError = null;
-							}
-						}}
-					>
-						<option value="filter">filter</option>
-						<option value="select">select</option>
-						<option value="rename">rename</option>
-						<option value="derive">derive</option>
-						<option value="aggregate">aggregate</option>
-						<option value="join">join</option>
-						<option value="sort">sort</option>
-						<option value="limit">limit</option>
-						<option value="dedupe">dedupe</option>
-						<option value="sql">sql</option>
-					</select>
-			</Field>
-		</Section>
 		<svelte:component
 			this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
 			{selectedNode}
@@ -158,10 +74,6 @@
 			{onDraft}
 			{onCommit}
 		/>
-	{/if}
-
-	{#if configError}
-		<div class="configError">{configError}</div>
 	{/if}
 	</div>
 {/if}
@@ -224,15 +136,5 @@
 	:global(.nodeInspectorTheme .v select option) {
 		background: var(--ni-control-bg);
 		color: var(--ni-control-text);
-	}
-
-	.configError {
-		margin-top: 8px;
-		padding: 8px 10px;
-		border-radius: 8px;
-		border: 1px solid var(--ni-error-border);
-		background: var(--ni-error-bg);
-		color: var(--ni-error-text);
-		font-size: 12px;
 	}
 </style>

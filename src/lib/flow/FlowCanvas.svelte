@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
+	import { get } from 'svelte/store';
 	import { SvelteFlow, Background, Controls, MarkerType, useSvelteFlow } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 
@@ -7,6 +8,7 @@
 
 	import { nodeTypes } from '$lib/flow/nodeTypes';
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
+	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
@@ -120,8 +122,30 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let inspectorMode: InspectorMode = 'edit';
 	let inspectorTopRatio = 0.5;
 	let resizingInspector = false;
+	let subtypeError: string | null = null;
+	let subtypeErrorNodeId: string | null = null;
+	let subtypeErrorTimer: ReturnType<typeof setTimeout> | null = null;
 
 	$: selectedId = $selectedNode?.id;
+	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
+		subtypeError = null;
+		subtypeErrorNodeId = null;
+		if (subtypeErrorTimer) {
+			clearTimeout(subtypeErrorTimer);
+			subtypeErrorTimer = null;
+		}
+	}
+	$: inspectorParams = ($graphStore.inspector?.draftParams ?? {}) as Record<string, unknown>;
+	$: selectedLlmKind = (((inspectorParams as any)?.llmKind ?? ($selectedNode?.data as any)?.llmKind ?? 'ollama') as LlmKind);
+	// $: selectedSourceKind = (($selectedNode?.data as any)?.sourceKind ?? 'file') as SourceKind;
+	// $: selectedTransformKind = ((($selectedNode?.data as any)?.transformKind ?? 'select') as TransformKind);
+	$: selectedSourceKind = 
+		(((inspectorParams as any)?.sourceKind ?? ($selectedNode?.data as any)?.sourceKind ?? 'file') as SourceKind);
+	$: selectedTransformKind =
+		(((inspectorParams as any)?.transformKind ?? ($selectedNode?.data as any)?.transformKind ?? 'select') as TransformKind);
+		$: selectedToolProvider = (((inspectorParams as any)?.provider ??
+		($selectedNode?.data as any)?.params?.provider ??
+		'mcp') as ToolProvider);
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: activeArtifactId =
@@ -323,6 +347,56 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graphStore.resetRunUi();
 	}
 
+	function clearSubtypeError(): void {
+		subtypeError = null;
+		subtypeErrorNodeId = null;
+		if (subtypeErrorTimer) {
+			clearTimeout(subtypeErrorTimer);
+			subtypeErrorTimer = null;
+		}
+	}
+
+	function showSubtypeError(msg: string, nodeId?: string): void {
+		subtypeError = msg;
+		subtypeErrorNodeId = nodeId ?? null;
+		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
+		subtypeErrorTimer = setTimeout(() => {
+			subtypeError = null;
+			subtypeErrorNodeId = null;
+			subtypeErrorTimer = null;
+		}, 4000);
+	}
+
+	function setSelectedNodeSubtype(value: string): void {
+		const n = get(selectedNode);
+		if (!n) return;
+		const nodeId = n.id;
+		const kind = n.data.kind;
+		if (kind === 'source') {
+			graphStore.setSourceKind(nodeId, value as SourceKind);
+			clearSubtypeError();
+			return;
+		}
+		if (kind === 'llm') {
+			graphStore.setLlmKind(nodeId, value as LlmKind);
+			clearSubtypeError();
+			return;
+		}
+		if (kind === 'transform') {
+			const result = graphStore.setTransformKind(nodeId, value as TransformKind);
+			if (!result.ok) {
+				showSubtypeError(result.error ?? 'Failed to update transform op', nodeId);
+			} else {
+				clearSubtypeError();
+			}
+			return;
+		}
+		if (kind === 'tool') {
+			graphStore.setToolProvider(nodeId, value as ToolProvider);
+			clearSubtypeError();
+		}
+	}
+
 	function newGraph() {
 		graphStore.hardResetGraph();
 	}
@@ -352,6 +426,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function onInspectorSplitUp() {
 		resizingInspector = false;
 	}
+
+	onDestroy(() => {
+		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
+	});
 </script>
 
 <svelte:window on:pointermove={onInspectorSplitMove} on:pointerup={onInspectorSplitUp} />
@@ -485,12 +563,54 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						>
 							Ports
 						</button>
-
-<!--  -->
-
-
-
-<!--  -->
+						{#if inspectorMode === 'edit' && $selectedNode}
+							<select
+								class="nodeTypeSwitch"
+								aria-label="Node subtype"
+								value={
+									$selectedNode.data.kind === 'source'
+										? selectedSourceKind
+										: $selectedNode.data.kind === 'llm'
+											? selectedLlmKind
+											: $selectedNode.data.kind === 'transform'
+												? selectedTransformKind
+												: selectedToolProvider
+								}
+								on:change={(e) => setSelectedNodeSubtype((e.currentTarget as HTMLSelectElement).value)}
+							>
+								{#if $selectedNode.data.kind === 'source'}
+									<option value="file">file</option>
+									<option value="database">database</option>
+									<option value="api">api</option>
+								{:else if $selectedNode.data.kind === 'llm'}
+									<option value="ollama">ollama</option>
+									<option value="openai_compat">openai_compat</option>
+								{:else if $selectedNode.data.kind === 'transform'}
+									<option value="filter">filter</option>
+									<option value="select">select</option>
+									<option value="rename">rename</option>
+									<option value="derive">derive</option>
+									<option value="aggregate">aggregate</option>
+									<option value="join">join</option>
+									<option value="sort">sort</option>
+									<option value="limit">limit</option>
+									<option value="dedupe">dedupe</option>
+									<option value="sql">sql</option>
+								{:else if $selectedNode.data.kind === 'tool'}
+									<option value="mcp">mcp</option>
+									<option value="http">http</option>
+									<option value="function">function</option>
+									<option value="python">python</option>
+									<option value="js">js</option>
+									<option value="shell">shell</option>
+									<option value="db">db</option>
+									<option value="builtin">builtin</option>
+								{/if}
+							</select>
+						{/if}
+						{#if subtypeError}
+							<span class="subtypeError" aria-live="polite">{subtypeError}</span>
+						{/if}
 						
 					</div>
 
@@ -590,7 +710,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.layout {
 		display: grid;
-		grid-template-columns: 1fr 380px;
+		grid-template-columns: 1fr calc(380px + 5ch);
 		height: 100vh;
 	}
 
@@ -850,6 +970,56 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.inspectorTabs button.active {
 		background: #283044;
 		font-weight: 700;
+	}
+
+	.nodeTypeSwitch {
+		margin-left: auto;
+		max-width: 200px;
+		padding: 6px 10px;
+		font-family: inherit;
+		font-size: 12px;
+		line-height: 1.2;
+		border-radius: 8px;
+		border: 1px solid #283044;
+		background: #0b1220;
+		color: #e5e7eb;
+	}
+
+	.nodeTypeSwitch option {
+		background: #0b1220;
+		color: #e5e7eb;
+	}
+
+	.nodeTypeSwitch:focus {
+		outline: none;
+		border-color: #3b82f6;
+		box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+	}
+
+	@media (prefers-color-scheme: light) {
+		.nodeTypeSwitch {
+			border: 1px solid #b9c5da;
+			background: #ffffff;
+			color: #1f2937;
+		}
+
+		.nodeTypeSwitch option {
+			background: #ffffff;
+			color: #1f2937;
+		}
+	}
+
+	.subtypeError {
+		margin-left: 8px;
+		padding: 4px 8px;
+		border-radius: 999px;
+		border: 1px solid rgba(239, 68, 68, 0.55);
+		background: rgba(239, 68, 68, 0.12);
+		color: #fecaca;
+		font-size: 11px;
+		line-height: 1.2;
+		max-width: 420px;
+		white-space: normal;
 	}
 
 	.inspectorTabs button:disabled {
