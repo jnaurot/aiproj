@@ -141,25 +141,52 @@ def test_llm_node_state_hash_changes_for_execution_params(key, a, b):
 
 def test_source_api_fingerprint_redacts_auth_header_and_body_secrets():
     node = _node(kind="source")
+    node["data"]["sourceKind"] = "api"
     params_a = {
         "source_type": "api",
-        "url": "https://api.example.com/v1/data",
+        "url": "https://api.example.com/v1/data?a=1&x=0",
         "method": "POST",
         "headers": {"Authorization": "Bearer a", "X-Custom": "ok"},
-        "body": {"token": "aaa", "query": "x"},
+        "query": {"a": "2"},
+        "content_type": "application/json",
+        "body_mode": "json",
+        "body_json": {"token": "aaa", "query": "x"},
         "timeout_seconds": 30,
         "auth_token_ref": "TOKEN_A",
     }
     params_b = {
         **params_a,
         "headers": {"Authorization": "Bearer b", "X-Custom": "ok"},
-        "body": {"token": "bbb", "query": "x"},
+        "body_json": {"token": "bbb", "query": "x"},
         "auth_token_ref": "TOKEN_B",
     }
     fp_a = build_source_fingerprint(node, params_a)
     fp_b = build_source_fingerprint(node, params_b)
     assert fp_a == fp_b
     assert "authorization" not in {str(k).lower() for k in fp_a.get("headers", {}).keys()}
+    assert fp_a.get("query", {}).get("a") == "2"
+    assert fp_a.get("body_mode") == "json"
+    assert "token" not in fp_a.get("body", {})
+
+
+def test_source_api_fingerprint_changes_when_effective_query_changes():
+    node = _node(kind="source")
+    node["data"]["sourceKind"] = "api"
+    params_a = {
+        "source_type": "api",
+        "url": "https://api.example.com/v1/data?a=1",
+        "method": "GET",
+        "query": {"a": "2"},
+    }
+    params_b = {
+        "source_type": "api",
+        "url": "https://api.example.com/v1/data?a=1",
+        "method": "GET",
+        "query": {"a": "3"},
+    }
+    fp_a = build_source_fingerprint(node, params_a)
+    fp_b = build_source_fingerprint(node, params_b)
+    assert fp_a != fp_b
 
 
 def test_exec_key_changes_when_node_impl_version_changes():

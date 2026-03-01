@@ -96,24 +96,92 @@ export const SourceCachePolicySchema = z
 	})
 	.strip();
 
+export const SourceApiContentTypeSchema = z.enum([
+	"application/json",
+	"application/x-www-form-urlencoded",
+	"multipart/form-data",
+	"text/plain",
+	"application/xml"
+]);
+
+export const SourceApiBodyModeSchema = z.enum(["none", "json", "form", "raw", "multipart"]);
+
 export const SourceAPIParamsSchema = z
 	.object({
 		url: z.string().url(),
-		method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).default("GET"),
+		method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]).default("GET"),
 		headers: z.record(z.string(), z.string()).default({}),
-		body: z.record(z.string(), z.any()).optional(),
+		query: z.record(z.string(), z.string()).default({}),
+		contentType: SourceApiContentTypeSchema.optional(),
+		bodyMode: SourceApiBodyModeSchema.default("none"),
+		bodyJson: z.record(z.string(), z.unknown()).optional(),
+		bodyForm: z.record(z.string(), z.string()).optional(),
+		bodyRaw: z.string().optional(),
+		// legacy compatibility for one migration cycle
+		body: z.union([z.record(z.string(), z.unknown()), z.string()]).optional(),
+		__managedHeaders: z
+			.object({
+				contentType: z.boolean().optional()
+			})
+			.strip()
+			.optional(),
 		auth_type: z.enum(["none", "bearer", "basic", "api_key"]).default("none"),
 		auth_token_ref: z.string().optional(),
 		timeout_seconds: z.number().int().positive().default(30),
 		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
 		output: SourceOutputSchema.default({ mode: "json" })
 	})
+	.strip()
+	.transform((v) => {
+		let bodyMode = v.bodyMode;
+		let bodyJson = v.bodyJson;
+		let bodyForm = v.bodyForm;
+		let bodyRaw = v.bodyRaw;
+		let contentType = v.contentType;
+
+		if (!bodyJson && !bodyForm && bodyRaw === undefined && v.body !== undefined) {
+			if (typeof v.body === "string") {
+				bodyMode = "raw";
+				bodyRaw = v.body;
+			} else {
+				bodyMode = "json";
+				bodyJson = v.body as Record<string, unknown>;
+			}
+		}
+
+		if (!contentType && bodyMode === "json") {
+			contentType = "application/json";
+		}
+
+		if (bodyMode === "none") {
+			bodyJson = undefined;
+			bodyForm = undefined;
+			bodyRaw = undefined;
+		} else if (bodyMode === "json") {
+			bodyForm = undefined;
+			bodyRaw = undefined;
+		} else if (bodyMode === "form" || bodyMode === "multipart") {
+			bodyJson = undefined;
+			bodyRaw = undefined;
+		} else if (bodyMode === "raw") {
+			bodyJson = undefined;
+			bodyForm = undefined;
+		}
+
+		return {
+			...v,
+			contentType,
+			bodyMode,
+			bodyJson,
+			bodyForm,
+			bodyRaw
+		};
+	})
 	.superRefine((v, ctx) => {
 		if (v.auth_type !== "none" && !v.auth_token_ref) {
 			ctx.addIssue({ code: "custom", message: "auth_token_ref required when using authentication" });
 		}
-	})
-	.strip();
+	});
 
 export const SourceParamsSchemaByKind = {
 	file: SourceFileParamsSchema,

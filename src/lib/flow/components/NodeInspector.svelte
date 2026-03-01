@@ -4,6 +4,8 @@
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
+	import Section from '$lib/flow/components/ui/Section.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
@@ -45,21 +47,14 @@
 	function onCommit(patch: Record<string, any>) {
 		graphStore.commitInspectorImmediate(patch);
 	}
-
-	function onSnapshotCommit(patch: Record<string, any>) {
-		graphStore.commitSnapshotSelection(patch);
-	}
 </script>
 
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
 	{#if isSource}
 		<!-- SOURCE -->
-		<div class="section">
-			<div class="sectionTitle">Source</div>
-			<div class="field">
-				<div class="k">source kind</div>
-				<div class="v">
+		<Section>
+			<Field label="Source">
 					<select
 						value={sourceKind}
 						on:change={(e) => {
@@ -71,9 +66,8 @@
 						<option value="database">database</option>
 						<option value="api">api</option>
 					</select>
-				</div>
-			</div>
-		</div>
+			</Field>
+		</Section>
 
 		<svelte:component
 			this={SourceEditorByKind[sourceKind] ?? SourceEditorByKind.file}
@@ -81,16 +75,11 @@
 			{params}
 			{onDraft}
 			{onCommit}
-			onSnapshotCommit={onSnapshotCommit}
 		/>
 	{:else if isLlm}
 		<!-- LLM -->
-		<div class="section">
-			<div class="sectionTitle">LLM</div>
-
-			<div class="field">
-				<div class="k">llm kind</div>
-				<div class="v">
+		<Section title="LLM">
+			<Field label="llm kind">
 					<select
 						value={llmKind}
 						on:change={(e) => {
@@ -101,9 +90,8 @@
 						<option selected value="ollama">ollama</option>
 						<option value="openai_compat">openai_compat</option>
 					</select>
-				</div>
-			</div>
-		</div>
+			</Field>
+		</Section>
 
 		<svelte:component
 			this={LlmEditorByKind[llmKind] ?? LlmEditorByKind.ollama}
@@ -114,11 +102,8 @@
 		/>
 	{:else if isTool}
 		<!-- TOOL -->
-		<div class="section">
-			<div class="sectionTitle">Tool</div>
-			<div class="field">
-				<div class="k">provider</div>
-				<div class="v">
+		<Section title="Tool">
+			<Field label="provider">
 					<select
 						value={toolProvider}
 						on:change={(e) => {
@@ -135,15 +120,12 @@
 						<option value="db">db</option>
 						<option value="builtin">builtin</option>
 					</select>
-				</div>
-			</div>
-		</div>
+			</Field>
+		</Section>
 		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
 	{:else if isTransform}
-		<div class="section">
-			<div class="field">
-				<div class="k">transform op</div>
-				<div class="v">
+		<Section>
+			<Field label="transform op">
 					<select
 						value={transformKind}
 						on:change={(e) => {
@@ -167,9 +149,8 @@
 						<option value="dedupe">dedupe</option>
 						<option value="sql">sql</option>
 					</select>
-				</div>
-			</div>
-		</div>
+			</Field>
+		</Section>
 		<svelte:component
 			this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
 			{selectedNode}

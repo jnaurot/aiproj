@@ -24,7 +24,7 @@
 	let edges: Edge<PipelineEdgeData>[] = [];
 
 	let scrollElement: HTMLDivElement;
-	let inspectorPane: HTMLDivElement;
+let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn't in TS DOM lib
 
 	// Guard: when we apply store -> local, we don't want to sync right back.
 	let applyingFromStore = false;
@@ -33,6 +33,31 @@
 	let lastStoreEdges: Edge<PipelineEdgeData>[] | null = null;
 	let lastSelectedNodeId: string | null = null;
 
+	//editing stuff
+	let isEditingTitle = false;
+	let titleDraft = '';
+
+	function beginEditTitle() {
+		if (!$selectedNode) return;
+		isEditingTitle = true;
+		titleDraft = $selectedNode.data.label ?? '';
+		tick().then(() => {
+			const el = document.getElementById('node-title-input') as HTMLInputElement | null;
+			el?.focus();
+			el?.select();
+		});
+	}
+
+	function commitEditTitle() {
+		isEditingTitle = false;
+		updateSelectedTitle(titleDraft);
+	}
+
+	function cancelEditTitle() {
+		isEditingTitle = false;
+		titleDraft = $selectedNode?.data.label ?? '';
+	}
+	//end editing stuff
 	$: if ($graphStore.logs && scrollElement) {
 		scrollToBottom();
 	}
@@ -82,8 +107,8 @@
 			{
 				params: $selectedNode.data.params ?? {},
 				ports: {
-					in: $selectedNode.data.ports.in ?? 'table',
-					out: $selectedNode.data.ports.out ?? 'table'
+					in: $selectedNode.data.ports?.in ?? 'table',
+					out: $selectedNode.data.ports?.out ?? 'table'
 				}
 			},
 			null,
@@ -105,8 +130,7 @@
 		nodeBinding?.last?.artifactId ??
 		nodeBinding?.lastArtifactId;
 	$: hasOutput = !!activeArtifactId;
-	$: displayNodeStatus =
-		displayStatusFromBinding(nodeBinding as any);
+	$: displayNodeStatus = displayStatusFromBinding(nodeBinding as any);
 	$: outputCacheLabel =
 		nodeOut?.cacheDecision === 'cache_hit_contract_mismatch'
 			? 'cached:mismatch'
@@ -196,13 +220,7 @@
 	function coercePortType(t: any): PortType | null {
 		// normalize anything that might exist in params (e.g., markdown)
 		if (t === 'markdown') return 'text';
-		if (
-			t === 'table' ||
-			t === 'text' ||
-			t === 'json' ||
-			t === 'binary' ||
-			t === 'embeddings'
-		)
+		if (t === 'table' || t === 'text' || t === 'json' || t === 'binary' || t === 'embeddings')
 			return t;
 		return null;
 	}
@@ -334,7 +352,6 @@
 	function onInspectorSplitUp() {
 		resizingInspector = false;
 	}
-
 </script>
 
 <svelte:window on:pointermove={onInspectorSplitMove} on:pointerup={onInspectorSplitUp} />
@@ -390,29 +407,51 @@
 
 	<aside class="inspector" bind:this={inspectorPane}>
 		<div class="inspectorTop" style={`flex: 0 0 ${Math.round(inspectorTopRatio * 100)}%;`}>
-			<h3>Inspector</h3>
+			<!-- <h3>Inspector</h3> -->
 
 			{#if $selectedNode}
 				<div class="card editorCard">
 					<div class="head">
-						<div>
-							<b class="title">{$selectedNode.data.label}</b>
+						<div style="min-width:0;">
+							{#if isEditingTitle}
+								<input
+									id="node-title-input"
+									value={titleDraft}
+									on:input={(e) => (titleDraft = (e.currentTarget as HTMLInputElement).value)}
+									on:blur={() => commitEditTitle()}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') {
+											e.preventDefault();
+											commitEditTitle();
+										} else if (e.key === 'Escape') {
+											e.preventDefault();
+											cancelEditTitle();
+										}
+									}}
+									style="font-size:14px;font-weight:600;max-width:100%;width:260px;"
+								/>
+							{:else}
+								<b
+									class="title"
+									role="button"
+									tabindex="0"
+									title="Click to edit title"
+									style="cursor:text;display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+									on:click={beginEditTitle}
+									on:keydown={(e) => {
+										if (e.key === 'Enter') beginEditTitle();
+									}}
+								>
+									{$selectedNode.data.label}
+								</b>
+							{/if}
+
 							<span class="pill">{$selectedNode.data.kind}</span>
 						</div>
+
 						<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
 							{displayNodeStatus ?? 'idle'}
 						</span>
-					</div>
-
-					<div class="field">
-						<div class="k">Title</div>
-						<div class="v">
-							<input
-								id="edit-title"
-								value={$selectedNode.data.label}
-								on:input={(e) => updateSelectedTitle((e.currentTarget as HTMLInputElement).value)}
-							/>
-						</div>
 					</div>
 					<div class="inspectorTabs">
 						<button
@@ -432,7 +471,9 @@
 							Output
 						</button>
 						{#if outputCacheLabel}
-							<span class={`pill ${outputCacheLabel === 'cached:mismatch' ? 'st-failed' : 'st-succeeded'}`}>
+							<span
+								class={`pill ${outputCacheLabel === 'cached:mismatch' ? 'st-failed' : 'st-succeeded'}`}
+							>
 								{outputCacheLabel}
 							</span>
 						{/if}
@@ -776,19 +817,19 @@
 	.inspectorTabs {
 		display: flex;
 		gap: 6px;
-		margin-bottom: 8px;
+		margin: 6px;
 	}
 
 	.tabBtn {
-	font-size: 12px;          /* ← same scale as Ports label */
-	padding: 4px 10px;        /* ← small like section controls */
-	border-radius: 6px;
-	border: 1px solid #2c3444;
-	background: #111622;
-	color: #9aa3b2;
-	cursor: pointer;
-	line-height: 1.2;
-}
+		font-size: 12px; /* ← same scale as Ports label */
+		padding: 4px 10px; /* ← small like section controls */
+		border-radius: 6px;
+		border: 1px solid #2c3444;
+		background: #111622;
+		color: #9aa3b2;
+		cursor: pointer;
+		line-height: 1.2;
+	}
 
 	.inspectorTabs button {
 		padding: 6px 10px;

@@ -90,6 +90,18 @@ type InspectorState = {
 	nodeId: string | null;
 	draftParams: Record<string, any>;
 	dirty: boolean;
+	uiByNodeId: Record<string, ApiEditorUiState>;
+};
+
+export type ApiEditorUiState = {
+	requestOpen: boolean;
+	authOpen: boolean;
+	transportOpen: boolean;
+	executionOpen: boolean;
+	debugOpen: boolean;
+	queryOpen: boolean;
+	headersOpen: boolean;
+	bodyOpen: boolean;
 };
 
 const IDLE: NodeStatus = 'idle';
@@ -98,8 +110,28 @@ const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
 const initialInspector: InspectorState = {
 	nodeId: null,
 	draftParams: {},
-	dirty: false
+	dirty: false,
+	uiByNodeId: {}
 };
+
+function hasAnyKeys(value: unknown): boolean {
+	return Boolean(value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length > 0);
+}
+
+function defaultApiEditorUiState(params?: Record<string, any>): ApiEditorUiState {
+	const authType = String(params?.auth_type ?? 'none');
+	const bodyMode = String(params?.bodyMode ?? params?.body_mode ?? 'none');
+	return {
+		requestOpen: true,
+		authOpen: authType !== 'none',
+		transportOpen: false,
+		executionOpen: false,
+		debugOpen: false,
+		queryOpen: hasAnyKeys(params?.query),
+		headersOpen: hasAnyKeys(params?.headers),
+		bodyOpen: bodyMode !== 'none'
+	};
+}
 
 let logSeq = 0;
 const statusRegressionLogThrottle = new Map<string, number>();
@@ -1526,7 +1558,8 @@ export const graphStore = (() => {
 					inspector: {
 						nodeId,
 						draftParams: structuredClone((n?.data.params ?? {}) as any),
-						dirty: false
+						dirty: false,
+						uiByNodeId: st.inspector.uiByNodeId
 					}
 				};
 			});
@@ -1546,7 +1579,8 @@ export const graphStore = (() => {
 				inspector: {
 					nodeId,
 					draftParams: structuredClone((n?.data.params ?? {}) as any),
-					dirty: false
+					dirty: false,
+					uiByNodeId: s.inspector.uiByNodeId
 				}
 			};
 		});
@@ -1565,6 +1599,34 @@ export const graphStore = (() => {
 		return hydrateFromRunSnapshotState(state, snap);
 	}
 
+	function getInspectorUi(nodeId: string, paramsHint?: Record<string, any>): ApiEditorUiState {
+		const state = get({ subscribe } as any) as GraphState;
+		const existing = state.inspector.uiByNodeId?.[nodeId];
+		if (existing) return existing;
+		const node = state.nodes.find((n) => n.id === nodeId);
+		const params = paramsHint ?? ((node?.data?.params ?? {}) as Record<string, any>);
+		return defaultApiEditorUiState(params);
+	}
+
+	function setInspectorUi(nodeId: string, patch: Partial<ApiEditorUiState>): void {
+		update((s) => {
+			const node = s.nodes.find((n) => n.id === nodeId);
+			const base =
+				s.inspector.uiByNodeId?.[nodeId] ??
+				defaultApiEditorUiState((node?.data?.params ?? {}) as Record<string, any>);
+			return {
+				...s,
+				inspector: {
+					...s.inspector,
+					uiByNodeId: {
+						...(s.inspector.uiByNodeId ?? {}),
+						[nodeId]: { ...base, ...patch }
+					}
+				}
+			};
+		});
+	}
+
 	return {
 		subscribe,
 		patchInspectorDraft,
@@ -1572,6 +1634,8 @@ export const graphStore = (() => {
 		commitSnapshotSelection,
 		applyInspectorDraft,
 		revertInspectorDraft,
+		getInspectorUi,
+		setInspectorUi,
 		updateNodeConfig: updateNodeConfigImpl,
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
@@ -1612,7 +1676,8 @@ export const graphStore = (() => {
 						inspector: {
 							nodeId,
 							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false
+							dirty: false,
+							uiByNodeId: s.inspector.uiByNodeId
 						}
 					};
 				});
@@ -1659,7 +1724,8 @@ export const graphStore = (() => {
 						inspector: {
 							nodeId,
 							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false
+							dirty: false,
+							uiByNodeId: s.inspector.uiByNodeId
 						}
 					};
 				});
@@ -1710,7 +1776,8 @@ export const graphStore = (() => {
 						inspector: {
 							nodeId,
 							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false
+							dirty: false,
+							uiByNodeId: s.inspector.uiByNodeId
 						}
 					};
 				});
@@ -1731,7 +1798,8 @@ export const graphStore = (() => {
 						inspector: {
 							nodeId,
 							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false
+							dirty: false,
+							uiByNodeId: s.inspector.uiByNodeId
 						}
 					};
 				});
@@ -1767,7 +1835,7 @@ export const graphStore = (() => {
 					return {
 						...s,
 						selectedNodeId: null,
-						inspector: initialInspector
+						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId }
 					};
 				}
 
@@ -1778,7 +1846,8 @@ export const graphStore = (() => {
 					inspector: {
 						nodeId,
 						draftParams: structuredClone((n?.data.params ?? {}) as any),
-						dirty: false
+						dirty: false,
+						uiByNodeId: s.inspector.uiByNodeId
 					}
 				};
 			});

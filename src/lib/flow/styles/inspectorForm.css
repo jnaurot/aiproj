@@ -1,67 +1,37 @@
-/* ---------------------------
-Canonical inspector k/v form layout
---------------------------- */
-:global(.inspector .field) {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	gap: 12px;
-	margin: 8px 0;
-}
-:global(.inspector .field.stacked) {
-	display: grid;
-	grid-template-columns: 1fr;
-	align-items: start;
-	gap: 6px;
+:global(.inspector) {
+	--if-control-bg: #ffffff;
+	--if-control-text: #1f2937;
+	--if-control-border: #b9c5da;
+	--if-option-bg: #ffffff;
+	--if-option-text: #1f2937;
+	--if-option-active-bg: #e7eefc;
 }
 
-:global(.inspector .k) {
-	flex: 0 0 140px;
-	min-width: 140px;
-	font-family: ui-monospace, Menlo, Consolas, monospace;
-	font-size: 12.5px;
-	opacity: 0.8;
-	padding-left: 6px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-:global(.inspector .field.stacked .k) {
-	flex: none;
-	min-width: 0;
-	padding-left: 0;
-	white-space: normal;
-	overflow: visible;
-	text-overflow: clip;
-}
-
-:global(.inspector .v) {
-	flex: 1;
-	min-width: 0;
-	padding-left: 0;
-	margin-top: 0;
-	font-size: 13px;
-}
-:global(.inspector .field.stacked .v) {
-	padding-left: 12px;
+@media (prefers-color-scheme: dark) {
+	:global(.inspector) {
+		--if-control-bg: #0b0c10;
+		--if-control-text: #e6e6e6;
+		--if-control-border: #283044;
+		--if-option-bg: #0b0c10;
+		--if-option-text: #e6e6e6;
+		--if-option-active-bg: #283044;
+	}
 }
 
 :global(.inspector select) {
-	background: #0b0c10;
-	color: #e6e6e6;
-	border: 1px solid #283044;
+	background: var(--if-control-bg);
+	color: var(--if-control-text);
+	border: 1px solid var(--if-control-border);
 }
 
-/* options inside dropdown */
 :global(.inspector select option) {
-	background-color: #0b0c10;
-	color: #e6e6e6;
+	background-color: var(--if-option-bg);
+	color: var(--if-option-text);
 }
 
-/* highlighted option */
 :global(.inspector select option:checked),
 :global(.inspector select option:hover) {
-	background-color: #283044;
+	background-color: var(--if-option-active-bg);
 }
 
 .inspector .v :global(input),
@@ -72,9 +42,9 @@ Canonical inspector k/v form layout
 	font-size: 13px;
 	padding: 6px 8px;
 	border-radius: 8px;
-	background: #0b0c10;
-	color: #e6e6e6;
-	border: 1px solid #283044;
+	background: var(--if-control-bg);
+	color: var(--if-control-text);
+	border: 1px solid var(--if-control-border);
 }
 
 .inspector .v :global(*) {

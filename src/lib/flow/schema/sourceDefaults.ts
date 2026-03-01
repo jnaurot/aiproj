@@ -25,15 +25,21 @@ export const defaultSourceDatabaseParams: SourceDatabaseParams = {
 };
 
 export const defaultSourceAPIParams: SourceAPIParams = {
-    url: "https://example.com/api",
-    method: "GET",
-    headers: {},
-    body: undefined,
-    auth_type: "none",
-    auth_token_ref: undefined,
-    timeout_seconds: 30,
-    cache_policy: { mode: "default" },
-    output: { mode: "json" }
+	url: "https://example.com/api",
+	method: "GET",
+	headers: {},
+	query: {},
+	contentType: undefined,
+	bodyMode: "none",
+	bodyJson: undefined,
+	bodyForm: undefined,
+	bodyRaw: undefined,
+	__managedHeaders: { contentType: true },
+	auth_type: "none",
+	auth_token_ref: undefined,
+	timeout_seconds: 30,
+	cache_policy: { mode: "default" },
+	output: { mode: "json" }
 };
 
 export const defaultSourceParamsByKind = {

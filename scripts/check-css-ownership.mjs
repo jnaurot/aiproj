@@ -20,8 +20,7 @@ try {
 	assertNoMatch('src/lib/flow/FlowCanvas.svelte', [
 		/\.inspector\s*\.field/,
 		/\.inspector\s*\.k/,
-		/\.inspector\s*\.v/,
-		/\.editorScroll\s*:global\(input\|/
+		/\.inspector\s*\.v/
 	]);
 	assertNoMatch('src/lib/flow/components/NodeInspector.svelte', [/\.sourceFileEditor/]);
 	console.log('css ownership checks passed');

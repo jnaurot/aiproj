@@ -284,15 +284,15 @@
 			{/if}
 		</Field>
 
-		<Field label="current snapshot" stacked>
+		<Field label="current file snapshot" stacked>
 			<div class="snapshotKv">
-				<div class="kvRow">
-					<div class="kvKey">id</div>
-					<div class="kvVal mono">{currentShortId}</div>
-				</div>
 				<div class="kvRow">
 					<div class="kvKey">file</div>
 					<div class="kvVal">{currentFilename}</div>
+				</div>
+				<div class="kvRow">
+					<div class="kvKey">id</div>
+					<div class="kvVal mono">{currentShortId}</div>
 				</div>
 				<div class="kvRow">
 					<div class="kvKey">size</div>
@@ -314,7 +314,7 @@
 			</select>
 		</Field>
 
-		<Field label="file_format">
+		<Field label="file format">
 			<select
 				class="full"
 				value={file_format}
@@ -354,7 +354,7 @@
 			</Field>
 		{/if}
 
-		<Field label="sample_size">
+		<Field label="sample size">
 			<Input
 				type="number"
 				min="1"
@@ -392,7 +392,7 @@
 			</select>
 		</Field>
 
-		<Field label="cache_enabled">
+		<Field label="cache enabled">
 			<Input
 				type="checkbox"
 				checked={cache_enabled}

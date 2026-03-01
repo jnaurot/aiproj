@@ -96,6 +96,27 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_mode"] = out.get("mode")
         if "schema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("schema")
+    if "contentType" in p and "content_type" not in p:
+        p["content_type"] = p.pop("contentType")
+    if "bodyMode" in p and "body_mode" not in p:
+        p["body_mode"] = p.pop("bodyMode")
+    if "bodyJson" in p and "body_json" not in p:
+        p["body_json"] = p.pop("bodyJson")
+    if "bodyForm" in p and "body_form" not in p:
+        p["body_form"] = p.pop("bodyForm")
+    if "bodyRaw" in p and "body_raw" not in p:
+        p["body_raw"] = p.pop("bodyRaw")
+    if "__managedHeaders" in p and "managed_headers" not in p:
+        p["managed_headers"] = p.pop("__managedHeaders")
+    if isinstance(p.get("body"), dict):
+        p.setdefault("body_mode", "json")
+        p.setdefault("body_json", p.get("body"))
+    elif isinstance(p.get("body"), str):
+        p.setdefault("body_mode", "raw")
+        p.setdefault("body_raw", p.get("body"))
+    p.pop("body", None)
+    if "query" in p and not isinstance(p.get("query"), dict):
+        p["query"] = {}
     cache_policy = p.get("cache_policy")
     if isinstance(cache_policy, dict) and "ttlSeconds" in cache_policy and "ttl_seconds" not in cache_policy:
         cache_policy["ttl_seconds"] = cache_policy.pop("ttlSeconds")
@@ -211,15 +232,58 @@ class SourceDatabaseParams(NodeParamSchema):
 class SourceAPIParams(NodeParamSchema):
     #source_type: Literal[SourceKind.API] = SourceKind.API
     url: str = Field(..., description="API endpoint URL")
-    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"] = "GET"
+    method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] = "GET"
     headers: Dict[str, str] = Field(default_factory=dict)
-    body: Optional[Dict[str, Any]] = None
+    query: Dict[str, str] = Field(default_factory=dict)
+    content_type: Optional[
+        Literal[
+            "application/json",
+            "application/x-www-form-urlencoded",
+            "multipart/form-data",
+            "text/plain",
+            "application/xml",
+        ]
+    ] = None
+    body_mode: Literal["none", "json", "form", "raw", "multipart"] = "none"
+    body_json: Optional[Dict[str, Any]] = None
+    body_form: Optional[Dict[str, str]] = None
+    body_raw: Optional[str] = None
+    managed_headers: Optional[Dict[str, Any]] = None
     auth_type: Literal["none", "bearer", "basic", "api_key"] = "none"
     auth_token_ref: Optional[str] = None
     timeout_seconds: int = 30
     cache_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "default"})
     output_mode: Literal["table", "text", "json", "binary"] = "json"
     output_schema: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _normalize_body_mode(self):
+        if self.body_mode == "json":
+            self.body_form = None
+            self.body_raw = None
+            if self.content_type is None:
+                self.content_type = "application/json"
+        elif self.body_mode in {"form", "multipart"}:
+            self.body_json = None
+            self.body_raw = None
+            if self.body_form is None:
+                self.body_form = {}
+            if self.content_type is None:
+                self.content_type = (
+                    "application/x-www-form-urlencoded"
+                    if self.body_mode == "form"
+                    else "multipart/form-data"
+                )
+        elif self.body_mode == "raw":
+            self.body_json = None
+            self.body_form = None
+            if self.body_raw is None:
+                self.body_raw = ""
+        else:
+            self.body_json = None
+            self.body_form = None
+            self.body_raw = None
+        return self
     
     def validate_required(self) -> List[str]:
         errors = []

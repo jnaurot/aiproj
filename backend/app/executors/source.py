@@ -5,6 +5,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 import pandas as pd
@@ -143,6 +144,24 @@ def _resolve_file_path(rel_path: str, filename: str) -> Path:
     if leaf.is_absolute():
         return leaf.resolve()
     return (base / leaf).resolve()
+
+
+def _sorted_string_map(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k, v in (value or {}).items():
+        out[str(k)] = str(v if v is not None else "")
+    return {k: out[k] for k in sorted(out.keys())}
+
+
+def _merge_query_into_url(url: str, query: Optional[Dict[str, Any]]) -> str:
+    if not url:
+        return url
+    split = urlsplit(url)
+    url_query = {k: v for k, v in parse_qsl(split.query, keep_blank_values=True)}
+    editor_query = _sorted_string_map(query)
+    merged = {**url_query, **editor_query}
+    ordered = [(k, merged[k]) for k in sorted(merged.keys())]
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(ordered, doseq=False), split.fragment))
 
 
 async def exec_source(
@@ -402,7 +421,10 @@ async def _handle_api_source(
     schema = SourceAPIParams.model_validate(params)
     output_mode = _get_output_mode(params, "json")
 
-    headers = dict(schema.headers)
+    headers = {str(k): str(v) for k, v in dict(schema.headers).items()}
+    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    if schema.content_type:
+        headers["Content-Type"] = str(schema.content_type)
     if schema.auth_type == "bearer" and schema.auth_token_ref:
         headers["Authorization"] = f"Bearer {os.getenv(schema.auth_token_ref, '')}"
     elif schema.auth_type == "basic" and schema.auth_token_ref:
@@ -413,14 +435,26 @@ async def _handle_api_source(
     elif schema.auth_type == "api_key" and schema.auth_token_ref:
         headers["X-API-Key"] = os.getenv(schema.auth_token_ref, "")
 
+    final_url = _merge_query_into_url(schema.url, schema.query)
+    request_kwargs: Dict[str, Any] = {
+        "method": schema.method,
+        "url": final_url,
+        "headers": headers,
+        "timeout": schema.timeout_seconds,
+    }
+
+    if schema.body_mode == "json":
+        request_kwargs["json"] = schema.body_json or {}
+    elif schema.body_mode == "form":
+        request_kwargs["data"] = _sorted_string_map(schema.body_form)
+    elif schema.body_mode == "multipart":
+        form = _sorted_string_map(schema.body_form)
+        request_kwargs["files"] = [(k, (None, v)) for k, v in form.items()]
+    elif schema.body_mode == "raw":
+        request_kwargs["content"] = (schema.body_raw or "").encode("utf-8")
+
     async with httpx.AsyncClient() as client:
-        response = await client.request(
-            method=schema.method,
-            url=schema.url,
-            headers=headers,
-            json=schema.body if schema.body else None,
-            timeout=schema.timeout_seconds,
-        )
+        response = await client.request(**request_kwargs)
         response.raise_for_status()
 
     content_type = response.headers.get("content-type", "")

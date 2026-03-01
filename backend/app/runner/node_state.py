@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 _SENSITIVE_PARAM_KEYS = {
@@ -69,6 +70,43 @@ def _normalize_input_refs(input_refs: Optional[list[tuple[str, str]]]) -> list[d
     norm = [(str(port), str(aid)) for port, aid in refs]
     norm.sort(key=lambda x: (x[0], x[1]))
     return [{"port": port, "artifact_id": aid} for port, aid in norm]
+
+
+def _sorted_string_map(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k, v in (value or {}).items():
+        out[str(k)] = str(v if v is not None else "")
+    return {k: out[k] for k in sorted(out.keys())}
+
+
+def _merge_url_query(url: str, query: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    raw_url = str(url or "")
+    split = urlsplit(raw_url)
+    url_query = {k: v for k, v in parse_qsl(split.query, keep_blank_values=True)}
+    editor_query = _sorted_string_map(query)
+    merged = {**url_query, **editor_query}
+    merged_sorted = {k: merged[k] for k in sorted(merged.keys())}
+    normalized_base = urlunsplit((split.scheme, split.netloc, split.path, "", split.fragment))
+    return {"base_url": normalized_base, "query": merged_sorted}
+
+
+def _redact_header_map(headers: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for k, v in (headers or {}).items():
+        key = str(k)
+        lv = key.lower()
+        if lv == "authorization":
+            continue
+        out[key] = "[REDACTED]" if _is_sensitive_key(key) else str(v if v is not None else "")
+    return {k: out[k] for k in sorted(out.keys())}
+
+
+def _redact_body_map(body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in (body or {}).items():
+        key = str(k)
+        out[key] = "[REDACTED]" if _is_sensitive_key(key) else _sanitize(v)
+    return {k: out[k] for k in sorted(out.keys())}
 
 
 def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
@@ -175,21 +213,30 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
             }
         )
     elif source_kind == "api":
-        headers = dict(p.get("headers") or {})
-        for key in list(headers.keys()):
-            if str(key).lower() == "authorization":
-                headers[key] = "[REDACTED]"
-        body = p.get("body")
-        if isinstance(body, dict):
-            body = {
-                k: ("[REDACTED]" if _is_sensitive_key(str(k)) else v)
-                for k, v in body.items()
-            }
+        content_type = p.get("content_type") or p.get("contentType")
+        body_mode = str(p.get("body_mode") or p.get("bodyMode") or "none")
+        merged_q = _merge_url_query(str(p.get("url") or ""), p.get("query"))
+        headers = _redact_header_map(p.get("headers") or {})
+        if content_type:
+            headers["Content-Type"] = str(content_type)
+            headers = {k: headers[k] for k in sorted(headers.keys())}
+
+        body: Any = None
+        if body_mode == "json":
+            body = _redact_body_map(p.get("body_json") or p.get("bodyJson"))
+        elif body_mode in {"form", "multipart"}:
+            body = _redact_body_map(p.get("body_form") or p.get("bodyForm"))
+        elif body_mode == "raw":
+            body = str(p.get("body_raw") or p.get("bodyRaw") or "")
+
         fp.update(
             {
-                "url": p.get("url"),
+                "url": merged_q.get("base_url"),
+                "query": merged_q.get("query"),
                 "method": p.get("method"),
                 "headers": headers,
+                "content_type": content_type,
+                "body_mode": body_mode,
                 "body": body,
                 "timeout_seconds": p.get("timeout_seconds"),
                 "cache_policy": p.get("cache_policy") or {"mode": "default"},

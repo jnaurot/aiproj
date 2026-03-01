@@ -5,6 +5,7 @@ import pytest
 from typing import Dict, Any
 from app.runner.schemas import (
     normalize_llm_params_frontend,
+    normalize_source_params_frontend,
     LLMParams,
     SourceFileParams,
     SourceDatabaseParams,
@@ -365,16 +366,18 @@ class TestSourceAPIParams:
         assert api_params.url == "https://api.example.com/data"
         assert api_params.method == "GET"
         assert api_params.headers == {}
+        assert api_params.query == {}
+        assert api_params.body_mode == "none"
     
     def test_custom_method(self):
         """Test custom HTTP method"""
         params = {
             "url": "https://api.example.com/data",
-            "method": "POST"
+            "method": "HEAD"
         }
         
         api_params = SourceAPIParams.model_validate(params)
-        assert api_params.method == "POST"
+        assert api_params.method == "HEAD"
     
     def test_custom_headers(self):
         """Test custom headers"""
@@ -390,16 +393,32 @@ class TestSourceAPIParams:
         assert api_params.headers["Authorization"] == "Bearer token123"
         assert api_params.headers["Content-Type"] == "application/json"
     
-    def test_body_parameter(self):
-        """Test request body parameter"""
+    def test_body_parameter_migrates_to_json_mode(self):
+        """Test legacy request body migrates to json body mode"""
         params = {
             "url": "https://api.example.com/data",
             "method": "POST",
-            "body": {"key": "value"}
+            "body_mode": "json",
+            "body_json": {"key": "value"},
+            "content_type": "application/json",
         }
         
         api_params = SourceAPIParams.model_validate(params)
-        assert api_params.body == {"key": "value"}
+        assert api_params.body_mode == "json"
+        assert api_params.body_json == {"key": "value"}
+        assert api_params.content_type == "application/json"
+
+    def test_form_mode_defaults_content_type(self):
+        params = {
+            "url": "https://api.example.com/data",
+            "method": "POST",
+            "body_mode": "form",
+            "body_form": {"a": "1"},
+        }
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.body_mode == "form"
+        assert api_params.body_form == {"a": "1"}
+        assert api_params.content_type == "application/x-www-form-urlencoded"
     
     def test_auth_types(self):
         """Test different authentication types"""
@@ -444,6 +463,38 @@ class TestSourceAPIParams:
         
         api_params = SourceAPIParams.model_validate(params)
         assert api_params.timeout_seconds == 10
+
+
+class TestNormalizeSourceParamsFrontend:
+    def test_api_camel_case_fields_are_normalized(self):
+        raw = {
+            "url": "https://api.example.com",
+            "method": "POST",
+            "contentType": "application/json",
+            "bodyMode": "json",
+            "bodyJson": {"q": "x"},
+            "bodyForm": {"a": "1"},
+            "bodyRaw": "hello",
+            "__managedHeaders": {"contentType": True},
+        }
+        out = normalize_source_params_frontend(raw)
+        assert out["content_type"] == "application/json"
+        assert out["body_mode"] == "json"
+        assert out["body_json"] == {"q": "x"}
+        assert out["body_form"] == {"a": "1"}
+        assert out["body_raw"] == "hello"
+        assert out["managed_headers"] == {"contentType": True}
+
+    def test_api_legacy_body_is_migrated(self):
+        out_obj = normalize_source_params_frontend({"url": "https://api.example.com", "body": {"k": "v"}})
+        assert out_obj["body_mode"] == "json"
+        assert out_obj["body_json"] == {"k": "v"}
+        assert "body" not in out_obj
+
+        out_str = normalize_source_params_frontend({"url": "https://api.example.com", "body": "raw text"})
+        assert out_str["body_mode"] == "raw"
+        assert out_str["body_raw"] == "raw text"
+        assert "body" not in out_str
 
 
 class TestFilterTransformParams:
