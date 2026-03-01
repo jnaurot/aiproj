@@ -38,11 +38,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	//editing stuff
 	let isEditingTitle = false;
 	let titleDraft = '';
+	let titleBeforeEdit = '';
 
 	function beginEditTitle() {
 		if (!$selectedNode) return;
 		isEditingTitle = true;
 		titleDraft = $selectedNode.data.label ?? '';
+		titleBeforeEdit = titleDraft;
 		tick().then(() => {
 			const el = document.getElementById('node-title-input') as HTMLInputElement | null;
 			el?.focus();
@@ -57,7 +59,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	function cancelEditTitle() {
 		isEditingTitle = false;
-		titleDraft = $selectedNode?.data.label ?? '';
+		titleDraft = titleBeforeEdit;
+		updateSelectedTitle(titleBeforeEdit);
 	}
 	//end editing stuff
 	$: if ($graphStore.logs && scrollElement) {
@@ -490,12 +493,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			{#if $selectedNode}
 				<div class="card editorCard">
 					<div class="head">
-						<div style="min-width:0;">
+						<div style="min-width:0;display:flex;align-items:center;gap:8px;">
 							{#if isEditingTitle}
 								<input
 									id="node-title-input"
 									value={titleDraft}
-									on:input={(e) => (titleDraft = (e.currentTarget as HTMLInputElement).value)}
+									size={Math.max(1, titleDraft.length || 1)}
+									on:input={(e) => {
+										const next = (e.currentTarget as HTMLInputElement).value;
+										titleDraft = next;
+										updateSelectedTitle(next);
+									}}
 									on:blur={() => commitEditTitle()}
 									on:keydown={(e) => {
 										if (e.key === 'Enter') {
@@ -506,7 +514,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											cancelEditTitle();
 										}
 									}}
-									style="font-size:14px;font-weight:600;max-width:100%;width:260px;"
+									style="font-size:14px;font-weight:600;max-width:100%;width:auto;"
 								/>
 							{:else}
 								<b
@@ -821,6 +829,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		padding: 3px 8px;
 		border: 1px solid #283044;
 		border-radius: 999px;
+		display: inline-flex;
+		align-items: center;
+		line-height: 1.2;
 	}
 
 	.st-idle {
