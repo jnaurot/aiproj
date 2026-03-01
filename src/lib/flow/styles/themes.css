@@ -1,0 +1,73 @@
+/* Concrete palette assignments only. */
+
+:root {
+	--theme-surface-page: #f7f9fc;
+	--theme-surface-panel: #ffffff;
+	--theme-surface-card: #ffffff;
+
+	--theme-text-primary: #1f2937;
+	--theme-text-muted: #5b6677;
+	--theme-border-default: #d7deea;
+
+	--theme-control-bg: #ffffff;
+	--theme-control-text: #1f2937;
+	--theme-control-border: #b9c5da;
+	--theme-control-option-bg: #ffffff;
+	--theme-control-option-text: #1f2937;
+	--theme-control-option-active-bg: #e7eefc;
+
+	--theme-button-bg: #eef3ff;
+	--theme-button-text: #1f2937;
+	--theme-danger-bg: rgba(239, 68, 68, 0.12);
+	--theme-danger-border: rgba(239, 68, 68, 0.55);
+	--theme-danger-text: #7f1d1d;
+}
+
+:root[data-theme='dark'] {
+	--theme-surface-page: #0b0f17;
+	--theme-surface-panel: #0b0c10;
+	--theme-surface-card: #0f1724;
+
+	--theme-text-primary: #e5e7eb;
+	--theme-text-muted: #9aa3b2;
+	--theme-border-default: #253049;
+
+	--theme-control-bg: #0b1220;
+	--theme-control-text: #e5e7eb;
+	--theme-control-border: #283044;
+	--theme-control-option-bg: #0b1220;
+	--theme-control-option-text: #e5e7eb;
+	--theme-control-option-active-bg: #283044;
+
+	--theme-button-bg: #111522;
+	--theme-button-text: #e6e6e6;
+	--theme-danger-bg: rgba(239, 68, 68, 0.12);
+	--theme-danger-border: rgba(239, 68, 68, 0.55);
+	--theme-danger-text: #fecaca;
+}
+
+/* Fallback only when explicit data-theme is not set. */
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme]) {
+		--theme-surface-page: #0b0f17;
+		--theme-surface-panel: #0b0c10;
+		--theme-surface-card: #0f1724;
+
+		--theme-text-primary: #e5e7eb;
+		--theme-text-muted: #9aa3b2;
+		--theme-border-default: #253049;
+
+		--theme-control-bg: #0b1220;
+		--theme-control-text: #e5e7eb;
+		--theme-control-border: #283044;
+		--theme-control-option-bg: #0b1220;
+		--theme-control-option-text: #e5e7eb;
+		--theme-control-option-active-bg: #283044;
+
+		--theme-button-bg: #111522;
+		--theme-button-text: #e6e6e6;
+		--theme-danger-bg: rgba(239, 68, 68, 0.12);
+		--theme-danger-border: rgba(239, 68, 68, 0.55);
+		--theme-danger-text: #fecaca;
+	}
+}

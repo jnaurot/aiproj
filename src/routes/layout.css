@@ -1,2 +1,3 @@
+@import '$lib/flow/styles/themes.css';
+@import '$lib/flow/styles/tokens.css';
 @import 'tailwindcss';
-

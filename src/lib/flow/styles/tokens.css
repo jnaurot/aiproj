@@ -1,0 +1,35 @@
+/* Semantic tokens only. No concrete palette values in this file. */
+:root {
+	--color-surface-page: var(--theme-surface-page);
+	--color-surface-panel: var(--theme-surface-panel);
+	--color-surface-card: var(--theme-surface-card);
+
+	--color-text-primary: var(--theme-text-primary);
+	--color-text-muted: var(--theme-text-muted);
+	--color-border-default: var(--theme-border-default);
+
+	--color-control-bg: var(--theme-control-bg);
+	--color-control-text: var(--theme-control-text);
+	--color-control-border: var(--theme-control-border);
+	--color-control-option-bg: var(--theme-control-option-bg);
+	--color-control-option-text: var(--theme-control-option-text);
+	--color-control-option-active-bg: var(--theme-control-option-active-bg);
+
+	--color-button-bg: var(--theme-button-bg);
+	--color-button-text: var(--theme-button-text);
+	--color-danger-bg: var(--theme-danger-bg);
+	--color-danger-border: var(--theme-danger-border);
+	--color-danger-text: var(--theme-danger-text);
+
+	--radius-sm: 6px;
+	--radius-md: 8px;
+	--radius-lg: 10px;
+
+	--space-1: 4px;
+	--space-2: 8px;
+	--space-3: 12px;
+	--space-4: 16px;
+
+	--font-size-sm: 12px;
+	--font-size-md: 13px;
+}

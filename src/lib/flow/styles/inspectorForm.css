@@ -1,21 +1,10 @@
 :global(.inspector) {
-	--if-control-bg: #ffffff;
-	--if-control-text: #1f2937;
-	--if-control-border: #b9c5da;
-	--if-option-bg: #ffffff;
-	--if-option-text: #1f2937;
-	--if-option-active-bg: #e7eefc;
-}
-
-@media (prefers-color-scheme: dark) {
-	:global(.inspector) {
-		--if-control-bg: #0b0c10;
-		--if-control-text: #e6e6e6;
-		--if-control-border: #283044;
-		--if-option-bg: #0b0c10;
-		--if-option-text: #e6e6e6;
-		--if-option-active-bg: #283044;
-	}
+	--if-control-bg: var(--color-control-bg);
+	--if-control-text: var(--color-control-text);
+	--if-control-border: var(--color-control-border);
+	--if-option-bg: var(--color-control-option-bg);
+	--if-option-text: var(--color-control-option-text);
+	--if-option-active-bg: var(--color-control-option-active-bg);
 }
 
 :global(.inspector select) {

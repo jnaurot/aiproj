@@ -195,28 +195,6 @@
 </div>
 
 <style>
-	:global(.inspector) {
-		--kv-control-bg: #ffffff;
-		--kv-control-text: #1f2937;
-		--kv-control-border: #b9c5da;
-		--kv-btn-bg: #eef3ff;
-		--kv-btn-text: #1f2937;
-		--kv-option-bg: #ffffff;
-		--kv-option-text: #1f2937;
-	}
-
-	@media (prefers-color-scheme: dark) {
-		:global(.inspector) {
-			--kv-control-bg: #0b0c10;
-			--kv-control-text: #e6e6e6;
-			--kv-control-border: #283044;
-			--kv-btn-bg: #111522;
-			--kv-btn-text: #e6e6e6;
-			--kv-option-bg: #0b0c10;
-			--kv-option-text: #e6e6e6;
-		}
-	}
-
 	.kvLabel {
 		margin-top: 8px;
 		opacity: 0.85;
@@ -254,17 +232,17 @@
 	.kvVal,
 	.kvType,
 	.kvJson {
-		border: 1px solid var(--kv-control-border);
-		background: var(--kv-control-bg);
-		color: var(--kv-control-text);
+		border: 1px solid var(--color-control-border, #283044);
+		background: var(--color-control-bg, #0b1220);
+		color: var(--color-control-text, #e5e7eb);
 		border-radius: 8px;
 		padding: 6px 8px;
 		font-size: 12px;
 	}
 
 	.kvType option {
-		background: var(--kv-option-bg);
-		color: var(--kv-option-text);
+		background: var(--color-control-option-bg, #0b1220);
+		color: var(--color-control-option-text, #e5e7eb);
 	}
 
 	.kvJson {
@@ -276,9 +254,9 @@
 	}
 
 	.kvDel {
-		border: 1px solid var(--kv-control-border);
-		background: var(--kv-btn-bg);
-		color: var(--kv-btn-text);
+		border: 1px solid var(--color-control-border, #283044);
+		background: var(--color-button-bg, #111522);
+		color: var(--color-button-text, #e6e6e6);
 		border-radius: 8px;
 		padding: 6px 10px;
 		cursor: pointer;
@@ -287,9 +265,9 @@
 	.kvAdd,
 	.kvAddInline {
 		align-self: flex-start;
-		border: 1px solid var(--kv-control-border);
-		background: var(--kv-btn-bg);
-		color: var(--kv-btn-text);
+		border: 1px solid var(--color-control-border, #283044);
+		background: var(--color-button-bg, #111522);
+		color: var(--color-button-text, #e6e6e6);
 		border-radius: 10px;
 		padding: 6px 10px;
 		cursor: pointer;
