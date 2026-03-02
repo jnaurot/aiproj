@@ -83,6 +83,53 @@ describe('graphStore races', () => {
 		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('running');
 	});
 
+	it('completed run with retained activeRunId does not block local stale invalidation', () => {
+		const runId = 'run-completed';
+		const state0 = makeStateWith(
+			{
+				runStatus: 'succeeded',
+				activeRunId: runId,
+				nodeBindings: {
+					n_source: __normalizeBindingForTest(
+						{
+							status: 'succeeded_up_to_date',
+							isUpToDate: true,
+							currentRunId: runId,
+							current: { execKey: 'ek_source', artifactId: 'art_source' },
+							last: { execKey: 'ek_source', artifactId: 'art_source' }
+						},
+						'n_source'
+					),
+					n_transform: __normalizeBindingForTest(
+						{
+							status: 'succeeded_up_to_date',
+							isUpToDate: true,
+							currentRunId: runId,
+							current: { execKey: 'ek_transform', artifactId: 'art_transform' },
+							last: { execKey: 'ek_transform', artifactId: 'art_transform' }
+						},
+						'n_transform'
+					),
+					n_sink: __normalizeBindingForTest(
+						{
+							status: 'succeeded_up_to_date',
+							isUpToDate: true,
+							currentRunId: runId,
+							current: { execKey: 'ek_sink', artifactId: 'art_sink' },
+							last: { execKey: 'ek_sink', artifactId: 'art_sink' }
+						},
+						'n_sink'
+					)
+				}
+			},
+			runId
+		);
+		const state = __markStaleFromNodeForTest(state0, 'n_source');
+		expect(displayStatusFromBinding(b(state, 'n_source'))).toBe('stale');
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('stale');
+		expect(displayStatusFromBinding(b(state, 'n_sink'))).toBe('stale');
+	});
+
 	it('old-run node_finished does not mutate active run node state', () => {
 		const runId = 'run-1';
 		let state = makeState(runId);
@@ -434,6 +481,52 @@ describe('graphStore races', () => {
 		expect(state.activeRunNodeSet.has('n_source')).toBe(false);
 		expect(state.nodeBindings.n_source.current.execKey).toBe('ek-source');
 		expect(state.nodeBindings.n_source.current.artifactId).toBe('art-source-v2');
+	});
+
+	it('node_output without cache hit clears stale cached pill state to cache_miss', () => {
+		const runId = 'run-cache-reset';
+		const seed = makeStateWith(
+			{
+				nodeOutputs: {
+					n_source: {
+						preview: 'old-preview',
+						mimeType: 'text/plain',
+						portType: 'text',
+						cached: true,
+						cacheDecision: 'cache_hit'
+					}
+				},
+				nodeBindings: {
+					n_source: __normalizeBindingForTest(
+						{
+							status: 'running',
+							currentRunId: runId,
+							current: { execKey: 'ek-old', artifactId: 'art-old' },
+							last: { execKey: 'ek-old', artifactId: 'art-old' }
+						},
+						'n_source'
+					)
+				} as any
+			},
+			runId
+		);
+		const next = apply(
+			seed,
+			{
+				type: 'node_output',
+				runId,
+				at: '2026-03-03T00:00:00Z',
+				nodeId: 'n_source',
+				artifactId: 'art-new',
+				preview: 'new-preview',
+				mimeType: 'text/plain',
+				portType: 'text',
+				cached: false
+			} as any,
+			runId
+		);
+		expect(next.nodeOutputs.n_source.cached).toBe(false);
+		expect(next.nodeOutputs.n_source.cacheDecision).toBe('cache_miss');
 	});
 
 	it('no outputs present remains safe and preserves last binding under stale/mismatch', () => {

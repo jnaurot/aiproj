@@ -474,6 +474,8 @@ function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string)
 }
 
 function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NormalizedNodeBinding): boolean {
+	// Guard only during an active in-flight run; completed runs must not block invalidation.
+	if (cur.runStatus !== 'running') return false;
 	if (!cur.activeRunId) return false;
 	if (binding.currentRunId !== cur.activeRunId) return false;
 	const status = String(binding.status ?? '').toLowerCase();
@@ -601,6 +603,44 @@ function effectiveExecParamsForNode(node: Node<PipelineNodeData> | undefined): R
 	return raw;
 }
 
+function committedNodeParamsForNode(
+	state: GraphState,
+	nodeId: string
+): Record<string, any> {
+	const node = state.nodes.find((x) => x.id === nodeId);
+	return { ...((node?.data?.params ?? {}) as Record<string, any>) };
+}
+
+function clearNodeCacheUi(
+	nodeOutputs: Record<string, NodeOutputInfo>,
+	nodeId: string
+): Record<string, NodeOutputInfo> {
+	const prev = nodeOutputs?.[nodeId];
+	if (!prev) return nodeOutputs;
+	return {
+		...nodeOutputs,
+		[nodeId]: {
+			...prev,
+			cached: false,
+			cacheDecision: undefined,
+			expectedContractFingerprint: undefined,
+			actualContractFingerprint: undefined,
+			mismatchKind: undefined
+		}
+	};
+}
+
+function clearNodeCacheUiForNodes(
+	nodeOutputs: Record<string, NodeOutputInfo>,
+	nodeIds: Iterable<string>
+): Record<string, NodeOutputInfo> {
+	let next = nodeOutputs;
+	for (const nodeId of nodeIds) {
+		next = clearNodeCacheUi(next, nodeId);
+	}
+	return next;
+}
+
 function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, context: string): void {
 	if (!DEV_MODE) return;
 	if (!next.activeRunId || !next.activeRunNodeSet || next.activeRunNodeSet.size === 0) return;
@@ -680,6 +720,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				...state.nodeBindings,
 				[evt.nodeId]: nextForNode
 			};
+			const prevCacheDecision = state.nodeOutputs?.[evt.nodeId]?.cacheDecision;
+			const nextCacheDecision =
+				evt.cached === true
+					? (prevCacheDecision ?? 'cache_hit')
+					: 'cache_miss';
 			const nodeOutputs = {
 				...state.nodeOutputs,
 				[evt.nodeId]: {
@@ -687,7 +732,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					portType: evt.portType,
 					preview: evt.preview ?? undefined,
 					cached: evt.cached ?? false,
-					cacheDecision: state.nodeOutputs?.[evt.nodeId]?.cacheDecision
+					cacheDecision: nextCacheDecision
 				}
 			};
 			return withGraphMeta({
@@ -734,7 +779,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				mimeType: prev?.mimeType,
 				portType: prev?.portType,
 				preview: prev?.preview,
-				cached: evt.decision === 'cache_hit' ? true : (prev?.cached ?? false),
+				cached: evt.decision === 'cache_hit',
 				cacheDecision: evt.decision,
 				expectedContractFingerprint:
 					evt.decision === 'cache_hit_contract_mismatch'
@@ -1334,14 +1379,24 @@ export const graphStore = (() => {
 		if (!nodeId) return { ok: false, error: 'No node selected' };
 		const beforeNode = s.nodes.find((x) => x.id === nodeId);
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
-		const paramsForSubmit = { ...(s.inspector.draftParams ?? {}), ...(patch ?? {}) };
-
-		// 1) update draft (so Apply is non-detrimental)
-		patchInspectorDraft(patch);
 
 		// 2) commit patch (validated/stripped)
 		const result = updateNodeConfigImpl(nodeId, { params: patch });
 		if (!result.ok) return result;
+
+		const afterState = get({ subscribe } as any) as GraphState;
+		const paramsForSubmit = committedNodeParamsForNode(afterState, nodeId);
+		update((cur) => {
+			if (cur.inspector.nodeId !== nodeId) return cur;
+			return {
+				...cur,
+				inspector: {
+					...cur.inspector,
+					draftParams: structuredClone(paramsForSubmit),
+					dirty: false
+				}
+			};
+		});
 
 		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
 		return result;
@@ -1353,40 +1408,39 @@ export const graphStore = (() => {
 		if (!nodeId) return { ok: false, error: 'No node selected' };
 		const beforeNode = s.nodes.find((x) => x.id === nodeId);
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
-		const wasDirty = Boolean(s.inspector.dirty);
 
 		// Commit only the provided snapshot-related patch; do not merge with pending draft.
 		const result = updateNodeConfigImpl(nodeId, { params: patch });
 		if (!result.ok) return result;
 
+		const afterState = get({ subscribe } as any) as GraphState;
+		const paramsForSubmit = committedNodeParamsForNode(afterState, nodeId);
 		update((cur) => {
 			if (cur.inspector.nodeId !== nodeId) return cur;
 			return {
 				...cur,
 				inspector: {
 					...cur.inspector,
-					draftParams: { ...cur.inspector.draftParams, ...patch },
-					dirty: wasDirty
+					draftParams: structuredClone(paramsForSubmit),
+					dirty: false
 				}
 			};
 		});
 
-		const afterState = get({ subscribe } as any) as GraphState;
-		const committedNode = afterState.nodes.find((x) => x.id === nodeId);
-		const paramsForSubmit = { ...((committedNode?.data?.params ?? {}) as Record<string, any>) };
 		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
 		return result;
 	}
 
-	function applyLocalStaleInvalidation(nodeId: string): void {
+function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
 		update((cur) => {
 			const candidateIds = downstreamNodeIds(cur.edges, nodeId);
 			const nodeBindings = { ...cur.nodeBindings };
+			let nodeOutputs = { ...cur.nodeOutputs };
 			let changed = false;
 			for (const affectedId of candidateIds) {
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
-				if (!hadArtifact) continue;
+				if (!hadArtifact && affectedId !== nodeId) continue;
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
 				let next = {
 					...prev,
@@ -1394,23 +1448,25 @@ export const graphStore = (() => {
 					isUpToDate: false,
 					cacheValid: false,
 					currentRunId: null,
-					staleReason: affectedId === nodeId ? 'PARAMS_CHANGED' : 'UPSTREAM_CHANGED'
+					staleReason: affectedId === nodeId ? rootReason : 'UPSTREAM_CHANGED'
 				};
 				next = _withPair(next, 'current', { execKey: null, artifactId: null });
 				_assertBindingPairInvariant(next, affectedId, 'applyLocalStaleInvalidation');
 				nodeBindings[affectedId] = next;
+				nodeOutputs = clearNodeCacheUi(nodeOutputs, affectedId);
 				changed = true;
 			}
 			if (!changed) return cur;
 			// Keep existing previews while stale so users can compare last known outputs.
-			return withGraphMeta({ ...cur, nodeBindings });
+			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
 		}, { source: 'accept_params', expectedDirtyTransition: true });
 	}
 
-	function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string): void {
+function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string): void {
 		if (!Array.isArray(affectedNodeIds) || affectedNodeIds.length === 0) return;
 		update((cur) => {
 			const nodeBindings = { ...cur.nodeBindings };
+			const touchedIds: string[] = [];
 			for (const affectedId of affectedNodeIds) {
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
@@ -1425,8 +1481,13 @@ export const graphStore = (() => {
 				next = _withPair(next, 'current', { execKey: null, artifactId: null });
 				_assertBindingPairInvariant(next, affectedId, 'applyBackendAffectedStale');
 				nodeBindings[affectedId] = next;
+				touchedIds.push(affectedId);
 			}
-			return withGraphMeta({ ...cur, nodeBindings });
+			const nodeOutputs =
+				touchedIds.length > 0
+					? clearNodeCacheUiForNodes({ ...cur.nodeOutputs }, touchedIds)
+					: cur.nodeOutputs;
+			return withGraphMeta({ ...cur, nodeBindings, nodeOutputs });
 		}, { source: 'accept_params', allowedNodeIds: new Set(affectedNodeIds), expectedDirtyTransition: true });
 	}
 
@@ -1627,6 +1688,29 @@ export const graphStore = (() => {
 		});
 	}
 
+	function applySemanticSubtypeReset(
+		nodeId: string,
+		payload: Record<string, unknown>
+	): void {
+		applyLocalStaleInvalidation(nodeId, 'KIND_CHANGED');
+		if (DEV_MODE) {
+			const st = get({ subscribe } as any) as GraphState;
+			const b = st.nodeBindings?.[nodeId];
+			const o = st.nodeOutputs?.[nodeId];
+			console.debug('[graphStore][subtype-switch] post-invalidate', {
+				nodeId,
+				...payload,
+				status: b?.status,
+				isUpToDate: b?.isUpToDate,
+				cacheDecision: o?.cacheDecision,
+				cached: o?.cached,
+				currentArtifactId: b?.current?.artifactId ?? b?.currentArtifactId ?? null,
+				currentExecKey: b?.current?.execKey ?? b?.currentExecKey ?? null,
+				lastArtifactId: b?.last?.artifactId ?? b?.lastArtifactId ?? null
+			});
+		}
+	}
+
 	return {
 		subscribe,
 		patchInspectorDraft,
@@ -1666,6 +1750,9 @@ export const graphStore = (() => {
 
 			// 2) replace params via your validated path (schema stripping happens here)
 			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+			if (r.ok) {
+				applySemanticSubtypeReset(nodeId, { kind: 'source', sourceKind: nextKind });
+			}
 
 			// 3) ensure inspector draft matches immediately after type switch
 			if (r.ok) {
@@ -1714,6 +1801,9 @@ export const graphStore = (() => {
 
 			// 2) replace params via your validated path (schema stripping happens here)
 			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+			if (r.ok) {
+				applySemanticSubtypeReset(nodeId, { kind: 'llm', llmKind: nextKind });
+			}
 
 			// 3) ensure inspector draft matches immediately after type switch
 			if (r.ok) {
@@ -1766,6 +1856,9 @@ export const graphStore = (() => {
 
 			// 2) replace params via your validated path (schema stripping happens here)
 			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+			if (r.ok) {
+				applySemanticSubtypeReset(nodeId, { kind: 'transform', transformKind: nextKind });
+			}
 
 			// 3) ensure inspector draft matches immediately after type switch
 			if (r.ok) {
@@ -1789,6 +1882,9 @@ export const graphStore = (() => {
 		setToolProvider(nodeId: string, nextProvider: ToolProvider) {
 			const nextParams = structuredClone(defaultToolParamsByProvider[nextProvider]);
 			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+			if (r.ok) {
+				applySemanticSubtypeReset(nodeId, { kind: 'tool', provider: nextProvider });
+			}
 
 			if (r.ok) {
 				update((s) => {

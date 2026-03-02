@@ -10,11 +10,11 @@
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
-	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
+	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -157,13 +157,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		nodeBinding?.last?.artifactId ??
 		nodeBinding?.lastArtifactId;
 	$: hasOutput = !!activeArtifactId;
-	$: displayNodeStatus = displayStatusFromBinding(nodeBinding as any);
-	$: outputCacheLabel =
-		nodeOut?.cacheDecision === 'cache_hit_contract_mismatch'
-			? 'cached:mismatch'
-			: nodeOut?.cached || nodeOut?.cacheDecision === 'cache_hit'
-				? 'cached'
-				: '';
+	$: displayNodeStatus = getHeaderNodeStatus(nodeBinding as any);
+	$: headerCachePill = getHeaderCachePill(nodeOut, nodeBinding as any, displayNodeStatus);
 	$: graphHeaderStatus =
 		$graphStore.lastRunStatus === 'never_run'
 			? 'Never run'
@@ -533,11 +528,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							{/if}
 
 							<span class="pill">{$selectedNode.data.kind}</span>
+							{#if headerCachePill}
+								<span
+									class={headerCachePill.className}
+									title={headerCachePill.title}
+								>
+									{headerCachePill.label}
+								</span>
+							{/if}
 						</div>
 
-						<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
-							{displayNodeStatus ?? 'idle'}
-						</span>
+						<div class="headPills">
+							<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
+								{displayNodeStatus ?? 'idle'}
+							</span>
+						</div>
 					</div>
 					<div class="inspectorTabs">
 						<button
@@ -556,14 +561,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						>
 							Output
 						</button>
-						{#if outputCacheLabel}
-							<span
-								class={`pill ${outputCacheLabel === 'cached:mismatch' ? 'st-failed' : 'st-succeeded'}`}
-							>
-								{outputCacheLabel}
-							</span>
-						{/if}
-
 						<button
 							class="tabBtn"
 							class:active={inspectorMode === 'ports'}
@@ -822,6 +819,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		justify-content: space-between;
 	}
 
+	.headPills {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		min-width: 0;
+	}
+
+	.headPills .pill {
+		margin-left: 0;
+	}
+
 	.pill {
 		opacity: 0.85;
 		font-size: 12px;
@@ -832,6 +842,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		display: inline-flex;
 		align-items: center;
 		line-height: 1.2;
+	}
+
+	.pill-cache {
+		background: rgba(95, 111, 137, 0.12);
+	}
+
+	.pill-cache-mismatch {
+		border-color: #f2cc60;
+		background: rgba(242, 204, 96, 0.14);
 	}
 
 	.st-idle {

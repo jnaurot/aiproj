@@ -53,7 +53,7 @@ export const SourceFileParamsSchema = z
 		filename: z.string().min(1).optional(),
 		file_size: z.number().int().nonnegative().optional(),
 		file_mime: z.string().optional(),
-		file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("csv"),
+		file_format: z.enum(["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"]).default("txt"),
 		delimiter: z.string().optional(),
 		sheet_name: z.string().optional(),
 		sample_size: z.number().int().positive().optional(),

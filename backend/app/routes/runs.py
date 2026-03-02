@@ -173,6 +173,7 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
         node=target,
         params=params_raw,
     )
+    source_cache_enabled = bool(normalized.get("cache_enabled", True))
     determinism_env = _determinism_env_for_node("source", normalized)
     source_fingerprint = build_source_fingerprint(target, normalized)
     node_state_hash = build_node_state_hash(
@@ -195,7 +196,7 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
     store = request.app.state.runtime.artifact_store
     artifact_id: Optional[str] = None
     artifact_meta: Optional[Dict[str, Any]] = None
-    if await store.exists(exec_key):
+    if source_cache_enabled and await store.exists(exec_key):
         art = await store.get(exec_key)
         if getattr(art, "graph_id", None) and str(art.graph_id) == graph_id:
             artifact_id = exec_key
@@ -209,11 +210,12 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
             }
 
     print(
-        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s exec_key=%s artifact=%s"
+        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s cache_enabled=%s exec_key=%s artifact=%s"
         % (
             graph_id,
             str(req.nodeId),
             str(normalized.get("snapshot_id") or ""),
+            str(source_cache_enabled).lower(),
             exec_key,
             str(artifact_id or ""),
         )

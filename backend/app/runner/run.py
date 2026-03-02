@@ -753,10 +753,13 @@ async def run_graph(
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
             source_kind = str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "")
             cache_policy = params.get("cache_policy") if isinstance(params.get("cache_policy"), dict) else {}
+            source_cache_enabled = bool(params.get("cache_enabled", True))
             source_force_miss = (
                 kind == "source"
-                and source_kind == "api"
-                and str(cache_policy.get("mode") or "default").lower() == "never"
+                and (
+                    (source_kind == "api" and str(cache_policy.get("mode") or "default").lower() == "never")
+                    or (source_kind == "file" and not source_cache_enabled)
+                )
             )
             use_cache_for_node = not (kind == "tool" and tool_mode == "effectful") and not source_force_miss
 
@@ -773,6 +776,8 @@ async def run_graph(
                 debug_payload = {
                     "nodeId": node_id,
                     "sourceKind": source_kind,
+                    "cacheEnabled": source_cache_enabled,
+                    "useCacheForNode": use_cache_for_node,
                     "snapshotId": normalized_params_for_hash.get("snapshot_id"),
                     "keys": sorted(list(normalized_params_for_hash.keys())),
                 }

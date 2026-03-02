@@ -96,6 +96,37 @@
 		};
 	}
 
+	function canonicalFileParams(overrides: SourceFilePatch = {}): SourceFilePatch {
+		const format = (asString(overrides.file_format, file_format) as FileFormat) || 'txt';
+		const normalizedRecent = normalizeRecentSnapshots(
+			(overrides as any)?.recentSnapshots ?? recentSnapshots,
+			(overrides as any)?.recentSnapshotIds
+		);
+		const sizeRaw = (overrides as any).file_size ?? (params as any)?.file_size;
+		const sizeNum = Number(sizeRaw);
+		const canonical: SourceFilePatch = {
+			snapshotId: asString(overrides.snapshotId, snapshotId).toLowerCase() || undefined,
+			snapshotMetadata: (overrides.snapshotMetadata ?? snapshotMetadata) as any,
+			recentSnapshots: normalizedRecent,
+			recentSnapshotIds: normalizedRecent.map((e) => e.id),
+			rel_path: asString((overrides as any).rel_path, asString((params as any)?.rel_path, '.')),
+			filename: asString((overrides as any).filename, asString((params as any)?.filename, 'data.txt')),
+			file_size: Number.isFinite(sizeNum) && sizeNum >= 0 ? sizeNum : undefined,
+			file_mime: asString((overrides as any).file_mime, asString((params as any)?.file_mime, '')) || undefined,
+			file_format: format,
+			delimiter: format === 'csv' || format === 'tsv' ? asString(overrides.delimiter, delimiter) : undefined,
+			sheet_name: format === 'excel' ? asString(overrides.sheet_name, sheet_name) : undefined,
+			sample_size:
+				(overrides as any).sample_size !== undefined
+					? parseOptionalInt(String((overrides as any).sample_size), 1)
+					: parseOptionalInt(String(sample_size), 1),
+			encoding: asString(overrides.encoding, encoding || 'utf-8'),
+			cache_enabled: asBoolean(overrides.cache_enabled, cache_enabled),
+			output: (overrides.output ?? (params as any)?.output) as any
+		};
+		return canonical;
+	}
+
 	function optionLabel(entry: RecentSnapshot): string {
 		return recentOptionLabel(entry, loadingIds.includes(entry.id), shortHash);
 	}
@@ -162,7 +193,7 @@
 				snapshotMetadata: result.metadata,
 				...withRecentPatch(nextRecent)
 			};
-			commitSnapshot(patch);
+			commitSnapshot(canonicalFileParams(patch));
 		} catch (err) {
 			uploadError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -233,7 +264,7 @@
 			},
 			...withRecentPatch(nextRecent)
 		};
-		commitSnapshot(patch);
+		commitSnapshot(canonicalFileParams(patch));
 	}
 
 	function setFileFormat(nextFormat: string): void {
@@ -306,8 +337,8 @@
 		</Field>
 
 		<Field label="previous uploads" stacked>
-			<select class="full" value="" on:change={onSelectPrevious}>
-				<option value="" disabled selected>Choose a previous upload...</option>
+			<select class="full" value={snapshotId || ''} on:change={onSelectPrevious}>
+				<option value="" disabled>Choose a previous upload...</option>
 				{#each displayRecentSnapshots as entry}
 					<option value={entry.id}>{optionLabel(entry)}</option>
 				{/each}
