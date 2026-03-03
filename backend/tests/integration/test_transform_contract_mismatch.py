@@ -208,3 +208,62 @@ async def test_transform_derive_engine_error_emits_expr_invalid(monkeypatch, tmp
     assert detail_payload.get("code") == "EXPR_INVALID"
     assert detail_payload.get("expected", {}).get("op") == "derive"
     assert "column" in str(detail_payload.get("actual", {}).get("engineError", "")).lower()
+
+
+@pytest.mark.asyncio
+async def test_source_and_transform_emit_table_schema_envelope(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data=[{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}],
+        )
+
+    def _fake_run_transform(params, input_tables, join_lookup=None):
+        return types.SimpleNamespace(
+            payload_bytes=b"id\n1\n2\n",
+            mime_type="text/csv; charset=utf-8",
+            meta={"columns": ["id"], "row_count": 2},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "run_transform", _fake_run_transform)
+
+    events = []
+    store = DiskArtifactStore(tmp_path / "artifacts")
+    cache = SqliteExecutionCache(str(tmp_path / "artifacts" / "meta" / "artifacts.sqlite"))
+    graph = _graph_for_select_missing_column()
+    graph["nodes"][1]["data"]["params"] = {"op": "select", "select": {"columns": ["id"]}}
+
+    await run_mod.run_graph(
+        run_id="run-transform-schema-envelope",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-transform-schema-envelope", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-transform-schema-envelope",
+    )
+
+    source_output = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_1"]
+    transform_output = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
+    assert source_output and transform_output
+
+    source_art = await store.get(source_output[-1]["artifactId"])
+    transform_art = await store.get(transform_output[-1]["artifactId"])
+
+    src_ps = source_art.payload_schema or {}
+    xfm_ps = transform_art.payload_schema or {}
+
+    src_schema = src_ps.get("schema")
+    xfm_schema = xfm_ps.get("schema")
+    assert isinstance(src_schema, dict)
+    assert isinstance(xfm_schema, dict)
+    assert src_schema.get("contract") == "TABLE_V1"
+    assert xfm_schema.get("contract") == "TABLE_V1"
+    assert isinstance((src_schema.get("table") or {}).get("columns"), list)
+    assert isinstance((xfm_schema.get("table") or {}).get("columns"), list)
+    assert (xfm_schema.get("stats") or {}).get("rowCount") == 2

@@ -17,8 +17,6 @@
 		if (op === 'limit') return params.limit?.n ? `Limit ${params.limit.n}` : '—';
 		if (op === 'dedupe') return 'Deduplicate';
 		if (op === 'sql') return params.sql?.query ? 'SQL Query' : '—';
-		if (op === 'python') return params.code?.language === 'python' ? 'Python Code' : '—';
-		if (op === 'js') return params.code?.language === 'js' ? 'JavaScript Code' : '—';
 		return '—';
 	}
 

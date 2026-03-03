@@ -11,8 +11,7 @@ const TransformKindSchema = z.enum(["filter",
   "sort",
   "limit",
   "dedupe",
-  "sql",
-  "python"]);
+  "sql"]);
 
 // ─────────────────────────────────────────────
 // Per-operation parameter schemas
@@ -99,12 +98,6 @@ export const TransformSqlParamsSchema = z.object({
   query: z.string().min(1, "SQL query cannot be empty"),
 }).strip();
 
-export const TransformPythonParamsSchema = z.object({
-  source: z.string().min(1, "Python code cannot be empty"),
-  // If you want to enforce language (though it's always python here)
-  language: z.literal("python").optional().default("python"),
-}).strip();
-
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
   select: TransformSelectParamsSchema,
@@ -115,8 +108,7 @@ export const TransformParamsSchemaByKind = {
   sort: TransformSortParamsSchema,
   limit: TransformLimitParamsSchema,
   dedupe: TransformDedupeParamsSchema,
-  sql: TransformSqlParamsSchema,
-  python: TransformPythonParamsSchema
+  sql: TransformSqlParamsSchema
 } as const
 
 // ---- inferred types (single source of truth) ----
@@ -130,7 +122,6 @@ export type TransformSortParams  = z.infer<typeof   TransformSortParamsSchema>;
 export type TransformLimitParams  = z.infer<typeof   TransformLimitParamsSchema>;
 export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchema>;
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
-export type  TransformPythonParams = z.infer<typeof   TransformPythonParamsSchema>;
 
 
 // ---- common params (shared across all ops) ----
@@ -199,11 +190,6 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("sql"),
     sql: TransformSqlParamsSchema
-  }).strip(),
-
-  TransformCommonSchema.extend({
-    op: z.literal("python"),
-    code: TransformPythonParamsSchema
   }).strip()
 ]);
 

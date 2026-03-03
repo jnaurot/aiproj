@@ -422,7 +422,6 @@ class TransformParamsCurrent(NodeParamSchema):
         "limit",
         "dedupe",
         "sql",
-        "python",
     ]
     enabled: bool = True
     notes: str = ""
@@ -437,7 +436,6 @@ class TransformParamsCurrent(NodeParamSchema):
     limit: Optional[Dict[str, Any]] = None
     dedupe: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
-    code: Optional[Dict[str, Any]] = None
 
     def validate_required(self) -> List[str]:
         op_to_payload = {
@@ -451,7 +449,6 @@ class TransformParamsCurrent(NodeParamSchema):
             "limit": "limit",
             "dedupe": "dedupe",
             "sql": "sql",
-            "python": "code",
         }
         payload_key = op_to_payload.get(self.op)
         payload = getattr(self, payload_key, None) if payload_key else None
@@ -780,7 +777,6 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "limit": "limit",
                 "dedupe": "dedupe",
                 "sql": "sql",
-                "python": "code",
             }.get(op)
             payload = norm.get(payload_key) if payload_key else None
             if not isinstance(payload, dict):
@@ -820,8 +816,6 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("limit.n must be an integer >= 1")
                 elif op == "sql" and not str(payload.get("query") or "").strip():
                     errors.append("sql.query is required")
-                elif op == "python" and not str(payload.get("source") or "").strip():
-                    errors.append("code.source is required")
         elif kind == "tool":
             norm_tool = normalize_tool_params_frontend(params)
             tool_model = ToolProviderParams.model_validate(norm_tool)

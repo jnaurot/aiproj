@@ -170,3 +170,62 @@ def test_video_default_schema_fingerprint_is_format_agnostic():
     assert mp4_expected["schemaSource"] == "default:VIDEO_V1"
     assert webm_expected["schemaSource"] == "default:VIDEO_V1"
     assert mp4_expected["schemaFingerprint"] == webm_expected["schemaFingerprint"]
+
+
+def test_table_v1_schema_fingerprint_ignores_stats_and_provenance():
+    base = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {
+            "columns": [
+                {"name": "id", "type": "int64"},
+                {"name": "name", "type": "string"},
+            ]
+        },
+    }
+    with_stats = {
+        **base,
+        "stats": {"rowCount": 10},
+        "provenance": {"sourceKind": "db", "dbName": "example", "tableName": "users"},
+    }
+    with_other_stats = {
+        **base,
+        "stats": {"rowCount": 999},
+        "provenance": {"sourceKind": "api", "endpoint": "https://example.com"},
+    }
+    assert schema_fingerprint(base) == schema_fingerprint(with_stats)
+    assert schema_fingerprint(base) == schema_fingerprint(with_other_stats)
+
+
+def test_table_v1_schema_fingerprint_changes_when_columns_change():
+    a = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "id", "type": "int64"}]},
+    }
+    b = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "user_id", "type": "int64"}]},
+    }
+    c = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "id", "type": "string"}]},
+    }
+    assert schema_fingerprint(a) != schema_fingerprint(b)
+    assert schema_fingerprint(a) != schema_fingerprint(c)
+
+
+def test_table_v1_schema_fingerprint_normalizes_missing_types_to_unknown():
+    missing = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "id"}]},
+    }
+    unknown = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "id", "type": "unknown"}]},
+    }
+    assert schema_fingerprint(missing) == schema_fingerprint(unknown)

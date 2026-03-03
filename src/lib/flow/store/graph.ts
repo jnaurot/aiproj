@@ -75,7 +75,6 @@ const OP_TO_BLOCK: Record<string, string> = {
   limit: "limit",
   dedupe: "dedupe",
   sql: "sql",
-  python: "code",
 };
 
 const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
@@ -89,7 +88,6 @@ const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   limit: ["n"],
   dedupe: ["by"],
   sql: ["dialect", "query"],
-  python: ["source", "language"],
 };
 
 function normalizeTransformPatch(

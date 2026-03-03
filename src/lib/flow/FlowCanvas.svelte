@@ -10,11 +10,13 @@
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
+	import type { InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
+	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -121,7 +123,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		);
 	}
 	//ViewArtifact
-	type InspectorMode = 'edit' | 'output' | 'ports';
+	type InspectorMode = 'edit' | 'inputs' | 'output' | 'ports';
 	let inspectorMode: InspectorMode = 'edit';
 	let inspectorTopRatio = 0.5;
 	let resizingInspector = false;
@@ -151,6 +153,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		'mcp') as ToolProvider);
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
+	$: hasInputs = Boolean($selectedNode && $selectedNode.data?.ports?.in !== null && $selectedNode.data?.ports?.in !== undefined);
+	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
+	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
 	$: activeArtifactId =
 		nodeBinding?.current?.artifactId ??
 		nodeBinding?.currentArtifactId ??
@@ -166,7 +171,74 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	// auto-fallback if you select a node without output
 	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
+	$: if (selectedId) {
+		inputMetaByArtifactId = {};
+		inputPreviewArtifactId = null;
+	}
 	//ViewArtifact
+
+	type InputArtifactMeta = {
+		mimeType?: string;
+		schemaFingerprint?: string | null;
+		contract?: string;
+	};
+
+	let inputMetaByArtifactId: Record<string, InputArtifactMeta> = {};
+	let inputPreviewArtifactId: string | null = null;
+
+	function inputReasonCopy(
+		reason: InputResolution['reason'] | undefined
+	): string {
+		if (reason === 'DISCONNECTED') return 'No upstream connection';
+		if (reason === 'UPSTREAM_FAILED') return 'Upstream failed';
+		if (reason === 'UPSTREAM_NO_ARTIFACT') return 'Upstream has no artifact yet';
+		return 'Input unavailable';
+	}
+
+	function shortId(v: string | undefined | null, n = 8): string {
+		const s = String(v ?? '');
+		return s ? s.slice(0, n) : '';
+	}
+
+	function upstreamLabel(fromNodeId: string, fromPort: string): string {
+		const node = $graphStore.nodes.find((n) => n.id === fromNodeId);
+		const base = String(node?.data?.label ?? fromNodeId);
+		return `${base}.${fromPort}`;
+	}
+
+	async function loadInputArtifactMetadata(
+		graphId: string,
+		resolutions: InputResolution[]
+	): Promise<void> {
+		const artifactIds = resolutions
+			.filter((r) => r.status === 'resolved' && r.artifactId)
+			.map((r) => String(r.artifactId));
+		const uniqueIds = Array.from(new Set(artifactIds));
+		const next: Record<string, InputArtifactMeta> = {};
+		await Promise.all(
+			uniqueIds.map(async (artifactId) => {
+				try {
+					const res = await fetch(getArtifactMetaUrl(graphId, artifactId));
+					if (!res.ok) return;
+					const meta = await res.json();
+					next[artifactId] = {
+						mimeType: meta?.mimeType,
+						schemaFingerprint: meta?.schemaFingerprint ?? null,
+						contract: meta?.schema?.contract ?? meta?.payloadSchema?.contract ?? meta?.portType
+					};
+				} catch {
+					// best effort; leave metadata blank when fetch fails
+				}
+			})
+		);
+		const stillSameNode = selectedId && selectedId === $selectedNode?.id;
+		if (!stillSameNode) return;
+		inputMetaByArtifactId = next;
+	}
+
+	$: if (inspectorMode === 'inputs' && selectedId) {
+		void loadInputArtifactMetadata($graphStore.graphId, inputResolutions);
+	}
 
 	async function scrollToBottom() {
 		// Wait for Svelte to finish updating the DOM
@@ -555,6 +627,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 						<button
 							class="tabBtn"
+							class:active={inspectorMode === 'inputs'}
+							disabled={!hasInputs}
+							on:click={() => (inspectorMode = 'inputs')}
+						>
+							Inputs
+						</button>
+						<button
+							class="tabBtn"
 							class:active={inspectorMode === 'output'}
 							disabled={!hasOutput}
 							on:click={() => (inspectorMode = 'output')}
@@ -622,6 +702,86 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					<div class="editorScroll">
 						{#if inspectorMode === 'edit'}
 							<NodeInspector />
+						{:else if inspectorMode === 'inputs'}
+							<div class="inputsView">
+								{#if inputResolutions.length === 0}
+									<div class="inputMissing">No input ports.</div>
+								{:else}
+									{#each inputResolutions as input (input.inPort)}
+										<div class="inputCard">
+											<div class="inputHead">
+												<span class="inputPort">{input.inPort}</span>
+												<span
+													class={`pill ${input.status === 'resolved'
+														? input.artifactSource === 'active_run'
+															? 'st-running'
+															: 'st-succeeded'
+														: 'st-stale'}`}
+												>
+													{input.status === 'resolved'
+														? input.artifactSource === 'active_run'
+															? 'active'
+															: 'bound'
+														: 'missing'}
+												</span>
+											</div>
+											<div class="inputUpstream">
+												{#if input.edge}
+													{upstreamLabel(input.edge.fromNodeId, input.edge.fromPort)}
+												{:else}
+													-
+												{/if}
+											</div>
+											{#if input.status === 'missing'}
+												<div class="inputMissing">{inputReasonCopy(input.reason)}</div>
+											{:else}
+												<div class="inputArtifact">
+													<span class="mono">{shortId(input.artifactId)}</span>
+													<button
+														class="tabBtn"
+														on:click={() => (inputPreviewArtifactId = input.artifactId ?? null)}
+													>
+														View
+													</button>
+												</div>
+												{#if input.artifactId}
+													<div class="inputMeta">
+														<div>
+															mime: {inputMetaByArtifactId[input.artifactId]?.mimeType ??
+																input.artifactSummary?.mimeType ??
+																'-'}
+														</div>
+														<div>
+															contract: {inputMetaByArtifactId[input.artifactId]?.contract ??
+																input.artifactSummary?.contract ??
+																'-'}
+														</div>
+														<div>
+															schema: {shortId(
+																String(
+																	inputMetaByArtifactId[input.artifactId]?.schemaFingerprint ??
+																		input.artifactSummary?.schemaFingerprint ??
+																		''
+																),
+																12
+															) || '-'}
+														</div>
+													</div>
+												{/if}
+											{/if}
+										</div>
+									{/each}
+									{#if inputPreviewArtifactId}
+										<div class="inputPreview">
+											<ArtifactViewer
+												artifactId={inputPreviewArtifactId}
+												graphId={$graphStore.graphId}
+												onJumpToNode={jumpToNodeFromArtifact}
+											/>
+										</div>
+									{/if}
+								{/if}
+							</div>
 						{:else if inspectorMode === 'output'}
 							<ArtifactViewer
 								artifactId={activeArtifactId}
@@ -1055,5 +1215,67 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.inspectorTabs button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
+	}
+
+	.inputsView {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.inputCard {
+		border: 1px solid #1f2430;
+		border-radius: 10px;
+		padding: 8px;
+		background: #0f1115;
+	}
+
+	.inputHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.inputPort {
+		font-size: 12px;
+		opacity: 0.9;
+	}
+
+	.inputUpstream {
+		font-size: 12px;
+		opacity: 0.75;
+		margin-top: 4px;
+	}
+
+	.inputArtifact {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 6px;
+	}
+
+	.inputMeta {
+		font-size: 11px;
+		opacity: 0.78;
+		margin-top: 4px;
+		display: grid;
+		gap: 2px;
+	}
+
+	.inputMissing {
+		font-size: 12px;
+		opacity: 0.8;
+		margin-top: 4px;
+	}
+
+	.inputPreview {
+		border-top: 1px solid #1f2430;
+		margin-top: 6px;
+		padding-top: 8px;
+	}
+
+	.mono {
+		font-family: ui-monospace, Menlo, Consolas, monospace;
 	}
 </style>

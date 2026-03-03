@@ -16,7 +16,7 @@ from app.runner.schemas import (
     AggregateTransformParams,
     CustomTransformParams,
     get_schema_for_node,
-    SCHEMA_REGISTRY
+    SCHEMA_REGISTRY,
 )
 
 
@@ -546,6 +546,14 @@ class TestFilterTransformParams:
             "filter_expression": "age > 18"
         })
         assert filter_params.columns is None
+
+
+class TestTransformPythonRemoval:
+    """Transform op=python is no longer supported."""
+
+    def test_transform_params_current_rejects_python_op(self):
+        with pytest.raises(ValueError):
+            TransformParamsCurrent.model_validate({"op": "python"})
 
 
 class TestMapTransformParams:

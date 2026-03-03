@@ -20,7 +20,6 @@ OP_KEYS = {
     "limit": "limit",
     "dedupe": "dedupe",
     "sql": "sql",
-    "python": "code",
 }
 
 # ---- helpers ----
@@ -47,6 +46,9 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         inferred = sorted(set(inferred))
         if len(inferred) == 1:
             op = inferred[0]
+
+    if op == "python":
+        raise ValueError('Transform op "python" has been removed. Use Tool node provider="python".')
 
     if op not in OP_KEYS:
         raise ValueError(f"Transform params missing/invalid op: {op}")
@@ -290,10 +292,6 @@ def execute_transform_op(
             q = params["sql"]["query"]
             # convention: user writes SQL referencing "input" (and optionally "other" if you add)
             return con.execute(q).df()
-
-        elif op == "python":
-            # IMPORTANT: you can enable later behind an explicit "unsafe_allow_code" flag
-            raise ValueError("python transform is disabled for determinism (enable explicitly later).")
 
         raise ValueError(f"Unsupported transform op: {op}")
     finally:

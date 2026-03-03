@@ -3,10 +3,13 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformParams, TransformKind } from '$lib/flow/schema/transform';
 	import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
+	import { graphStore } from '$lib/flow/store/graphStore';
+	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { TransformEditorByKind } from './TransformEditor';
+	import { parseInputSchemaView, type InputSchemaView } from './inputSchema';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformParams>;
@@ -14,13 +17,26 @@
 	export let onCommit: (patch: Partial<TransformParams>) => void;
 
 	const ops: TransformKind[] = ['filter', 'select', 'rename', 'derive', 'aggregate', 'join', 'sort', 'limit', 'dedupe', 'sql'];
+	function isTransformKind(value: unknown): value is TransformKind {
+		return typeof value === 'string' && ops.includes(value as TransformKind);
+	}
 
 	$: void selectedNode?.id;
-	$: currentOp = params?.op ?? 'filter';
+	$: currentOp = isTransformKind(params?.op) ? params.op : 'filter';
 	$: enabled = params?.enabled ?? true;
 	$: notes = params?.notes ?? '';
 	$: EditorComponent = TransformEditorByKind[currentOp];
 	$: childParams = (params as Record<string, unknown>)[currentOp] ?? defaultTransformParamsByKind[currentOp][currentOp];
+	$: graphState = $graphStore;
+
+	let inputSchemas: InputSchemaView[] = [];
+	let inputSchemaError: string | null = null;
+	let loadingInputSchemas = false;
+	let inputSchemaReqSeq = 0;
+
+	$: if (selectedNode?.id) {
+		void refreshInputSchemas();
+	}
 
 	function handleOpChange(nextOp: TransformKind): void {
 		const next = structuredClone(defaultTransformParamsByKind[nextOp]);
@@ -34,6 +50,60 @@
 
 	function commitChild(next: Record<string, unknown>): void {
 		onCommit({ [currentOp]: next } as Partial<TransformParams>);
+	}
+
+	async function refreshInputSchemas(): Promise<void> {
+		const nodeId = selectedNode?.id;
+		if (!nodeId) {
+			inputSchemas = [];
+			inputSchemaError = null;
+			return;
+		}
+		const reqId = ++inputSchemaReqSeq;
+		loadingInputSchemas = true;
+		inputSchemaError = null;
+		try {
+			const edges = graphState?.edges ?? [];
+			const nodeBindings = graphState?.nodeBindings ?? {};
+			const nodesById = new Map((graphState?.nodes ?? []).map((n) => [n.id, n]));
+			const graphId = String(graphState?.graphId ?? '').trim();
+			if (!graphId) {
+				inputSchemas = [];
+				return;
+			}
+			const incoming = edges
+				.filter((e) => e.target === nodeId)
+				.map((e) => {
+					const sourceBinding = nodeBindings[e.source];
+					const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
+					return {
+						sourceNodeId: e.source,
+						label: `${String(nodesById.get(e.source)?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
+						artifactId
+					};
+				})
+				.filter((x) => x.artifactId.length > 0);
+			if (incoming.length === 0) {
+				inputSchemas = [];
+				return;
+			}
+			const responses = await Promise.all(
+				incoming.map(async (entry) => {
+					const res = await fetch(getArtifactMetaUrl(entry.artifactId, graphId));
+					if (!res.ok) throw new Error(`Failed to load schema for ${entry.artifactId}: ${res.status}`);
+					const meta = await res.json();
+					return parseInputSchemaView(entry.artifactId, entry.label, meta?.payloadSchema);
+				})
+			);
+			if (reqId !== inputSchemaReqSeq) return;
+			inputSchemas = responses;
+		} catch (err) {
+			if (reqId !== inputSchemaReqSeq) return;
+			inputSchemaError = err instanceof Error ? err.message : String(err);
+			inputSchemas = [];
+		} finally {
+			if (reqId === inputSchemaReqSeq) loadingInputSchemas = false;
+		}
 	}
 </script>
 
@@ -67,6 +137,56 @@
 	</Field>
 </Section>
 
+<Section title="Input Schema">
+	{#if loadingInputSchemas}
+		<div class="schemaMuted">Loading input schema...</div>
+	{:else if inputSchemaError}
+		<div class="schemaError">{inputSchemaError}</div>
+	{:else if inputSchemas.length === 0}
+		<div class="schemaMuted">Schema unavailable.</div>
+	{:else}
+		{#each inputSchemas as schema}
+			<div class="schemaCard">
+				<div class="schemaHeader">
+					<div class="schemaLabel">{schema.label}</div>
+					<div class="schemaRows">
+						rows:
+						{schema.rowCount ?? 'unknown'}
+					</div>
+				</div>
+				{#if schema.provenance}
+					<div class="schemaProv">
+						{#if schema.provenance.tableName}
+							<span>table: {schema.provenance.tableName}</span>
+						{/if}
+						{#if schema.provenance.dbName}
+							<span>db: {schema.provenance.dbName}</span>
+						{/if}
+						{#if schema.provenance.dbSchema}
+							<span>schema: {schema.provenance.dbSchema}</span>
+						{/if}
+						{#if schema.provenance.endpoint}
+							<span>endpoint: {schema.provenance.endpoint}</span>
+						{/if}
+					</div>
+				{/if}
+				{#if schema.columns.length === 0}
+					<div class="schemaMuted">No columns available.</div>
+				{:else}
+					<div class="schemaCols">
+						{#each schema.columns as col}
+							<div class="schemaCol">
+								<span class="schemaColName">{col.name}</span>
+								<span class="schemaColType">{col.type || 'unknown'}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/each}
+	{/if}
+</Section>
+
 {#if EditorComponent}
 	<svelte:component
 		this={EditorComponent}
@@ -76,3 +196,69 @@
 		onCommit={commitChild}
 	/>
 {/if}
+
+<style>
+	.schemaCard {
+		border: 1px solid var(--field-border, #334155);
+		border-radius: 8px;
+		padding: 8px;
+		margin-bottom: 8px;
+	}
+
+	.schemaHeader {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 12px;
+		margin-bottom: 6px;
+	}
+
+	.schemaLabel {
+		font-weight: 600;
+		word-break: break-word;
+	}
+
+	.schemaRows {
+		opacity: 0.85;
+	}
+
+	.schemaProv {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		font-size: 11px;
+		opacity: 0.8;
+		margin-bottom: 6px;
+	}
+
+	.schemaCols {
+		display: grid;
+		gap: 4px;
+	}
+
+	.schemaCol {
+		display: flex;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 12px;
+	}
+
+	.schemaColName {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.schemaColType {
+		opacity: 0.85;
+	}
+
+	.schemaMuted {
+		font-size: 12px;
+		opacity: 0.8;
+	}
+
+	.schemaError {
+		font-size: 12px;
+		color: #f87171;
+	}
+</style>

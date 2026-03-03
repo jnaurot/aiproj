@@ -280,6 +280,133 @@ export type GraphState = {
 	activeRunId: string | null;
 };
 
+export type InputResolution = {
+	inPort: string;
+	edge: { fromNodeId: string; fromPort: string } | null;
+	status: 'resolved' | 'missing';
+	reason?: 'DISCONNECTED' | 'UPSTREAM_NO_ARTIFACT' | 'UPSTREAM_FAILED' | 'UNKNOWN';
+	artifactId?: string;
+	artifactSource?: 'active_run' | 'bound';
+	upstream: {
+		nodeId: string;
+		port: string;
+		status?: string;
+		isUpToDate?: boolean;
+		staleReason?: string | null;
+	};
+	artifactSummary?: {
+		mimeType?: string;
+		schemaFingerprint?: string;
+		contract?: string;
+	};
+};
+
+function normalizeHandleId(handleId: string | null | undefined, fallback: 'in' | 'out'): string {
+	const v = String(handleId ?? '').trim();
+	return v ? v : fallback;
+}
+
+function isFailedBindingStatus(binding: NormalizedNodeBinding | undefined): boolean {
+	const display = displayStatusFromBinding(binding as any);
+	const raw = String(binding?.status ?? '').toLowerCase();
+	return display === 'failed' || raw.startsWith('failed');
+}
+
+function resolveUpstreamArtifact(
+	state: GraphState,
+	upstreamBinding: NormalizedNodeBinding | undefined
+): { artifactId?: string; artifactSource?: 'active_run' | 'bound' } {
+	const currentArtifactId =
+		upstreamBinding?.current?.artifactId ?? upstreamBinding?.currentArtifactId ?? null;
+	const lastArtifactId = upstreamBinding?.last?.artifactId ?? upstreamBinding?.lastArtifactId ?? null;
+	const activeRunId = state.activeRunId;
+	if (
+		activeRunId &&
+		upstreamBinding?.currentRunId === activeRunId &&
+		typeof currentArtifactId === 'string' &&
+		currentArtifactId.length > 0
+	) {
+		return { artifactId: currentArtifactId, artifactSource: 'active_run' };
+	}
+	if (typeof currentArtifactId === 'string' && currentArtifactId.length > 0) {
+		return { artifactId: currentArtifactId, artifactSource: 'bound' };
+	}
+	if (typeof lastArtifactId === 'string' && lastArtifactId.length > 0) {
+		return { artifactId: lastArtifactId, artifactSource: 'bound' };
+	}
+	return {};
+}
+
+export function resolveNodeInputsFromState(state: GraphState, nodeId: string): InputResolution[] {
+	const node = state.nodes.find((n) => n.id === nodeId);
+	if (!node) return [];
+	const inPortType = node.data?.ports?.in ?? null;
+	const hasInputPort = inPortType !== null && inPortType !== undefined;
+	const incoming = (state.edges ?? [])
+		.filter((e) => e.target === nodeId)
+		.slice()
+		.sort((a, b) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
+	const inPorts = new Set<string>();
+	if (hasInputPort) inPorts.add('in');
+	for (const e of incoming) inPorts.add(normalizeHandleId((e as any).targetHandle, 'in'));
+	const orderedInPorts = Array.from(inPorts).sort((a, b) => a.localeCompare(b));
+	const resolutions: InputResolution[] = [];
+	for (const inPort of orderedInPorts) {
+		const edge = incoming.find((e) => normalizeHandleId((e as any).targetHandle, 'in') === inPort) ?? null;
+		if (!edge) {
+			resolutions.push({
+				inPort,
+				edge: null,
+				status: 'missing',
+				reason: 'DISCONNECTED',
+				upstream: { nodeId: '', port: '' }
+			});
+			continue;
+		}
+		const fromNodeId = String(edge.source ?? '');
+		const fromPort = normalizeHandleId((edge as any).sourceHandle, 'out');
+		const upstreamBinding = state.nodeBindings?.[fromNodeId];
+		const upstreamOut = state.nodeOutputs?.[fromNodeId];
+		const resolved = resolveUpstreamArtifact(state, upstreamBinding);
+		if (resolved.artifactId) {
+			resolutions.push({
+				inPort,
+				edge: { fromNodeId, fromPort },
+				status: 'resolved',
+				artifactId: resolved.artifactId,
+				artifactSource: resolved.artifactSource,
+				upstream: {
+					nodeId: fromNodeId,
+					port: fromPort,
+					status: displayStatusFromBinding(upstreamBinding as any),
+					isUpToDate: upstreamBinding?.isUpToDate,
+					staleReason: upstreamBinding?.staleReason ?? null
+				},
+				artifactSummary: {
+					mimeType: upstreamOut?.mimeType,
+					schemaFingerprint: upstreamOut?.actualContractFingerprint,
+					contract: upstreamOut?.portType
+				}
+			});
+			continue;
+		}
+		resolutions.push({
+			inPort,
+			edge: { fromNodeId, fromPort },
+			status: 'missing',
+			reason: isFailedBindingStatus(upstreamBinding) ? 'UPSTREAM_FAILED' : 'UPSTREAM_NO_ARTIFACT',
+			upstream: {
+				nodeId: fromNodeId,
+				port: fromPort,
+				status: displayStatusFromBinding(upstreamBinding as any),
+				isUpToDate: upstreamBinding?.isUpToDate,
+				staleReason: upstreamBinding?.staleReason ?? null
+			}
+		});
+	}
+	return resolutions;
+}
+
 function ensureNormalizedBindingsForNodes(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
 	nodeBindings: Record<string, NormalizedNodeBinding>
@@ -1720,6 +1847,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		revertInspectorDraft,
 		getInspectorUi,
 		setInspectorUi,
+		resolveNodeInputs(nodeId: string): InputResolution[] {
+			const s = get({ subscribe } as any) as GraphState;
+			return resolveNodeInputsFromState(s, nodeId);
+		},
 		updateNodeConfig: updateNodeConfigImpl,
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
@@ -1826,9 +1957,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		// graphStore.ts (inside your graphStore object)
 		setTransformKind(nodeId: string, nextKind: TransformKind) {
-			if (nextKind === 'python') {
-				return { ok: false, error: 'Transform op "python" is disabled. Use Tool node instead.' };
-			}
 			const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
 
 			// 1) update structural subtype on the node

@@ -35,8 +35,7 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
-	TransformSqlParams,
-	TransformPythonParams
+	TransformSqlParams
 } from '$lib/flow/schema/transform';
 export type TransformKind =
 	| 'filter'
@@ -48,8 +47,7 @@ export type TransformKind =
 	| 'sort'
 	| 'limit'
 	| 'dedupe'
-	| 'sql'
-	| 'python';
+	| 'sql';
 
 export type TransformParamsByKind = {
 	filter: TransformFilterParams;
@@ -62,7 +60,6 @@ export type TransformParamsByKind = {
 	limit: TransformLimitParams;
 	dedupe: TransformDedupeParams;
 	sql: TransformSqlParams;
-	python: TransformPythonParams;
 };
 
 export type ToolProvider = 'mcp' | 'http' | 'function' | 'python' | 'js' | 'shell' | 'db' | 'builtin';

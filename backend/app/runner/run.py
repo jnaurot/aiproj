@@ -24,6 +24,8 @@ from .cache import ExecutionCache
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .capabilities import allowed_ports
 from .contracts import (
+    TABLE_V1,
+    canonical_table_columns,
     canonical_schema_for_contract,
     default_contract_for_node,
     schema_fingerprint as contract_schema_fingerprint,
@@ -238,6 +240,92 @@ def _table_payload_schema_from_rows(rows: list[dict[str, Any]]) -> Dict[str, Any
     return {"schema_version": 1, "type": "table", "columns": columns}
 
 
+def _table_schema_envelope(
+    *,
+    columns: list[Dict[str, Any]],
+    row_count: Optional[int] = None,
+    provenance: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    env: Dict[str, Any] = {
+        "contract": TABLE_V1,
+        "version": 1,
+        "table": {"columns": canonical_table_columns(columns)},
+    }
+    if row_count is not None:
+        env["stats"] = {"rowCount": int(row_count)}
+    if isinstance(provenance, dict) and provenance:
+        env["provenance"] = provenance
+    return env
+
+
+def _table_schema_fingerprint_from_envelope(schema_env: Dict[str, Any]) -> str:
+    return contract_schema_fingerprint(schema_env)
+
+
+def _extract_table_columns_from_payload_schema(payload_schema: Any) -> list[Dict[str, Any]]:
+    if not isinstance(payload_schema, dict):
+        return []
+    schema_env = payload_schema.get("schema")
+    if isinstance(schema_env, dict):
+        table = schema_env.get("table")
+        if isinstance(table, dict):
+            cols = table.get("columns")
+            if isinstance(cols, list):
+                return canonical_table_columns(cols)
+    cols = payload_schema.get("columns")
+    if isinstance(cols, list):
+        return canonical_table_columns(cols)
+    return []
+
+
+def _transform_output_columns(
+    *,
+    op: str,
+    norm: Dict[str, Any],
+    primary_cols: list[str],
+    other_cols: Optional[list[str]] = None,
+) -> list[Dict[str, str]]:
+    primary = [str(c) for c in (primary_cols or [])]
+    other = [str(c) for c in (other_cols or [])]
+    op_l = str(op or "").lower()
+
+    if op_l == "select":
+        cols = [str(c) for c in ((norm.get("select") or {}).get("columns") or [])]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in cols])
+    if op_l == "rename":
+        rename_map = (norm.get("rename") or {}).get("map") or {}
+        out = [str(rename_map.get(c, c)) for c in primary]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "derive":
+        derive_cols = ((norm.get("derive") or {}).get("columns") or [])
+        appended = [str(d.get("name")) for d in derive_cols if isinstance(d, dict) and d.get("name")]
+        out = primary + [c for c in appended if c not in primary]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "aggregate":
+        group_by = [str(c) for c in ((norm.get("aggregate") or {}).get("groupBy") or [])]
+        metrics = [str(m.get("as")) for m in ((norm.get("aggregate") or {}).get("metrics") or []) if isinstance(m, dict) and m.get("as")]
+        out = group_by + [m for m in metrics if m not in group_by]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "join":
+        out = list(primary)
+        for col in other:
+            if col not in out:
+                out.append(col)
+            else:
+                suffix = "_right"
+                cand = f"{col}{suffix}"
+                n = 2
+                while cand in out:
+                    cand = f"{col}{suffix}{n}"
+                    n += 1
+                out.append(cand)
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l in {"sort", "limit", "dedupe", "filter", "sql"}:
+        # sql may differ but keep deterministic fallback if no parser.
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
+    return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
+
+
 def _source_payload_schema(out_contract: Optional[str], data_value: Any) -> Optional[Dict[str, Any]]:
     if out_contract == "table" and isinstance(data_value, list):
         return _table_payload_schema_from_rows(data_value)
@@ -320,11 +408,12 @@ def _artifact_metadata_v1(
     schema_fingerprint: str,
     mime_type: str,
     port_type: Optional[str],
+    schema: Optional[Dict[str, Any]],
     created_at_iso: str,
     run_id: Optional[str],
     graph_id: Optional[str],
 ) -> Dict[str, Any]:
-    return {
+    out = {
         "metadataVersion": 1,
         "execKey": exec_key,
         "nodeId": node_id,
@@ -340,6 +429,9 @@ def _artifact_metadata_v1(
         "runId": run_id,
         "graphId": graph_id,
     }
+    if isinstance(schema, dict):
+        out["schema"] = schema
+    return out
 
 
 def _is_contract_mismatch_error(message: str) -> bool:
@@ -445,6 +537,45 @@ def _explicit_schema_from_node(node: Dict[str, Any]) -> Optional[Any]:
     if isinstance(schema_obj, (dict, list)):
         return _sanitize_for_fingerprint(schema_obj)
     return None
+
+
+def _source_table_provenance(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
+    data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
+    source_kind = str(data.get("sourceKind") or params.get("source_type") or "file").lower()
+    out: Dict[str, Any] = {"sourceKind": source_kind}
+    if source_kind == "file":
+        filename = str(params.get("filename") or "").strip()
+        if filename:
+            out["tableName"] = filename
+    elif source_kind == "database":
+        conn = str(params.get("connection_string") or "")
+        table_name = str(params.get("table_name") or "").strip()
+        query = str(params.get("query") or "").strip()
+        if table_name:
+            out["tableName"] = table_name
+        if query:
+            out["query"] = query
+        if conn:
+            try:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(conn)
+                if parsed.hostname:
+                    out["dbName"] = parsed.hostname
+                db_schema = (parsed.path or "").lstrip("/")
+                if db_schema:
+                    out["dbSchema"] = db_schema
+            except Exception:
+                pass
+    elif source_kind == "api":
+        endpoint = str(params.get("url") or "").strip()
+        if endpoint:
+            try:
+                parsed = urlsplit(endpoint)
+                out["endpoint"] = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.fragment))
+            except Exception:
+                out["endpoint"] = endpoint
+    return out
 
 
 def _expected_schema_contract_for_node(node: Dict[str, Any]) -> Dict[str, Any]:
@@ -1257,7 +1388,11 @@ async def run_graph(
                         input_refs = resolve_input_refs(edges, node_id, get_current_artifact)  # [(port, artifact_id), ...]
                         input_tables = {}  # port -> DataFrame
                         input_columns: dict[str, list[str]] = {}
+                        input_schema_cols_by_port: dict[str, list[Dict[str, Any]]] = {}
+                        input_provenance_by_port: dict[str, Dict[str, Any]] = {}
                         required_cols_by_artifact: dict[str, list[str]] = {}
+                        upstream_source_by_artifact: dict[str, str] = {}
+                        upstream_port_by_artifact: dict[str, str] = {}
 
                         for e in edges.values():
                             if e.get("target") != node_id:
@@ -1268,6 +1403,8 @@ async def run_graph(
                             src_artifact_id = get_current_artifact(src)
                             if not src_artifact_id:
                                 continue
+                            upstream_source_by_artifact[src_artifact_id] = str(src)
+                            upstream_port_by_artifact[src_artifact_id] = str(e.get("targetHandle") or "in")
                             contract = (e.get("data", {}) or {}).get("contract", {}) or {}
                             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
                             target_hint = payload.get("target", {}) if isinstance(payload, dict) else {}
@@ -1300,12 +1437,10 @@ async def run_graph(
                             req_cols = required_cols_by_artifact.get(upstream_artifact_id)
                             if req_cols:
                                 payload_schema = getattr(art, "payload_schema", None) or {}
-                                src_cols = payload_schema.get("columns") if isinstance(payload_schema, dict) else None
+                                src_cols = _extract_table_columns_from_payload_schema(payload_schema)
                                 src_col_names = []
                                 if isinstance(src_cols, list):
-                                    src_col_names = [
-                                        c.get("name") if isinstance(c, dict) else c for c in src_cols
-                                    ]
+                                    src_col_names = [c.get("name") if isinstance(c, dict) else c for c in src_cols]
                                 if src_col_names:
                                     missing = [c for c in req_cols if c not in src_col_names]
                                     if missing:
@@ -1325,6 +1460,21 @@ async def run_graph(
                             df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
                             input_tables[port] = df
                             input_columns[port] = [str(c) for c in list(getattr(df, "columns", []))]
+                            schema_cols = _extract_table_columns_from_payload_schema(getattr(art, "payload_schema", None))
+                            input_schema_cols_by_port[port] = (
+                                schema_cols
+                                if schema_cols
+                                else canonical_table_columns(
+                                    [{"name": c, "type": "unknown"} for c in input_columns[port]]
+                                )
+                            )
+                            input_provenance_by_port[port] = {
+                                "sourceKind": "upstream",
+                                "upstream": {
+                                    "nodeId": upstream_source_by_artifact.get(upstream_artifact_id),
+                                    "port": upstream_port_by_artifact.get(upstream_artifact_id, port),
+                                },
+                            }
 
                         # join lookup (node_id -> DataFrame), best-effort
                         join_lookup: dict[str, Any] = {}
@@ -1491,10 +1641,49 @@ async def run_graph(
                         elif llm_output_mode == "embeddings":
                             llm_port_type = "embeddings"
                         created_at_dt = datetime.now(timezone.utc)
+                        primary_cols_for_schema = input_columns.get(primary_port, [])
+                        other_cols_for_schema: list[str] = []
+                        if op == "join":
+                            join_spec = norm.get("join") or {}
+                            with_node = str(join_spec.get("withNodeId") or "")
+                            other_df = join_lookup.get(with_node)
+                            if other_df is not None:
+                                other_cols_for_schema = [str(c) for c in list(getattr(other_df, "columns", []))]
+                        output_cols_core = _transform_output_columns(
+                            op=op,
+                            norm=norm,
+                            primary_cols=primary_cols_for_schema,
+                            other_cols=other_cols_for_schema,
+                        )
+                        runtime_cols = canonical_table_columns(
+                            [{"name": c, "type": "unknown"} for c in (res.meta.get("columns") or [])]
+                        )
+                        # Prefer runtime columns when available; deterministic fallback otherwise.
+                        output_cols = runtime_cols if runtime_cols else output_cols_core
+                        upstream_refs = [
+                            {
+                                "nodeId": input_provenance_by_port.get(port, {})
+                                .get("upstream", {})
+                                .get("nodeId"),
+                                "port": input_provenance_by_port.get(port, {})
+                                .get("upstream", {})
+                                .get("port", port),
+                            }
+                            for port, _ in input_refs
+                        ]
+                        table_schema_env = _table_schema_envelope(
+                            columns=output_cols,
+                            row_count=(res.meta.get("row_count") if isinstance(res.meta, dict) else None),
+                            provenance={
+                                "sourceKind": "transform",
+                                "upstream": upstream_refs,
+                            },
+                        )
                         base_payload_schema = {
                             "schema_version": 1,
                             "type": "table",
-                            "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
+                            "columns": output_cols,
+                            "schema": table_schema_env,
                         }
                         schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
                         if not schema_fp:
@@ -1513,6 +1702,7 @@ async def run_graph(
                             schema_fingerprint=schema_fp,
                             mime_type=res.mime_type,
                             port_type="table",
+                            schema=table_schema_env,
                             created_at_iso=created_at_dt.isoformat(),
                             run_id=run_id,
                             graph_id=context.graph_id,
@@ -1948,6 +2138,20 @@ async def run_graph(
                         if kind == "tool"
                         else None
                     ) or {}
+                    table_schema_env: Optional[Dict[str, Any]] = None
+                    if kind == "source" and str(artifact_port_type or "").lower() == "table":
+                        payload_cols = _extract_table_columns_from_payload_schema(base_payload_schema)
+                        row_count = None
+                        if isinstance(base_payload_schema.get("row_count"), int):
+                            row_count = int(base_payload_schema.get("row_count"))
+                        elif isinstance(data_value, list):
+                            row_count = len(data_value)
+                        table_schema_env = _table_schema_envelope(
+                            columns=payload_cols,
+                            row_count=row_count,
+                            provenance=_source_table_provenance(n, params if isinstance(params, dict) else {}),
+                        )
+                        base_payload_schema["schema"] = table_schema_env
                     created_at_dt = datetime.now(timezone.utc)
                     schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
                     if not schema_fp:
@@ -1966,6 +2170,7 @@ async def run_graph(
                         schema_fingerprint=schema_fp,
                         mime_type=mime_type,
                         port_type=artifact_port_type,
+                        schema=table_schema_env,
                         created_at_iso=created_at_dt.isoformat(),
                         run_id=run_id,
                         graph_id=context.graph_id,
