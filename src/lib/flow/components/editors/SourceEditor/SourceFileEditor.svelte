@@ -8,9 +8,7 @@
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
 	import {
 		asBoolean,
-		asNumberOrEmpty,
-		asString,
-		parseOptionalInt
+		asString
 	} from '$lib/flow/components/editors/shared';
 	import {
 		type RecentSnapshot,
@@ -20,6 +18,7 @@
 		sortRecentSnapshotsForDisplay,
 		updateRecentSnapshotInPlace
 	} from './sourceFileSnapshots';
+	import { detectFileFormatFromFilename } from './fileFormatDetect';
 
 	type FileFormat = SourceFileParams['file_format'];
 	type SourceFilePatch = Partial<SourceFileParams>;
@@ -30,7 +29,40 @@
 	export let onSnapshotCommit: ((patch: SourceFilePatch) => void | Promise<unknown>) | undefined =
 		undefined;
 
-	const fileFormatOptions: FileFormat[] = ['csv', 'tsv', 'parquet', 'json', 'excel', 'txt', 'pdf'];
+	const baseFileFormatOptions: FileFormat[] = [
+		'csv',
+		'tsv',
+		'parquet',
+		'json',
+		'excel',
+		'txt',
+		'pdf'
+	];
+	const imageFileFormatOptions: FileFormat[] = [
+		'png',
+		'jpg',
+		'jpeg',
+		'webp',
+		'gif',
+		'svg',
+		'tiff',
+		'tif'
+	];
+	const audioFileFormatOptions: FileFormat[] = [
+		'mp3',
+		'wav',
+		'flac',
+		'ogg',
+		'm4a',
+		'aac'
+	];
+	const videoFileFormatOptions: FileFormat[] = ['mp4', 'mov', 'webm'];
+	const fileFormatOptions: FileFormat[] = [
+		...baseFileFormatOptions,
+		...imageFileFormatOptions,
+		...audioFileFormatOptions,
+		...videoFileFormatOptions
+	];
 	const RECENT_LIMIT = 10;
 
 	let fileInputEl: HTMLInputElement | null = null;
@@ -53,8 +85,8 @@
 	$: currentShortId = snapshotId ? shortHash(snapshotId) : '-';
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
+	$: delimiterDisplay = delimiter === '\t' ? '\\t' : delimiter;
 	$: sheet_name = asString(params?.sheet_name, '');
-	$: sample_size = asNumberOrEmpty(params?.sample_size);
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
 	$: void hydrateMissingRecentSnapshots(recentSnapshots);
@@ -116,10 +148,6 @@
 			file_format: format,
 			delimiter: format === 'csv' || format === 'tsv' ? asString(overrides.delimiter, delimiter) : undefined,
 			sheet_name: format === 'excel' ? asString(overrides.sheet_name, sheet_name) : undefined,
-			sample_size:
-				(overrides as any).sample_size !== undefined
-					? parseOptionalInt(String((overrides as any).sample_size), 1)
-					: parseOptionalInt(String(sample_size), 1),
 			encoding: asString(overrides.encoding, encoding || 'utf-8'),
 			cache_enabled: asBoolean(overrides.cache_enabled, cache_enabled),
 			output: (overrides.output ?? (params as any)?.output) as any
@@ -129,6 +157,22 @@
 
 	function optionLabel(entry: RecentSnapshot): string {
 		return recentOptionLabel(entry, loadingIds.includes(entry.id), shortHash);
+	}
+
+	function patchForDetectedFormat(next: FileFormat | null): SourceFilePatch {
+		if (!next) return {};
+		const patch: SourceFilePatch = { file_format: next };
+		if (next === 'csv' || next === 'tsv') {
+			patch.delimiter = next === 'tsv' ? '\t' : ',';
+			patch.sheet_name = undefined;
+		} else if (next === 'excel') {
+			patch.sheet_name = asString(params?.sheet_name, '') || 'Sheet1';
+			patch.delimiter = undefined;
+		} else {
+			patch.delimiter = undefined;
+			patch.sheet_name = undefined;
+		}
+		return patch;
 	}
 
 	async function hydrateMissingRecentSnapshots(entries: RecentSnapshot[]): Promise<void> {
@@ -191,6 +235,7 @@
 			const patch: SourceFilePatch = {
 				snapshotId: incoming.id,
 				snapshotMetadata: result.metadata,
+				...patchForDetectedFormat(detectFileFormatFromFilename(incoming.filename ?? file.name)),
 				...withRecentPatch(nextRecent)
 			};
 			commitSnapshot(canonicalFileParams(patch));
@@ -262,6 +307,7 @@
 				byteSize: resolved?.size,
 				mimeType: resolved?.mimeType
 			},
+			...patchForDetectedFormat(detectFileFormatFromFilename(resolved?.filename)),
 			...withRecentPatch(nextRecent)
 		};
 		commitSnapshot(canonicalFileParams(patch));
@@ -273,7 +319,7 @@
 		const patch: SourceFilePatch = { file_format: next };
 
 		if (next === 'csv' || next === 'tsv') {
-			patch.delimiter = params?.delimiter ?? (next === 'tsv' ? '\t' : ',');
+			patch.delimiter = next === 'tsv' ? '\t' : ',';
 			patch.sheet_name = undefined;
 		} else if (next === 'excel') {
 			patch.sheet_name = params?.sheet_name ?? '';
@@ -284,6 +330,11 @@
 		}
 
 		commit(patch);
+	}
+
+	function decodeDelimiterInput(raw: string): string {
+		if (raw === '\\t') return '\t';
+		return raw;
 	}
 </script>
 
@@ -351,19 +402,36 @@
 				value={file_format}
 				on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}
 			>
-				{#each fileFormatOptions as option}
+				{#each baseFileFormatOptions as option}
 					<option value={option}>{option}</option>
 				{/each}
+				<optgroup label="Image">
+					{#each imageFileFormatOptions as option}
+						<option value={option}>{option}</option>
+					{/each}
+				</optgroup>
+				<optgroup label="Audio">
+					{#each audioFileFormatOptions as option}
+						<option value={option}>{option}</option>
+					{/each}
+				</optgroup>
+				<optgroup label="Video">
+					{#each videoFileFormatOptions as option}
+						<option value={option}>{option}</option>
+					{/each}
+				</optgroup>
 			</select>
 		</Field>
 
 		{#if file_format === 'csv' || file_format === 'tsv'}
 			<Field label="delimiter">
 				<Input
-					value={delimiter}
+					value={delimiterDisplay}
 					placeholder={file_format === 'tsv' ? '\\t' : ','}
-					onInput={(event) => draft({ delimiter: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ delimiter: (event.currentTarget as HTMLInputElement).value })}
+					onInput={(event) =>
+						draft({ delimiter: decodeDelimiterInput((event.currentTarget as HTMLInputElement).value) })}
+					onBlur={(event) =>
+						commit({ delimiter: decodeDelimiterInput((event.currentTarget as HTMLInputElement).value) })}
 				/>
 			</Field>
 		{/if}
@@ -384,24 +452,6 @@
 				/>
 			</Field>
 		{/if}
-
-		<Field label="sample size">
-			<Input
-				type="number"
-				min="1"
-				step="1"
-				value={sample_size}
-				placeholder="e.g. 1000"
-				onInput={(event) =>
-					draft({
-						sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-					})}
-				onBlur={(event) =>
-					commit({
-						sample_size: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-					})}
-			/>
-		</Field>
 
 		<Field label="encoding">
 			<select

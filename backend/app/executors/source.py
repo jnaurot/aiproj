@@ -65,6 +65,37 @@ def _mode_to_mime(mode: str) -> str:
     return "text/csv"
 
 
+def _file_format_mime(file_format: str) -> str:
+    ff = str(file_format or "").strip().lower()
+    mapping = {
+        "csv": "text/csv",
+        "tsv": "text/tab-separated-values",
+        "parquet": "application/vnd.apache.parquet",
+        "json": "application/json",
+        "excel": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "txt": "text/plain; charset=utf-8",
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "png": "image/png",
+        "webp": "image/webp",
+        "gif": "image/gif",
+        "svg": "image/svg+xml",
+        "tif": "image/tiff",
+        "tiff": "image/tiff",
+        "mp3": "audio/mpeg",
+        "wav": "audio/wav",
+        "flac": "audio/flac",
+        "ogg": "audio/ogg",
+        "m4a": "audio/mp4",
+        "aac": "audio/aac",
+        "mp4": "video/mp4",
+        "mov": "video/quicktime",
+        "webm": "video/webm",
+    }
+    return mapping.get(ff, "application/octet-stream")
+
+
 def _canonical_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -101,12 +132,13 @@ def _metadata_for_output(
     output_mode: str,
     data: Any,
     params: Dict[str, Any],
+    mime_override: Optional[str] = None,
 ) -> FileMetadata:
     payload_bytes = _payload_bytes_for_mode(data, output_mode)
     return FileMetadata(
         file_path=f"artifact://{graph_id}/{node_id}/{source_kind}",
         file_type=_mode_to_file_type(output_mode),
-        mime_type=_mode_to_mime(output_mode),
+        mime_type=str(mime_override or _mode_to_mime(output_mode)),
         size_bytes=len(payload_bytes),
         data_schema={"source_kind": source_kind, "output_mode": output_mode},
         row_count=(len(data) if isinstance(data, list) else None),
@@ -267,14 +299,11 @@ async def _handle_file_source(
             csv_input,
             delimiter=schema.delimiter or ("\t" if schema.file_format == "tsv" else ","),
             encoding=schema.encoding,
-            nrows=schema.sample_size,
         )
         rows = df.to_dict(orient="records")
     elif schema.file_format == "parquet":
         parquet_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pq.read_table(parquet_input).to_pandas()
-        if schema.sample_size:
-            df = df.head(schema.sample_size)
         rows = df.to_dict(orient="records")
     elif schema.file_format == "json":
         raw_json = (
@@ -287,7 +316,7 @@ async def _handle_file_source(
             rows = json_data
     elif schema.file_format == "excel":
         excel_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
-        df = pd.read_excel(excel_input, sheet_name=schema.sheet_name or 0, nrows=schema.sample_size)
+        df = pd.read_excel(excel_input, sheet_name=schema.sheet_name or 0)
         rows = df.to_dict(orient="records")
     elif schema.file_format == "txt":
         text_data = (
@@ -300,8 +329,7 @@ async def _handle_file_source(
             raise ImportError("PDF support requires PyPDF2 and pdfplumber")
         pdf_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         with pdfplumber.open(pdf_input) as pdf:
-            max_pages = schema.sample_size or len(pdf.pages)
-            text_data = "\n\n".join((page.extract_text() or "") for page in pdf.pages[:max_pages])
+            text_data = "\n\n".join((page.extract_text() or "") for page in pdf.pages)
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 
@@ -351,6 +379,7 @@ async def _handle_file_source(
         output_mode=output_mode,
         data=data,
         params=params,
+        mime_override=_file_format_mime(schema.file_format),
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
 
@@ -494,4 +523,10 @@ def _default_file_output_mode(file_format: str) -> str:
         return "json"
     if file_format in {"txt", "pdf"}:
         return "text"
+    if file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+        return "binary"
+    if file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+        return "binary"
+    if file_format in {"mp4", "mov", "webm"}:
+        return "binary"
     return "binary"

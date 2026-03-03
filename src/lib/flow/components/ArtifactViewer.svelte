@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import JsonTreeNode from './JsonTreeNode.svelte';
 	import {
 		getArtifactConsumersUrl,
@@ -65,6 +66,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	let meta: ArtifactMeta | null = null;
 	let text: string | null = null;
 	let jsonObj: any = null;
+	let imageUrl: string | null = null;
+	let audioUrl: string | null = null;
+	let videoUrl: string | null = null;
 
 	let tableRows: Record<string, any>[] = [];
 	let tableCols: TableCol[] = [];
@@ -95,7 +99,38 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		effectiveMime.includes('excel');
 	$: isJson = effectiveMime.includes('application/json') || (meta?.payloadSchema as any)?.type === 'json';
 	$: isMarkdown = effectiveMime.includes('text/markdown');
+	$: isImage = effectiveMime.toLowerCase().startsWith('image/');
+	$: isTiff = effectiveMime.toLowerCase().startsWith('image/tiff');
+	$: isAudio = effectiveMime.toLowerCase().startsWith('audio/');
+	$: isVideo = effectiveMime.toLowerCase().startsWith('video/');
 	$: colCount = tableCols.length || ((meta?.payloadSchema as any)?.columns?.length ?? 0);
+
+	function clearImageUrl(): void {
+		if (imageUrl) {
+			URL.revokeObjectURL(imageUrl);
+			imageUrl = null;
+		}
+	}
+
+	function clearAudioUrl(): void {
+		if (audioUrl) {
+			URL.revokeObjectURL(audioUrl);
+			audioUrl = null;
+		}
+	}
+
+	function clearVideoUrl(): void {
+		if (videoUrl) {
+			URL.revokeObjectURL(videoUrl);
+			videoUrl = null;
+		}
+	}
+
+	onDestroy(() => {
+		clearImageUrl();
+		clearAudioUrl();
+		clearVideoUrl();
+	});
 
 	function typedBadge(raw: string | undefined) {
 		const t = String(raw ?? 'unknown').toLowerCase();
@@ -445,6 +480,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		error = null;
 		text = null;
 		jsonObj = null;
+		clearImageUrl();
+		clearAudioUrl();
+		clearVideoUrl();
 		tableRows = [];
 		tableCols = [];
 		totalRows = 0;
@@ -474,6 +512,25 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 
 			const ct = res.headers.get('content-type') ?? meta?.mimeType ?? mimeType ?? '';
 			const raw = await res.arrayBuffer();
+			const loweredCt = String(ct).toLowerCase();
+			if (loweredCt.startsWith('image/tiff')) {
+				return;
+			}
+			if (loweredCt.startsWith('image/')) {
+				const blob = new Blob([raw], { type: ct || 'application/octet-stream' });
+				imageUrl = URL.createObjectURL(blob);
+				return;
+			}
+			if (String(ct).toLowerCase().startsWith('audio/')) {
+				const blob = new Blob([raw], { type: ct || 'application/octet-stream' });
+				audioUrl = URL.createObjectURL(blob);
+				return;
+			}
+			if (String(ct).toLowerCase().startsWith('video/')) {
+				const blob = new Blob([raw], { type: ct || 'application/octet-stream' });
+				videoUrl = URL.createObjectURL(blob);
+				return;
+			}
 			const decoded = decodeBytes(raw, ct);
 			if (ct.includes('application/json')) {
 				try {
@@ -737,6 +794,32 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 			<pre>{text}</pre>
 		{/if}
 	</div>
+{:else if isTiff}
+	<div class="block">
+		<div class="label">Image</div>
+		<div class="muted">TIFF preview is not available inline. Download to inspect.</div>
+		<button class="downloadTiff" on:click={downloadArtifact}>Download TIFF</button>
+	</div>
+{:else if isImage && imageUrl}
+	<div class="block">
+		<div class="label">Image</div>
+		<img class="imagePreview" src={imageUrl} alt="artifact preview" />
+	</div>
+{:else if isAudio && audioUrl}
+	<div class="block">
+		<div class="label">Audio</div>
+		<audio class="audioPreview" src={audioUrl} controls preload="metadata">
+			Your browser does not support audio playback.
+		</audio>
+	</div>
+{:else if isVideo && videoUrl}
+	<div class="block">
+		<div class="label">Video</div>
+		<!-- svelte-ignore a11y_media_has_caption -->
+		<video class="videoPreview" src={videoUrl} controls preload="metadata">
+			Your browser does not support video playback.
+		</video>
+	</div>
 {:else}
 	<div class="muted">No content.</div>
 {/if}
@@ -987,5 +1070,33 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		color: var(--av-text);
 		padding: 8px;
 		border-radius: 6px;
+	}
+	.imagePreview {
+		display: block;
+		max-width: 100%;
+		max-height: 480px;
+		border: 1px solid var(--av-border);
+		border-radius: 8px;
+		background: var(--av-surface-alt);
+	}
+	.audioPreview {
+		display: block;
+		width: 100%;
+	}
+	.videoPreview {
+		display: block;
+		width: 100%;
+		max-height: 520px;
+		border: 1px solid var(--av-border);
+		border-radius: 8px;
+		background: var(--av-surface-alt);
+	}
+	.downloadTiff {
+		margin-top: 8px;
+		background: var(--av-surface-alt);
+		color: var(--av-text);
+		border: 1px solid var(--av-border);
+		border-radius: 6px;
+		padding: 6px 10px;
 	}
 </style>

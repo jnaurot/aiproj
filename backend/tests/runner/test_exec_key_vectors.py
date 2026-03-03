@@ -41,7 +41,7 @@ def test_exec_key_golden_vectors():
         input_refs=[("in", "a" * 64)],
         execution_version="v1",
     )
-    assert tool_v1 == "23385e3867619fca871a14e599b0521bc2f06291c08dd44cc5565f4fbba01bfd"
+    assert tool_v1 == "887a5c5ef08cc183562126f726b0dd4003482a18ebd62667a977c33f6f0df589"
 
     transform_v1 = _transform_exec_key(
         normalized_params={
@@ -54,7 +54,7 @@ def test_exec_key_golden_vectors():
         input_refs=[("in", "a" * 64)],
         execution_version="v1",
     )
-    assert transform_v1 == "5ba0ab7155d7b2de23c854af888c65b22e2e0fa60875141c3cde57bc1b36f47d"
+    assert transform_v1 == "0af644fd0fe15fb8741e8f1e0c9ccd161f412e32eb9c18ca831622b880e3f5a1"
 
 
 def test_exec_key_params_key_order_is_canonical():

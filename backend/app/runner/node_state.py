@@ -124,7 +124,6 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                     "encoding": p.get("encoding"),
                     "delimiter": p.get("delimiter"),
                     "sheet_name": p.get("sheet_name"),
-                    "sample_size": p.get("sample_size"),
                     "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
                     "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 }
@@ -177,7 +176,6 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "encoding": p.get("encoding"),
                 "delimiter": p.get("delimiter"),
                 "sheet_name": p.get("sheet_name"),
-                "sample_size": p.get("sample_size"),
                 "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 "file_stat": file_stat,
@@ -271,16 +269,9 @@ def build_node_state_hash(
         if embedding_contract is None and "embedding" in output_obj:
             embedding_contract = output_obj.get("embedding")
 
-        llm_out_port = "text"
-        if output_mode == "json":
-            llm_out_port = "json"
-        elif output_mode == "embeddings":
-            llm_out_port = "embeddings"
-
         state = {
             "execution_version": execution_version,
             "node_kind": kind,
-            "ports": {"out": llm_out_port},
             "schema": {
                 "output_mode": output_mode,
                 "output_strict": bool(output_strict),
@@ -295,7 +286,6 @@ def build_node_state_hash(
     state: Dict[str, Any] = {
         "execution_version": execution_version,
         "node_kind": kind,
-        "ports": _sanitize(data.get("ports") or {}),
         "schema": _sanitize(data.get("schema") or data.get("contract") or {}),
         "settings": _sanitize(data.get("settings") or {}),
         "params": _sanitize(params or {}),

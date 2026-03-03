@@ -7,7 +7,6 @@ File
   "delimiter": ",",
   "encoding": "utf-8",
   "sheet_name": null,
-  "sample_size": null,
   "cache_enabled": true
 }
 

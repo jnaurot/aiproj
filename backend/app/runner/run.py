@@ -23,6 +23,11 @@ from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .capabilities import allowed_ports
+from .contracts import (
+    canonical_schema_for_contract,
+    default_contract_for_node,
+    schema_fingerprint as contract_schema_fingerprint,
+)
 
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
@@ -312,6 +317,7 @@ def _artifact_metadata_v1(
     params_fingerprint: str,
     upstream_artifact_ids: list[str],
     contract_fingerprint: str,
+    schema_fingerprint: str,
     mime_type: str,
     port_type: Optional[str],
     created_at_iso: str,
@@ -327,6 +333,7 @@ def _artifact_metadata_v1(
         "paramsFingerprint": params_fingerprint,
         "upstreamArtifactIds": list(upstream_artifact_ids),
         "contractFingerprint": contract_fingerprint,
+        "schemaFingerprint": schema_fingerprint,
         "mimeType": mime_type,
         "portType": str(port_type or ""),
         "createdAt": created_at_iso,
@@ -427,6 +434,67 @@ def _infer_artifact_port_type(artifact: Artifact) -> str:
     return "binary"
 
 
+def _explicit_schema_from_node(node: Dict[str, Any]) -> Optional[Any]:
+    params = (node.get("data", {}).get("params", {}) or {}) if isinstance(node, dict) else {}
+    schema_obj = (
+        params.get("output_schema")
+        or ((params.get("output") or {}).get("schema"))
+        or params.get("json_schema")
+        or ((params.get("output") or {}).get("jsonSchema"))
+    )
+    if isinstance(schema_obj, (dict, list)):
+        return _sanitize_for_fingerprint(schema_obj)
+    return None
+
+
+def _expected_schema_contract_for_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    explicit_schema = _explicit_schema_from_node(node)
+    if explicit_schema is not None:
+        canonical = {"schema_version": 1, "explicit_schema": explicit_schema}
+        return {
+            "schemaObject": canonical,
+            "schemaFingerprint": contract_schema_fingerprint(canonical),
+            "schemaSource": "explicit",
+        }
+    default_contract = default_contract_for_node(node)
+    canonical = canonical_schema_for_contract(default_contract)
+    return {
+        "schemaObject": canonical,
+        "schemaFingerprint": contract_schema_fingerprint(canonical),
+        "schemaSource": f"default:{default_contract}",
+    }
+
+
+def _expected_mime_for_port(port: str) -> str:
+    p = str(port or "").strip().lower()
+    if p == "json":
+        return "application/json"
+    if p == "table":
+        return "text/csv; charset=utf-8"
+    if p == "text":
+        return "text/plain; charset=utf-8"
+    if p == "embeddings":
+        return "application/json"
+    return "application/octet-stream"
+
+
+def _artifact_schema_fingerprint(artifact: Artifact) -> str:
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    meta = ps.get("artifactMetadataV1") if isinstance(ps, dict) else None
+    if isinstance(meta, dict):
+        v = str(meta.get("schemaFingerprint") or meta.get("contractFingerprint") or "").strip()
+        if v:
+            return v
+    payload_without_meta = dict(ps) if isinstance(ps, dict) else {}
+    if isinstance(payload_without_meta, dict):
+        payload_without_meta.pop("artifactMetadataV1", None)
+    return contract_schema_fingerprint(payload_without_meta)
+
+
+def _normalize_mime_strict(mime_type: str) -> str:
+    return str(mime_type or "").strip().lower()
+
+
 def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     ports = (node.get("data", {}).get("ports", {}) or {})
     if kind == "llm":
@@ -451,28 +519,46 @@ def _allowed_ports(kind: str, direction: str, provider: Optional[str] = None) ->
     return allowed_ports(kind, direction, provider=provider)
 
 
-def _cached_artifact_contract_mismatch(kind: str, node: Dict[str, Any], artifact: Artifact) -> Optional[Dict[str, Any]]:
-    declared = _declared_out_port(kind, node)
-    if not declared:
+def _cached_artifact_contract_mismatch(
+    kind: str,
+    node: Dict[str, Any],
+    artifact: Artifact,
+    expected_schema: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    declared = _declared_out_port(kind, node) or "unknown"
+    expected_schema_fingerprint = str(expected_schema.get("schemaFingerprint") or "")
+    expected_schema_source = str(expected_schema.get("schemaSource") or "unknown")
+    if not expected_schema_fingerprint:
         return None
-    artifact_pt = _infer_artifact_port_type(artifact)
-    if declared != artifact_pt:
-        expected_contract = {"portType": declared}
-        actual_contract = {
-            "portType": artifact_pt,
-            "mimeType": artifact.mime_type,
-            "payloadSchema": artifact.payload_schema or {},
-        }
+    actual_schema_fingerprint = _artifact_schema_fingerprint(artifact)
+    expected_mime = _normalize_mime_strict(_expected_mime_for_port(declared))
+    actual_mime = _normalize_mime_strict(artifact.mime_type or "")
+    expected_contract = {
+        "schemaFingerprint": expected_schema_fingerprint,
+        "mimeType": expected_mime,
+    }
+    actual_contract = {
+        "schemaFingerprint": actual_schema_fingerprint,
+        "mimeType": actual_mime,
+    }
+    schema_mismatch = expected_schema_fingerprint != actual_schema_fingerprint
+    if schema_mismatch:
+        mime_matches = expected_mime == actual_mime
         return {
             "message": (
                 "Contract mismatch (cache hit): "
-                f"declared out='{declared}' but cached artifact port_type='{artifact_pt}'"
+                f"[schemaSource={expected_schema_source}] declared out='{declared}' expected schema '{expected_schema_fingerprint[:12]}...' "
+                f"but cached artifact had '{actual_schema_fingerprint[:12]}...'"
             ),
-            "expectedPortType": declared,
-            "actualPortType": artifact_pt,
             "artifactId": artifact.artifact_id,
             "producerExecKey": artifact.exec_key,
-            "mismatchKind": "port_type",
+            "mismatchKind": "schema_fingerprint",
+            "mimeMatches": mime_matches,
+            "expectedSchemaSource": expected_schema_source,
+            "expectedSchemaFingerprint": expected_schema_fingerprint,
+            "actualSchemaFingerprint": actual_schema_fingerprint,
+            "expectedMimeType": expected_mime,
+            "actualMimeType": actual_mime,
             "expectedContractFingerprint": sha256_hex(canonical_json(expected_contract).encode("utf-8")),
             "actualContractFingerprint": sha256_hex(canonical_json(actual_contract).encode("utf-8")),
         }
@@ -620,6 +706,7 @@ async def run_graph(
         expected_port_type: Optional[str] = None,
         actual_port_type: Optional[str] = None,
         producer_exec_key: Optional[str] = None,
+        expected_schema_source: Optional[str] = None,
         expected_contract_fingerprint: Optional[str] = None,
         actual_contract_fingerprint: Optional[str] = None,
         mismatch_kind: Optional[str] = None,
@@ -651,6 +738,8 @@ async def run_graph(
             evt["actualPortType"] = actual_port_type
         if producer_exec_key is not None:
             evt["producerExecKey"] = producer_exec_key
+        if expected_schema_source:
+            evt["expectedSchemaSource"] = expected_schema_source
         if expected_contract_fingerprint:
             evt["expectedContractFingerprint"] = expected_contract_fingerprint
         if actual_contract_fingerprint:
@@ -800,6 +889,7 @@ async def run_graph(
                 execution_version=context.execution_version,
                 node_impl_version=_node_impl_version(kind),
             )
+            expected_schema = _expected_schema_contract_for_node(n)
             cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
             cache_resolution = "CACHE_HIT" if cached_artifact_id else "CACHE_MISS"
             logger.debug(
@@ -824,6 +914,7 @@ async def run_graph(
                 "node_state_hash": node_state_hash,
                 "exec_key": exec_key,
                 "artifact_id": exec_key,
+                "expected_schema": expected_schema,
                 "cache_resolution": cache_resolution,
                 "cached_artifact_id": cached_artifact_id,
             }
@@ -863,8 +954,25 @@ async def run_graph(
             node_state_hash = resolved["node_state_hash"]
             exec_key = resolved["exec_key"]
             artifact_id = resolved["artifact_id"]
+            expected_schema = resolved["expected_schema"]
             cache_resolution = resolved["cache_resolution"]
             cached_artifact_id = resolved["cached_artifact_id"]
+            expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
+
+            if expected_schema_source.startswith("default:"):
+                await context.bus.emit({
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": (
+                        f"Schema defaulted: default={expected_schema_source.split(':', 1)[1]} "
+                        "(no explicit schema provided)"
+                    ),
+                    "nodeId": node_id,
+                    "schemaSource": expected_schema_source,
+                    "expectedSchemaFingerprint": (expected_schema or {}).get("schemaFingerprint"),
+                })
 
             allowed_in = _allowed_ports(kind, "in", provider=tool_provider)
             allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
@@ -954,7 +1062,7 @@ async def run_graph(
                     raise RuntimeError(
                         f"Cache graph mismatch for node '{node_id}': artifact graph_id={cached_art.graph_id} run graph_id={context.graph_id}"
                     )
-                mismatch_error = _cached_artifact_contract_mismatch(kind, n, cached_art)
+                mismatch_error = _cached_artifact_contract_mismatch(kind, n, cached_art, expected_schema)
                 if mismatch_error:
                     # Contract mismatch on cached artifact is a cache rejection, not a successful cache hit.
                     cache_stats["hit_contract_mismatch"] += 1
@@ -964,9 +1072,8 @@ async def run_graph(
                         decision="cache_hit_contract_mismatch",
                         exec_key=exec_key,
                         artifact_id=cached_artifact_id,
-                        expected_port_type=mismatch_error["expectedPortType"],
-                        actual_port_type=mismatch_error["actualPortType"],
                         producer_exec_key=mismatch_error.get("producerExecKey"),
+                        expected_schema_source=mismatch_error.get("expectedSchemaSource"),
                         expected_contract_fingerprint=mismatch_error.get("expectedContractFingerprint"),
                         actual_contract_fingerprint=mismatch_error.get("actualContractFingerprint"),
                         mismatch_kind=mismatch_error.get("mismatchKind"),
@@ -980,10 +1087,13 @@ async def run_graph(
                         "message": mismatch_error["message"],
                         "nodeId": node_id,
                         "code": "CONTRACT_MISMATCH",
-                        "expectedPortType": mismatch_error["expectedPortType"],
-                        "actualPortType": mismatch_error["actualPortType"],
                         "artifactId": mismatch_error["artifactId"],
                         "producerExecKey": mismatch_error.get("producerExecKey"),
+                        "expectedMimeType": mismatch_error.get("expectedMimeType"),
+                        "actualMimeType": mismatch_error.get("actualMimeType"),
+                        "expectedSchemaFingerprint": mismatch_error.get("expectedSchemaFingerprint"),
+                        "expectedSchemaSource": mismatch_error.get("expectedSchemaSource"),
+                        "actualSchemaFingerprint": mismatch_error.get("actualSchemaFingerprint"),
                         "expectedContractFingerprint": mismatch_error.get("expectedContractFingerprint"),
                         "actualContractFingerprint": mismatch_error.get("actualContractFingerprint"),
                         "mismatchKind": mismatch_error.get("mismatchKind"),
@@ -1386,7 +1496,12 @@ async def run_graph(
                             "type": "table",
                             "columns": [{"name": c, "dtype": "unknown"} for c in (res.meta.get("columns") or [])],
                         }
-                        contract_fingerprint = sha256_hex(canonical_json(base_payload_schema).encode("utf-8"))
+                        schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
+                        if not schema_fp:
+                            schema_fp = contract_schema_fingerprint(
+                                canonical_schema_for_contract(default_contract_for_node(n))
+                            )
+                        contract_fingerprint = schema_fp
                         base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
                             exec_key=exec_key,
                             node_id=node_id,
@@ -1395,6 +1510,7 @@ async def run_graph(
                             params_fingerprint=node_state_hash,
                             upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
                             contract_fingerprint=contract_fingerprint,
+                            schema_fingerprint=schema_fp,
                             mime_type=res.mime_type,
                             port_type="table",
                             created_at_iso=created_at_dt.isoformat(),
@@ -1635,7 +1751,13 @@ async def run_graph(
                                     f"Source output contract mismatch: out=binary expects bytes, got {type(data_value)}"
                                 )
                             payload_bytes = bytes(data_value)
-                            mime_type = "application/octet-stream"
+                            source_meta = getattr(output, "metadata", None)
+                            source_meta_mime = (
+                                str(getattr(source_meta, "mime_type", "")).strip()
+                                if source_meta is not None
+                                else ""
+                            )
+                            mime_type = source_meta_mime or "application/octet-stream"
                         else:
                             raise RuntimeError(
                                 f"Source output contract mismatch: unsupported out port '{out_contract}'"
@@ -1827,7 +1949,12 @@ async def run_graph(
                         else None
                     ) or {}
                     created_at_dt = datetime.now(timezone.utc)
-                    contract_fingerprint = sha256_hex(canonical_json(base_payload_schema).encode("utf-8"))
+                    schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
+                    if not schema_fp:
+                        schema_fp = contract_schema_fingerprint(
+                            canonical_schema_for_contract(default_contract_for_node(n))
+                        )
+                    contract_fingerprint = schema_fp
                     base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
                         exec_key=exec_key,
                         node_id=node_id,
@@ -1836,6 +1963,7 @@ async def run_graph(
                         params_fingerprint=artifact_params_hash,
                         upstream_artifact_ids=sorted(upstream_ids),
                         contract_fingerprint=contract_fingerprint,
+                        schema_fingerprint=schema_fp,
                         mime_type=mime_type,
                         port_type=artifact_port_type,
                         created_at_iso=created_at_dt.isoformat(),

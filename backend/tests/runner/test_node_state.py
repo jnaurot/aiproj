@@ -15,11 +15,11 @@ def _node(kind: str = "tool", ports=None, schema=None, settings=None):
     }
 
 
-def test_node_state_hash_changes_when_ports_change():
+def test_node_state_hash_ignores_ports_change():
     params = {"provider": "builtin", "builtin": {"toolId": "noop"}}
     h1 = build_node_state_hash(node=_node(ports={"in": "json", "out": "json"}), params=params, execution_version="v1")
     h2 = build_node_state_hash(node=_node(ports={"in": "text", "out": "json"}), params=params, execution_version="v1")
-    assert h1 != h2
+    assert h1 == h2
 
 
 def test_node_state_hash_changes_when_execution_version_changes():

@@ -11,7 +11,6 @@ export const defaultSourceFileParams: SourceFileParams = {
     file_format: "txt",
     delimiter: ",",
     sheet_name: "Sheet1",
-    sample_size: 1000,
     encoding: "utf-8",
     cache_enabled: true,
     output: { mode: "table" }

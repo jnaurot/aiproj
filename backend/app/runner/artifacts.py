@@ -27,6 +27,7 @@ _REQUIRED_ARTIFACT_META_KEYS = {
     "paramsFingerprint",
     "upstreamArtifactIds",
     "contractFingerprint",
+    "schemaFingerprint",
     "mimeType",
     "portType",
     "createdAt",

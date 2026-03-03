@@ -1,0 +1,172 @@
+import sys
+import types
+from datetime import datetime, timezone
+
+if "duckdb" not in sys.modules:
+    sys.modules["duckdb"] = types.SimpleNamespace()
+
+from app.runner.artifacts import Artifact
+from app.runner.contracts import (
+    AUDIO_V1,
+    IMAGE_V1,
+    JSON_ANY_V1,
+    TABLE_ANY_V1,
+    TEXT_V1,
+    VIDEO_V1,
+    canonical_schema_for_contract,
+    default_contract_for_node,
+    schema_fingerprint,
+)
+from app.runner.run import _cached_artifact_contract_mismatch, _expected_schema_contract_for_node
+
+
+def _node(kind: str, *, source_kind: str | None = None, params: dict | None = None) -> dict:
+    data = {"kind": kind, "params": params or {}, "ports": {"in": None, "out": "table"}}
+    if source_kind:
+        data["sourceKind"] = source_kind
+    return {"id": "n1", "data": data}
+
+
+def _artifact_with_schema_fp(schema_fp: str) -> Artifact:
+    return Artifact(
+        artifact_id="a" * 64,
+        node_kind="source",
+        params_hash="p" * 64,
+        upstream_ids=[],
+        created_at=datetime.now(timezone.utc),
+        execution_version="v1",
+        mime_type="application/octet-stream",
+        port_type="binary",
+        size_bytes=0,
+        storage_uri="artifact://a",
+        payload_schema={
+            "schema_version": 1,
+            "type": "binary",
+            "artifactMetadataV1": {
+                "metadataVersion": 1,
+                "execKey": "a" * 64,
+                "nodeId": "n1",
+                "nodeType": "source",
+                "nodeImplVersion": "SOURCE@1",
+                "paramsFingerprint": "p" * 64,
+                "upstreamArtifactIds": [],
+                "contractFingerprint": schema_fp,
+                "schemaFingerprint": schema_fp,
+                "mimeType": "application/octet-stream",
+                "portType": "binary",
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "runId": "r1",
+                "graphId": "g1",
+            },
+        },
+        run_id="r1",
+        graph_id="g1",
+        node_id="n1",
+        exec_key="a" * 64,
+    )
+
+
+def test_default_contract_mapping():
+    assert default_contract_for_node(_node("source", source_kind="file")) == TABLE_ANY_V1
+    assert (
+        default_contract_for_node(
+            _node("source", source_kind="file", params={"file_format": "png"})
+        )
+        == IMAGE_V1
+    )
+    assert (
+        default_contract_for_node(
+            _node("source", source_kind="file", params={"file_format": "jpg"})
+        )
+        == IMAGE_V1
+    )
+    assert (
+        default_contract_for_node(
+            _node("source", source_kind="file", params={"file_format": "tif"})
+        )
+        == IMAGE_V1
+    )
+    assert (
+        default_contract_for_node(
+            _node("source", source_kind="file", params={"file_format": "mp3"})
+        )
+        == AUDIO_V1
+    )
+    assert (
+        default_contract_for_node(
+            _node("source", source_kind="file", params={"file_format": "mp4"})
+        )
+        == VIDEO_V1
+    )
+    assert default_contract_for_node(_node("source", source_kind="api")) == JSON_ANY_V1
+    assert default_contract_for_node(_node("llm", params={"output_mode": "text"})) == TEXT_V1
+
+
+def test_expected_schema_source_explicit_vs_default():
+    explicit_node = _node("llm", params={"output_schema": {"type": "object"}})
+    default_node = _node("source", source_kind="file")
+
+    explicit = _expected_schema_contract_for_node(explicit_node)
+    defaulted = _expected_schema_contract_for_node(default_node)
+
+    assert explicit["schemaSource"] == "explicit"
+    assert str(explicit["schemaFingerprint"])
+    assert str(defaulted["schemaSource"]).startswith("default:")
+    assert str(defaulted["schemaFingerprint"])
+
+
+def test_default_schema_still_gates_cache_mismatch():
+    node = _node("source", source_kind="file")
+    expected = _expected_schema_contract_for_node(node)
+    wrong = schema_fingerprint(canonical_schema_for_contract(TEXT_V1))
+    art = _artifact_with_schema_fp(wrong)
+    mismatch = _cached_artifact_contract_mismatch("source", node, art, expected)
+    assert mismatch is not None
+    assert mismatch.get("mismatchKind") == "schema_fingerprint"
+    assert str(mismatch.get("expectedSchemaSource", "")).startswith("default:")
+
+
+def test_image_default_schema_fingerprint_is_format_agnostic():
+    png_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "png"})
+    )
+    jpg_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "jpg"})
+    )
+    jpeg_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "jpeg"})
+    )
+    tif_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "tif"})
+    )
+    assert png_expected["schemaSource"] == "default:IMAGE_V1"
+    assert jpg_expected["schemaSource"] == "default:IMAGE_V1"
+    assert jpeg_expected["schemaSource"] == "default:IMAGE_V1"
+    assert tif_expected["schemaSource"] == "default:IMAGE_V1"
+    assert png_expected["schemaFingerprint"] == jpg_expected["schemaFingerprint"]
+    assert png_expected["schemaFingerprint"] == jpeg_expected["schemaFingerprint"]
+    assert png_expected["schemaFingerprint"] == tif_expected["schemaFingerprint"]
+
+
+def test_audio_default_schema_fingerprint_is_format_agnostic():
+    mp3_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "mp3"})
+    )
+    wav_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "wav"})
+    )
+    assert mp3_expected["schemaSource"] == "default:AUDIO_V1"
+    assert wav_expected["schemaSource"] == "default:AUDIO_V1"
+    assert mp3_expected["schemaFingerprint"] == wav_expected["schemaFingerprint"]
+
+
+def test_video_default_schema_fingerprint_is_format_agnostic():
+    mp4_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "mp4"})
+    )
+    webm_expected = _expected_schema_contract_for_node(
+        _node("source", source_kind="file", params={"file_format": "webm"})
+    )
+    assert mp4_expected["schemaSource"] == "default:VIDEO_V1"
+    assert webm_expected["schemaSource"] == "default:VIDEO_V1"
+    assert mp4_expected["schemaFingerprint"] == webm_expected["schemaFingerprint"]

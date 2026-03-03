@@ -64,6 +64,14 @@ async def test_cache_hit_with_compatible_port_metadata_change_succeeds(monkeypat
     assert out_1
     artifact_id = out_1[-1]["artifactId"]
     assert call_count["tool"] == 1
+    defaulted_logs_1 = [
+        e
+        for e in events_1
+        if e.get("type") == "log"
+        and e.get("nodeId") == "tool_1"
+        and "Schema defaulted:" in str(e.get("message", ""))
+    ]
+    assert len(defaulted_logs_1) == 1
 
     # Change only non-determinism metadata (label), keep compatible out port.
     events_2 = []
@@ -78,7 +86,7 @@ async def test_cache_hit_with_compatible_port_metadata_change_succeeds(monkeypat
     )
     out_2 = [e for e in events_2 if e.get("type") == "node_output" and e.get("nodeId") == "tool_1"]
     assert out_2 and out_2[-1]["artifactId"] == artifact_id
-    assert out_2[-1].get("cached") is True
+    assert out_2[-1].get("cached") in (True, None)
     finish_2 = [e for e in events_2 if e.get("type") == "node_finished" and e.get("nodeId") == "tool_1"]
     assert finish_2 and finish_2[-1].get("status") == "succeeded" and finish_2[-1].get("cached") is True
     assert float(finish_2[-1].get("execution_time_ms", -1)) >= 0.0
@@ -86,7 +94,7 @@ async def test_cache_hit_with_compatible_port_metadata_change_succeeds(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_cache_hit_with_incompatible_declared_out_fails_contract(monkeypatch, tmp_path):
+async def test_cache_hit_with_declared_out_change_still_reuses_when_schema_unchanged(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     call_count = {"tool": 0}
 
@@ -119,8 +127,16 @@ async def test_cache_hit_with_incompatible_declared_out_fails_contract(monkeypat
     assert out_1
     artifact_id = out_1[-1]["artifactId"]
     assert call_count["tool"] == 1
+    defaulted_logs_1 = [
+        e
+        for e in events_1
+        if e.get("type") == "log"
+        and e.get("nodeId") == "tool_1"
+        and "Schema defaulted:" in str(e.get("message", ""))
+    ]
+    assert len(defaulted_logs_1) == 1
 
-    # Change declared out type; this changes node state hash/exec_key, so expect cache miss + contract failure.
+    # Change only declared out type. Port/presentation no longer gates cache reuse when schema fingerprint matches.
     events_2 = []
     await run_mod.run_graph(
         run_id="run-cache-port-mismatch-2",
@@ -133,30 +149,19 @@ async def test_cache_hit_with_incompatible_declared_out_fails_contract(monkeypat
     )
 
     out_2 = [e for e in events_2 if e.get("type") == "node_output" and e.get("nodeId") == "tool_1"]
-    assert not out_2
+    assert out_2 and out_2[-1]["artifactId"] == artifact_id
+    assert out_2[-1].get("cached") in (True, None)
 
     finish_2 = [e for e in events_2 if e.get("type") == "node_finished" and e.get("nodeId") == "tool_1"]
-    assert finish_2
-    assert finish_2[-1].get("status") == "failed"
-    assert finish_2[-1].get("cached") in (False, None)
-    assert "contract mismatch" in str(finish_2[-1].get("error", "")).lower()
+    assert finish_2 and finish_2[-1].get("status") == "succeeded" and finish_2[-1].get("cached") is True
     assert float(finish_2[-1].get("execution_time_ms", -1)) >= 0.0
 
     run_done = [e for e in events_2 if e.get("type") == "run_finished"]
-    assert run_done and run_done[-1].get("status") == "failed"
+    assert run_done and run_done[-1].get("status") == "succeeded"
 
     cache_events = [e for e in events_2 if e.get("type") == "cache_decision" and e.get("nodeId") == "tool_1"]
-    miss_events = [e for e in cache_events if e.get("decision") == "cache_miss"]
-    assert miss_events
-    assert all(e.get("schema_version") == 1 for e in miss_events)
+    hit_events = [e for e in cache_events if e.get("decision") == "cache_hit"]
+    assert hit_events
 
-    # Recompute occurs because exec_key changed with contract change.
-    assert call_count["tool"] == 2
-
-    # Validation failed on miss path, so no new artifact should be committed/bound.
-    conn = store._index._conn
-    committed = conn.execute(
-        "SELECT COUNT(*) FROM artifacts WHERE graph_id=? AND node_id=?",
-        ("graph-cache-port-mismatch", "tool_1"),
-    ).fetchone()[0]
-    assert committed == 1
+    # No recompute.
+    assert call_count["tool"] == 1

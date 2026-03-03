@@ -269,7 +269,31 @@ class TestSourceFileParams:
     
     def test_valid_file_formats(self):
         """Test all valid file formats"""
-        formats = ["csv", "parquet", "json", "excel", "txt"]
+        formats = [
+            "csv",
+            "parquet",
+            "json",
+            "excel",
+            "txt",
+            "pdf",
+            "jpg",
+            "jpeg",
+            "png",
+            "webp",
+            "gif",
+            "svg",
+            "tif",
+            "tiff",
+            "mp3",
+            "wav",
+            "flac",
+            "ogg",
+            "m4a",
+            "aac",
+            "mp4",
+            "mov",
+            "webm",
+        ]
         for fmt in formats:
             params = {
                 "rel_path": ".",

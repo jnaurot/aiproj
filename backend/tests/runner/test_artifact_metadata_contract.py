@@ -58,6 +58,7 @@ async def test_artifact_write_succeeds_with_metadata_v1():
                 "paramsFingerprint": "p" * 64,
                 "upstreamArtifactIds": [],
                 "contractFingerprint": "c" * 64,
+                "schemaFingerprint": "s" * 64,
                 "mimeType": "text/plain; charset=utf-8",
                 "portType": "text",
                 "createdAt": datetime.now(timezone.utc).isoformat(),

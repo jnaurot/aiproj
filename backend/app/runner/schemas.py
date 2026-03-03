@@ -68,6 +68,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(raw or {})
+    p.pop("sample_size", None)
+    p.pop("sampleSize", None)
     if "snapshotId" in p and "snapshot_id" not in p:
         p["snapshot_id"] = p.pop("snapshotId")
     if "recentSnapshotIds" in p and "recent_snapshot_ids" not in p:
@@ -176,10 +178,34 @@ class SourceFileParams(NodeParamSchema):
     file_path: Optional[str] = None  # compatibility shim (legacy FE)
     recent_snapshot_ids: List[str] = Field(default_factory=list)
     snapshot_metadata: Optional[Dict[str, Any]] = None
-    file_format: Literal["csv", "tsv", "parquet", "json", "excel", "txt", "pdf"] = "csv"
+    file_format: Literal[
+        "csv",
+        "tsv",
+        "parquet",
+        "json",
+        "excel",
+        "txt",
+        "pdf",
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "gif",
+        "svg",
+        "tif",
+        "tiff",
+        "mp3",
+        "wav",
+        "flac",
+        "ogg",
+        "m4a",
+        "aac",
+        "mp4",
+        "mov",
+        "webm",
+    ] = "csv"
     delimiter: Optional[str] = None  # for CSV
     sheet_name: Optional[str] = None  # for Excel
-    sample_size: Optional[int] = None
     encoding: str = "utf-8"
     cache_enabled: bool = True
     output_mode: Optional[Literal["table", "text", "json", "binary"]] = None
@@ -195,6 +221,12 @@ class SourceFileParams(NodeParamSchema):
             self.output_mode = "json"
         elif self.file_format in {"txt", "pdf"}:
             self.output_mode = "text"
+        elif self.file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+            self.output_mode = "binary"
+        elif self.file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+            self.output_mode = "binary"
+        elif self.file_format in {"mp4", "mov", "webm"}:
+            self.output_mode = "binary"
         else:
             self.output_mode = "binary"
         return self
