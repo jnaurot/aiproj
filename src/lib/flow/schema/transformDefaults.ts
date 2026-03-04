@@ -42,15 +42,12 @@ export const defaultTransformDeriveParams: TransformDeriveParams = {
 };
 
 export const defaultTransformAggregateParams: TransformAggregateParams = {
-	groupBy: ['category'],
+	groupBy: [],
 	metrics: [
 		{
-			as: 'row_count',
-			expr: 'count(*)'
-		},
-		{
-			as: 'avg_length',
-			expr: 'avg(length(text))'
+			name: 'row_count',
+			op: 'count_rows',
+			column: null
 		}
 	]
 };

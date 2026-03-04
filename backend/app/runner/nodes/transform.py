@@ -31,6 +31,29 @@ OP_KEYS = {
 }
 
 JOIN_HOWS = {"inner", "left", "right", "full"}
+AGG_OPS = {
+    "count_rows",
+    "count",
+    "count_distinct",
+    "min",
+    "max",
+    "sum",
+    "mean",
+    "avg_length",
+    "min_length",
+    "max_length",
+}
+AGG_OPS_NEEDS_COLUMN = {
+    "count",
+    "count_distinct",
+    "min",
+    "max",
+    "sum",
+    "mean",
+    "avg_length",
+    "min_length",
+    "max_length",
+}
 
 # ---- helpers ----
 
@@ -137,6 +160,86 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
                     "how": how,
                 })
         p["join"] = {"clauses": clauses}
+
+    if op == "aggregate":
+        raw = p.get("aggregate") if isinstance(p.get("aggregate"), dict) else {}
+        group_by_raw = raw.get("groupBy")
+        group_by: List[str] = []
+        if isinstance(group_by_raw, list):
+            seen_group: set[str] = set()
+            for item in group_by_raw:
+                col = str(item or "").strip()
+                if not col or col in seen_group:
+                    continue
+                seen_group.add(col)
+                group_by.append(col)
+
+        metrics_raw = raw.get("metrics")
+        metrics: List[Dict[str, Any]] = []
+        if isinstance(metrics_raw, list):
+            seen_names: set[str] = set()
+            for item in metrics_raw:
+                if not isinstance(item, dict):
+                    continue
+                # legacy compatibility: {as, expr}
+                if "as" in item or "expr" in item:
+                    legacy_name = str(item.get("as") or "").strip()
+                    legacy_expr = str(item.get("expr") or "").strip()
+                    if not legacy_name or not legacy_expr:
+                        continue
+                    fn_match = re.match(r"^\s*([a-z_]+)\((.*)\)\s*$", legacy_expr, flags=re.IGNORECASE)
+                    op_name = "count_rows"
+                    column_name: Optional[str] = None
+                    if fn_match:
+                        fn = str(fn_match.group(1) or "").lower().strip()
+                        arg = str(fn_match.group(2) or "").strip().strip('"')
+                        if fn == "count" and arg == "*":
+                            op_name = "count_rows"
+                        elif fn == "avg":
+                            length_match = re.match(r"^length\(([^)]+)\)$", arg, flags=re.IGNORECASE)
+                            if length_match:
+                                op_name = "avg_length"
+                                column_name = str(length_match.group(1) or "").strip().strip('"')
+                            else:
+                                op_name = "mean"
+                                column_name = arg
+                        elif fn == "count_distinct":
+                            op_name = "count_distinct"
+                            column_name = arg
+                        elif fn in AGG_OPS:
+                            op_name = fn
+                            column_name = arg if fn in AGG_OPS_NEEDS_COLUMN else None
+                    if legacy_name in seen_names:
+                        continue
+                    seen_names.add(legacy_name)
+                    metrics.append({
+                        "name": legacy_name,
+                        "op": op_name,
+                        "column": column_name,
+                    })
+                    continue
+
+                name = str(item.get("name") or "").strip()
+                op_name = str(item.get("op") or "").strip()
+                column_name = str(item.get("column") or "").strip()
+                if not name or name in seen_names:
+                    continue
+                if op_name not in AGG_OPS:
+                    continue
+                seen_names.add(name)
+                metrics.append({
+                    "name": name,
+                    "op": op_name,
+                    "column": column_name if op_name in AGG_OPS_NEEDS_COLUMN else None,
+                })
+
+        if not metrics:
+            metrics = [{"name": "row_count", "op": "count_rows", "column": None}]
+
+        p["aggregate"] = {
+            "groupBy": group_by,
+            "metrics": metrics,
+        }
 
     return p
 
@@ -352,6 +455,114 @@ def _execute_dedupe_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.Dat
     deduped = deduped.sort_values("__rowid", kind="stable").drop(columns=["__rowid"], errors="ignore")
     return deduped.reset_index(drop=True)
 
+
+def _execute_aggregate_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    group_by_raw = spec.get("groupBy")
+    metrics_raw = spec.get("metrics")
+    group_by: List[str] = []
+    if isinstance(group_by_raw, list):
+        seen_group: set[str] = set()
+        for item in group_by_raw:
+            col = str(item or "").strip()
+            if not col or col in seen_group:
+                continue
+            seen_group.add(col)
+            group_by.append(col)
+
+    metrics: List[Dict[str, Any]] = []
+    if isinstance(metrics_raw, list):
+        seen_names: set[str] = set()
+        for item in metrics_raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            op = str(item.get("op") or "").strip()
+            column = str(item.get("column") or "").strip()
+            if not name or name in seen_names:
+                continue
+            if op not in AGG_OPS:
+                continue
+            if op in AGG_OPS_NEEDS_COLUMN and not column:
+                continue
+            seen_names.add(name)
+            metrics.append({"name": name, "op": op, "column": column or None})
+    if not metrics:
+        metrics = [{"name": "row_count", "op": "count_rows", "column": None}]
+
+    cols = [str(c) for c in list(primary_df.columns)]
+    missing_group = [c for c in group_by if c not in cols]
+    missing_metric = [m["column"] for m in metrics if m.get("column") and m["column"] not in cols]
+    missing = sorted(set([*missing_group, *missing_metric]))
+    if missing:
+        raise ValueError(f"aggregate columns missing from input: {', '.join(missing)}")
+
+    if len(group_by) == 0:
+        out_row: Dict[str, Any] = {}
+        for metric in metrics:
+            name = metric["name"]
+            op = metric["op"]
+            col = metric.get("column")
+            if op == "count_rows":
+                out_row[name] = int(len(primary_df))
+            elif op == "count":
+                out_row[name] = int(primary_df[col].count())
+            elif op == "count_distinct":
+                out_row[name] = int(primary_df[col].nunique(dropna=True))
+            elif op == "min":
+                out_row[name] = primary_df[col].min()
+            elif op == "max":
+                out_row[name] = primary_df[col].max()
+            elif op == "sum":
+                out_row[name] = primary_df[col].sum()
+            elif op == "mean":
+                out_row[name] = primary_df[col].mean()
+            elif op in {"avg_length", "min_length", "max_length"}:
+                lengths = primary_df[col].astype("string").str.len()
+                if op == "avg_length":
+                    out_row[name] = lengths.mean()
+                elif op == "min_length":
+                    out_row[name] = lengths.min()
+                else:
+                    out_row[name] = lengths.max()
+        return pd.DataFrame([out_row], columns=[m["name"] for m in metrics])
+
+    grouped = primary_df.groupby(group_by, dropna=False, sort=True)
+    out = grouped.size().reset_index(name="__group_size")
+    out = out.drop(columns=["__group_size"], errors="ignore")
+    for metric in metrics:
+        name = metric["name"]
+        op = metric["op"]
+        col = metric.get("column")
+        if op == "count_rows":
+            series = grouped.size()
+        elif op == "count":
+            series = grouped[col].count()
+        elif op == "count_distinct":
+            series = grouped[col].nunique(dropna=True)
+        elif op == "min":
+            series = grouped[col].min()
+        elif op == "max":
+            series = grouped[col].max()
+        elif op == "sum":
+            series = grouped[col].sum()
+        elif op == "mean":
+            series = grouped[col].mean()
+        elif op in {"avg_length", "min_length", "max_length"}:
+            lengths = primary_df[col].astype("string").str.len()
+            if op == "avg_length":
+                series = lengths.groupby([primary_df[g] for g in group_by], dropna=False).mean()
+            elif op == "min_length":
+                series = lengths.groupby([primary_df[g] for g in group_by], dropna=False).min()
+            else:
+                series = lengths.groupby([primary_df[g] for g in group_by], dropna=False).max()
+        else:
+            continue
+        out = out.merge(series.rename(name).reset_index(), on=group_by, how="left")
+
+    out = out.sort_values(by=group_by, kind="stable", na_position="last").reset_index(drop=True)
+    ordered_cols = group_by + [m["name"] for m in metrics]
+    return out.reindex(columns=ordered_cols)
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
@@ -378,6 +589,9 @@ def execute_transform_op(
     if op == "dedupe":
         spec = params["dedupe"]
         return _execute_dedupe_op(primary_df, spec)
+    if op == "aggregate":
+        spec = params["aggregate"]
+        return _execute_aggregate_op(primary_df, spec)
 
     if duckdb is None:
         raise ModuleNotFoundError("duckdb is required for non-split transform operations")
@@ -416,17 +630,6 @@ def execute_transform_op(
             for d in params["derive"]["columns"]:
                 parts.append(f"({d['expr']}) as {quote_ident(d['name'])}")
             return con.execute(f"select {', '.join(parts)} from {primary_name}").df()
-
-        elif op == "aggregate":
-            gb = params["aggregate"]["groupBy"]
-            metrics = params["aggregate"]["metrics"]
-            gb_sql = ", ".join([quote_ident(c) for c in gb]) if gb else ""
-            metrics_sql = ", ".join([f"({m['expr']}) as {quote_ident(m['as'])}" for m in metrics])
-            if gb_sql:
-                q = f"select {gb_sql}, {metrics_sql} from {primary_name} group by {gb_sql}"
-            else:
-                q = f"select {metrics_sql} from {primary_name}"
-            return con.execute(q).df()
 
         elif op == "join":
             if not join_lookup:

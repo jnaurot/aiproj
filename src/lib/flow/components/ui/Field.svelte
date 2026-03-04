@@ -19,22 +19,11 @@
 		hasDirectTextarea = Array.from(vEl.children).some(
 			(el) => el.tagName.toLowerCase() === 'textarea'
 		);
-
-		// hard proof in console
-		console.log('[Field]', {
-			label,
-			stackedProp: stacked,
-			hasAnyTextarea,
-			hasDirectTextarea,
-			vChildren: Array.from(vEl.children).map((c) => c.tagName.toLowerCase())
-		});
 	}
 
 	onMount(recompute);
 	afterUpdate(recompute);
 
-	// Toggle visual debug without changing code again
-	$: debug = typeof window !== 'undefined' && localStorage.getItem('FIELD_DEBUG') === '1';
 </script>
 
 <!-- <div class={`field ${stacked ? 'stacked' : ''} ${className}`.trim()}>
@@ -122,8 +111,7 @@
 		gap: 6px;
 	}
 
-	/* keep your existing behavior for now; do NOT change it yet */
-	.field:has(textarea) {
+	.field[data-has-any-textarea='1'] {
 		grid-template-columns: 1fr;
 		gap: 6px;
 	}
@@ -143,19 +131,11 @@
 		padding-top: 0;
 	}
 
-	.field:has(textarea) .k {
+	.field[data-has-any-textarea='1'] .k {
 		padding-top: 0;
 	}
 
 	.field.stacked .v {
 		padding-left: 12px;
-	}
-
-	/* DEBUG visuals */
-	.field[data-has-any-textarea='1'] {
-		outline: 1px solid rgba(255, 200, 0, 0.6);
-	}
-	.field[data-has-direct-textarea='1'] {
-		outline: 2px solid rgba(0, 200, 255, 0.6);
 	}
 </style>

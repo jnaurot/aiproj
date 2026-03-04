@@ -325,7 +325,7 @@ def _transform_output_columns(
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
     if op_l == "aggregate":
         group_by = [str(c) for c in ((norm.get("aggregate") or {}).get("groupBy") or [])]
-        metrics = [str(m.get("as")) for m in ((norm.get("aggregate") or {}).get("metrics") or []) if isinstance(m, dict) and m.get("as")]
+        metrics = [str(m.get("name")) for m in ((norm.get("aggregate") or {}).get("metrics") or []) if isinstance(m, dict) and m.get("name")]
         out = group_by + [m for m in metrics if m not in group_by]
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
     if op_l == "join":
@@ -1740,6 +1740,68 @@ async def run_graph(
                                             available_source=available_source,
                                         ),
                                     )
+                        elif op == "aggregate":
+                            aggregate_spec = norm.get("aggregate") or {}
+                            group_by_cols = [
+                                str(c).strip()
+                                for c in (aggregate_spec.get("groupBy") or [])
+                                if str(c).strip()
+                            ]
+                            metrics = aggregate_spec.get("metrics") or []
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            missing_group = [c for c in group_by_cols if c not in available_set]
+                            if missing_group:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: aggregate groupBy references missing columns {missing_group}",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="aggregate",
+                                        param_path="params.aggregate.groupBy",
+                                        missing_columns=missing_group,
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
+                            needs_column_ops = {
+                                "count",
+                                "count_distinct",
+                                "min",
+                                "max",
+                                "sum",
+                                "mean",
+                                "avg_length",
+                                "min_length",
+                                "max_length",
+                            }
+                            missing_metrics: list[str] = []
+                            missing_metric_indices: list[int] = []
+                            if isinstance(metrics, list):
+                                for i, metric in enumerate(metrics):
+                                    if not isinstance(metric, dict):
+                                        continue
+                                    op_name = str(metric.get("op") or "").strip()
+                                    col_name = str(metric.get("column") or "").strip()
+                                    if op_name in needs_column_ops and col_name and col_name not in available_set:
+                                        missing_metrics.append(col_name)
+                                        missing_metric_indices.append(i)
+                            if missing_metrics:
+                                metric_idx = missing_metric_indices[0] if missing_metric_indices else 0
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: aggregate metrics reference missing columns {missing_metrics}",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="aggregate",
+                                        param_path=f"params.aggregate.metrics.{metric_idx}.column",
+                                        missing_columns=missing_metrics,
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
                         elif op == "join":
                             join_spec = norm.get("join") or {}
                             clauses = join_spec.get("clauses") or []

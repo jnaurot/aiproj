@@ -49,11 +49,66 @@ export const TransformDeriveParamsSchema = z.object({
 export const TransformAggregateParamsSchema = z.object({
   groupBy: z.array(z.string().min(1)).optional().default([]),
   metrics: z.array(
-    z.object({
-      as: z.string().min(1, "Aggregate alias cannot be empty"),
-      expr: z.string().min(1, "Aggregate expression cannot be empty"),
-    })
+    z
+      .object({
+        name: z.string().min(1, "Aggregate metric name cannot be empty"),
+        op: z.enum([
+          "count_rows",
+          "count",
+          "count_distinct",
+          "min",
+          "max",
+          "sum",
+          "mean",
+          "avg_length",
+          "min_length",
+          "max_length",
+        ]),
+        column: z.string().min(1).nullable().optional(),
+      })
+      .strip()
   ).min(1, "Aggregate must specify at least one metric"),
+}).superRefine((val, ctx) => {
+  const needsColumn = new Set([
+    "count",
+    "count_distinct",
+    "min",
+    "max",
+    "sum",
+    "mean",
+    "avg_length",
+    "min_length",
+    "max_length",
+  ]);
+  const seenNames = new Set<string>();
+  for (let i = 0; i < val.metrics.length; i += 1) {
+    const metric = val.metrics[i];
+    const name = String(metric.name ?? "").trim();
+    if (!name) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metrics", i, "name"],
+        message: "Aggregate metric name cannot be empty",
+      });
+      continue;
+    }
+    if (seenNames.has(name)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metrics", i, "name"],
+        message: "Aggregate metric names must be unique",
+      });
+    } else {
+      seenNames.add(name);
+    }
+    if (needsColumn.has(metric.op) && !String(metric.column ?? "").trim()) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["metrics", i, "column"],
+        message: `Aggregate op '${metric.op}' requires a column`,
+      });
+    }
+  }
 }).strip();
 
 export const TransformJoinParamsSchema = z.object({

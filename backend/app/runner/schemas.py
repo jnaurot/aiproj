@@ -801,9 +801,60 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     if not isinstance(cols, list) or len(cols) == 0:
                         errors.append("derive.columns must be a non-empty array")
                 elif op == "aggregate":
+                    group_by = payload.get("groupBy")
+                    if group_by is not None and (
+                        not isinstance(group_by, list)
+                        or any(not str(c).strip() for c in group_by)
+                    ):
+                        errors.append("aggregate.groupBy must be an array of non-empty column names")
                     metrics = payload.get("metrics")
                     if not isinstance(metrics, list) or len(metrics) == 0:
                         errors.append("aggregate.metrics must be a non-empty array")
+                    else:
+                        seen_names: set[str] = set()
+                        allowed_ops = {
+                            "count_rows",
+                            "count",
+                            "count_distinct",
+                            "min",
+                            "max",
+                            "sum",
+                            "mean",
+                            "avg_length",
+                            "min_length",
+                            "max_length",
+                        }
+                        needs_column = {
+                            "count",
+                            "count_distinct",
+                            "min",
+                            "max",
+                            "sum",
+                            "mean",
+                            "avg_length",
+                            "min_length",
+                            "max_length",
+                        }
+                        for i, metric in enumerate(metrics):
+                            if not isinstance(metric, dict):
+                                errors.append(f"aggregate.metrics[{i}] must be an object")
+                                continue
+                            name = str(metric.get("name") or "").strip()
+                            if not name:
+                                errors.append(f"aggregate.metrics[{i}].name is required")
+                            elif name in seen_names:
+                                errors.append(f"aggregate.metrics[{i}].name must be unique")
+                            else:
+                                seen_names.add(name)
+                            op_name = str(metric.get("op") or "").strip()
+                            if op_name not in allowed_ops:
+                                errors.append(
+                                    f"aggregate.metrics[{i}].op must be one of: {', '.join(sorted(allowed_ops))}"
+                                )
+                            if op_name in needs_column:
+                                column = str(metric.get("column") or "").strip()
+                                if not column:
+                                    errors.append(f"aggregate.metrics[{i}].column is required for op='{op_name}'")
                 elif op == "join":
                     clauses = payload.get("clauses")
                     if not isinstance(clauses, list) or len(clauses) == 0:
