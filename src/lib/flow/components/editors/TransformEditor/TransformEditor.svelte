@@ -138,7 +138,11 @@
 					const res = await fetch(getArtifactMetaUrl(entry.artifactId, graphId));
 					if (!res.ok) throw new Error(`Failed to load schema for ${entry.artifactId}: ${res.status}`);
 					const meta = await res.json();
-					return parseInputSchemaView(entry.artifactId, entry.label, meta?.payloadSchema);
+					return parseInputSchemaView(
+						entry.artifactId,
+						entry.label,
+						(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined
+					);
 				})
 			);
 			if (reqId !== inputSchemaReqSeq) return;

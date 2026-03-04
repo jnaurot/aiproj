@@ -151,6 +151,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$: selectedToolProvider = (((inspectorParams as any)?.provider ??
 		($selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider);
+	$: hideInspectorApplyRow =
+		inspectorMode === 'edit' &&
+		$selectedNode?.data?.kind === 'transform' &&
+		selectedTransformKind === 'dedupe';
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: nodeError = (nodeOut as any)?.lastError ?? null;
@@ -818,7 +822,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						{/if}
 					</div>
 
-					{#if inspectorMode === 'edit'}
+					{#if inspectorMode === 'edit' && !hideInspectorApplyRow}
 						<!-- Apply row (applies to any draft-only fields in editors) -->
 						<div class="inspectorActions">
 							<button
@@ -842,13 +846,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
-		<div
+		<button
+			type="button"
 			class="inspectorSplitter"
-			role="separator"
-			aria-orientation="horizontal"
-			tabindex="0"
+			aria-label="Resize inspector panels"
 			on:pointerdown={onInspectorSplitDown}
-		/>
+		></button>
 		<div class="inspectorBottom">
 			<h3>Run Logs</h3>
 			<div class="logs" bind:this={scrollElement}>
@@ -965,11 +968,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	.inspectorSplitter {
+		display: block;
+		width: 100%;
 		height: 4px;
+		padding: 0;
+		border: 0;
 		border-radius: 999px;
 		background: #283044;
 		cursor: row-resize;
 		flex: 0 0 auto;
+		touch-action: none;
+		user-select: none;
 	}
 
 	.inspectorSplitter:hover,
