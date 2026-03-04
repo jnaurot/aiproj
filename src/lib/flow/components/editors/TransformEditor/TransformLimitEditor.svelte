@@ -6,48 +6,97 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { parseOptionalInt } from '$lib/flow/components/editors/shared';
+	import { graphStore } from '$lib/flow/store/graphStore';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformLimitParams>;
 	export let onDraft: (patch: Partial<TransformLimitParams>) => void;
 	export let onCommit: (patch: Partial<TransformLimitParams>) => void;
 
-	const defaultValue = 100;
+	const initialDefaultValue = 100;
+	const minValue = 1;
+	const maxValue = 1_000_000;
+	let nDraft = String(initialDefaultValue);
+	let lastNodeId = '';
+	let lastStoreN = initialDefaultValue;
+
+	function toFiniteInt(value: unknown): number | undefined {
+		if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+		if (typeof value === 'string') {
+			const parsed = Number.parseInt(value, 10);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+		return undefined;
+	}
 
 	$: void selectedNode?.id;
-	$: n = params?.n ?? defaultValue;
+	$: void params;
+	$: persistedN = (() => {
+		const nodeId = selectedNode?.id;
+		if (!nodeId) return undefined;
+		const node = $graphStore.nodes.find((n) => n.id === nodeId);
+		const p = (node?.data?.params ?? {}) as Record<string, unknown>;
+		const nested = p.limit as Record<string, unknown> | undefined;
+		return toFiniteInt(nested?.n) ?? toFiniteInt(p.n);
+	})();
+	$: n = persistedN ?? initialDefaultValue;
+	$: nSafe = Math.max(minValue, Math.min(maxValue, Math.trunc(n)));
+
+	$: if ((selectedNode?.id ?? '') !== lastNodeId) {
+		lastNodeId = selectedNode?.id ?? '';
+		nDraft = String(nSafe);
+		lastStoreN = nSafe;
+	}
+
+	$: if ((selectedNode?.id ?? '') === lastNodeId && nSafe !== lastStoreN) {
+		// Keep local input in sync only when store value changed externally.
+		nDraft = String(nSafe);
+		lastStoreN = nSafe;
+	}
+
+	function commitValue(raw: string, fallback = nSafe): void {
+		const parsed = parseOptionalInt(raw, minValue);
+		const next = parsed === undefined ? fallback : Math.min(maxValue, parsed);
+		nDraft = String(next);
+		onDraft({ n: next });
+		onCommit({ n: next });
+	}
 </script>
 
 <Section title="Limit">
 	<div class="hint">Return only the first <code>n</code> rows.</div>
 
-	<Field label="n">
+	<Field >
 		<div class="row">
 			<Input
 				type="number"
-				min="1"
+				min={String(minValue)}
+				max={String(maxValue)}
 				step="1"
-				value={n}
-				onInput={(event) => onDraft({ n: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? defaultValue })}
-				onBlur={() => onCommit({ n: n < 1 ? 1 : n })}
+				value={nDraft}
+				onInput={(event) => {
+					const raw = (event.currentTarget as HTMLInputElement).value;
+					nDraft = raw;
+					const parsed = parseOptionalInt(raw, minValue);
+					if (parsed !== undefined) onDraft({ n: Math.min(maxValue, parsed) });
+				}}
+				onBlur={() => commitValue(nDraft, nSafe)}
+				onKeydown={(event) => {
+					if ((event as KeyboardEvent).key === 'Enter') {
+						event.preventDefault();
+						commitValue(nDraft, nSafe);
+					}
+				}}
 			/>
-			<button
+			<!-- <button
 				class="small ghost"
 				type="button"
-				on:click={() => {
-					onDraft({ n: defaultValue });
-					onCommit({ n: defaultValue });
-				}}
+				on:click={() => commitValue(String(nSafe), nSafe)}
 			>
 				Reset
-			</button>
+			</button> -->
 		</div>
 	</Field>
-
-	<div class="preview">
-		<div class="subTitle">Preview</div>
-		<pre>SELECT * FROM input LIMIT {n < 1 ? 1 : n}</pre>
-	</div>
 </Section>
 
 <style>
@@ -57,29 +106,10 @@
 		align-items: center;
 	}
 
-	.subTitle {
-		margin-top: 10px;
-		font-size: 13px;
-		font-weight: 600;
-	}
-
 	.hint {
 		font-size: 12px;
 		opacity: 0.75;
 		margin-top: 6px;
-	}
-
-	.preview {
-		margin-top: 12px;
-	}
-
-	pre {
-		white-space: pre-wrap;
-		word-break: break-word;
-		padding: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 10px;
-		font-size: 12px;
 	}
 
 	button.small {

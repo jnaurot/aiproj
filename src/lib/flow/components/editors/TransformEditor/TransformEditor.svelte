@@ -35,12 +35,31 @@
 		return typeof value === 'string' && ops.includes(value as TransformKind);
 	}
 
+	function toFiniteInt(value: unknown): number | undefined {
+		if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
+		if (typeof value === 'string') {
+			const parsed = Number.parseInt(value, 10);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+		return undefined;
+	}
+
 	$: void selectedNode?.id;
 	$: currentOp = isTransformKind(params?.op) ? params.op : 'filter';
 	$: enabled = params?.enabled ?? true;
 	$: notes = params?.notes ?? '';
 	$: EditorComponent = TransformEditorByKind[currentOp];
-	$: childParams = (params as Record<string, unknown>)[currentOp] ?? defaultTransformParamsByKind[currentOp][currentOp];
+	$: limitNested = (params as Record<string, unknown>)?.limit as Record<string, unknown> | undefined;
+	$: limitN =
+		toFiniteInt(limitNested?.n) ??
+		toFiniteInt((limitNested as any)?.limit?.n) ??
+		toFiniteInt((params as Record<string, unknown>)?.n) ??
+		defaultTransformParamsByKind.limit.limit.n;
+	$: childParams =
+		currentOp === 'limit'
+			? ({ n: limitN } as Record<string, unknown>)
+			: ((params as Record<string, unknown>)[currentOp] ??
+				defaultTransformParamsByKind[currentOp][currentOp]);
 	$: graphState = $graphStore;
 	$: splitInputColumns = Array.from(
 		new Set(inputSchemas.flatMap((schema) => schema.columns.map((c) => String(c.name || ''))).filter(Boolean))
