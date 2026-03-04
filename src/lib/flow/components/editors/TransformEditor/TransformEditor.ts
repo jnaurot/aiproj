@@ -19,7 +19,7 @@ export const TransformEditorCommitModeByKind = {
 	filter: 'draft',
 	select: 'draft',
 	rename: 'draft',
-	derive: 'draft',
+	derive: 'immediate',
 	aggregate: 'immediate',
 	join: 'immediate',
 	sort: 'immediate',

@@ -328,7 +328,7 @@
 			onCommit={commitChild}
 			inputColumns={splitInputColumns}
 		/>
-	{:else if currentOp === 'sort' || currentOp === 'aggregate'}
+	{:else if currentOp === 'sort' || currentOp === 'aggregate' || currentOp === 'derive'}
 	{@const opKey = currentOp}
 		<svelte:component
 			this={EditorComponent}
