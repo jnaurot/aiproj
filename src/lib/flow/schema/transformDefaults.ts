@@ -56,14 +56,7 @@ export const defaultTransformAggregateParams: TransformAggregateParams = {
 };
 
 export const defaultTransformJoinParams: TransformJoinParams = {
-	withNodeId: '',
-	how: 'inner',
-	on: [
-		{
-			left: 'id',
-			right: 'id'
-		}
-	]
+	clauses: []
 };
 
 export const defaultTransformSortParams: TransformSortParams = {
@@ -81,7 +74,7 @@ export const defaultTransformLimitParams: TransformLimitParams = {
 
 export const defaultTransformDedupeParams: TransformDedupeParams = {
 	allColumns: false,
-	by: ['__none__']
+	by: []
 };
 
 export const defaultTransformSqlParams: TransformSqlParams = {

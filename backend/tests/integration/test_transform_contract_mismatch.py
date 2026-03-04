@@ -136,7 +136,7 @@ async def test_transform_select_missing_columns_emits_payload_mismatch_details(m
 
 
 @pytest.mark.asyncio
-async def test_transform_dedupe_none_placeholder_returns_column_selection_required(monkeypatch, tmp_path):
+async def test_transform_dedupe_empty_by_returns_column_selection_required(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     transform_calls = {"count": 0}
 
@@ -164,7 +164,7 @@ async def test_transform_dedupe_none_placeholder_returns_column_selection_requir
     cache = SqliteExecutionCache(str(tmp_path / "artifacts" / "meta" / "artifacts.sqlite"))
     await run_mod.run_graph(
         run_id="run-transform-dedupe-none",
-        graph=_graph_for_dedupe(["__none__"]),
+        graph=_graph_for_dedupe([]),
         run_from=None,
         bus=RunEventBus("run-transform-dedupe-none", on_emit=lambda e: events.append(dict(e))),
         artifact_store=store,
@@ -178,7 +178,7 @@ async def test_transform_dedupe_none_placeholder_returns_column_selection_requir
     assert finish[-1].get("errorCode") == "COLUMN_SELECTION_REQUIRED"
     details = finish[-1].get("errorDetails") or {}
     assert details.get("paramPath") == "params.dedupe.by"
-    assert details.get("missingColumns") == ["__none__"]
+    assert details.get("missingColumns") == []
     assert details.get("availableColumns") == ["text", "other"]
 
 

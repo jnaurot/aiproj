@@ -47,6 +47,16 @@
 	let inputSchemaReqSeq = 0;
 	let lastInputSignature = '';
 
+	function artifactIdFromBinding(binding: any): string {
+		return String(
+			binding?.current?.artifactId ??
+				binding?.currentArtifactId ??
+				binding?.last?.artifactId ??
+				binding?.lastArtifactId ??
+				''
+		);
+	}
+
 	$: if (selectedNode?.id && isTransform) {
 		const nodeId = selectedNode.id;
 		const edges = $graphStore?.edges ?? [];
@@ -55,8 +65,8 @@
 			.filter((e) => e.target === nodeId)
 			.map((e) => {
 				const sourceBinding = nodeBindings[e.source];
-				const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
-				return `${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
+				const artifactId = artifactIdFromBinding(sourceBinding);
+				return `${String(e.id ?? '')}:${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
 			})
 			.sort();
 		const signature = `${String($graphStore?.graphId ?? '')}|${nodeId}|${incoming.join('|')}`;
@@ -85,17 +95,18 @@
 				inputSchemas = [];
 				return;
 			}
-			const incoming = edges
-				.filter((e) => e.target === nodeId)
-				.map((e) => {
-					const sourceBinding = nodeBindings[e.source];
-					const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
-					return {
-						sourceNodeId: e.source,
-						label: `${String(nodesById.get(e.source)?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
-						artifactId
-					};
-				})
+				const incoming = edges
+					.filter((e) => e.target === nodeId)
+					.map((e) => {
+						const sourceBinding = nodeBindings[e.source];
+						const artifactId = artifactIdFromBinding(sourceBinding);
+						return {
+							sourceNodeId: e.source,
+							inputHandle: String(e.targetHandle ?? 'in'),
+							label: `${String(nodesById.get(e.source)?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
+							artifactId
+						};
+					})
 				.filter((x) => x.artifactId.length > 0);
 			if (incoming.length === 0) {
 				inputSchemas = [];
@@ -106,13 +117,17 @@
 					const res = await fetch(getArtifactMetaUrl(entry.artifactId, graphId));
 					if (!res.ok) throw new Error(`Failed to load schema for ${entry.artifactId}: ${res.status}`);
 					const meta = await res.json();
-					return parseInputSchemaView(
-						entry.artifactId,
-						entry.label,
-						(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined
-					);
-				})
-			);
+						return parseInputSchemaView(
+							entry.artifactId,
+							entry.label,
+							(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined,
+							{
+								sourceNodeId: entry.sourceNodeId,
+								inputHandle: entry.inputHandle
+							}
+						);
+					})
+				);
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemas = responses;
 		} catch {
@@ -127,6 +142,22 @@
 
 	function onCommit(patch: Record<string, any>) {
 		graphStore.commitInspectorImmediate(patch);
+	}
+
+	function toJoinPatch(patch: Record<string, any>): Record<string, any> {
+		const next = patch && typeof patch === 'object' ? patch : {};
+		if ('join' in next || 'op' in next) {
+			return { op: 'join', ...next };
+		}
+		return { op: 'join', join: next };
+	}
+
+	function onJoinDraft(patch: Record<string, any>) {
+		onDraft(toJoinPatch(patch));
+	}
+
+	function onJoinCommit(patch: Record<string, any>) {
+		onCommit(toJoinPatch(patch));
 	}
 </script>
 
@@ -150,17 +181,29 @@
 		/>
 	{:else if isTool}
 		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
-	{:else if isTransform}
-		<svelte:component
-			this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
-			{selectedNode}
-			{params}
-			{nodeError}
-			inputColumns={splitInputColumns}
-			{onDraft}
-			{onCommit}
-		/>
-	{/if}
+		{:else if isTransform}
+			{#if transformKind === 'join'}
+				<svelte:component
+					this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
+					{selectedNode}
+					{params}
+					{nodeError}
+					{inputSchemas}
+					onDraft={onJoinDraft}
+					onCommit={onJoinCommit}
+				/>
+			{:else}
+				<svelte:component
+					this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
+					{selectedNode}
+					{params}
+					{nodeError}
+					inputColumns={splitInputColumns}
+					{onDraft}
+					{onCommit}
+				/>
+			{/if}
+		{/if}
 	</div>
 {/if}
 

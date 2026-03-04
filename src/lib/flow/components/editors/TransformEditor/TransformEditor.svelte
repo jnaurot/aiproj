@@ -73,6 +73,17 @@
 	let loadingInputSchemas = false;
 	let inputSchemaReqSeq = 0;
 	let lastInputSignature = '';
+	const DEV_MODE = Boolean((import.meta as any)?.env?.DEV);
+
+	function artifactIdFromBinding(binding: any): string {
+		return String(
+			binding?.current?.artifactId ??
+				binding?.currentArtifactId ??
+				binding?.last?.artifactId ??
+				binding?.lastArtifactId ??
+				''
+		);
+	}
 
 	$: if (selectedNode?.id) {
 		const nodeId = selectedNode.id;
@@ -82,8 +93,8 @@
 			.filter((e) => e.target === nodeId)
 			.map((e) => {
 				const sourceBinding = nodeBindings[e.source];
-				const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
-				return `${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
+				const artifactId = artifactIdFromBinding(sourceBinding);
+				return `${String(e.id ?? '')}:${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
 			})
 			.sort();
 		const signature = `${String(graphState?.graphId ?? '')}|${nodeId}|${incoming.join('|')}`;
@@ -139,15 +150,29 @@
 			const incoming = edges
 				.filter((e) => e.target === nodeId)
 				.map((e) => {
-					const sourceBinding = nodeBindings[e.source];
-					const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
+					const sourceNodeId = String(e.source ?? '');
+					const inputHandle = String((e as any).targetHandle ?? 'in');
+					const sourceBinding = nodeBindings[sourceNodeId];
+					const artifactId = artifactIdFromBinding(sourceBinding);
 					return {
-						sourceNodeId: e.source,
-						label: `${String(nodesById.get(e.source)?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
-						artifactId
+						sourceNodeId,
+						inputHandle,
+						label: `${String(nodesById.get(sourceNodeId)?.data?.label ?? sourceNodeId)}.${inputHandle}`,
+						artifactId: String(artifactId ?? '')
 					};
 				})
 				.filter((x) => x.artifactId.length > 0);
+			if (DEV_MODE && currentOp === 'join') {
+				console.debug('[join-ui] incoming-edges', {
+					nodeId,
+					totalIncomingEdges: edges.filter((e) => e.target === nodeId).length,
+					resolvedArtifacts: incoming.map((x) => ({
+						sourceNodeId: x.sourceNodeId,
+						inputHandle: x.inputHandle,
+						artifactId: x.artifactId
+					}))
+				});
+			}
 			if (incoming.length === 0) {
 				inputSchemas = [];
 				return;
@@ -160,12 +185,28 @@
 					return parseInputSchemaView(
 						entry.artifactId,
 						entry.label,
-						(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined
+						(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined,
+						{
+							sourceNodeId: entry.sourceNodeId,
+							inputHandle: entry.inputHandle
+						}
 					);
 				})
 			);
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemas = responses;
+			if (DEV_MODE && currentOp === 'join') {
+				console.debug('[join-ui] fetched-schemas', {
+					nodeId,
+					count: responses.length,
+					rows: responses.map((r) => ({
+						sourceNodeId: r.sourceNodeId ?? '',
+						label: r.label,
+						artifactId: r.artifactId,
+						columns: r.columns.map((c) => c.name)
+					}))
+				});
+			}
 		} catch (err) {
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemaError = err instanceof Error ? err.message : String(err);
@@ -298,6 +339,17 @@
 			inputColumns={splitInputColumns}
 			{nodeError}
 		/>
+	{:else if currentOp === 'join'}
+	{@const opKey = currentOp}
+		<svelte:component
+			this={EditorComponent}
+			{selectedNode}
+			params={childParams}
+			onDraft={(next) => patchChildFor(opKey, next)}
+			onCommit={(next) => commitChildFor(opKey, next)}
+			{inputSchemas}
+			{nodeError}
+	/>
 	{:else if currentOp === 'dedupe'}
 	{@const opKey = currentOp}
 		<svelte:component

@@ -5,11 +5,16 @@
 	import type { NodeExecutionError } from '$lib/flow/store/graphStore';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
-	import { uniqueStrings } from '$lib/flow/components/editors/shared';
-
-	type SortItem = NonNullable<TransformSortParams['by']>[number];
-	type SortDir = SortItem['dir'];
-	type SortEditorParams = Partial<TransformSortParams> & { sort?: Partial<TransformSortParams> };
+	import {
+		computeSortColumnState,
+		missingSortColumnsFromError,
+		normalizeSortDraftColumn,
+		normalizeSortItems,
+		readSortBy,
+		schemaColumnsFromInput,
+		type SortItem,
+		type SortEditorParams
+	} from './sortModel';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: SortEditorParams;
@@ -26,7 +31,7 @@
 	let suppressParamSync = false;
 
 	$: void selectedNode?.id;
-	$: paramsItems = normalizeItems(readSortBy(params));
+	$: paramsItems = normalizeSortItems(readSortBy(params));
 	$: paramsSignature = JSON.stringify(paramsItems);
 	$: if ((selectedNode?.id ?? '') !== lastNodeId) {
 		lastNodeId = selectedNode?.id ?? '';
@@ -37,38 +42,17 @@
 		items = [...paramsItems];
 		lastParamsSignature = paramsSignature;
 	}
-	$: schemaColumns = uniqueStrings(inputColumns.map((c) => String(c).trim()).filter(Boolean)).sort((a, b) =>
-		a.localeCompare(b)
-	);
-	$: hasKnownSchema = schemaColumns.length > 0;
-	$: if (schemaColumns.length > 0) {
-		stickyKnownColumns = uniqueStrings(schemaColumns);
-	}
-	$: knownColumns = uniqueStrings([...stickyKnownColumns, ...schemaColumns, ...items.map((x) => x.col)]).sort((a, b) =>
-		a.localeCompare(b)
-	);
 	$: selectedCols = items.map((item) => item.col);
-	$: availableCols = knownColumns.filter((col) => !selectedCols.includes(col));
-	$: unknownFromSchema = schemaColumns.length === 0 ? [] : selectedCols.filter((col) => !schemaColumns.includes(col));
+	$: schemaColumns = schemaColumnsFromInput(inputColumns);
+	$: hasKnownSchema = schemaColumns.length > 0;
+	$: if (hasKnownSchema) {
+		stickyKnownColumns = [...schemaColumns];
+	}
+	$: columnState = computeSortColumnState(inputColumns, stickyKnownColumns, selectedCols);
+	$: knownColumns = columnState.knownColumns;
+	$: availableCols = columnState.availableCols;
+	$: unknownFromSchema = columnState.unknownFromSchema;
 	$: missingFromError = missingSortColumnsFromError(nodeError);
-
-	function normalizeItems(raw: TransformSortParams['by'] | undefined): SortItem[] {
-		const out: SortItem[] = [];
-		for (const item of raw ?? []) {
-			const col = String(item?.col ?? '').trim();
-			if (!col) continue;
-			if (out.some((x) => x.col === col)) continue;
-			const dir: SortDir = item?.dir === 'desc' ? 'desc' : 'asc';
-			out.push({ col, dir });
-		}
-		return out;
-	}
-
-	function readSortBy(rawParams: SortEditorParams | undefined): TransformSortParams['by'] | undefined {
-		if (Array.isArray(rawParams?.by)) return rawParams.by;
-		if (Array.isArray(rawParams?.sort?.by)) return rawParams.sort.by;
-		return undefined;
-	}
 
 	function markLocalEdit() {
 		suppressParamSync = true;
@@ -85,10 +69,10 @@
 	}
 
 	function addColumn(col: string): void {
-		const name = String(col ?? '').trim();
+		const name = normalizeSortDraftColumn(col);
 		if (!name) return;
 		if (items.some((x) => x.col === name)) return;
-		stickyKnownColumns = uniqueStrings([...stickyKnownColumns, name]);
+		stickyKnownColumns = [...new Set([...stickyKnownColumns, name])];
 		commitItems([...items, { col: name, dir: 'asc' }]);
 	}
 
@@ -99,18 +83,6 @@
 	function toggleDir(col: string): void {
 		const next = items.map((x) => (x.col === col ? { ...x, dir: x.dir === 'asc' ? 'desc' : 'asc' } : x));
 		commitItems(next);
-	}
-
-	function missingSortColumnsFromError(err: NodeExecutionError | null): string[] {
-		const code = String(err?.errorCode ?? '');
-		const path = String(err?.paramPath ?? '');
-		const validPath = path === 'by' || path === 'params.sort.by' || path.endsWith('/by') || path.endsWith('.by');
-		if (code !== 'MISSING_COLUMN' || !validPath) return [];
-		return uniqueStrings(
-			(Array.isArray(err?.missingColumns) ? err.missingColumns : [])
-				.map((c) => String(c).trim())
-				.filter(Boolean)
-		);
 	}
 </script>
 
@@ -170,7 +142,7 @@
 			<div class="listHeader">Available Cols</div>
 			<div class="availableList">
 				{#if availableCols.length === 0}
-					<div class="emptySel">{schemaColumns.length > 0 ? 'No more column names' : 'Schema unavailable (run upstream)'}</div>
+					<div class="emptySel">{knownColumns.length > 0 ? 'No more column names' : 'Schema unavailable (run upstream)'}</div>
 				{:else}
 					{#each availableCols as col}
 						<button class="chipBtn" type="button" on:click={() => addColumn(col)}>{col}</button>

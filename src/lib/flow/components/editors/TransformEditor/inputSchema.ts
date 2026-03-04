@@ -27,6 +27,8 @@ export type InputSchemaEnvelope = {
 export type InputSchemaView = {
 	artifactId: string;
 	label: string;
+	sourceNodeId?: string;
+	inputHandle?: string;
 	columns: InputSchemaColumn[];
 	rowCount: number | null;
 	provenance: InputSchemaProvenance | null;
@@ -55,7 +57,8 @@ function normalizeColumns(columns: unknown): InputSchemaColumn[] {
 export function parseInputSchemaView(
 	artifactId: string,
 	label: string,
-	payloadSchema: unknown
+	payloadSchema: unknown,
+	ctx?: { sourceNodeId?: string; inputHandle?: string }
 ): InputSchemaView {
 	const ps = (payloadSchema ?? {}) as Record<string, unknown>;
 	const looksLikeEnvelope =
@@ -75,6 +78,8 @@ export function parseInputSchemaView(
 	return {
 		artifactId,
 		label,
+		sourceNodeId: ctx?.sourceNodeId,
+		inputHandle: ctx?.inputHandle,
 		columns: schemaCols.length > 0 ? schemaCols : (fallbackCols.length > 0 ? fallbackCols : textLikeCols),
 		rowCount: typeof rowCountRaw === 'number' ? rowCountRaw : null,
 		provenance: schema?.provenance ?? null,

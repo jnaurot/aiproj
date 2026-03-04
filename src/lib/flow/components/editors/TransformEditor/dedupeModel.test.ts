@@ -59,9 +59,9 @@ describe('error column helpers', () => {
 			missingDedupeColumnsFromError({
 				errorCode: 'COLUMN_SELECTION_REQUIRED',
 				paramPath: 'params.dedupe.by',
-				missingColumns: ['__none__'],
+				missingColumns: [],
 			})
-		).toEqual(['__none__']);
+		).toEqual([]);
 		expect(
 			missingDedupeColumnsFromError({
 				errorCode: 'MISSING_COLUMN',

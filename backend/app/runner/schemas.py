@@ -805,11 +805,26 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     if not isinstance(metrics, list) or len(metrics) == 0:
                         errors.append("aggregate.metrics must be a non-empty array")
                 elif op == "join":
-                    if not str(payload.get("withNodeId") or "").strip():
-                        errors.append("join.withNodeId is required")
-                    ons = payload.get("on")
-                    if not isinstance(ons, list) or len(ons) == 0:
-                        errors.append("join.on must be a non-empty array")
+                    clauses = payload.get("clauses")
+                    if not isinstance(clauses, list) or len(clauses) == 0:
+                        errors.append("join.clauses must be a non-empty array")
+                    else:
+                        allowed_hows = {"inner", "left", "right", "full"}
+                        for i, clause in enumerate(clauses):
+                            if not isinstance(clause, dict):
+                                errors.append(f"join.clauses[{i}] must be an object")
+                                continue
+                            if not str(clause.get("leftNodeId") or "").strip():
+                                errors.append(f"join.clauses[{i}].leftNodeId is required")
+                            if not str(clause.get("leftCol") or "").strip():
+                                errors.append(f"join.clauses[{i}].leftCol is required")
+                            if not str(clause.get("rightNodeId") or "").strip():
+                                errors.append(f"join.clauses[{i}].rightNodeId is required")
+                            if not str(clause.get("rightCol") or "").strip():
+                                errors.append(f"join.clauses[{i}].rightCol is required")
+                            how = str(clause.get("how") or "inner").strip().lower()
+                            if how not in allowed_hows:
+                                errors.append(f"join.clauses[{i}].how must be one of: inner, left, right, full")
                 elif op == "sort":
                     by = payload.get("by")
                     if not isinstance(by, list) or len(by) == 0:
@@ -826,8 +841,6 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("dedupe.by must be an array of column names")
                     if isinstance(by, list) and any(not str(c).strip() for c in by):
                         errors.append("dedupe.by cannot contain empty column names")
-                    if all_columns is False and isinstance(by, list) and len(by) == 0:
-                        errors.append("dedupe.by must include at least one column when allColumns=false")
                     if keep is not None and str(keep) != "first":
                         errors.append("dedupe.keep must be 'first'")
                 elif op == "sql" and not str(payload.get("query") or "").strip():

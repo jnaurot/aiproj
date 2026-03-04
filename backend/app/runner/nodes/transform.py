@@ -30,6 +30,8 @@ OP_KEYS = {
     "sql": "sql",
 }
 
+JOIN_HOWS = {"inner", "left", "right", "full"}
+
 # ---- helpers ----
 
 def sha256_hex(b: bytes) -> str:
@@ -109,6 +111,32 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         if emit_dropped_count:
             dedupe_payload["emitDroppedCount"] = True
         p["dedupe"] = dedupe_payload
+
+    if op == "join":
+        raw = p.get("join") if isinstance(p.get("join"), dict) else {}
+        clauses_raw = raw.get("clauses")
+        clauses: List[Dict[str, Any]] = []
+        if isinstance(clauses_raw, list):
+            for item in clauses_raw:
+                if not isinstance(item, dict):
+                    continue
+                left_node_id = str(item.get("leftNodeId") or "").strip()
+                left_col = str(item.get("leftCol") or "").strip()
+                right_node_id = str(item.get("rightNodeId") or "").strip()
+                right_col = str(item.get("rightCol") or "").strip()
+                how = str(item.get("how") or "inner").strip().lower()
+                if how not in JOIN_HOWS:
+                    how = "inner"
+                if not left_node_id or not left_col or not right_node_id or not right_col:
+                    continue
+                clauses.append({
+                    "leftNodeId": left_node_id,
+                    "leftCol": left_col,
+                    "rightNodeId": right_node_id,
+                    "rightCol": right_col,
+                    "how": how,
+                })
+        p["join"] = {"clauses": clauses}
 
     return p
 
@@ -336,7 +364,7 @@ def execute_transform_op(
     Execute via DuckDB to keep semantics consistent.
     Convention:
     - primary input table is inputs["in"] (or first input)
-    - for join, params.join.withNodeId resolves via join_lookup[nodeId]
+    - for join, params.join.clauses drives node-qualified joins via join_lookup[nodeId]
     """
     primary_df = inputs.get("in")
     if primary_df is None:
@@ -404,21 +432,79 @@ def execute_transform_op(
             if not join_lookup:
                 raise ValueError("join_lookup missing for join op")
             spec = params["join"]
-            with_node = spec["withNodeId"]
-            other = join_lookup.get(with_node)
-            if other is None:
-                raise ValueError(f"join.withNodeId '{with_node}' not found in run context")
-            con.register("other", other)
+            clauses = spec.get("clauses") or []
+            if not isinstance(clauses, list) or len(clauses) == 0:
+                raise ValueError("join.clauses must be a non-empty array")
 
-            how = spec["how"].lower()
-            how_sql = {"inner":"inner", "left":"left", "right":"right", "full":"full outer"}[how]
+            joined_nodes: set[str] = set()
+            alias_map: Dict[str, str] = {}
+            alias_index = 0
+            sql_from: Optional[str] = None
 
-            ons = spec["on"]
-            on_sql = " AND ".join([
-                f"{primary_name}.{quote_ident(x['left'])} = other.{quote_ident(x['right'])}"
-                for x in ons
-            ])
-            return con.execute(f"select * from {primary_name} {how_sql} join other on {on_sql}").df()
+            def ensure_alias(node_id: str) -> str:
+                nonlocal alias_index
+                if node_id in alias_map:
+                    return alias_map[node_id]
+                df = join_lookup.get(node_id)
+                if df is None:
+                    raise ValueError(f"join clause references unknown node '{node_id}'")
+                alias = f"t{alias_index}"
+                alias_index += 1
+                alias_map[node_id] = alias
+                con.register(alias, df)
+                return alias
+
+            for idx, clause in enumerate(clauses):
+                if not isinstance(clause, dict):
+                    raise ValueError(f"join clause at index {idx} is invalid")
+                left_node = str(clause.get("leftNodeId") or "").strip()
+                right_node = str(clause.get("rightNodeId") or "").strip()
+                left_col = str(clause.get("leftCol") or "").strip()
+                right_col = str(clause.get("rightCol") or "").strip()
+                how = str(clause.get("how") or "inner").strip().lower()
+                if how not in JOIN_HOWS:
+                    how = "inner"
+                how_sql = {"inner": "inner", "left": "left", "right": "right", "full": "full outer"}[how]
+                if not left_node or not right_node or not left_col or not right_col:
+                    raise ValueError(f"join clause at index {idx} has empty node/column values")
+
+                left_alias = ensure_alias(left_node)
+                right_alias = ensure_alias(right_node)
+
+                if sql_from is None:
+                    sql_from = left_alias
+                    joined_nodes.add(left_node)
+
+                left_in = left_node in joined_nodes
+                right_in = right_node in joined_nodes
+
+                if not left_in and not right_in:
+                    raise ValueError(
+                        "join clauses must form a connected chain; "
+                        f"clause {idx} references two unjoined nodes ({left_node}, {right_node})"
+                    )
+                if left_in and right_in:
+                    raise ValueError(
+                        "join clauses must add exactly one new node at each step; "
+                        f"clause {idx} references two already-joined nodes ({left_node}, {right_node})"
+                    )
+
+                if left_in:
+                    sql_from = (
+                        f"{sql_from} {how_sql} join {right_alias} "
+                        f"on {left_alias}.{quote_ident(left_col)} = {right_alias}.{quote_ident(right_col)}"
+                    )
+                    joined_nodes.add(right_node)
+                else:
+                    sql_from = (
+                        f"{sql_from} {how_sql} join {left_alias} "
+                        f"on {left_alias}.{quote_ident(left_col)} = {right_alias}.{quote_ident(right_col)}"
+                    )
+                    joined_nodes.add(left_node)
+
+            if not sql_from:
+                raise ValueError("join clauses did not produce a valid join plan")
+            return con.execute(f"select * from {sql_from}").df()
 
         elif op == "sort":
             by = params["sort"]["by"]

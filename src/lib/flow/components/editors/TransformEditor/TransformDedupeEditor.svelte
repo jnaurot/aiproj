@@ -4,15 +4,14 @@
 	import type { TransformDedupeParams } from '$lib/flow/schema/transform';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
-	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import {
 		canCommitDedupeDraft,
 		missingDedupeColumnsFromError,
 		normalizeDedupeParams,
 		resolveDedupeAvailableColumns
 	} from './dedupeModel';
+	import { computeColumnUniverse, normalizeColumnNames } from './columnSelectionModel';
 	import type { NodeExecutionError } from '$lib/flow/store/graphStore';
-	import { SCHEMA_UNAVAILABLE_VALUE, SCHEMA_UNAVAILABLE_LABEL } from '$lib/flow/constants';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformDedupeParams>;
@@ -23,7 +22,7 @@
 
 	const defaults: TransformDedupeParams = {
 		allColumns: false,
-		by: [SCHEMA_UNAVAILABLE_VALUE]
+		by: []
 	};
 
 	let by: string[] = [];
@@ -39,20 +38,26 @@
 	$: errorAvailableColumns = Array.isArray(nodeError?.availableColumns)
 		? nodeError.availableColumns.map((c) => String(c).trim()).filter(Boolean)
 		: [];
-	$: resolvedColumns = resolveDedupeAvailableColumns(inputColumns, errorAvailableColumns, []);
-	$: if (resolvedColumns.length > 0) stickyAvailableColumns = resolvedColumns;
-	$: availableColumns = resolvedColumns.length > 0 ? resolvedColumns : stickyAvailableColumns;
-	$: validRuntimeColumns = uniqueStrings(
-		(availableColumns ?? []).map((c) => String(c).trim()).filter(Boolean)
-	);
+	$: resolvedBaseColumns = resolveDedupeAvailableColumns(inputColumns, errorAvailableColumns, []);
+	$: if (resolvedBaseColumns.length > 0) {
+		stickyAvailableColumns = [...resolvedBaseColumns];
+	}
+	$: selectedFromBy = normalizeColumnNames((by ?? []) as unknown[]);
+	$: universe = computeColumnUniverse({
+		stickyColumns: stickyAvailableColumns,
+		schemaColumns: resolvedBaseColumns,
+		selectedColumns: selectedFromBy
+	});
+	$: availableColumns = universe.knownColumns;
+	$: validRuntimeColumns = universe.knownColumns;
 	$: missingByColumns = missingDedupeColumnsFromError(nodeError);
 	$: isMissingColumnError = missingByColumns.length > 0;
 	$: dedupeAll = allColumns;
 	$: canCommit = canCommitDedupeDraft(useByColumns, by);
-	$: selectedColumns = uniqueStrings(
+	$: selectedColumns = normalizeColumnNames(
 		(by ?? [])
 			.map((c) => String(c).trim())
-			.filter((c) => c && c !== SCHEMA_UNAVAILABLE_VALUE && validRuntimeColumns.includes(c))
+			.filter((c) => c && validRuntimeColumns.includes(c)) as unknown[]
 	);
 	$: selectableColumns = validRuntimeColumns.filter((c) => !selectedColumns.includes(c));
 	$: selectedColumnsSorted = [...selectedColumns].sort((a, b) => a.localeCompare(b));
@@ -67,6 +72,7 @@
 	}
 
 	$: if (!suppressParamSync && (selectedNode?.id ?? '') === lastNodeId && paramsSignature !== lastParamsSignature) {
+		useByColumns = !allColumns;
 		by = Array.isArray(normalized.by) ? [...normalized.by] : [];
 		lastParamsSignature = paramsSignature;
 	}
@@ -107,12 +113,7 @@
 
 	function setCommitAllowInvalid(next: Partial<TransformDedupeParams>) {
 		const merged = normalizeDedupeParams({ allColumns, by: [...by], ...next });
-		if (merged.allColumns === false) {
-			const cleanBy = uniqueStrings((merged.by ?? []).map((v) => String(v).trim()).filter(Boolean));
-			merged.by = cleanBy.length === 0 ? [SCHEMA_UNAVAILABLE_VALUE] : cleanBy;
-		} else {
-			merged.by = [];
-		}
+		merged.by = normalizeColumnNames((merged.by ?? []) as unknown[]);
 		console.log('[dedupe-ui] setCommitAllowInvalid', {
 			nodeId: selectedNode?.id,
 			next,
@@ -123,8 +124,7 @@
 	}
 
 	function addSelectedColumn(candidate: string) {
-		const base = by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE);
-		const next = uniqueStrings([...base, candidate]);
+		const next = normalizeColumnNames([...by, candidate] as unknown[]);
 		markLocalEdit();
 		by = next;
 		setDraft({ allColumns: false, by: next });
@@ -141,6 +141,20 @@
 			return;
 		}
 		setCommit({ allColumns: false, by: next });
+	}
+
+	function resetFromCommitted(): void {
+		const committedParams = (selectedNode?.data?.params ?? {}) as Record<string, unknown>;
+		const committedDedupe = normalizeDedupeParams(
+			((committedParams.dedupe as Partial<TransformDedupeParams> | undefined) ??
+				(committedParams as Partial<TransformDedupeParams>)) as Partial<TransformDedupeParams>
+		);
+		const next = committedDedupe ?? defaults;
+		markLocalEdit();
+		useByColumns = !next.allColumns;
+		by = Array.isArray(next.by) ? [...next.by] : [];
+		onDraft(next);
+		onCommit(next);
 	}
 </script>
 
@@ -170,10 +184,7 @@
 						return;
 					}
 					useByColumns = true;
-					const seeded =
-						by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE).length > 0
-							? by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE)
-							: [SCHEMA_UNAVAILABLE_VALUE];
+					const seeded = normalizeColumnNames((by ?? []) as unknown[]);
 					setDraft({ allColumns: false, by: seeded });
 					setCommitAllowInvalid({ allColumns: false, by: seeded });
 				}}
@@ -184,11 +195,7 @@
 		<button
 			class="small ghost"
 			type="button"
-			on:click={() => {
-				useByColumns = true;
-				onDraft(defaults);
-				onCommit(defaults);
-			}}
+			on:click={resetFromCommitted}
 		>
 			Reset
 		</button>

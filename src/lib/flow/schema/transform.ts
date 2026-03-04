@@ -57,18 +57,17 @@ export const TransformAggregateParamsSchema = z.object({
 }).strip();
 
 export const TransformJoinParamsSchema = z.object({
-  withNodeId: z.string().min(1, "Join target node ID is required"),
-
-  how: z.enum(["inner", "left", "right", "full"]),
-
-  on: z
+  clauses: z
     .array(
       z.object({
-        left: z.string().min(1, "Left join key cannot be empty"),
-        right: z.string().min(1, "Right join key cannot be empty"),
+        leftNodeId: z.string().min(1, "Left join node id cannot be empty"),
+        leftCol: z.string().min(1, "Left join key cannot be empty"),
+        rightNodeId: z.string().min(1, "Right join node id cannot be empty"),
+        rightCol: z.string().min(1, "Right join key cannot be empty"),
+        how: z.enum(["inner", "left", "right", "full"]).default("inner"),
       })
     )
-    .min(1, "Join must specify at least one ON condition"),
+    .min(1, "Join must specify at least one clause"),
 }).strip();
 
 export const TransformSortParamsSchema = z.object({

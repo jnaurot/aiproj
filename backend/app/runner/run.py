@@ -1471,6 +1471,75 @@ async def run_graph(
                         "message": "transform: start",
                         "nodeId": node_id,
                     })
+                    transform_kind = str((n.get("data", {}) or {}).get("transformKind") or "").lower()
+                    op_hint = str((params or {}).get("op") or "").lower()
+                    is_join_transform = transform_kind == "join" or op_hint == "join"
+                    if is_join_transform:
+                        join_edges = [e for e in edges.values() if e.get("target") == node_id]
+                        if not join_edges:
+                            msg = "join: ack input node=<none> sourceNode=<none> inPort=<none> artifact=<none> cols=[]"
+                            await context.bus.emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": msg,
+                                "nodeId": node_id,
+                            })
+                            print(
+                                f"[join-ack] runId={run_id} nodeId={node_id} "
+                                "node=<none> sourceNode=<none> inPort=<none> artifact=<none> cols=[]"
+                            )
+                        else:
+                            for e in join_edges:
+                                source_node = str(e.get("source") or "<unknown>")
+                                in_port = str(e.get("targetHandle") or "in")
+                                source_artifact = get_current_artifact(source_node)
+                                artifact_label = str(source_artifact or "<none>")
+                                if source_node.startswith("n_"):
+                                    short_node = f"n_{source_node[2:10]}"
+                                else:
+                                    short_node = source_node[:10]
+                                cols: list[str] = []
+                                if source_artifact:
+                                    try:
+                                        art = await context.artifact_store.get(source_artifact)
+                                        schema_cols = _extract_table_columns_from_payload_schema(
+                                            getattr(art, "payload_schema", None)
+                                        )
+                                        if schema_cols:
+                                            cols = _stable_unique_strings(
+                                                [c.get("name") for c in schema_cols if isinstance(c, dict)]
+                                            )
+                                        else:
+                                            try:
+                                                raw = await context.artifact_store.read(source_artifact)
+                                                df = load_table_from_artifact_bytes(art.mime_type or "", raw)
+                                                cols = _stable_unique_strings(
+                                                    [str(c) for c in list(getattr(df, "columns", []))]
+                                                )
+                                            except Exception:
+                                                cols = []
+                                    except Exception:
+                                        cols = []
+                                cols_label = "[" + ",".join(cols) + "]"
+                                msg = (
+                                    f"join: ack input node={short_node} sourceNode={source_node} "
+                                    f"inPort={in_port} artifact={artifact_label} cols={cols_label}"
+                                )
+                                await context.bus.emit({
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": msg,
+                                    "nodeId": node_id,
+                                })
+                                print(
+                                    f"[join-ack] runId={run_id} nodeId={node_id} "
+                                    f"node={short_node} sourceNode={source_node} "
+                                    f"inPort={in_port} artifact={artifact_label} cols={cols_label}"
+                                )
 
                     if not params.get("enabled", True):
                         await context.bus.emit({
@@ -1673,69 +1742,112 @@ async def run_graph(
                                     )
                         elif op == "join":
                             join_spec = norm.get("join") or {}
-                            with_node = str(join_spec.get("withNodeId") or "")
-                            if len(input_refs) < 2:
+                            clauses = join_spec.get("clauses") or []
+                            if not isinstance(clauses, list) or len(clauses) == 0:
                                 raise ContractMismatchError(
-                                    "Transform output contract mismatch: join requires two connected inputs",
+                                    "Transform output contract mismatch: join.clauses must be a non-empty array",
                                     details=_contract_details(
-                                        expected={"inputCount": 2},
-                                        actual={"inputCount": int(len(input_refs))},
+                                        expected={"clausesCountMin": 1},
+                                        actual={"clausesCount": int(len(clauses) if isinstance(clauses, list) else 0)},
                                     ),
                                 )
-                            with_node_artifact = get_current_artifact(with_node)
-                            if not with_node_artifact or with_node_artifact not in input_artifact_ids:
-                                raise ContractMismatchError(
-                                    "Transform output contract mismatch: join.withNodeId must be connected as an input",
-                                    details=_contract_details(
-                                        expected={"withNodeIdConnected": True},
-                                        actual={
-                                            "withNodeId": with_node,
-                                            "connectedInputArtifactIds": sorted(input_artifact_ids),
-                                        },
-                                    ),
+                            connected_nodes = {
+                                str(upstream_source_by_artifact.get(aid, ""))
+                                for aid in input_artifact_ids
+                                if str(upstream_source_by_artifact.get(aid, "")).strip()
+                            }
+                            node_columns: dict[str, list[str]] = {}
+                            for connected_node in connected_nodes:
+                                df = join_lookup.get(connected_node)
+                                node_columns[connected_node] = (
+                                    [str(c) for c in list(getattr(df, "columns", []))]
+                                    if df is not None
+                                    else []
                                 )
-                            other_df = join_lookup.get(with_node)
-                            other_cols = (
-                                [str(c) for c in list(getattr(other_df, "columns", []))]
-                                if other_df is not None
-                                else []
-                            )
-                            other_cols_set = set(other_cols)
-                            on_specs = join_spec.get("on") or []
-                            left_expected = [
-                                str(x.get("left"))
-                                for x in on_specs
-                                if isinstance(x, dict) and x.get("left") is not None
-                            ]
-                            right_expected = [
-                                str(x.get("right"))
-                                for x in on_specs
-                                if isinstance(x, dict) and x.get("right") is not None
-                            ]
-                            missing_left = [c for c in left_expected if c not in primary_cols_set]
-                            missing_right = [c for c in right_expected if c not in other_cols_set]
-                            missing_cols = sorted(set(missing_left + missing_right))
-                            if missing_cols:
-                                available_union = _sorted_unique_strings(primary_cols + other_cols)
+
+                            missing_qualified: list[str] = []
+                            disconnected_nodes: list[str] = []
+                            for idx, clause in enumerate(clauses):
+                                if not isinstance(clause, dict):
+                                    missing_qualified.append(f"clause[{idx}]")
+                                    continue
+                                left_node = str(clause.get("leftNodeId") or "")
+                                right_node = str(clause.get("rightNodeId") or "")
+                                left_col = str(clause.get("leftCol") or "")
+                                right_col = str(clause.get("rightCol") or "")
+                                if left_node not in connected_nodes:
+                                    disconnected_nodes.append(left_node)
+                                if right_node not in connected_nodes:
+                                    disconnected_nodes.append(right_node)
+                                left_cols = set(node_columns.get(left_node, []))
+                                right_cols = set(node_columns.get(right_node, []))
+                                if left_col and left_col not in left_cols:
+                                    missing_qualified.append(f"{left_node}.{left_col}")
+                                if right_col and right_col not in right_cols:
+                                    missing_qualified.append(f"{right_node}.{right_col}")
+
+                            if disconnected_nodes:
                                 raise ContractMismatchError(
-                                    f"Transform payload schema mismatch: join references missing columns {missing_cols}",
+                                    "Transform output contract mismatch: join clause references unconnected node(s)",
                                     code="MISSING_COLUMN",
                                     details={
-                                        **_missing_column_details(
-                                            op="join",
-                                            param_path="join.on",
-                                            missing_columns=missing_cols,
-                                            available_columns=available_union,
-                                            available_source="schema",
-                                        ),
-                                        "expected": {
-                                            "leftRequiredColumns": _sorted_unique_strings(left_expected),
-                                            "rightRequiredColumns": _sorted_unique_strings(right_expected),
+                                        "errorCode": "MISSING_COLUMN",
+                                        "op": "join",
+                                        "paramPath": "params.join.clauses",
+                                        "missingColumns": _stable_unique_strings(disconnected_nodes),
+                                        "availableColumns": _stable_unique_strings(sorted(connected_nodes)),
+                                        "availableColumnsSource": "schema",
+                                        "expected": {"connectedNodes": _stable_unique_strings(sorted(connected_nodes))},
+                                        "actual": {"referencedNodes": _stable_unique_strings(disconnected_nodes)},
+                                    },
+                                )
+                            joined_nodes_for_plan: set[str] = set()
+                            for idx, clause in enumerate(clauses):
+                                if not isinstance(clause, dict):
+                                    continue
+                                left_node = str(clause.get("leftNodeId") or "")
+                                right_node = str(clause.get("rightNodeId") or "")
+                                if idx == 0:
+                                    joined_nodes_for_plan.update([left_node, right_node])
+                                    continue
+                                left_in = left_node in joined_nodes_for_plan
+                                right_in = right_node in joined_nodes_for_plan
+                                if left_in == right_in:
+                                    raise ContractMismatchError(
+                                        "Transform output contract mismatch: each join clause must add exactly one new node",
+                                        code="MISSING_COLUMN",
+                                        details={
+                                            "errorCode": "MISSING_COLUMN",
+                                            "op": "join",
+                                            "paramPath": "params.join.clauses",
+                                            "missingColumns": [f"clause[{idx}]"],
+                                            "availableColumns": _stable_unique_strings(sorted(connected_nodes)),
+                                            "availableColumnsSource": "schema",
+                                            "expected": {"clauseAddsOneNewNode": True},
+                                            "actual": {
+                                                "leftNodeId": left_node,
+                                                "rightNodeId": right_node,
+                                                "joinedNodes": _stable_unique_strings(sorted(joined_nodes_for_plan)),
+                                            },
                                         },
-                                        "actual": {
-                                            "leftAvailableColumns": _sorted_unique_strings(primary_cols),
-                                            "rightAvailableColumns": _sorted_unique_strings(other_cols),
-                                        },
+                                    )
+                                joined_nodes_for_plan.update([left_node, right_node])
+                            if missing_qualified:
+                                available_qualified = _stable_unique_strings([
+                                    f"{nid}.{col}"
+                                    for nid, cols in node_columns.items()
+                                    for col in cols
+                                ])
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: join references missing columns {missing_qualified}",
+                                    code="MISSING_COLUMN",
+                                    details={
+                                        "errorCode": "MISSING_COLUMN",
+                                        "op": "join",
+                                        "paramPath": "params.join.clauses",
+                                        "missingColumns": _stable_unique_strings(missing_qualified),
+                                        "availableColumns": available_qualified,
+                                        "availableColumnsSource": "schema",
                                     },
                                 )
                         elif op == "dedupe":
@@ -1755,7 +1867,7 @@ async def run_graph(
                                 f"allColumns={all_columns} "
                                 f"availableColumnsSource={available_source}"
                             )
-                            if (not all_columns) and any(c == "__none__" for c in by_cols):
+                            if (not all_columns) and len(by_cols) == 0:
                                 raise ContractMismatchError(
                                     "Transform payload schema mismatch: dedupe requires selecting one or more valid columns",
                                     code="COLUMN_SELECTION_REQUIRED",
@@ -1763,12 +1875,12 @@ async def run_graph(
                                         "errorCode": "COLUMN_SELECTION_REQUIRED",
                                         "op": "dedupe",
                                         "paramPath": "params.dedupe.by",
-                                        "missingColumns": ["__none__"],
+                                        "missingColumns": [],
                                         "availableColumns": _stable_unique_strings(available_cols),
                                         "availableColumnsSource": available_source,
                                         "nodeId": str(node_id),
                                         "schemaFingerprint": str((expected_schema or {}).get("schemaFingerprint") or ""),
-                                        "message": "Select one or more columns for dedupe; '__none__' is a placeholder.",
+                                        "message": "Select one or more columns for dedupe.",
                                     },
                                 )
                             available_set = set(available_cols)
@@ -1845,10 +1957,25 @@ async def run_graph(
                         other_cols_for_schema: list[str] = []
                         if op == "join":
                             join_spec = norm.get("join") or {}
-                            with_node = str(join_spec.get("withNodeId") or "")
-                            other_df = join_lookup.get(with_node)
-                            if other_df is not None:
-                                other_cols_for_schema = [str(c) for c in list(getattr(other_df, "columns", []))]
+                            clauses = join_spec.get("clauses") or []
+                            seen_nodes: list[str] = []
+                            if isinstance(clauses, list):
+                                for clause in clauses:
+                                    if not isinstance(clause, dict):
+                                        continue
+                                    ln = str(clause.get("leftNodeId") or "")
+                                    rn = str(clause.get("rightNodeId") or "")
+                                    if ln and ln not in seen_nodes:
+                                        seen_nodes.append(ln)
+                                    if rn and rn not in seen_nodes:
+                                        seen_nodes.append(rn)
+                            merged_cols: list[str] = []
+                            for nid in seen_nodes:
+                                df = join_lookup.get(nid)
+                                if df is None:
+                                    continue
+                                merged_cols.extend([str(c) for c in list(getattr(df, "columns", []))])
+                            other_cols_for_schema = _stable_unique_strings(merged_cols)
                         output_cols_core = _transform_output_columns(
                             op=op,
                             norm=norm,

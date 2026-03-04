@@ -12,7 +12,7 @@
 		if (op === 'rename') return Object.keys(params.rename?.map || {}).length > 0 ? 'Rename columns' : '—';
 		if (op === 'derive') return (params.derive?.columns || []).length > 0 ? 'Derive columns' : '—';
 		if (op === 'aggregate') return (params.aggregate?.groupBy || []).length > 0 ? 'Aggregate' : '—';
-		if (op === 'join') return params.join?.withNodeId ? `Join with ${params.join.withNodeId}` : '—';
+		if (op === 'join') return (params.join?.clauses || []).length > 0 ? 'Join' : '—';
 		if (op === 'sort') return (params.sort?.by || []).length > 0 ? 'Sort' : '—';
 		if (op === 'limit') return params.limit?.n ? `Limit ${params.limit.n}` : '—';
 		if (op === 'dedupe') return 'Deduplicate';

@@ -1,7 +1,7 @@
 import { uniqueStrings } from '$lib/flow/components/editors/shared';
 import type { TransformDedupeParams } from '$lib/flow/schema/transform';
 import type { NodeExecutionError } from '$lib/flow/store/graphStore';
-import { SCHEMA_UNAVAILABLE_VALUE } from '$lib/flow/constants';
+import { isByParamPath, missingColumnsFromError, normalizeColumnNames } from './columnSelectionModel';
 
 type LegacyDedupeParams = {
 	by?: unknown;
@@ -41,10 +41,7 @@ WHERE rn = 1`;
 
 export function canCommitDedupeDraft(useByColumns: boolean, by: string[]): boolean {
 	const normalizedBy = uniqueStrings((by ?? []).map((v) => String(v).trim()).filter(Boolean));
-	if (!useByColumns) return true;
-	const hasReal = normalizedBy.some((c) => c !== SCHEMA_UNAVAILABLE_VALUE);
-	const hasPlaceholder = normalizedBy.includes(SCHEMA_UNAVAILABLE_VALUE);
-	return hasReal && !hasPlaceholder;
+	return !useByColumns || normalizedBy.length > 0;
 }
 
 export function resolveDedupeAvailableColumns(
@@ -53,21 +50,13 @@ export function resolveDedupeAvailableColumns(
 	by: string[] = []
 ): string[] {
 	const base = errorAvailableColumns.length > 0 ? errorAvailableColumns : inputColumns;
-	return uniqueStrings([...base, ...by].map((c) => String(c).trim()).filter(Boolean));
+	return normalizeColumnNames([...base, ...by] as unknown[]);
 }
 
 export function missingDedupeColumnsFromError(nodeError: NodeExecutionError | null): string[] {
-	const path = String(nodeError?.paramPath ?? '');
-	const validPath =
-		path === 'by' ||
-		path === 'params.dedupe.by' ||
-		path.endsWith('/by') ||
-		path.endsWith('.by');
-	const code = String(nodeError?.errorCode ?? '');
-	if (!['MISSING_COLUMN', 'COLUMN_SELECTION_REQUIRED'].includes(code) || !validPath) return [];
-	return uniqueStrings(
-		(Array.isArray(nodeError?.missingColumns) ? nodeError.missingColumns : [])
-			.map((c) => String(c).trim())
-			.filter(Boolean)
+	return missingColumnsFromError(
+		nodeError,
+		['MISSING_COLUMN', 'COLUMN_SELECTION_REQUIRED'],
+		(path) => path === 'params.dedupe.by' || isByParamPath(path)
 	);
 }

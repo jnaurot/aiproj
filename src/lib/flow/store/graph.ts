@@ -83,7 +83,7 @@ const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   rename: ["map"],
   derive: ["columns"],
   aggregate: ["groupBy", "metrics"],
-  join: ["withNodeId", "how", "on"],
+  join: ["clauses"],
   sort: ["by"],
   limit: ["n"],
   dedupe: ["allColumns", "by"],
