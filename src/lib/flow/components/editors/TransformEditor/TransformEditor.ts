@@ -13,6 +13,22 @@ import TransformSqlEditor from './TransformSqlEditor.svelte';
 
 // filter, select, rename, derive, aggregate, join, sort, limit, dedupe, sql
 
+export type EditorCommitMode = 'draft' | 'immediate';
+
+export const TransformEditorCommitModeByKind = {
+	filter: 'draft',
+	select: 'draft',
+	rename: 'draft',
+	derive: 'draft',
+	aggregate: 'draft',
+	join: 'draft',
+	sort: 'draft',
+	limit: 'immediate',
+	dedupe: 'immediate',
+	split: 'draft',
+	sql: 'draft'
+} as const satisfies Record<string, EditorCommitMode>;
+
 export const TransformEditorByKind = {
     filter: TransformFilterEditor,
     select: TransformSelectEditor,

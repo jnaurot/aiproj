@@ -79,11 +79,6 @@
 			Reset defaults
 		</button>
 	</div>
-
-	<div class="preview">
-		<div class="subTitle">Preview</div>
-		<pre>SELECT * FROM input ORDER BY {orderSql}</pre>
-	</div>
 </Section>
 
 <style>

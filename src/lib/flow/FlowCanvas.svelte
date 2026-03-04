@@ -17,6 +17,7 @@
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
+	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -154,7 +155,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: hideInspectorApplyRow =
 		inspectorMode === 'edit' &&
 		$selectedNode?.data?.kind === 'transform' &&
-		selectedTransformKind === 'dedupe';
+		TransformEditorCommitModeByKind[selectedTransformKind] === 'immediate';
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: nodeError = (nodeOut as any)?.lastError ?? null;

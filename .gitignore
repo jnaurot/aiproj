@@ -88,6 +88,8 @@ coverage.xml
 *.sqlite3
 *.sqlite
 backend/data/artifacts/
+backend/data/artifacts/meta/artifacts.sqlite-shm
+backend/data/artifacts/meta/artifacts.sqlite-wal
 
 # Virtual environments (very common names)
 venv/
