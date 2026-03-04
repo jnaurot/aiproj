@@ -88,6 +88,9 @@ coverage.xml
 *.sqlite3
 *.sqlite
 backend/data/artifacts/
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 
 # Virtual environments (very common names)
 venv/
