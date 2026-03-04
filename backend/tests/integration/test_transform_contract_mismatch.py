@@ -42,6 +42,34 @@ def _graph_for_select_missing_column() -> dict:
     }
 
 
+def _graph_for_dedupe(by_cols: list[str]) -> dict:
+    return {
+        "nodes": [
+            {
+                "id": "source_1",
+                "data": {
+                    "kind": "source",
+                    "label": "Source",
+                    "sourceKind": "file",
+                    "params": {"file_path": "dummy.txt", "file_format": "txt"},
+                    "ports": {"in": None, "out": "table"},
+                },
+            },
+            {
+                "id": "transform_1",
+                "data": {
+                    "kind": "transform",
+                    "label": "Transform",
+                    "transformKind": "dedupe",
+                    "params": {"op": "dedupe", "dedupe": {"allColumns": False, "by": by_cols}},
+                    "ports": {"in": "table", "out": "table"},
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "source_1", "target": "transform_1"}],
+    }
+
+
 @pytest.mark.asyncio
 async def test_transform_select_missing_columns_emits_payload_mismatch_details(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
@@ -83,6 +111,11 @@ async def test_transform_select_missing_columns_emits_payload_mismatch_details(m
     finish = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "transform_1"]
     assert finish and finish[-1].get("status") == "failed"
     assert "payload schema mismatch" in str(finish[-1].get("error", "")).lower()
+    assert finish[-1].get("errorCode") == "MISSING_COLUMN"
+    assert (finish[-1].get("errorDetails") or {}).get("paramPath") == "select.columns"
+    assert (finish[-1].get("errorDetails") or {}).get("missingColumns") == ["missing_col"]
+    assert (finish[-1].get("errorDetails") or {}).get("availableColumns") == ["text"]
+    assert (finish[-1].get("errorDetails") or {}).get("availableColumnsSource") in {"schema", "inferred"}
 
     out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
     assert not out
@@ -91,13 +124,98 @@ async def test_transform_select_missing_columns_emits_payload_mismatch_details(m
     ]
     assert details_logs
     detail_payload = json.loads(str(details_logs[-1]["message"]))
-    assert detail_payload.get("code") == "PAYLOAD_SCHEMA_MISMATCH"
+    assert detail_payload.get("code") == "MISSING_COLUMN"
+    assert detail_payload.get("errorCode") == "MISSING_COLUMN"
     assert detail_payload.get("missingColumns") == ["missing_col"]
-    assert detail_payload.get("expected", {}).get("requiredColumns") == ["missing_col"]
+    assert detail_payload.get("availableColumns") == ["text"]
+    assert detail_payload.get("paramPath") == "select.columns"
     transform_logs = [
         e for e in events if e.get("type") == "log" and e.get("nodeId") == "transform_1"
     ]
     assert not any("transform: produced" in str(e.get("message", "")) for e in transform_logs)
+
+
+@pytest.mark.asyncio
+async def test_transform_dedupe_none_placeholder_returns_column_selection_required(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    transform_calls = {"count": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data=[{"text": "hello", "other": "x"}],
+        )
+
+    def _fake_run_transform(params, input_tables, join_lookup=None):
+        transform_calls["count"] += 1
+        return types.SimpleNamespace(
+            payload_bytes=b"text\nhello\n",
+            mime_type="text/csv; charset=utf-8",
+            meta={"columns": ["text"]},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "run_transform", _fake_run_transform)
+
+    events = []
+    store = DiskArtifactStore(tmp_path / "artifacts")
+    cache = SqliteExecutionCache(str(tmp_path / "artifacts" / "meta" / "artifacts.sqlite"))
+    await run_mod.run_graph(
+        run_id="run-transform-dedupe-none",
+        graph=_graph_for_dedupe(["__none__"]),
+        run_from=None,
+        bus=RunEventBus("run-transform-dedupe-none", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-transform-contract-mismatch",
+    )
+
+    assert transform_calls["count"] == 0
+    finish = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "transform_1"]
+    assert finish and finish[-1].get("status") == "failed"
+    assert finish[-1].get("errorCode") == "COLUMN_SELECTION_REQUIRED"
+    details = finish[-1].get("errorDetails") or {}
+    assert details.get("paramPath") == "params.dedupe.by"
+    assert details.get("missingColumns") == ["__none__"]
+    assert details.get("availableColumns") == ["text", "other"]
+
+
+@pytest.mark.asyncio
+async def test_transform_dedupe_missing_column_returns_missing_column(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data=[{"text": "hello", "other": "x"}],
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+
+    events = []
+    store = DiskArtifactStore(tmp_path / "artifacts")
+    cache = SqliteExecutionCache(str(tmp_path / "artifacts" / "meta" / "artifacts.sqlite"))
+    await run_mod.run_graph(
+        run_id="run-transform-dedupe-missing",
+        graph=_graph_for_dedupe(["text", "nope"]),
+        run_from=None,
+        bus=RunEventBus("run-transform-dedupe-missing", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-transform-contract-mismatch",
+    )
+
+    finish = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "transform_1"]
+    assert finish and finish[-1].get("status") == "failed"
+    assert finish[-1].get("errorCode") == "MISSING_COLUMN"
+    details = finish[-1].get("errorDetails") or {}
+    assert details.get("paramPath") == "params.dedupe.by"
+    assert details.get("missingColumns") == ["nope"]
+    assert details.get("availableColumns") == ["text", "other"]
 
 
 @pytest.mark.asyncio
@@ -113,7 +231,7 @@ async def test_transform_non_table_payload_schema_type_fails_with_expected_actua
             data=[{"text": "hello"}],
         )
 
-    def _fake_source_payload_schema(out_contract, data_value):
+    def _fake_source_payload_schema(out_contract, data_value, source_meta=None):
         return {"schema_version": 1, "type": "json"}
 
     def _fake_run_transform(params, input_tables, join_lookup=None):

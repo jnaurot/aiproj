@@ -17,7 +17,14 @@ from app.runner.contracts import (
     default_contract_for_node,
     schema_fingerprint,
 )
-from app.runner.run import _cached_artifact_contract_mismatch, _expected_schema_contract_for_node
+from app.runner.run import (
+    _available_columns_for_port,
+    _cached_artifact_contract_mismatch,
+    _expected_schema_contract_for_node,
+    _missing_column_details,
+    _source_payload_schema,
+    _table_schema_envelope,
+)
 
 
 def _node(kind: str, *, source_kind: str | None = None, params: dict | None = None) -> dict:
@@ -197,6 +204,23 @@ def test_table_v1_schema_fingerprint_ignores_stats_and_provenance():
     assert schema_fingerprint(base) == schema_fingerprint(with_other_stats)
 
 
+def test_table_v1_schema_fingerprint_ignores_coercion_descriptor():
+    base = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {"columns": [{"name": "text", "type": "string"}]},
+    }
+    with_coercion = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {
+            "columns": [{"name": "text", "type": "string"}],
+            "coercion": {"mode": "text_1row", "lossy": False, "notes": "wrapped"},
+        },
+    }
+    assert schema_fingerprint(base) == schema_fingerprint(with_coercion)
+
+
 def test_table_v1_schema_fingerprint_changes_when_columns_change():
     a = {
         "contract": "TABLE_V1",
@@ -229,3 +253,82 @@ def test_table_v1_schema_fingerprint_normalizes_missing_types_to_unknown():
         "table": {"columns": [{"name": "id", "type": "unknown"}]},
     }
     assert schema_fingerprint(missing) == schema_fingerprint(unknown)
+
+
+def test_table_v1_schema_fingerprint_changes_when_split_out_column_changes():
+    split_a = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {
+            "columns": [
+                {"name": "part", "type": "string"},
+                {"name": "index", "type": "int"},
+                {"name": "source_row", "type": "int"},
+            ]
+        },
+    }
+    split_b = {
+        "contract": "TABLE_V1",
+        "version": 1,
+        "table": {
+            "columns": [
+                {"name": "chunk", "type": "string"},
+                {"name": "index", "type": "int"},
+                {"name": "source_row", "type": "int"},
+            ]
+        },
+    }
+    assert schema_fingerprint(split_a) != schema_fingerprint(split_b)
+
+
+def test_source_payload_schema_carries_coercion_from_source_metadata():
+    source_meta = types.SimpleNamespace(
+        data_schema={"table_coercion": {"mode": "json_object_1row", "lossy": False}}
+    )
+    payload = _source_payload_schema("table", [{"a": 1}], source_meta)
+    assert isinstance(payload, dict)
+    assert payload.get("coercion", {}).get("mode") == "json_object_1row"
+
+
+def test_table_schema_envelope_places_coercion_under_table():
+    env = _table_schema_envelope(
+        columns=[{"name": "a", "type": "int"}],
+        row_count=1,
+        coercion={"mode": "binary_hex_1row", "lossy": True, "notes": "wrapped"},
+    )
+    assert env.get("table", {}).get("coercion", {}).get("mode") == "binary_hex_1row"
+    assert env.get("table", {}).get("coercion", {}).get("lossy") is True
+
+
+def test_available_columns_prefers_schema_then_inferred():
+    cols, source = _available_columns_for_port(
+        port="in",
+        input_schema_cols_by_port={"in": [{"name": "text"}, {"name": "other"}]},
+        input_columns={"in": ["text", "other", "runtime_only"]},
+    )
+    assert cols == ["text", "other"]
+    assert source == "schema"
+
+    cols2, source2 = _available_columns_for_port(
+        port="in",
+        input_schema_cols_by_port={"in": []},
+        input_columns={"in": ["text", "other"]},
+    )
+    assert cols2 == ["text", "other"]
+    assert source2 == "inferred"
+
+
+def test_missing_column_details_payload_shape():
+    details = _missing_column_details(
+        op="dedupe",
+        param_path="by",
+        missing_columns=["missing"],
+        available_columns=["text", "other"],
+        available_source="schema",
+    )
+    assert details["errorCode"] == "MISSING_COLUMN"
+    assert details["op"] == "dedupe"
+    assert details["paramPath"] == "by"
+    assert details["missingColumns"] == ["missing"]
+    assert details["availableColumns"] == ["text", "other"]
+    assert details["availableColumnsSource"] == "schema"

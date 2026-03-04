@@ -232,12 +232,27 @@ def _tool_is_armed(params: Dict[str, Any]) -> bool:
 
 
 def _table_payload_schema_from_rows(rows: list[dict[str, Any]]) -> Dict[str, Any]:
-    columns: list[Dict[str, Any]] = []
-    if rows:
-        sample = rows[0]
-        for k, v in sample.items():
-            columns.append({"name": str(k), "dtype": type(v).__name__ if v is not None else "unknown"})
-    return {"schema_version": 1, "type": "table", "columns": columns}
+    first_seen: list[str] = []
+    seen: set[str] = set()
+    types: Dict[str, str] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        for k, v in row.items():
+            col = str(k)
+            if col not in seen:
+                seen.add(col)
+                first_seen.append(col)
+            if v is None:
+                continue
+            vtype = type(v).__name__.lower().strip() or "unknown"
+            prev = types.get(col)
+            if prev is None:
+                types[col] = vtype
+            elif prev != vtype:
+                types[col] = "unknown"
+    columns = [{"name": col, "type": types.get(col, "unknown")} for col in first_seen]
+    return {"schema_version": 1, "type": "table", "columns": columns, "row_count": len(rows or [])}
 
 
 def _table_schema_envelope(
@@ -245,12 +260,19 @@ def _table_schema_envelope(
     columns: list[Dict[str, Any]],
     row_count: Optional[int] = None,
     provenance: Optional[Dict[str, Any]] = None,
+    coercion: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     env: Dict[str, Any] = {
         "contract": TABLE_V1,
         "version": 1,
         "table": {"columns": canonical_table_columns(columns)},
     }
+    if isinstance(coercion, dict) and coercion:
+        env["table"]["coercion"] = {
+            "mode": str(coercion.get("mode") or "native"),
+            **({"lossy": bool(coercion.get("lossy"))} if "lossy" in coercion else {}),
+            **({"notes": str(coercion.get("notes"))} if coercion.get("notes") else {}),
+        }
     if row_count is not None:
         env["stats"] = {"rowCount": int(row_count)}
     if isinstance(provenance, dict) and provenance:
@@ -320,15 +342,36 @@ def _transform_output_columns(
                     n += 1
                 out.append(cand)
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "split":
+        spec = norm.get("split") or {}
+        out_col = str(spec.get("outColumn") or "part")
+        emit_index = bool(spec.get("emitIndex", True))
+        emit_source_row = bool(spec.get("emitSourceRow", True))
+        out: list[dict[str, str]] = [{"name": out_col, "type": "string"}]
+        if emit_index:
+            out.append({"name": "index", "type": "int"})
+        if emit_source_row:
+            out.append({"name": "source_row", "type": "int"})
+        return canonical_table_columns(out)
     if op_l in {"sort", "limit", "dedupe", "filter", "sql"}:
         # sql may differ but keep deterministic fallback if no parser.
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
     return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
 
 
-def _source_payload_schema(out_contract: Optional[str], data_value: Any) -> Optional[Dict[str, Any]]:
+def _source_payload_schema(
+    out_contract: Optional[str],
+    data_value: Any,
+    source_metadata: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
     if out_contract == "table" and isinstance(data_value, list):
-        return _table_payload_schema_from_rows(data_value)
+        payload = _table_payload_schema_from_rows(data_value)
+        if isinstance(getattr(source_metadata, "data_schema", None), dict):
+            ds = getattr(source_metadata, "data_schema", {}) or {}
+            coercion = ds.get("table_coercion")
+            if isinstance(coercion, dict):
+                payload["coercion"] = coercion
+        return payload
     if out_contract == "json":
         return {
             "schema_version": 1,
@@ -479,6 +522,22 @@ def _sorted_unique_strings(values: Any) -> list[str]:
     return sorted(set(out))
 
 
+def _stable_unique_strings(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values:
+        if v is None:
+            continue
+        s = str(v)
+        if s == "" or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
 def _contract_details(
     *,
     missing_columns: Optional[list[str]] = None,
@@ -492,6 +551,48 @@ def _contract_details(
         "actual": actual or {},
     }
     return details
+
+
+def _available_columns_for_port(
+    *,
+    port: str,
+    input_schema_cols_by_port: Dict[str, list[Dict[str, Any]]],
+    input_columns: Dict[str, list[str]],
+) -> tuple[list[str], str]:
+    schema_cols = input_schema_cols_by_port.get(port) or []
+    schema_names = [
+        str(c.get("name"))
+        for c in schema_cols
+        if isinstance(c, dict) and str(c.get("name") or "").strip()
+    ]
+    if schema_names:
+        return _stable_unique_strings(schema_names), "schema"
+    inferred = _stable_unique_strings(input_columns.get(port) or [])
+    return inferred, "inferred"
+
+
+def _missing_column_details(
+    *,
+    op: str,
+    param_path: str,
+    missing_columns: list[str],
+    available_columns: list[str],
+    available_source: str,
+) -> Dict[str, Any]:
+    missing = _stable_unique_strings(missing_columns)
+    available = _stable_unique_strings(available_columns)
+    return {
+        "errorCode": "MISSING_COLUMN",
+        "op": str(op),
+        "paramPath": str(param_path),
+        "missingColumns": missing,
+        "availableColumns": available,
+        "availableColumnsSource": str(available_source),
+        "message": (
+            f"Missing column(s): {missing}. "
+            f"Available columns: {available}"
+        ),
+    }
 
 
 def _extract_quoted_identifiers(expr: str) -> list[str]:
@@ -1501,29 +1602,45 @@ async def run_graph(
 
                         if op == "select":
                             expected_cols = [str(c) for c in ((norm.get("select") or {}).get("columns") or [])]
-                            missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            missing_cols = [c for c in expected_cols if c not in available_set]
                             if missing_cols:
                                 raise ContractMismatchError(
                                     f"Transform payload schema mismatch: select references missing columns {missing_cols}",
-                                    code="PAYLOAD_SCHEMA_MISMATCH",
-                                    details=_contract_details(
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="select",
+                                        param_path="select.columns",
                                         missing_columns=missing_cols,
-                                        expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
-                                        actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                        available_columns=available_cols,
+                                        available_source=available_source,
                                     ),
                                 )
                         elif op == "rename":
                             rename_map = (norm.get("rename") or {}).get("map") or {}
                             expected_cols = [str(c) for c in rename_map.keys()]
-                            missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            missing_cols = [c for c in expected_cols if c not in available_set]
                             if missing_cols:
                                 raise ContractMismatchError(
                                     f"Transform payload schema mismatch: rename references missing columns {missing_cols}",
-                                    code="PAYLOAD_SCHEMA_MISMATCH",
-                                    details=_contract_details(
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="rename",
+                                        param_path="rename.map",
                                         missing_columns=missing_cols,
-                                        expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
-                                        actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                        available_columns=available_cols,
+                                        available_source=available_source,
                                     ),
                                 )
                         elif op == "derive":
@@ -1535,15 +1652,23 @@ async def run_graph(
                                 expected_cols.extend(_extract_quoted_identifiers(str(d.get("expr") or "")))
                             expected_cols = sorted(set(expected_cols))
                             if expected_cols:
-                                missing_cols = [c for c in expected_cols if c not in primary_cols_set]
+                                available_cols, available_source = _available_columns_for_port(
+                                    port=primary_port,
+                                    input_schema_cols_by_port=input_schema_cols_by_port,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in expected_cols if c not in available_set]
                                 if missing_cols:
                                     raise ContractMismatchError(
                                         f"Transform payload schema mismatch: derive references missing columns {missing_cols}",
-                                        code="PAYLOAD_SCHEMA_MISMATCH",
-                                        details=_contract_details(
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="derive",
+                                            param_path="derive.columns",
                                             missing_columns=missing_cols,
-                                            expected={"requiredColumns": _sorted_unique_strings(expected_cols)},
-                                            actual={"availableColumns": _sorted_unique_strings(primary_cols)},
+                                            available_columns=available_cols,
+                                            available_source=available_source,
                                         ),
                                     )
                         elif op == "join":
@@ -1591,19 +1716,94 @@ async def run_graph(
                             missing_right = [c for c in right_expected if c not in other_cols_set]
                             missing_cols = sorted(set(missing_left + missing_right))
                             if missing_cols:
+                                available_union = _sorted_unique_strings(primary_cols + other_cols)
                                 raise ContractMismatchError(
                                     f"Transform payload schema mismatch: join references missing columns {missing_cols}",
-                                    code="PAYLOAD_SCHEMA_MISMATCH",
-                                    details=_contract_details(
-                                        missing_columns=missing_cols,
-                                        expected={
+                                    code="MISSING_COLUMN",
+                                    details={
+                                        **_missing_column_details(
+                                            op="join",
+                                            param_path="join.on",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_union,
+                                            available_source="schema",
+                                        ),
+                                        "expected": {
                                             "leftRequiredColumns": _sorted_unique_strings(left_expected),
                                             "rightRequiredColumns": _sorted_unique_strings(right_expected),
                                         },
-                                        actual={
+                                        "actual": {
                                             "leftAvailableColumns": _sorted_unique_strings(primary_cols),
                                             "rightAvailableColumns": _sorted_unique_strings(other_cols),
                                         },
+                                    },
+                                )
+                        elif op == "dedupe":
+                            dedupe_spec = norm.get("dedupe") or {}
+                            by_cols = [str(c) for c in (dedupe_spec.get("by") or []) if str(c).strip()]
+                            all_columns = bool(dedupe_spec.get("allColumns", len(by_cols) == 0))
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            print(
+                                "[dedupe-debug] "
+                                f"runId={run_id} nodeId={node_id} "
+                                f"column_names={by_cols} "
+                                f"availableColumns={available_cols} "
+                                f"allColumns={all_columns} "
+                                f"availableColumnsSource={available_source}"
+                            )
+                            if (not all_columns) and any(c == "__none__" for c in by_cols):
+                                raise ContractMismatchError(
+                                    "Transform payload schema mismatch: dedupe requires selecting one or more valid columns",
+                                    code="COLUMN_SELECTION_REQUIRED",
+                                    details={
+                                        "errorCode": "COLUMN_SELECTION_REQUIRED",
+                                        "op": "dedupe",
+                                        "paramPath": "params.dedupe.by",
+                                        "missingColumns": ["__none__"],
+                                        "availableColumns": _stable_unique_strings(available_cols),
+                                        "availableColumnsSource": available_source,
+                                        "nodeId": str(node_id),
+                                        "schemaFingerprint": str((expected_schema or {}).get("schemaFingerprint") or ""),
+                                        "message": "Select one or more columns for dedupe; '__none__' is a placeholder.",
+                                    },
+                                )
+                            available_set = set(available_cols)
+                            missing_cols = [c for c in by_cols if c not in available_set]
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: dedupe references missing columns {missing_cols}",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="dedupe",
+                                        param_path="params.dedupe.by",
+                                        missing_columns=missing_cols,
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
+                        elif op == "split":
+                            split_spec = norm.get("split") or {}
+                            source_col = str(split_spec.get("sourceColumn") or "text")
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            if source_col not in available_set:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: split sourceColumn missing '{source_col}'",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="split",
+                                        param_path="split.sourceColumn",
+                                        missing_columns=[source_col],
+                                        available_columns=available_cols,
+                                        available_source=available_source,
                                     ),
                                 )
 
@@ -1671,12 +1871,24 @@ async def run_graph(
                             }
                             for port, _ in input_refs
                         ]
+                        dedupe_provenance: dict[str, Any] = {}
+                        if op == "dedupe":
+                            dedupe_spec = norm.get("dedupe") or {}
+                            by_cols = dedupe_spec.get("by") if isinstance(dedupe_spec.get("by"), list) else []
+                            dedupe_provenance = {
+                                "op": "dedupe",
+                                "by": [str(c) for c in by_cols if str(c).strip()],
+                                "allColumns": len([str(c) for c in by_cols if str(c).strip()]) == 0,
+                                "keep": "first",
+                            }
+
                         table_schema_env = _table_schema_envelope(
                             columns=output_cols,
                             row_count=(res.meta.get("row_count") if isinstance(res.meta, dict) else None),
                             provenance={
                                 "sourceKind": "transform",
                                 "upstream": upstream_refs,
+                                **dedupe_provenance,
                             },
                         )
                         base_payload_schema = {
@@ -2127,6 +2339,7 @@ async def run_graph(
                         _source_payload_schema(
                             str(artifact_port_type or "table"),
                             data_value,
+                            output.metadata if kind == "source" else None,
                         )
                         if kind == "source"
                         else _llm_payload_schema(mime_type, data_value)
@@ -2150,6 +2363,9 @@ async def run_graph(
                             columns=payload_cols,
                             row_count=row_count,
                             provenance=_source_table_provenance(n, params if isinstance(params, dict) else {}),
+                            coercion=base_payload_schema.get("coercion")
+                            if isinstance(base_payload_schema.get("coercion"), dict)
+                            else None,
                         )
                         base_payload_schema["schema"] = table_schema_env
                     created_at_dt = datetime.now(timezone.utc)
@@ -2282,6 +2498,8 @@ async def run_graph(
                     "nodeId": node_id,
                     "status": "failed",
                     "error": error_message,
+                    **({"errorCode": error_code} if error_code else {}),
+                    **({"errorDetails": error_details} if error_details else {}),
                     "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
                 if error_details:
@@ -2293,7 +2511,10 @@ async def run_graph(
                         "message": json.dumps(
                             {
                                 "code": (ex.code if isinstance(ex, ContractMismatchError) else "CONTRACT_MISMATCH"),
+                                "errorCode": error_code,
                                 "missingColumns": error_details.get("missingColumns", []),
+                                "availableColumns": error_details.get("availableColumns", []),
+                                "paramPath": error_details.get("paramPath"),
                                 "expected": error_details.get("expected"),
                                 "actual": error_details.get("actual"),
                             },

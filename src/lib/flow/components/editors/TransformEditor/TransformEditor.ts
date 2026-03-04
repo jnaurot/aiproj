@@ -8,6 +8,7 @@ import TransformJoinEditor from './TransformJoinEditor.svelte';
 import TransformSortEditor from './TransformSortEditor.svelte';
 import TransformLimitEditor from './TransformLimitEditor.svelte';
 import TransformDedupeEditor from './TransformDedupeEditor.svelte';
+import TransformSplitEditor from './TransformSplitEditor.svelte';
 import TransformSqlEditor from './TransformSqlEditor.svelte';
 
 // filter, select, rename, derive, aggregate, join, sort, limit, dedupe, sql
@@ -22,5 +23,6 @@ export const TransformEditorByKind = {
     sort: TransformSortEditor,
     limit: TransformLimitEditor,
     dedupe: TransformDedupeEditor,
+    split: TransformSplitEditor,
     sql: TransformSqlEditor
 } as const;

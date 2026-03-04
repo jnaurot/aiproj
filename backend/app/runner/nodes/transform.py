@@ -3,11 +3,18 @@ from __future__ import annotations
 import io
 import json
 import hashlib
+import re
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-import duckdb
+try:
+    import duckdb
+except ModuleNotFoundError:  # pragma: no cover - exercised in lightweight test envs
+    duckdb = None
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 OP_KEYS = {
     "filter": "filter",
@@ -19,6 +26,7 @@ OP_KEYS = {
     "sort": "sort",
     "limit": "limit",
     "dedupe": "dedupe",
+    "split": "split",
     "sql": "sql",
 }
 
@@ -73,9 +81,34 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
     # keep only the active op payload
     keep_key = OP_KEYS[op]
-    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","sql","code"):
+    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","sql","code"):
         if k != keep_key:
             p.pop(k, None)
+
+    if op == "dedupe":
+        raw = p.get("dedupe") if isinstance(p.get("dedupe"), dict) else {}
+        by_raw = raw.get("by")
+        by: List[str] = []
+        if isinstance(by_raw, list):
+            seen: set[str] = set()
+            for item in by_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                by.append(col)
+        all_columns = bool(raw.get("allColumns", len(by) == 0))
+        if all_columns:
+            by = []
+        keep = str(raw.get("keep") or "first")
+        stable_order_column = raw.get("stableOrderColumn")
+        emit_dropped_count = bool(raw.get("emitDroppedCount", False))
+        dedupe_payload: Dict[str, Any] = {"allColumns": all_columns, "by": by, "keep": keep}
+        if isinstance(stable_order_column, str) and str(stable_order_column).strip():
+            dedupe_payload["stableOrderColumn"] = str(stable_order_column).strip()
+        if emit_dropped_count:
+            dedupe_payload["emitDroppedCount"] = True
+        p["dedupe"] = dedupe_payload
 
     return p
 
@@ -165,6 +198,132 @@ def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     df.to_csv(out, index=False, lineterminator="\n")
     return out.getvalue().encode("utf-8")
 
+
+def _execute_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    source_col = str(spec.get("sourceColumn") or "text")
+    out_col = str(spec.get("outColumn") or "part")
+    mode = str(spec.get("mode") or "sentences")
+    pattern = str(spec.get("pattern") or "")
+    delimiter = str(spec.get("delimiter") or "")
+    flags_raw = str(spec.get("flags") or "")
+    trim = bool(spec.get("trim", True))
+    drop_empty = bool(spec.get("dropEmpty", True))
+    emit_index = bool(spec.get("emitIndex", True))
+    emit_source_row = bool(spec.get("emitSourceRow", True))
+    max_parts = int(spec.get("maxParts") or 5000)
+    max_parts = max(1, min(100000, max_parts))
+    max_chars = 2_000_000
+
+    flag_value = 0
+    if "i" in flags_raw:
+        flag_value |= re.IGNORECASE
+    if "m" in flags_raw:
+        flag_value |= re.MULTILINE
+    if "s" in flags_raw:
+        flag_value |= re.DOTALL
+
+    if mode == "regex":
+        if not pattern.strip():
+            raise ValueError("split.pattern is required when mode='regex'")
+        splitter = re.compile(pattern, flags=flag_value)
+    else:
+        splitter = None
+
+    if mode == "delimiter":
+        if delimiter == "":
+            raise ValueError("split.delimiter is required when mode='delimiter'")
+        delimiter = delimiter.replace("\\r", "\r").replace("\\n", "\n").replace("\\t", "\t")
+
+    def _split_text(text: str) -> List[str]:
+        if mode == "lines":
+            return re.split(r"\r\n|\n|\r", text)
+        if mode == "sentences":
+            normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+            normalized = re.sub(r"\s+", " ", normalized).strip()
+            if not normalized:
+                return []
+            return re.split(r"(?<=[.!?])\s+", normalized)
+        if mode == "regex":
+            assert splitter is not None
+            return splitter.split(text)
+        if mode == "delimiter":
+            return text.split(delimiter)
+        return [text]
+
+    rows_out: List[Dict[str, Any]] = []
+    for src_idx, row in enumerate(primary_df.to_dict(orient="records")):
+        value = row.get(source_col, "")
+        text = "" if value is None else str(value)
+        if len(text) > max_chars:
+            raise ValueError(
+                f"split source value exceeds max chars ({len(text)} > {max_chars}) for row={src_idx}"
+            )
+        parts = _split_text(text)
+        emitted = 0
+        for idx, part in enumerate(parts):
+            token = part.strip() if trim else part
+            if drop_empty and token == "":
+                continue
+            if emitted >= max_parts:
+                logger.warning(
+                    "Split capped: emitted=%s parts (maxParts=%s) for row=%s",
+                    emitted,
+                    max_parts,
+                    src_idx,
+                )
+                break
+            out_row: Dict[str, Any] = {out_col: token}
+            if emit_index:
+                out_row["index"] = idx
+            if emit_source_row:
+                out_row["source_row"] = src_idx
+            rows_out.append(out_row)
+            emitted += 1
+    return pd.DataFrame(rows_out)
+
+
+def _execute_dedupe_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Deduplicate is a logical TABLE_V1 transform.
+    - by=[] means dedupe on the entire row.
+    - keep='first' keeps the first row by stable row order (__rowid).
+    """
+    all_columns = bool(spec.get("allColumns", False))
+    by_raw = spec.get("by")
+    by: List[str] = []
+    if isinstance(by_raw, list):
+        seen: set[str] = set()
+        for item in by_raw:
+            col = str(item or "").strip()
+            if not col or col in seen:
+                continue
+            seen.add(col)
+            by.append(col)
+    if all_columns:  # legacy compatibility
+        by = []
+    keep = str(spec.get("keep") or "first")
+    if keep != "first":
+        raise ValueError("dedupe.keep must be 'first'")
+    if (not all_columns) and (len(by) == 0):
+        raise ValueError("dedupe.by must include at least one column when allColumns=false")
+
+    cols = [str(c) for c in list(primary_df.columns)]
+    missing = [c for c in by if c not in cols]
+    if missing:
+        raise ValueError(f"dedupe.by columns missing from input: {', '.join(missing)}")
+
+    working = primary_df.reset_index(drop=True).copy()
+    working["__rowid"] = range(len(working))
+    working = working.sort_values("__rowid", kind="stable")
+
+    if by:
+        deduped = working.drop_duplicates(subset=by, keep="first")
+    else:
+        deduped = working.drop_duplicates(subset=cols, keep="first") if cols else working.head(1)
+
+    deduped = deduped.sort_values("__rowid", kind="stable").drop(columns=["__rowid"], errors="ignore")
+    return deduped.reset_index(drop=True)
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
@@ -179,16 +338,26 @@ def execute_transform_op(
     - primary input table is inputs["in"] (or first input)
     - for join, params.join.withNodeId resolves via join_lookup[nodeId]
     """
+    primary_df = inputs.get("in")
+    if primary_df is None:
+        if not inputs:
+            raise ValueError("Transform has no input tables (expected at least one).")
+        primary_df = next(iter(inputs.values()))
+
+    if op == "split":
+        spec = params["split"]
+        return _execute_split_op(primary_df, spec)
+    if op == "dedupe":
+        spec = params["dedupe"]
+        return _execute_dedupe_op(primary_df, spec)
+
+    if duckdb is None:
+        raise ModuleNotFoundError("duckdb is required for non-split transform operations")
+
     con = duckdb.connect(database=":memory:")
     try:
         # register input tables
         primary_name = "input"
-        
-        primary_df = inputs.get("in")
-        if primary_df is None:
-            if not inputs:
-                raise ValueError("Transform has no input tables (expected at least one).")
-            primary_df = next(iter(inputs.values()))
 
         con.register(primary_name, primary_df)
 
@@ -286,7 +455,6 @@ def execute_transform_op(
             # no 'by' => deterministic unique set; DISTINCT doesn’t guarantee order, so sort it
             q = f"select distinct * from {primary_name} order by {order_sql}"
             return con.execute(q).df()
-
 
         elif op == "sql":
             q = params["sql"]["query"]

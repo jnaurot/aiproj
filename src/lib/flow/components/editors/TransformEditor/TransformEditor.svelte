@@ -10,13 +10,27 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { TransformEditorByKind } from './TransformEditor';
 	import { parseInputSchemaView, type InputSchemaView } from './inputSchema';
+	import type { NodeExecutionError } from '$lib/flow/store/graphStore';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformParams>;
 	export let onDraft: (patch: Partial<TransformParams>) => void;
 	export let onCommit: (patch: Partial<TransformParams>) => void;
+	export let nodeError: NodeExecutionError | null = null;
 
-	const ops: TransformKind[] = ['filter', 'select', 'rename', 'derive', 'aggregate', 'join', 'sort', 'limit', 'dedupe', 'sql'];
+	const ops: TransformKind[] = [
+		'filter',
+		'select',
+		'rename',
+		'derive',
+		'aggregate',
+		'join',
+		'sort',
+		'limit',
+		'dedupe',
+		'split',
+		'sql'
+	];
 	function isTransformKind(value: unknown): value is TransformKind {
 		return typeof value === 'string' && ops.includes(value as TransformKind);
 	}
@@ -28,14 +42,38 @@
 	$: EditorComponent = TransformEditorByKind[currentOp];
 	$: childParams = (params as Record<string, unknown>)[currentOp] ?? defaultTransformParamsByKind[currentOp][currentOp];
 	$: graphState = $graphStore;
+	$: splitInputColumns = Array.from(
+		new Set(inputSchemas.flatMap((schema) => schema.columns.map((c) => String(c.name || ''))).filter(Boolean))
+	);
+	$: hasWrappedInput = inputSchemas.some((s) =>
+		['json_object_1row', 'text_1row', 'binary_hex_1row'].includes(s.coercion?.mode ?? '')
+	);
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaError: string | null = null;
 	let loadingInputSchemas = false;
 	let inputSchemaReqSeq = 0;
+	let lastInputSignature = '';
 
 	$: if (selectedNode?.id) {
-		void refreshInputSchemas();
+		const nodeId = selectedNode.id;
+		const edges = graphState?.edges ?? [];
+		const nodeBindings = graphState?.nodeBindings ?? {};
+		const incoming = edges
+			.filter((e) => e.target === nodeId)
+			.map((e) => {
+				const sourceBinding = nodeBindings[e.source];
+				const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
+				return `${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
+			})
+			.sort();
+		const signature = `${String(graphState?.graphId ?? '')}|${nodeId}|${incoming.join('|')}`;
+		if (signature !== lastInputSignature) {
+			lastInputSignature = signature;
+			void refreshInputSchemas();
+		}
+	} else {
+		lastInputSignature = '';
 	}
 
 	function handleOpChange(nextOp: TransformKind): void {
@@ -50,6 +88,14 @@
 
 	function commitChild(next: Record<string, unknown>): void {
 		onCommit({ [currentOp]: next } as Partial<TransformParams>);
+	}
+
+	function patchChildFor(opKey: TransformKind, next: Record<string, unknown>) {
+		onDraft({ [opKey]: next } as Partial<TransformParams>);
+	}
+
+	function commitChildFor(opKey: TransformKind, next: Record<string, unknown>) {
+		onCommit({ [opKey]: next } as Partial<TransformParams>);
 	}
 
 	async function refreshInputSchemas(): Promise<void> {
@@ -170,6 +216,21 @@
 						{/if}
 					</div>
 				{/if}
+				{#if schema.coercion && schema.coercion.mode !== 'native'}
+					<div class="schemaCoercion">
+						<span>Coerced table: {schema.coercion.mode}</span>
+						{#if schema.rowCount !== null}
+							<span>rows: {schema.rowCount}</span>
+						{/if}
+						<span>cols: {schema.columns.length}</span>
+						{#if schema.coercion.lossy}
+							<span>lossy coercion</span>
+						{/if}
+						{#if schema.coercion.notes}
+							<span>{schema.coercion.notes}</span>
+						{/if}
+					</div>
+				{/if}
 				{#if schema.columns.length === 0}
 					<div class="schemaMuted">No columns available.</div>
 				{:else}
@@ -187,14 +248,42 @@
 	{/if}
 </Section>
 
+{#if currentOp === 'join' && hasWrappedInput}
+	<div class="joinHint">
+		This input is a wrapped payload; joins/aggregations may not behave as expected.
+	</div>
+{/if}
+
 {#if EditorComponent}
-	<svelte:component
-		this={EditorComponent}
-		{selectedNode}
-		params={childParams}
-		onDraft={patchChild}
-		onCommit={commitChild}
+	{#if currentOp === 'split'}
+		<svelte:component
+			this={EditorComponent}
+			{selectedNode}
+			params={childParams}
+			onDraft={patchChild}
+			onCommit={commitChild}
+			inputColumns={splitInputColumns}
+		/>
+	{:else if currentOp === 'dedupe'}
+	{@const opKey = currentOp}
+		<svelte:component
+			this={EditorComponent}
+			{selectedNode}
+			params={childParams}
+			onDraft={(next) => patchChildFor(opKey, next)}
+			onCommit={(next) => commitChildFor(opKey, next)}
+			inputColumns={splitInputColumns}
+			{nodeError}
 	/>
+	{:else}
+		<svelte:component
+			this={EditorComponent}
+			{selectedNode}
+			params={childParams}
+			onDraft={patchChild}
+			onCommit={commitChild}
+		/>
+	{/if}
 {/if}
 
 <style>
@@ -260,5 +349,26 @@
 	.schemaError {
 		font-size: 12px;
 		color: #f87171;
+	}
+
+	.schemaCoercion {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		font-size: 11px;
+		margin-bottom: 6px;
+		padding: 6px 8px;
+		border: 1px solid var(--field-border, #334155);
+		border-radius: 6px;
+		background: rgba(148, 163, 184, 0.08);
+	}
+
+	.joinHint {
+		font-size: 12px;
+		opacity: 0.85;
+		margin-bottom: 8px;
+		padding: 6px 8px;
+		border: 1px solid var(--field-border, #334155);
+		border-radius: 8px;
 	}
 </style>

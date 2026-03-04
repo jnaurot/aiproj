@@ -99,11 +99,39 @@ def _file_format_mime(file_format: str) -> str:
 def _canonical_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
-    cols = sorted({str(k) for row in rows for k in row.keys()})
+    seen: set[str] = set()
+    cols: list[str] = []
+    for row in rows:
+        for k in row.keys():
+            sk = str(k)
+            if sk in seen:
+                continue
+            seen.add(sk)
+            cols.append(sk)
     out: list[dict[str, Any]] = []
     for row in rows:
         out.append({col: row.get(col) for col in cols})
     return out
+
+
+def _table_rows_from_json_array(items: list[Any]) -> tuple[list[dict[str, Any]], str]:
+    if all(isinstance(item, dict) for item in items):
+        seen: set[str] = set()
+        ordered_keys: list[str] = []
+        for item in items:
+            for key in item.keys():
+                sk = str(key)
+                if sk in seen:
+                    continue
+                seen.add(sk)
+                ordered_keys.append(sk)
+        rows: list[dict[str, Any]] = []
+        for item in items:
+            src = item if isinstance(item, dict) else {}
+            rows.append({k: src.get(k) for k in ordered_keys})
+        return rows, "json_rows"
+    rows = [{"index": idx, "value": item} for idx, item in enumerate(items)]
+    return rows, "json_scalar_array_rows"
 
 
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
@@ -133,14 +161,18 @@ def _metadata_for_output(
     data: Any,
     params: Dict[str, Any],
     mime_override: Optional[str] = None,
+    schema_extra: Optional[Dict[str, Any]] = None,
 ) -> FileMetadata:
     payload_bytes = _payload_bytes_for_mode(data, output_mode)
+    data_schema: Dict[str, Any] = {"source_kind": source_kind, "output_mode": output_mode}
+    if isinstance(schema_extra, dict):
+        data_schema.update(schema_extra)
     return FileMetadata(
         file_path=f"artifact://{graph_id}/{node_id}/{source_kind}",
         file_type=_mode_to_file_type(output_mode),
         mime_type=str(mime_override or _mode_to_mime(output_mode)),
         size_bytes=len(payload_bytes),
-        data_schema={"source_kind": source_kind, "output_mode": output_mode},
+        data_schema=data_schema,
         row_count=(len(data) if isinstance(data, list) else None),
         access_method="local",
         content_hash=_sha256_bytes(payload_bytes),
@@ -292,6 +324,7 @@ async def _handle_file_source(
     text_data: str | None = None
     json_data: Any = None
     binary_data: bytes | None = None
+    table_coercion: Dict[str, Any] | None = None
 
     if schema.file_format in {"csv", "tsv"}:
         csv_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
@@ -335,15 +368,29 @@ async def _handle_file_source(
 
     if output_mode == "table":
         if rows is not None:
+            if schema.file_format in {"csv", "tsv", "parquet", "excel"}:
+                table_coercion = {"mode": "native", "lossy": False}
+            elif schema.file_format == "json":
+                rows, json_mode = _table_rows_from_json_array(rows)
+                table_coercion = {"mode": json_mode, "lossy": False}
             data = _canonical_table_rows(rows)
         elif isinstance(json_data, dict):
             data = [json_data]
+            table_coercion = {"mode": "json_object_1row", "lossy": False}
         elif text_data is not None:
             data = [{"text": text_data}]
+            lossy = bool(schema.file_format == "pdf")
+            table_coercion = {
+                "mode": "text_1row",
+                "lossy": lossy,
+                **({"notes": "PDF text extraction may be partial."} if lossy else {}),
+            }
         elif binary_data is not None:
             data = [{"binary_hex": binary_data.hex()}]
+            table_coercion = {"mode": "binary_hex_1row", "lossy": False}
         else:
             data = []
+            table_coercion = {"mode": "native", "lossy": False}
     elif output_mode == "json":
         if json_data is not None:
             data = json_data
@@ -380,6 +427,10 @@ async def _handle_file_source(
         data=data,
         params=params,
         mime_override=_file_format_mime(schema.file_format),
+        schema_extra={
+            "file_format": schema.file_format,
+            **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
+        },
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
 

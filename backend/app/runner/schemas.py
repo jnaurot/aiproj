@@ -421,6 +421,7 @@ class TransformParamsCurrent(NodeParamSchema):
         "sort",
         "limit",
         "dedupe",
+        "split",
         "sql",
     ]
     enabled: bool = True
@@ -435,6 +436,7 @@ class TransformParamsCurrent(NodeParamSchema):
     sort: Optional[Dict[str, Any]] = None
     limit: Optional[Dict[str, Any]] = None
     dedupe: Optional[Dict[str, Any]] = None
+    split: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
 
     def validate_required(self) -> List[str]:
@@ -448,6 +450,7 @@ class TransformParamsCurrent(NodeParamSchema):
             "sort": "sort",
             "limit": "limit",
             "dedupe": "dedupe",
+            "split": "split",
             "sql": "sql",
         }
         payload_key = op_to_payload.get(self.op)
@@ -776,6 +779,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "sort": "sort",
                 "limit": "limit",
                 "dedupe": "dedupe",
+                "split": "split",
                 "sql": "sql",
             }.get(op)
             payload = norm.get(payload_key) if payload_key else None
@@ -814,8 +818,42 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     n = payload.get("n")
                     if not isinstance(n, int) or n < 1:
                         errors.append("limit.n must be an integer >= 1")
+                elif op == "dedupe":
+                    by = payload.get("by")
+                    all_columns = payload.get("allColumns")
+                    keep = payload.get("keep")
+                    if by is not None and not isinstance(by, list):
+                        errors.append("dedupe.by must be an array of column names")
+                    if isinstance(by, list) and any(not str(c).strip() for c in by):
+                        errors.append("dedupe.by cannot contain empty column names")
+                    if all_columns is False and isinstance(by, list) and len(by) == 0:
+                        errors.append("dedupe.by must include at least one column when allColumns=false")
+                    if keep is not None and str(keep) != "first":
+                        errors.append("dedupe.keep must be 'first'")
                 elif op == "sql" and not str(payload.get("query") or "").strip():
                     errors.append("sql.query is required")
+                elif op == "split":
+                    source_col = str(payload.get("sourceColumn") or "").strip()
+                    out_col = str(payload.get("outColumn") or "").strip()
+                    mode = str(payload.get("mode") or "sentences").strip()
+                    pattern = str(payload.get("pattern") or "")
+                    delimiter = payload.get("delimiter")
+                    flags = str(payload.get("flags") or "")
+                    max_parts = payload.get("maxParts")
+                    if not source_col:
+                        errors.append("split.sourceColumn is required")
+                    if not out_col:
+                        errors.append("split.outColumn is required")
+                    if mode not in {"sentences", "lines", "regex", "delimiter"}:
+                        errors.append("split.mode must be one of: sentences, lines, regex, delimiter")
+                    if mode == "regex" and not pattern.strip():
+                        errors.append("split.pattern is required when mode=regex")
+                    if mode == "delimiter" and (not isinstance(delimiter, str) or delimiter == ""):
+                        errors.append("split.delimiter is required when mode=delimiter")
+                    if any(ch not in {"i", "m", "s"} for ch in flags):
+                        errors.append("split.flags allows only i, m, s")
+                    if not isinstance(max_parts, int) or max_parts < 1 or max_parts > 100000:
+                        errors.append("split.maxParts must be an integer between 1 and 100000")
         elif kind == "tool":
             norm_tool = normalize_tool_params_frontend(params)
             tool_model = ToolProviderParams.model_validate(norm_tool)

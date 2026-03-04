@@ -86,7 +86,7 @@ const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   join: ["withNodeId", "how", "on"],
   sort: ["by"],
   limit: ["n"],
-  dedupe: ["by"],
+  dedupe: ["allColumns", "by"],
   sql: ["dialect", "query"],
 };
 

@@ -12,7 +12,11 @@ describe('parseInputSchemaView', () => {
 					columns: [
 						{ name: 'id', type: 'int64' },
 						{ name: 'name' }
-					]
+					],
+					coercion: {
+						mode: 'text_1row',
+						lossy: false
+					}
 				},
 				stats: { rowCount: 42 },
 				provenance: { sourceKind: 'db', tableName: 'users' }
@@ -24,6 +28,7 @@ describe('parseInputSchemaView', () => {
 		expect(parsed.rowCount).toBe(42);
 		expect(parsed.provenance?.sourceKind).toBe('db');
 		expect(parsed.provenance?.tableName).toBe('users');
+		expect(parsed.coercion).toEqual({ mode: 'text_1row', lossy: false });
 		expect(parsed.columns).toEqual([
 			{ name: 'id', type: 'int64' },
 			{ name: 'name', type: 'unknown' }
@@ -42,5 +47,13 @@ describe('parseInputSchemaView', () => {
 		]);
 		expect(parsed.rowCount).toBeNull();
 		expect(parsed.provenance).toBeNull();
+		expect(parsed.coercion).toBeNull();
+	});
+
+	it('defaults text payloads to a text column when schema columns are absent', () => {
+		const parsed = parseInputSchemaView('a3', 'Source.in', {
+			type: 'text'
+		});
+		expect(parsed.columns).toEqual([{ name: 'text', type: 'string' }]);
 	});
 });

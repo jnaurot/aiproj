@@ -35,6 +35,7 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
+	TransformSplitParams,
 	TransformSqlParams
 } from '$lib/flow/schema/transform';
 export type TransformKind =
@@ -47,6 +48,7 @@ export type TransformKind =
 	| 'sort'
 	| 'limit'
 	| 'dedupe'
+	| 'split'
 	| 'sql';
 
 export type TransformParamsByKind = {
@@ -59,6 +61,7 @@ export type TransformParamsByKind = {
 	sort: TransformSortParams;
 	limit: TransformLimitParams;
 	dedupe: TransformDedupeParams;
+	split: TransformSplitParams;
 	sql: TransformSqlParams;
 };
 

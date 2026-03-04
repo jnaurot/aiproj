@@ -25,6 +25,7 @@
 
 	// inspector draft params (single source of truth for editors)
 	$: params = $graphStore.inspector?.draftParams ?? {};
+	$: nodeError = selectedNode ? ($graphStore.nodeOutputs?.[selectedNode.id]?.lastError ?? null) : null;
 
 	// sub-kinds / kinds
 	$: sourceKind = (selectedNode?.data as any)?.sourceKind ?? 'file';
@@ -71,6 +72,7 @@
 			this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
 			{selectedNode}
 			{params}
+			{nodeError}
 			{onDraft}
 			{onCommit}
 		/>

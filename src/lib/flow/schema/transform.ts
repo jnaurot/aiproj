@@ -11,6 +11,7 @@ const TransformKindSchema = z.enum(["filter",
   "sort",
   "limit",
   "dedupe",
+  "split",
   "sql"]);
 
 // ─────────────────────────────────────────────
@@ -88,15 +89,63 @@ export const TransformLimitParamsSchema = z.object({
     .min(1, "Limit must be at least 1"),
 }).strip();
 
+// export const TransformDedupeParamsSchema = z.object({
+//   allColumns: z.boolean().optional().default(false),
+//   by: z.array(z.string().min(1)).optional().default([]),
+// }).strip();
+
 export const TransformDedupeParamsSchema = z.object({
-  by: z.array(z.string().min(1)).optional().default([]),
-  // Optional: could add .refine() to check for empty array meaning "dedupe all columns"
-}).strip();
+  allColumns: z.boolean().default(false),
+  by: z.array(z.string().min(1)).default([]),
+}).superRefine((val, ctx) => {
+  if (val.allColumns && val.by.length > 0) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["by"],
+      message: "by must be empty when allColumns is true",
+    });
+  }
+});
 
 export const TransformSqlParamsSchema = z.object({
   dialect: z.enum(["duckdb", "postgres", "sqlite"]).optional().default("duckdb"),
   query: z.string().min(1, "SQL query cannot be empty"),
 }).strip();
+
+export const TransformSplitParamsSchema = z
+	.object({
+		sourceColumn: z.string().min(1, 'Source column is required').default('text'),
+		outColumn: z.string().min(1, 'Output column is required').default('part'),
+		mode: z.enum(['sentences', 'lines', 'regex', 'delimiter']).default('sentences'),
+		pattern: z.string().optional(),
+		delimiter: z.string().optional(),
+		flags: z
+			.string()
+			.default('')
+			.refine((v) => /^[ims]*$/.test(v), 'Flags must contain only i, m, s'),
+		trim: z.boolean().default(true),
+		dropEmpty: z.boolean().default(true),
+		emitIndex: z.boolean().default(true),
+		emitSourceRow: z.boolean().default(true),
+		maxParts: z.number().int().min(1).max(100000).default(5000)
+	})
+	.superRefine((v, ctx) => {
+		if (v.mode === 'regex' && !String(v.pattern ?? '').trim()) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['pattern'],
+				message: 'Pattern is required when mode=regex'
+			});
+		}
+		if (v.mode === 'delimiter' && !String(v.delimiter ?? '').length) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['delimiter'],
+				message: 'Delimiter is required when mode=delimiter'
+			});
+		}
+	})
+	.strip();
 
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
@@ -108,6 +157,7 @@ export const TransformParamsSchemaByKind = {
   sort: TransformSortParamsSchema,
   limit: TransformLimitParamsSchema,
   dedupe: TransformDedupeParamsSchema,
+  split: TransformSplitParamsSchema,
   sql: TransformSqlParamsSchema
 } as const
 
@@ -122,6 +172,7 @@ export type TransformSortParams  = z.infer<typeof   TransformSortParamsSchema>;
 export type TransformLimitParams  = z.infer<typeof   TransformLimitParamsSchema>;
 export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchema>;
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
+export type TransformSplitParams = z.infer<typeof TransformSplitParamsSchema>;
 
 
 // ---- common params (shared across all ops) ----
@@ -185,6 +236,11 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("dedupe"),
     dedupe: TransformDedupeParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("split"),
+    split: TransformSplitParamsSchema
   }).strip(),
 
   TransformCommonSchema.extend({

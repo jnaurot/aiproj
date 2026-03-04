@@ -2,6 +2,8 @@
 Unit tests for schema validation and normalization
 """
 import pytest
+import sys
+from types import SimpleNamespace
 from typing import Dict, Any
 from app.runner.schemas import (
     normalize_llm_params_frontend,
@@ -17,6 +19,7 @@ from app.runner.schemas import (
     CustomTransformParams,
     get_schema_for_node,
     SCHEMA_REGISTRY,
+    validate_node_params,
 )
 
 
@@ -554,6 +557,77 @@ class TestTransformPythonRemoval:
     def test_transform_params_current_rejects_python_op(self):
         with pytest.raises(ValueError):
             TransformParamsCurrent.model_validate({"op": "python"})
+
+
+class TestTransformSplitValidation:
+    def test_split_requires_pattern_for_regex_mode(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "split",
+                    "split": {
+                        "sourceColumn": "text",
+                        "outColumn": "part",
+                        "mode": "regex",
+                        "flags": "im",
+                        "trim": True,
+                        "dropEmpty": True,
+                        "emitIndex": True,
+                        "emitSourceRow": True,
+                        "maxParts": 5000,
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert "split.pattern is required when mode=regex" in errors
+
+    def test_split_rejects_invalid_flags_and_bounds(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "split",
+                    "split": {
+                        "sourceColumn": "text",
+                        "outColumn": "part",
+                        "mode": "delimiter",
+                        "delimiter": ",",
+                        "flags": "ix",
+                        "trim": True,
+                        "dropEmpty": True,
+                        "emitIndex": True,
+                        "emitSourceRow": True,
+                        "maxParts": 0,
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert "split.flags allows only i, m, s" in errors
+        assert "split.maxParts must be an integer between 1 and 100000" in errors
+
+
+class TestTransformDedupeValidation:
+    def test_dedupe_rejects_invalid_keep(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "dedupe",
+                    "dedupe": {
+                        "by": ["text"],
+                        "keep": "last",
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert "dedupe.keep must be 'first'" in errors
 
 
 class TestMapTransformParams:

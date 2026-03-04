@@ -33,7 +33,7 @@
 	<input
 		class={`checkbox ${className}`.trim()}
 		{type}
-		{checked}
+		checked={checked}
 		{disabled}
 		{readonly}
 		on:change={onChange}

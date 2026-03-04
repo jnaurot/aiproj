@@ -89,6 +89,7 @@ export async function acceptNodeParams(req: {
   graph: any;
   params: Record<string, unknown>;
 }) {
+  console.log("[accept-params] req.params", req.params);
   const res = await fetch(
     `/runs/${encodeURIComponent(req.runId)}/nodes/${encodeURIComponent(req.nodeId)}/accept-params`,
     {

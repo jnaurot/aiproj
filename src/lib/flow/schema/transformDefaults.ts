@@ -9,7 +9,8 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
-	TransformSqlParams
+	TransformSqlParams,
+	TransformSplitParams
 } from '$lib/flow/schema/transform';
 
 export const defaultTransformFilterParams: TransformFilterParams = {
@@ -79,12 +80,27 @@ export const defaultTransformLimitParams: TransformLimitParams = {
 };
 
 export const defaultTransformDedupeParams: TransformDedupeParams = {
-	by: ['text']
+	allColumns: false,
+	by: ['__none__']
 };
 
 export const defaultTransformSqlParams: TransformSqlParams = {
 	dialect: 'duckdb',
 	query: 'SELECT * FROM input LIMIT 10'
+};
+
+export const defaultTransformSplitParams: TransformSplitParams = {
+	sourceColumn: 'text',
+	outColumn: 'part',
+	mode: 'sentences',
+	pattern: '(?<=[.!?])\\s+',
+	delimiter: '\n',
+	flags: '',
+	trim: true,
+	dropEmpty: true,
+	emitIndex: true,
+	emitSourceRow: true,
+	maxParts: 5000
 };
 
 export const defaultTransformParamsByKind = {
@@ -150,6 +166,13 @@ export const defaultTransformParamsByKind = {
 		notes: '',
 		cache: { enabled: false },
 		dedupe: defaultTransformDedupeParams
+	},
+	split: {
+		op: 'split',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		split: defaultTransformSplitParams
 	},
 	sql: {
 		op: 'sql',

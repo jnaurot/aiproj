@@ -42,6 +42,17 @@ type NodeOutputInfo = {
 	expectedContractFingerprint?: string;
 	actualContractFingerprint?: string;
 	mismatchKind?: string;
+	lastError?: NodeExecutionError | null;
+};
+
+export type NodeExecutionError = {
+	message?: string;
+	errorCode?: string;
+	op?: string;
+	paramPath?: string;
+	missingColumns?: string[];
+	availableColumns?: string[];
+	availableColumnsSource?: 'schema' | 'inferred' | string;
 };
 type NodeBindingInfo = {
 	status?: string;
@@ -971,7 +982,14 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					currentRunId: evt.runId ?? runId
 				}
 			};
-			return withGraphMeta(logPush({ ...state, nodeBindings }, 'info', 'Node started', evt.nodeId));
+			const nodeOutputs = {
+				...state.nodeOutputs,
+				[evt.nodeId]: {
+					...(state.nodeOutputs?.[evt.nodeId] ?? {}),
+					lastError: null
+				}
+			};
+			return withGraphMeta(logPush({ ...state, nodeBindings, nodeOutputs }, 'info', 'Node started', evt.nodeId));
 		}
 		case 'edge_exec': {
 			const edges = state.edges.map((e) =>
@@ -985,6 +1003,25 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
 			const succeeded = evt.status === 'succeeded';
+			const errorDetails = (evt as any).errorDetails as Record<string, unknown> | undefined;
+			const errorPayload: NodeExecutionError | null = succeeded
+				? null
+				: {
+					message: evt.error ? String(evt.error) : undefined,
+					errorCode: typeof (evt as any).errorCode === 'string' ? String((evt as any).errorCode) : undefined,
+					op: typeof errorDetails?.op === 'string' ? String(errorDetails.op) : undefined,
+					paramPath: typeof errorDetails?.paramPath === 'string' ? String(errorDetails.paramPath) : undefined,
+					missingColumns: Array.isArray(errorDetails?.missingColumns)
+						? errorDetails?.missingColumns.map((c) => String(c))
+						: undefined,
+					availableColumns: Array.isArray(errorDetails?.availableColumns)
+						? errorDetails?.availableColumns.map((c) => String(c))
+						: undefined,
+					availableColumnsSource:
+						typeof errorDetails?.availableColumnsSource === 'string'
+							? (errorDetails.availableColumnsSource as any)
+							: undefined
+				};
 			let nextBinding: NormalizedNodeBinding = {
 				...prevBinding,
 				status: succeeded ? 'succeeded_up_to_date' : evt.status,
@@ -1009,7 +1046,8 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				...state.nodeOutputs,
 				[evt.nodeId]: {
 					...prevOut,
-					cacheDecision: prevOut?.cacheDecision ?? (succeeded ? 'cache_miss' : prevOut?.cacheDecision)
+					cacheDecision: prevOut?.cacheDecision ?? (succeeded ? 'cache_miss' : prevOut?.cacheDecision),
+					lastError: errorPayload
 				}
 			};
 			return withGraphMeta(
@@ -1504,6 +1542,13 @@ export const graphStore = (() => {
 		const s = get({ subscribe } as any) as GraphState;
 		const nodeId = s.inspector.nodeId;
 		if (!nodeId) return { ok: false, error: 'No node selected' };
+		if (patch?.op === 'dedupe' || patch?.dedupe || s.inspector.draftParams?.op === 'dedupe') {
+			console.log('[dedupe-store] commitInspectorImmediate:patch', {
+				nodeId,
+				patch,
+				draftParams: s.inspector.draftParams
+			});
+		}
 		const beforeNode = s.nodes.find((x) => x.id === nodeId);
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
 
@@ -1513,6 +1558,12 @@ export const graphStore = (() => {
 
 		const afterState = get({ subscribe } as any) as GraphState;
 		const paramsForSubmit = committedNodeParamsForNode(afterState, nodeId);
+		if (paramsForSubmit?.op === 'dedupe') {
+			console.log('[dedupe-store] commitInspectorImmediate:paramsForSubmit', {
+				nodeId,
+				paramsForSubmit
+			});
+		}
 		update((cur) => {
 			if (cur.inspector.nodeId !== nodeId) return cur;
 			return {
@@ -1667,6 +1718,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		paramsForSubmit: Record<string, any>,
 		beforeExecParams: Record<string, unknown>
 	): Promise<void> {
+		if (paramsForSubmit?.op === 'dedupe') {
+			console.log('[dedupe-store] syncAcceptParamsForNode:begin', {
+				nodeId,
+				paramsForSubmit
+			});
+		}
 		const st = get({ subscribe } as any) as GraphState;
 		const afterNode = st.nodes.find((x) => x.id === nodeId);
 		const afterExecParams = effectiveExecParamsForNode(afterNode);

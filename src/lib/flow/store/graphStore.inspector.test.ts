@@ -43,6 +43,35 @@ describe('graphStore snapshot scoped commit', () => {
 		expect((state.inspector.draftParams as any).snapshotId).toBe(snapshotId);
 	});
 
+	it('node_finished failed stores structured missing-column error details', () => {
+		const nodeId = setupSourceNode();
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_finished',
+				runId: 'run_missing_column',
+				at: '2026-03-03T00:00:00Z',
+				nodeId,
+				status: 'failed',
+				error: 'Transform payload schema mismatch: dedupe references missing columns',
+				errorCode: 'MISSING_COLUMN',
+				errorDetails: {
+					op: 'dedupe',
+					paramPath: 'by',
+					missingColumns: ['missing'],
+					availableColumns: ['text', 'other'],
+					availableColumnsSource: 'schema'
+				}
+			} as any,
+			'run_missing_column'
+		);
+		expect(next.nodeOutputs[nodeId]?.lastError?.errorCode).toBe('MISSING_COLUMN');
+		expect(next.nodeOutputs[nodeId]?.lastError?.paramPath).toBe('by');
+		expect(next.nodeOutputs[nodeId]?.lastError?.missingColumns).toEqual(['missing']);
+		expect(next.nodeOutputs[nodeId]?.lastError?.availableColumns).toEqual(['text', 'other']);
+	});
+
 	it('selecting_previous_upload_does_not_accept_unrelated_drafts', async () => {
 		const nodeId = setupSourceNode();
 		const snapshotId = 'b'.repeat(64);

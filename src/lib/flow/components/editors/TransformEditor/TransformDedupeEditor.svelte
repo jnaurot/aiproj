@@ -4,24 +4,132 @@
 	import type { TransformDedupeParams } from '$lib/flow/schema/transform';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import Field from '$lib/flow/components/ui/Field.svelte';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
+	import {
+		canCommitDedupeDraft,
+		missingDedupeColumnsFromError,
+		normalizeDedupeParams,
+		resolveDedupeAvailableColumns
+	} from './dedupeModel';
+	import type { NodeExecutionError } from '$lib/flow/store/graphStore';
+	import { SCHEMA_UNAVAILABLE_VALUE, SCHEMA_UNAVAILABLE_LABEL } from '$lib/flow/constants';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformDedupeParams>;
 	export let onDraft: (patch: Partial<TransformDedupeParams>) => void;
 	export let onCommit: (patch: Partial<TransformDedupeParams>) => void;
+	export let inputColumns: string[] = [];
+	export let nodeError: NodeExecutionError | null = null;
 
-	const defaults: TransformDedupeParams = { by: ['text'] };
+	const defaults: TransformDedupeParams = {
+		allColumns: false,
+		by: [SCHEMA_UNAVAILABLE_VALUE]
+	};
+
+	let by: string[] = [];
+	let useByColumns = false;
+	let selectedColumnToAdd = '';
+	let lastNodeId = '';
+	let replacementByIndex: Record<number, string> = {};
+	let stickyAvailableColumns: string[] = [];
 
 	$: void selectedNode?.id;
-	$: by = uniqueStrings(params?.by ?? defaults.by);
-	$: dedupeAll = by.length === 0;
+	$: normalized = normalizeDedupeParams(params);
+	$: allColumns = normalized.allColumns;
+	$: by = normalized.by;
+	$: errorAvailableColumns = Array.isArray(nodeError?.availableColumns)
+		? nodeError.availableColumns.map((c) => String(c).trim()).filter(Boolean)
+		: [];
+	$: resolvedColumns = resolveDedupeAvailableColumns(inputColumns, errorAvailableColumns, by);
+	$: if (resolvedColumns.length > 0) stickyAvailableColumns = resolvedColumns;
+	$: availableColumns = resolvedColumns.length > 0 ? resolvedColumns : stickyAvailableColumns;
+	$: fallbackColumns = uniqueStrings([...inputColumns, ...errorAvailableColumns, ...by]);
+	$: missingByColumns = missingDedupeColumnsFromError(nodeError);
+	$: isMissingColumnError = missingByColumns.length > 0;
+	$: dedupeAll = allColumns;
+	$: canCommit = canCommitDedupeDraft(useByColumns, by);
+
+	$: if ((selectedNode?.id ?? '') !== lastNodeId) {
+		lastNodeId = selectedNode?.id ?? '';
+		useByColumns = !allColumns;
+	}
+
+	$: if (!selectedColumnToAdd || !availableColumns.includes(selectedColumnToAdd)) {
+		selectedColumnToAdd =
+			availableColumns[0] ??
+			(fallbackColumns[0] ?? (useByColumns ? SCHEMA_UNAVAILABLE_VALUE : ''));
+	}
+
+	$: {
+		const next: Record<number, string> = {};
+		for (let i = 0; i < by.length; i += 1) {
+			const current = replacementByIndex[i];
+			next[i] = availableColumns.includes(current) ? current : (availableColumns[0] ?? '');
+		}
+		replacementByIndex = next;
+	}
+
+	function setDraft(next: Partial<TransformDedupeParams>) {
+		const merged = normalizeDedupeParams({ ...normalized, ...next });
+		console.log('[dedupe-ui] setDraft', {
+			nodeId: selectedNode?.id,
+			next,
+			merged,
+			currentNormalized: normalized,
+			useByColumns
+		});
+		onDraft(merged);
+	}
+
+	function setCommit(next: Partial<TransformDedupeParams>) {
+		const merged = normalizeDedupeParams({ ...normalized, ...next });
+		const mergedUseByColumns = merged.allColumns === false;
+		const allowed = canCommitDedupeDraft(mergedUseByColumns, merged.by ?? []);
+		console.log('[dedupe-ui] setCommit', {
+			nodeId: selectedNode?.id,
+			next,
+			merged,
+			mergedUseByColumns,
+			allowed
+		});
+		if (!allowed) return;
+		onCommit(merged);
+	}
+
+	function setCommitAllowInvalid(next: Partial<TransformDedupeParams>) {
+		const merged = normalizeDedupeParams({ ...normalized, ...next });
+		if (merged.allColumns === false) {
+			const cleanBy = uniqueStrings((merged.by ?? []).map((v) => String(v).trim()).filter(Boolean));
+			merged.by = cleanBy.length === 0 ? [SCHEMA_UNAVAILABLE_VALUE] : cleanBy;
+		} else {
+			merged.by = [];
+		}
+		console.log('[dedupe-ui] setCommitAllowInvalid', {
+			nodeId: selectedNode?.id,
+			next,
+			merged,
+			useByColumns
+		});
+		onCommit(merged);
+	}
+
+	function addSelectedColumn() {
+		const candidate = selectedColumnToAdd.trim();
+		if (!candidate) return;
+		const base = by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE);
+		const next = uniqueStrings([...base, candidate]);
+		setDraft({ allColumns: false, by: next });
+		setCommit({ allColumns: false, by: next });
+	}
 </script>
 
 <Section title="Deduplicate">
 	<div class="hint">
-		If <code>by</code> is empty, the backend deduplicates on the entire row.
+		Removes duplicate rows based on selected columns.
+		Enable <b>Deduplicate on all columns</b> to remove rows that are identical across the entire row.
 	</div>
+	<div class="hint">Keeps: first row (stable order)</div>
 
 	<div class="actions">
 		<label class="toggle">
@@ -30,9 +138,24 @@
 				checked={dedupeAll}
 				onChange={(event) => {
 					const checked = (event.currentTarget as HTMLInputElement).checked;
-					const next = checked ? [] : defaults.by;
-					onDraft({ by: next });
-					onCommit({ by: next });
+					console.log('[dedupe-ui] checkbox:onChange', {
+						nodeId: selectedNode?.id,
+						checked,
+						before: { allColumns, by, useByColumns, dedupeAll }
+					});
+					if (checked) {
+						useByColumns = false;
+						setDraft({ allColumns: true, by: [] });
+						setCommit({ allColumns: true, by: [] });
+						return;
+					}
+					useByColumns = true;
+					const seeded =
+						by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE).length > 0
+							? by.filter((c) => c !== SCHEMA_UNAVAILABLE_VALUE)
+							: [SCHEMA_UNAVAILABLE_VALUE];
+					setDraft({ allColumns: false, by: seeded });
+					setCommitAllowInvalid({ allColumns: false, by: seeded });
 				}}
 			/>
 			<span>Deduplicate on all columns</span>
@@ -42,6 +165,7 @@
 			class="small ghost"
 			type="button"
 			on:click={() => {
+				useByColumns = true;
 				onDraft(defaults);
 				onCommit(defaults);
 			}}
@@ -50,45 +174,102 @@
 		</button>
 	</div>
 
-	{#if !dedupeAll}
+	{#if useByColumns}
+		<Field label="columns">
+			<div class="addRow">
+				<select bind:value={selectedColumnToAdd}>
+					{#if availableColumns.length === 0}
+						{#if fallbackColumns.length === 0}
+							<option value={SCHEMA_UNAVAILABLE_VALUE}>{SCHEMA_UNAVAILABLE_LABEL}</option>
+						{:else}
+							<option value="">Choose column</option>
+						{/if}
+						{#each fallbackColumns as col}
+							<option value={col}>{col}</option>
+						{/each}
+					{:else}
+						{#each availableColumns as col}
+							<option value={col}>{col}</option>
+						{/each}
+					{/if}
+				</select>
+				<button class="small" type="button" disabled={!selectedColumnToAdd} on:click={addSelectedColumn}>
+					+
+				</button>
+			</div>
+		</Field>
+
 		{#each by as column, index}
-			<div class="row">
+			<div
+				class="row"
+				class:invalidRow={isMissingColumnError && missingByColumns.includes(column)}
+				title={isMissingColumnError && missingByColumns.includes(column)
+					? 'Column name not present in input schema'
+					: undefined}
+			>
 				<Input
 					value={column}
+					className={isMissingColumnError && missingByColumns.includes(column) ? 'invalidInput' : ''}
 					placeholder="column"
 					onInput={(event) => {
 						const next = [...by];
 						next[index] = (event.currentTarget as HTMLInputElement).value;
-						onDraft({ by: uniqueStrings(next) });
+						setDraft({ allColumns: false, by: next });
 					}}
-					onBlur={() => onCommit({ by })}
 				/>
-				<button class="small danger" type="button" on:click={() => onDraft({ by: by.filter((_, current) => current !== index) })}>
+				<button
+					class="small danger"
+					type="button"
+					on:click={() => {
+						const next = by.filter((_, current) => current !== index);
+						setDraft({ allColumns: false, by: next });
+						setCommitAllowInvalid({ allColumns: false, by: next });
+					}}
+				>
 					Remove
 				</button>
+				{#if isMissingColumnError && missingByColumns.includes(column) && availableColumns.length > 0}
+					<select bind:value={replacementByIndex[index]}>
+						{#each availableColumns as replacement}
+							<option value={replacement}>{replacement}</option>
+						{/each}
+					</select>
+					<button
+						class="small"
+						type="button"
+						on:click={() => {
+							const next = [...by];
+							next[index] = replacementByIndex[index] ?? next[index];
+							setDraft({ allColumns: false, by: next });
+							setCommit({ allColumns: false, by: next });
+						}}
+					>
+						Replace
+					</button>
+				{/if}
 			</div>
 		{/each}
 
 		<div class="actions">
-			<button class="small" type="button" on:click={() => onDraft({ by: [...by, ''] })}>+ Add column</button>
-			<button class="small ghost" type="button" on:click={() => onCommit({ by })}>Commit</button>
+			<button
+				class="small ghost"
+				type="button"
+				disabled={!canCommit}
+				on:click={() => setCommit({ allColumns: false, by })}
+			>
+				Commit
+			</button>
 		</div>
-	{/if}
-
-	<div class="preview">
-		<div class="subTitle">Preview</div>
-		{#if dedupeAll}
-			<pre>SELECT DISTINCT * FROM input</pre>
-		{:else}
-			<pre>{`SELECT *
-FROM (
-  SELECT *,
-         row_number() OVER (PARTITION BY ${by.map((column) => `"${column}"`).join(', ')}) AS rn
-  FROM input
-)
-WHERE rn = 1`}</pre>
+		{#if !canCommit}
+			<div class="warn">Select at least one column.</div>
 		{/if}
-	</div>
+		{#if by.includes(SCHEMA_UNAVAILABLE_VALUE)}
+			<div class="warn">Select 1+ columns to dedupe on.</div>
+		{/if}
+		{#if isMissingColumnError && missingByColumns.length > 0}
+			<div class="warn">Unknown columns: {missingByColumns.join(', ')}</div>
+		{/if}
+	{/if}
 </Section>
 
 <style>
@@ -99,16 +280,24 @@ WHERE rn = 1`}</pre>
 		margin: 8px 0;
 	}
 
+	.addRow {
+		display: flex;
+		gap: 8px;
+		align-items: center;
+		width: 100%;
+		margin: 8px 0;
+	}
+
+	.addRow :global(select),
+	.addRow :global(input) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
 	.toggle {
 		display: inline-flex;
 		gap: 8px;
 		align-items: center;
-	}
-
-	.subTitle {
-		margin-top: 10px;
-		font-size: 13px;
-		font-weight: 600;
 	}
 
 	.hint {
@@ -124,19 +313,6 @@ WHERE rn = 1`}</pre>
 		align-items: center;
 		margin-top: 8px;
 		flex-wrap: wrap;
-	}
-
-	.preview {
-		margin-top: 12px;
-	}
-
-	pre {
-		white-space: pre-wrap;
-		word-break: break-word;
-		padding: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		border-radius: 10px;
-		font-size: 12px;
 	}
 
 	button.small {
@@ -158,8 +334,25 @@ WHERE rn = 1`}</pre>
 		background: rgba(239, 68, 68, 0.14);
 	}
 
-	code {
-		font-family: ui-monospace, Menlo, Consolas, monospace;
+	button:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.warn {
 		font-size: 12px;
+		color: #fca5a5;
+		margin-top: 6px;
+	}
+
+	.invalidRow {
+		border: 1px solid rgba(239, 68, 68, 0.6);
+		border-radius: 8px;
+		padding: 6px;
+		background: rgba(239, 68, 68, 0.08);
+	}
+
+	.invalidInput {
+		border-color: rgba(239, 68, 68, 0.7);
 	}
 </style>

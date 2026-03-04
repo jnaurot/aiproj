@@ -17,7 +17,24 @@ export type KnownRunEvent =
     }
   | { type: "run_finished"; runId: string; at: string; status: RunStatus }
   | { type: "node_started"; runId: string; at: string; nodeId: string }
-  | { type: "node_finished"; runId: string; at: string; nodeId: string; status: RunStatus; error?: string }
+  | {
+      type: "node_finished";
+      runId: string;
+      at: string;
+      nodeId: string;
+      status: RunStatus;
+      error?: string;
+      errorCode?: string;
+      errorDetails?: {
+        op?: string;
+        paramPath?: string;
+        missingColumns?: string[];
+        availableColumns?: string[];
+        availableColumnsSource?: "schema" | "inferred" | string;
+        message?: string;
+        [key: string]: unknown;
+      };
+    }
   | { type: "edge_exec"; runId: string; at: string; edgeId: string; exec: "idle" | "active" | "done" }
   | { type: "log"; runId: string; at: string; level: "info" | "warn" | "error"; message: string; nodeId?: string }
   | { type: "node_output"; runId: string; at: string; nodeId: string; artifactId: string; mimeType?: string; portType?: string; preview?: string; cached?: boolean }
