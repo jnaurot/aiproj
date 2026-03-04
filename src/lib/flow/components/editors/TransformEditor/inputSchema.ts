@@ -58,8 +58,12 @@ export function parseInputSchemaView(
 	payloadSchema: unknown
 ): InputSchemaView {
 	const ps = (payloadSchema ?? {}) as Record<string, unknown>;
-	const schema =
-		((ps.schema ?? (ps.artifactMetadataV1 as any)?.schema ?? null) as InputSchemaEnvelope | null);
+	const looksLikeEnvelope =
+		typeof ps.contract === 'string' &&
+		(ps.table !== undefined || ps.stats !== undefined || ps.provenance !== undefined);
+	const schema = (looksLikeEnvelope
+		? (ps as InputSchemaEnvelope)
+		: ((ps.schema ?? (ps.artifactMetadataV1 as any)?.schema ?? null) as InputSchemaEnvelope | null));
 	const schemaCols = normalizeColumns(schema?.table?.columns);
 	const fallbackCols = normalizeColumns(ps.columns);
 	const payloadType = String(ps.type ?? '').toLowerCase();

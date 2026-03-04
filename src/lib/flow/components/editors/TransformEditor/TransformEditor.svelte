@@ -287,6 +287,17 @@
 			onCommit={commitChild}
 			inputColumns={splitInputColumns}
 		/>
+	{:else if currentOp === 'sort'}
+	{@const opKey = currentOp}
+		<svelte:component
+			this={EditorComponent}
+			{selectedNode}
+			params={childParams}
+			onDraft={(next) => patchChildFor(opKey, next)}
+			onCommit={(next) => commitChildFor(opKey, next)}
+			inputColumns={splitInputColumns}
+			{nodeError}
+		/>
 	{:else if currentOp === 'dedupe'}
 	{@const opKey = currentOp}
 		<svelte:component

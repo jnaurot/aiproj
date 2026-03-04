@@ -22,7 +22,7 @@ export const TransformEditorCommitModeByKind = {
 	derive: 'draft',
 	aggregate: 'draft',
 	join: 'draft',
-	sort: 'draft',
+	sort: 'immediate',
 	limit: 'immediate',
 	dedupe: 'immediate',
 	split: 'draft',

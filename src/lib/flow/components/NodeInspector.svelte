@@ -4,6 +4,8 @@
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
+	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
+	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
@@ -37,6 +39,87 @@
 	$: toolProvider = ((params as any)?.provider ??
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
+	$: splitInputColumns = Array.from(
+		new Set(inputSchemas.flatMap((schema) => schema.columns.map((c) => String(c.name || ''))).filter(Boolean))
+	);
+
+	let inputSchemas: InputSchemaView[] = [];
+	let inputSchemaReqSeq = 0;
+	let lastInputSignature = '';
+
+	$: if (selectedNode?.id && isTransform) {
+		const nodeId = selectedNode.id;
+		const edges = $graphStore?.edges ?? [];
+		const nodeBindings = $graphStore?.nodeBindings ?? {};
+		const incoming = edges
+			.filter((e) => e.target === nodeId)
+			.map((e) => {
+				const sourceBinding = nodeBindings[e.source];
+				const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
+				return `${e.source}:${String(e.targetHandle ?? 'in')}:${artifactId}`;
+			})
+			.sort();
+		const signature = `${String($graphStore?.graphId ?? '')}|${nodeId}|${incoming.join('|')}`;
+		if (signature !== lastInputSignature) {
+			lastInputSignature = signature;
+			void refreshInputSchemas();
+		}
+	} else {
+		lastInputSignature = '';
+		inputSchemas = [];
+	}
+
+	async function refreshInputSchemas(): Promise<void> {
+		const nodeId = selectedNode?.id;
+		if (!nodeId) {
+			inputSchemas = [];
+			return;
+		}
+		const reqId = ++inputSchemaReqSeq;
+		try {
+			const edges = $graphStore?.edges ?? [];
+			const nodeBindings = $graphStore?.nodeBindings ?? {};
+			const nodesById = new Map(($graphStore?.nodes ?? []).map((n) => [n.id, n]));
+			const graphId = String($graphStore?.graphId ?? '').trim();
+			if (!graphId) {
+				inputSchemas = [];
+				return;
+			}
+			const incoming = edges
+				.filter((e) => e.target === nodeId)
+				.map((e) => {
+					const sourceBinding = nodeBindings[e.source];
+					const artifactId = String(sourceBinding?.currentArtifactId ?? sourceBinding?.lastArtifactId ?? '');
+					return {
+						sourceNodeId: e.source,
+						label: `${String(nodesById.get(e.source)?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
+						artifactId
+					};
+				})
+				.filter((x) => x.artifactId.length > 0);
+			if (incoming.length === 0) {
+				inputSchemas = [];
+				return;
+			}
+			const responses = await Promise.all(
+				incoming.map(async (entry) => {
+					const res = await fetch(getArtifactMetaUrl(entry.artifactId, graphId));
+					if (!res.ok) throw new Error(`Failed to load schema for ${entry.artifactId}: ${res.status}`);
+					const meta = await res.json();
+					return parseInputSchemaView(
+						entry.artifactId,
+						entry.label,
+						(meta?.schema ?? meta?.payloadSchema) as Record<string, unknown> | undefined
+					);
+				})
+			);
+			if (reqId !== inputSchemaReqSeq) return;
+			inputSchemas = responses;
+		} catch {
+			if (reqId !== inputSchemaReqSeq) return;
+			inputSchemas = [];
+		}
+	}
 
 	function onDraft(patch: Record<string, any>) {
 		graphStore.patchInspectorDraft(patch);
@@ -73,6 +156,7 @@
 			{selectedNode}
 			{params}
 			{nodeError}
+			inputColumns={splitInputColumns}
 			{onDraft}
 			{onCommit}
 		/>
