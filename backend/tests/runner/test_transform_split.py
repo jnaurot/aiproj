@@ -51,6 +51,27 @@ def test_split_lines_normalizes_linebreaks():
 	assert [r["part"] for r in out] == ["a", "b", "c", "d"]
 
 
+def test_split_lines_lf_mode():
+	df = _input_df("a\nb\nc")
+	params = _split_params(mode="lines", lineBreak="lf")
+	out = execute_transform_op("split", params, {"in": df}).to_dict(orient="records")
+	assert [r["part"] for r in out] == ["a", "b", "c"]
+
+
+def test_split_lines_crlf_mode():
+	df = _input_df("a\r\nb\r\nc")
+	params = _split_params(mode="lines", lineBreak="crlf")
+	out = execute_transform_op("split", params, {"in": df}).to_dict(orient="records")
+	assert [r["part"] for r in out] == ["a", "b", "c"]
+
+
+def test_split_lines_cr_mode():
+	df = _input_df("a\rb\rc")
+	params = _split_params(mode="lines", lineBreak="cr")
+	out = execute_transform_op("split", params, {"in": df}).to_dict(orient="records")
+	assert [r["part"] for r in out] == ["a", "b", "c"]
+
+
 def test_split_regex_mode():
 	df = _input_df("a   b\tc")
 	params = _split_params(mode="regex", pattern=r"\s+")

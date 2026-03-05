@@ -196,6 +196,7 @@ export const TransformSplitParamsSchema = z
 		sourceColumn: z.string().min(1, 'Source column is required').default('text'),
 		outColumn: z.string().min(1, 'Output column is required').default('part'),
 		mode: z.enum(['sentences', 'lines', 'regex', 'delimiter']).default('sentences'),
+		lineBreak: z.enum(['any', 'lf', 'crlf', 'cr']).optional().default('any'),
 		pattern: z.string().optional(),
 		delimiter: z.string().optional(),
 		flags: z

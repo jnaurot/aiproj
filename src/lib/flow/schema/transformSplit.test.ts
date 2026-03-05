@@ -7,6 +7,7 @@ describe('TransformSplitParamsSchema', () => {
 		expect(parsed.mode).toBe('sentences');
 		expect(parsed.sourceColumn).toBe('text');
 		expect(parsed.outColumn).toBe('part');
+		expect(parsed.lineBreak).toBe('any');
 		expect(parsed.maxParts).toBe(5000);
 		expect(parsed.emitSourceRow).toBe(true);
 
@@ -36,6 +37,7 @@ describe('TransformSplitParamsSchema', () => {
 		expect(() => TransformSplitParamsSchema.parse({ flags: 'x' })).toThrow(
 			/Flags must contain only i, m, s/
 		);
+		expect(() => TransformSplitParamsSchema.parse({ lineBreak: 'windows' as any })).toThrow();
 		expect(() => TransformSplitParamsSchema.parse({ maxParts: 0 })).toThrow();
 		expect(() => TransformSplitParamsSchema.parse({ maxParts: 100001 })).toThrow();
 	});

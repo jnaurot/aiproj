@@ -360,6 +360,7 @@ def _execute_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.Data
     source_col = str(spec.get("sourceColumn") or "text")
     out_col = str(spec.get("outColumn") or "part")
     mode = str(spec.get("mode") or "sentences")
+    line_break = str(spec.get("lineBreak") or "any").strip().lower()
     pattern = str(spec.get("pattern") or "")
     delimiter = str(spec.get("delimiter") or "")
     flags_raw = str(spec.get("flags") or "")
@@ -391,8 +392,17 @@ def _execute_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.Data
             raise ValueError("split.delimiter is required when mode='delimiter'")
         delimiter = delimiter.replace("\\r", "\r").replace("\\n", "\n").replace("\\t", "\t")
 
+    if line_break not in {"any", "lf", "crlf", "cr"}:
+        line_break = "any"
+
     def _split_text(text: str) -> List[str]:
         if mode == "lines":
+            if line_break == "lf":
+                return text.split("\n")
+            if line_break == "crlf":
+                return text.split("\r\n")
+            if line_break == "cr":
+                return text.split("\r")
             return re.split(r"\r\n|\n|\r", text)
         if mode == "sentences":
             normalized = text.replace("\r\n", "\n").replace("\r", "\n")

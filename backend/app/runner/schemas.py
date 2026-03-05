@@ -921,6 +921,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     source_col = str(payload.get("sourceColumn") or "").strip()
                     out_col = str(payload.get("outColumn") or "").strip()
                     mode = str(payload.get("mode") or "sentences").strip()
+                    line_break = str(payload.get("lineBreak") or "any").strip().lower()
                     pattern = str(payload.get("pattern") or "")
                     delimiter = payload.get("delimiter")
                     flags = str(payload.get("flags") or "")
@@ -935,6 +936,8 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("split.pattern is required when mode=regex")
                     if mode == "delimiter" and (not isinstance(delimiter, str) or delimiter == ""):
                         errors.append("split.delimiter is required when mode=delimiter")
+                    if line_break not in {"any", "lf", "crlf", "cr"}:
+                        errors.append("split.lineBreak must be one of: any, lf, crlf, cr")
                     if any(ch not in {"i", "m", "s"} for ch in flags):
                         errors.append("split.flags allows only i, m, s")
                     if not isinstance(max_parts, int) or max_parts < 1 or max_parts > 100000:

@@ -159,10 +159,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: nodeError = (nodeOut as any)?.lastError ?? null;
-	$: missingColumnError = String(nodeError?.errorCode ?? '') === 'MISSING_COLUMN';
-	$: availableColumnsForError = Array.isArray(nodeError?.availableColumns)
-		? Array.from(new Set(nodeError.availableColumns.map((c: unknown) => String(c).trim()).filter(Boolean)))
-		: [];
 	$: hasInputs = Boolean($selectedNode && $selectedNode.data?.ports?.in !== null && $selectedNode.data?.ports?.in !== undefined);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -712,20 +708,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 					<div class="editorScroll">
 						{#if inspectorMode === 'edit'}
-							{#if missingColumnError}
-								<div class="missingColumnsCard">
-									<div class="missingColumnsTitle">Available columns ({availableColumnsForError.length})</div>
-									{#if availableColumnsForError.length > 0}
-										<div class="missingColumnsList">
-											{#each availableColumnsForError as col}
-												<span class="missingColChip mono">{col}</span>
-											{/each}
-										</div>
-									{:else}
-										<div class="inputMissing">No available columns reported.</div>
-									{/if}
-								</div>
-							{/if}
 							<NodeInspector />
 						{:else if inspectorMode === 'inputs'}
 							<div class="inputsView">
@@ -1305,34 +1287,4 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		padding-top: 8px;
 	}
 
-	.missingColumnsCard {
-		border: 1px solid rgba(239, 68, 68, 0.5);
-		border-radius: 10px;
-		padding: 8px;
-		margin-bottom: 8px;
-		background: rgba(239, 68, 68, 0.08);
-	}
-
-	.missingColumnsTitle {
-		font-size: 12px;
-		font-weight: 700;
-		margin-bottom: 6px;
-	}
-
-	.missingColumnsList {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-
-	.missingColChip {
-		font-size: 11px;
-		border: 1px solid #283044;
-		border-radius: 999px;
-		padding: 3px 8px;
-	}
-
-	.mono {
-		font-family: ui-monospace, Menlo, Consolas, monospace;
-	}
 </style>

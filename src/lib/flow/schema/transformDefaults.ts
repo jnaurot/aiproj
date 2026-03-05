@@ -83,6 +83,7 @@ export const defaultTransformSplitParams: TransformSplitParams = {
 	sourceColumn: 'text',
 	outColumn: 'part',
 	mode: 'sentences',
+	lineBreak: 'any',
 	pattern: '(?<=[.!?])\\s+',
 	delimiter: '\n',
 	flags: '',

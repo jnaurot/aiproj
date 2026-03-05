@@ -610,6 +610,31 @@ class TestTransformSplitValidation:
         assert "split.flags allows only i, m, s" in errors
         assert "split.maxParts must be an integer between 1 and 100000" in errors
 
+    def test_split_rejects_invalid_line_break_mode(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "split",
+                    "split": {
+                        "sourceColumn": "text",
+                        "outColumn": "part",
+                        "mode": "lines",
+                        "lineBreak": "windows",
+                        "flags": "",
+                        "trim": True,
+                        "dropEmpty": True,
+                        "emitIndex": True,
+                        "emitSourceRow": True,
+                        "maxParts": 5000,
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert "split.lineBreak must be one of: any, lf, crlf, cr" in errors
+
 
 class TestTransformDedupeValidation:
     def test_dedupe_rejects_invalid_keep(self, monkeypatch):
