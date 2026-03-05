@@ -2,14 +2,27 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { ToolParams } from '$lib/flow/schema/tool';
-	import { ToolEditorByProvider } from './ToolEditor';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
-	type Provider = ToolParams['provider'];
 	type ToolPatch = Partial<ToolParams>;
+	type RetryPolicy = NonNullable<ToolParams['retry']>;
+	type ToolPermissions = NonNullable<ToolParams['permissions']>;
+
+	const defaultRetry: RetryPolicy = {
+		max_attempts: 1,
+		backoff_ms: 0,
+		on: ['timeout', '429', '5xx']
+	};
+
+	const defaultPermissions: ToolPermissions = {
+		net: false,
+		fs: false,
+		env: false,
+		subprocess: false
+	};
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<ToolParams>;
@@ -17,17 +30,16 @@
 	export let onCommit: (patch: ToolPatch) => void;
 
 	$: void selectedNode?.id;
-	$: provider = (params?.provider ?? 'mcp') as Provider;
 	$: name = asString(params?.name, '');
 	$: toolVersion = asString(params?.toolVersion, 'v1');
 	$: sideEffectMode = (params?.side_effect_mode ?? 'pure') as 'pure' | 'idempotent' | 'effectful';
 	$: armed = Boolean(params?.armed ?? false);
 	$: connectionRef = asString(params?.connectionRef, '');
 	$: timeoutMs = asNumberOrEmpty(params?.timeoutMs);
-	$: retry = params?.retry ?? {};
+	$: retry = { ...defaultRetry, ...(params?.retry ?? {}) } as RetryPolicy;
 	$: maxAttempts = asNumberOrEmpty(retry?.max_attempts ?? 1);
 	$: backoffMs = asNumberOrEmpty(retry?.backoff_ms ?? 0);
-	$: permissions = params?.permissions ?? {};
+	$: permissions = { ...defaultPermissions, ...(params?.permissions ?? {}) } as ToolPermissions;
 	$: canNet = Boolean(permissions?.net ?? false);
 	$: canFs = Boolean(permissions?.fs ?? false);
 	$: canEnv = Boolean(permissions?.env ?? false);
@@ -184,7 +196,3 @@
 		/>
 	</Field>
 </Section>
-
-{#if ToolEditorByProvider[provider]}
-	<svelte:component this={ToolEditorByProvider[provider]} {params} {onDraft} {onCommit} />
-{/if}

@@ -3,6 +3,7 @@
 	import { SourceEditorByKind } from '$lib/flow/components/editors/SourceEditor/SourceEditor';
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
+	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
@@ -180,6 +181,12 @@
 		/>
 	{:else if isTool}
 		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
+		<svelte:component
+			this={ToolEditorByProvider[toolProvider] ?? ToolEditorByProvider.mcp}
+			{params}
+			{onDraft}
+			{onCommit}
+		/>
 		{:else if isTransform}
 			{#if transformKind === 'join'}
 				<svelte:component
