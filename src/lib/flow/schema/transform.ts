@@ -20,7 +20,7 @@ const TransformKindSchema = z.enum(["filter",
 // ─────────────────────────────────────────────
 
 export const TransformFilterParamsSchema = z.object({
-  expr: z.string().min(1, "Filter expression cannot be empty"),
+  expr: z.string().default(""),
 }).strip();
 
 export const TransformSelectParamsSchema = z.object({

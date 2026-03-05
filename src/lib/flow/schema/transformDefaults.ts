@@ -14,7 +14,7 @@ import type {
 } from '$lib/flow/schema/transform';
 
 export const defaultTransformFilterParams: TransformFilterParams = {
-	expr: 'length(text) > 10'
+	expr: ''
 };
 
 export const defaultTransformSelectParams: TransformSelectParams = {

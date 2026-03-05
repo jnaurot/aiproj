@@ -786,8 +786,10 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
             if not isinstance(payload, dict):
                 errors.append(f"{payload_key} block is required for op='{op}'")
             else:
-                if op == "filter" and not str(payload.get("expr") or "").strip():
-                    errors.append("filter.expr is required")
+                if op == "filter":
+                    expr = payload.get("expr")
+                    if expr is not None and not isinstance(expr, str):
+                        errors.append("filter.expr must be a string")
                 elif op == "select":
                     cols = payload.get("columns")
                     if not isinstance(cols, list):

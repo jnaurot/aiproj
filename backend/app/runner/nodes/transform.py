@@ -631,6 +631,8 @@ def execute_transform_op(
 
         if op == "filter":
             expr = params["filter"]["expr"]
+            if not str(expr or "").strip():
+                return primary_df
             return con.execute(f"select * from {primary_name} where {expr}").df()
 
         elif op == "select":

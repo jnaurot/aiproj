@@ -64,6 +64,14 @@
 	$: splitInputColumns = Array.from(
 		new Set(inputSchemas.flatMap((schema) => schema.columns.map((c) => String(c.name || ''))).filter(Boolean))
 	);
+	$: inputSchemaColumns = inputSchemas.flatMap((schema) =>
+		schema.columns
+			.map((c) => ({
+				name: String(c.name || '').trim(),
+				type: String(c.type || 'unknown').trim() || 'unknown'
+			}))
+			.filter((c) => c.name.length > 0)
+	);
 	$: hasWrappedInput = inputSchemas.some((s) =>
 		['json_object_1row', 'text_1row', 'binary_hex_1row'].includes(s.coercion?.mode ?? '')
 	);
@@ -328,7 +336,7 @@
 			onCommit={commitChild}
 			inputColumns={splitInputColumns}
 		/>
-	{:else if currentOp === 'sort' || currentOp === 'aggregate' || currentOp === 'derive' || currentOp === 'rename' || currentOp === 'select'}
+	{:else if currentOp === 'filter' || currentOp === 'sort' || currentOp === 'aggregate' || currentOp === 'derive' || currentOp === 'rename' || currentOp === 'select'}
 	{@const opKey = currentOp}
 		<svelte:component
 			this={EditorComponent}
@@ -337,6 +345,7 @@
 			onDraft={(next) => patchChildFor(opKey, next)}
 			onCommit={(next) => commitChildFor(opKey, next)}
 			inputColumns={splitInputColumns}
+			{inputSchemaColumns}
 			{nodeError}
 		/>
 	{:else if currentOp === 'join'}
