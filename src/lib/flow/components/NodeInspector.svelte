@@ -6,6 +6,7 @@
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
+	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore } from '$lib/flow/store/graphStore';
@@ -39,9 +40,7 @@
 	$: toolProvider = ((params as any)?.provider ??
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
-	$: splitInputColumns = Array.from(
-		new Set(inputSchemas.flatMap((schema) => schema.columns.map((c) => String(c.name || ''))).filter(Boolean))
-	);
+	$: schemaProps = buildTransformSchemaProps(transformKind as TransformKind, inputSchemas);
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
@@ -198,7 +197,9 @@
 					{selectedNode}
 					{params}
 					{nodeError}
-					inputColumns={splitInputColumns}
+					inputColumns={schemaProps.inputColumns}
+					inputSchemaColumns={schemaProps.inputSchemaColumns}
+					inputSchemas={schemaProps.inputSchemas}
 					{onDraft}
 					{onCommit}
 				/>

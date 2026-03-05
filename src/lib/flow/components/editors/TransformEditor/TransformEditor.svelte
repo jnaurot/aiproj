@@ -1,4 +1,4 @@
-<script lang="ts">
+<!-- LEGACY DISABLED FOR TESTING: TransformEditor.svelte is intentionally commented out.\nDo not delete until migration verification is complete.\n<script lang="ts">
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformParams, TransformKind } from '$lib/flow/schema/transform';
@@ -72,6 +72,14 @@
 			}))
 			.filter((c) => c.name.length > 0)
 	);
+	$: if (currentOp === 'filter') {
+		console.debug('[filter-schema-prop] TransformEditor.inputSchemaColumns', {
+			nodeId: selectedNode?.id ?? '',
+			inputSchemasCount: inputSchemas.length,
+			inputSchemaError,
+			columns: inputSchemaColumns
+		});
+	}
 	$: hasWrappedInput = inputSchemas.some((s) =>
 		['json_object_1row', 'text_1row', 'binary_hex_1row'].includes(s.coercion?.mode ?? '')
 	);
@@ -84,13 +92,23 @@
 	const DEV_MODE = Boolean((import.meta as any)?.env?.DEV);
 
 	function artifactIdFromBinding(binding: any): string {
-		return String(
-			binding?.current?.artifactId ??
-				binding?.currentArtifactId ??
-				binding?.last?.artifactId ??
-				binding?.lastArtifactId ??
-				''
-		);
+		const candidates = [
+			binding?.current?.artifactId,
+			binding?.current?.artifact_id,
+			binding?.currentArtifactId,
+			binding?.current_artifact_id,
+			binding?.last?.artifactId,
+			binding?.last?.artifact_id,
+			binding?.lastArtifactId,
+			binding?.last_artifact_id,
+			binding?.artifactId,
+			binding?.artifact_id
+		];
+		for (const c of candidates) {
+			const v = String(c ?? '').trim();
+			if (v.length > 0) return v;
+		}
+		return '';
 	}
 
 	$: if (selectedNode?.id) {
@@ -109,6 +127,14 @@
 		if (signature !== lastInputSignature) {
 			lastInputSignature = signature;
 			void refreshInputSchemas();
+		} else {
+			const hasConnectedArtifacts = incoming.some((entry) => {
+				const parts = String(entry).split(':');
+				return String(parts[parts.length - 1] ?? '').trim().length > 0;
+			});
+			if (!loadingInputSchemas && hasConnectedArtifacts && inputSchemas.length === 0) {
+				void refreshInputSchemas();
+			}
 		}
 	} else {
 		lastInputSignature = '';
@@ -138,9 +164,15 @@
 
 	async function refreshInputSchemas(): Promise<void> {
 		const nodeId = selectedNode?.id;
+		console.debug('[filter-schema-prop] refreshInputSchemas:start', {
+			nodeId: nodeId ?? '',
+			currentOp,
+			activeSelectedNodeId: selectedNode?.id ?? ''
+		});
 		if (!nodeId) {
 			inputSchemas = [];
 			inputSchemaError = null;
+			console.debug('[filter-schema-prop] refreshInputSchemas:no-node', { nodeId: '' });
 			return;
 		}
 		const reqId = ++inputSchemaReqSeq;
@@ -151,12 +183,29 @@
 			const nodeBindings = graphState?.nodeBindings ?? {};
 			const nodesById = new Map((graphState?.nodes ?? []).map((n) => [n.id, n]));
 			const graphId = String(graphState?.graphId ?? '').trim();
+			console.debug('[filter-schema-prop] refreshInputSchemas:graph', {
+				nodeId,
+				reqId,
+				graphId,
+				edgesTotal: edges.length
+			});
 			if (!graphId) {
 				inputSchemas = [];
+				console.debug('[filter-schema-prop] refreshInputSchemas:no-graphId', { nodeId, reqId });
 				return;
 			}
-			const incoming = edges
-				.filter((e) => e.target === nodeId)
+			const incomingEdges = edges.filter((e) => e.target === nodeId);
+			console.debug('[filter-schema-prop] refreshInputSchemas:incomingEdges', {
+				nodeId,
+				reqId,
+				count: incomingEdges.length,
+				edges: incomingEdges.map((e) => ({
+					id: String(e.id ?? ''),
+					source: String(e.source ?? ''),
+					targetHandle: String((e as any).targetHandle ?? 'in')
+				}))
+			});
+			const incoming = incomingEdges
 				.map((e) => {
 					const sourceNodeId = String(e.source ?? '');
 					const inputHandle = String((e as any).targetHandle ?? 'in');
@@ -170,6 +219,12 @@
 					};
 				})
 				.filter((x) => x.artifactId.length > 0);
+			console.debug('[filter-schema-prop] refreshInputSchemas:resolvedIncoming', {
+				nodeId,
+				reqId,
+				count: incoming.length,
+				rows: incoming
+			});
 			if (DEV_MODE && currentOp === 'join') {
 				console.debug('[join-ui] incoming-edges', {
 					nodeId,
@@ -181,13 +236,34 @@
 					}))
 				});
 			}
-			if (incoming.length === 0) {
+			if (incomingEdges.length === 0) {
+				// Truly disconnected: clear.
 				inputSchemas = [];
+				console.debug('[filter-schema-prop] refreshInputSchemas:disconnected', { nodeId, reqId });
+				return;
+			}
+			if (incoming.length === 0) {
+				// Connected but no currently resolved artifact (transient run/binding state):
+				// preserve last known schema so editors keep typed column context.
+				console.debug('[filter-schema-prop] refreshInputSchemas:no-artifact-yet', { nodeId, reqId });
 				return;
 			}
 			const responses = await Promise.all(
 				incoming.map(async (entry) => {
-					const res = await fetch(getArtifactMetaUrl(entry.artifactId, graphId));
+					const url = getArtifactMetaUrl(entry.artifactId, graphId);
+					console.debug('[filter-schema-prop] refreshInputSchemas:fetch:start', {
+						nodeId,
+						reqId,
+						artifactId: entry.artifactId,
+						url
+					});
+					const res = await fetch(url);
+					console.debug('[filter-schema-prop] refreshInputSchemas:fetch:done', {
+						nodeId,
+						reqId,
+						artifactId: entry.artifactId,
+						status: res.status
+					});
 					if (!res.ok) throw new Error(`Failed to load schema for ${entry.artifactId}: ${res.status}`);
 					const meta = await res.json();
 					return parseInputSchemaView(
@@ -203,6 +279,16 @@
 			);
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemas = responses;
+			console.debug('[filter-schema-prop] refreshInputSchemas:parsed', {
+				nodeId,
+				reqId,
+				count: responses.length,
+				rows: responses.map((r) => ({
+					artifactId: r.artifactId,
+					columns: r.columns,
+					rowCount: r.rowCount
+				}))
+			});
 			if (DEV_MODE && currentOp === 'join') {
 				console.debug('[join-ui] fetched-schemas', {
 					nodeId,
@@ -218,9 +304,22 @@
 		} catch (err) {
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemaError = err instanceof Error ? err.message : String(err);
-			inputSchemas = [];
+			console.debug('[filter-schema-prop] refreshInputSchemas:error', {
+				nodeId,
+				reqId,
+				error: inputSchemaError
+			});
+			// Keep previous successful schemas; fetch errors can be transient during run/bind updates.
 		} finally {
-			if (reqId === inputSchemaReqSeq) loadingInputSchemas = false;
+			if (reqId === inputSchemaReqSeq) {
+				loadingInputSchemas = false;
+				console.debug('[filter-schema-prop] refreshInputSchemas:final', {
+					nodeId,
+					reqId,
+					inputSchemasCount: inputSchemas.length,
+					inputSchemaError
+				});
+			}
 		}
 	}
 </script>
@@ -346,6 +445,7 @@
 			onCommit={(next) => commitChildFor(opKey, next)}
 			inputColumns={splitInputColumns}
 			{inputSchemaColumns}
+			{inputSchemas}
 			{nodeError}
 		/>
 	{:else if currentOp === 'join'}
@@ -467,3 +567,4 @@
 		border-radius: 8px;
 	}
 </style>
+\n-->

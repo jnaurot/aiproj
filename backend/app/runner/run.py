@@ -284,6 +284,33 @@ def _table_schema_fingerprint_from_envelope(schema_env: Dict[str, Any]) -> str:
     return contract_schema_fingerprint(schema_env)
 
 
+def _compact_typed_columns(cols: list[Dict[str, Any]] | None) -> list[str]:
+    out: list[str] = []
+    for c in cols or []:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").strip()
+        if not name:
+            continue
+        ctype = str(c.get("type") or "unknown").strip() or "unknown"
+        out.append(f"{name}:{ctype}")
+    return out
+
+
+def _compact_expected_actual(details: Dict[str, Any]) -> tuple[str, str]:
+    expected = details.get("expected")
+    actual = details.get("actual")
+    try:
+        exp_s = json.dumps(expected, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        exp_s = str(expected)
+    try:
+        act_s = json.dumps(actual, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        act_s = str(actual)
+    return exp_s, act_s
+
+
 def _extract_table_columns_from_payload_schema(payload_schema: Any) -> list[Dict[str, Any]]:
     if not isinstance(payload_schema, dict):
         return []
@@ -379,9 +406,22 @@ def _source_payload_schema(
         payload = _table_payload_schema_from_rows(data_value)
         if isinstance(getattr(source_metadata, "data_schema", None), dict):
             ds = getattr(source_metadata, "data_schema", {}) or {}
+            table_columns = ds.get("table_columns")
+            if isinstance(table_columns, list):
+                payload["columns"] = canonical_table_columns(table_columns)
             coercion = ds.get("table_coercion")
             if isinstance(coercion, dict):
                 payload["coercion"] = coercion
+        resolved_columns = payload.get("columns")
+        if isinstance(resolved_columns, list):
+            node_id = str(getattr(source_metadata, "node_id", "") or "")
+            compact = [
+                f"{str(c.get('name') or '').strip()}:{str(c.get('type') or 'unknown').strip() or 'unknown'}"
+                for c in resolved_columns
+                if isinstance(c, dict)
+            ]
+            print(f"[schema-types] nodeId={node_id} schema.table.columns={compact}")
+            logger.info("[schema-types] nodeId=%s schema.table.columns=%s", node_id, compact)
         return payload
     if out_contract == "json":
         return {
@@ -1657,6 +1697,29 @@ async def run_graph(
                                 },
                             }
 
+                        op_preview = str((_normalized_params_for_exec_key(kind=kind, node=n, params=params).get("op") or "")).lower()
+                        input_schema_summary = [
+                            {
+                                "port": port,
+                                "artifact": aid,
+                                "columns": _compact_typed_columns(input_schema_cols_by_port.get(port) or []),
+                            }
+                            for port, aid in input_refs
+                        ]
+                        input_schema_msg = (
+                            f"transform: input-schema op={op_preview or '<none>'} "
+                            f"inputs={json.dumps(input_schema_summary, ensure_ascii=False, separators=(',', ':'))}"
+                        )
+                        await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": input_schema_msg,
+                            "nodeId": node_id,
+                        })
+                        print(f"[transform-input-schema] runId={run_id} nodeId={node_id} {input_schema_msg}")
+
                         # join lookup (node_id -> DataFrame), best-effort
                         join_lookup: dict[str, Any] = {}
                         for upstream_node_id in nodes.keys():
@@ -2087,6 +2150,75 @@ async def run_graph(
                         )
                         # Prefer runtime columns when available; deterministic fallback otherwise.
                         output_cols = runtime_cols if runtime_cols else output_cols_core
+
+                        # Preserve input schema types for transforms where output columns are structurally derived
+                        # from known input columns.
+                        primary_type_by_name: dict[str, str] = {
+                            str(c.get("name") or ""): str(c.get("type") or "unknown")
+                            for c in (input_schema_cols_by_port.get(primary_port) or [])
+                            if isinstance(c, dict) and str(c.get("name") or "").strip()
+                        }
+                        all_name_counts: dict[str, int] = {}
+                        all_name_type: dict[str, str] = {}
+                        for cols in input_schema_cols_by_port.values():
+                            for c in cols or []:
+                                if not isinstance(c, dict):
+                                    continue
+                                ncol = str(c.get("name") or "").strip()
+                                if not ncol:
+                                    continue
+                                all_name_counts[ncol] = int(all_name_counts.get(ncol, 0)) + 1
+                                if ncol not in all_name_type:
+                                    all_name_type[ncol] = str(c.get("type") or "unknown")
+
+                        rename_map = ((norm.get("rename") or {}).get("map") or {}) if op == "rename" else {}
+                        rename_inv: dict[str, str] = {}
+                        if isinstance(rename_map, dict):
+                            for src in primary_cols_for_schema:
+                                dst = str(rename_map.get(src, src))
+                                rename_inv[dst] = str(src)
+
+                        derive_names = set()
+                        if op == "derive":
+                            for d in ((norm.get("derive") or {}).get("columns") or []):
+                                if isinstance(d, dict):
+                                    name = str(d.get("name") or "").strip()
+                                    if name:
+                                        derive_names.add(name)
+
+                        aggregate_group_by = set()
+                        if op == "aggregate":
+                            aggregate_group_by = {
+                                str(c).strip()
+                                for c in (((norm.get("aggregate") or {}).get("groupBy") or []))
+                                if str(c).strip()
+                            }
+
+                        enriched_cols: list[dict[str, str]] = []
+                        passthrough_ops = {"filter", "sort", "limit", "dedupe", "sql", "select"}
+                        for c in output_cols:
+                            if not isinstance(c, dict):
+                                continue
+                            col_name = str(c.get("name") or "").strip()
+                            col_type = str(c.get("type") or "unknown").strip() or "unknown"
+                            next_type = col_type
+                            if col_name and col_type == "unknown":
+                                if op == "rename":
+                                    src = rename_inv.get(col_name, col_name)
+                                    next_type = primary_type_by_name.get(src, "unknown")
+                                elif op == "derive":
+                                    if col_name not in derive_names:
+                                        next_type = primary_type_by_name.get(col_name, "unknown")
+                                elif op == "aggregate":
+                                    if col_name in aggregate_group_by:
+                                        next_type = primary_type_by_name.get(col_name, "unknown")
+                                elif op in passthrough_ops:
+                                    next_type = primary_type_by_name.get(col_name, "unknown")
+                                # generic fallback: if a column name is unique across all inputs, preserve its type
+                                if next_type == "unknown" and all_name_counts.get(col_name, 0) == 1:
+                                    next_type = all_name_type.get(col_name, "unknown")
+                            enriched_cols.append({"name": col_name, "type": next_type})
+                        output_cols = canonical_table_columns(enriched_cols if enriched_cols else output_cols)
                         upstream_refs = [
                             {
                                 "nodeId": input_provenance_by_port.get(port, {})
@@ -2118,6 +2250,25 @@ async def run_graph(
                                 **dedupe_provenance,
                             },
                         )
+                        output_schema_cols = _compact_typed_columns((table_schema_env.get("table", {}) or {}).get("columns") or [])
+                        output_row_count = (
+                            ((table_schema_env.get("stats") or {}).get("rowCount"))
+                            if isinstance(table_schema_env, dict)
+                            else None
+                        )
+                        output_schema_msg = (
+                            f"transform: output-schema op={op} rowCount={output_row_count if output_row_count is not None else 'unknown'} "
+                            f"columns={output_schema_cols}"
+                        )
+                        await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": output_schema_msg,
+                            "nodeId": node_id,
+                        })
+                        print(f"[transform-output-schema] runId={run_id} nodeId={node_id} {output_schema_msg}")
                         base_payload_schema = {
                             "schema_version": 1,
                             "type": "table",
@@ -2709,6 +2860,23 @@ async def run_graph(
                         if "payload schema mismatch" in error_message.lower()
                         else "CONTRACT_MISMATCH"
                     )
+                if kind == "transform" and error_code in {"PAYLOAD_SCHEMA_MISMATCH", "CONTRACT_MISMATCH", "MISSING_COLUMN", "DUPLICATE_COLUMN", "COLUMN_SELECTION_REQUIRED", "EXPR_INVALID"}:
+                    expected_s, actual_s = _compact_expected_actual(error_details)
+                    mismatch_msg = (
+                        f"transform: schema-mismatch code={error_code} "
+                        f"missingColumns={_stable_unique_strings(error_details.get('missingColumns') or [])} "
+                        f"paramPath={str(error_details.get('paramPath') or '')} "
+                        f"expected={expected_s} actual={actual_s}"
+                    )
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": mismatch_msg,
+                        "nodeId": node_id,
+                    })
+                    print(f"[schema-mismatch] runId={run_id} nodeId={node_id} {mismatch_msg}")
 
                 await context.bus.emit({
                     "type": "log",

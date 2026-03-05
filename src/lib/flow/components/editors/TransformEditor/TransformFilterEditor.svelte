@@ -3,6 +3,7 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformFilterParams } from '$lib/flow/schema/transform';
 	import type { NodeExecutionError } from '$lib/flow/store/graphStore';
+	import type { InputSchemaView } from './inputSchema';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
@@ -13,6 +14,7 @@
 	export let onCommit: (patch: Partial<TransformFilterParams>) => void;
 	export let inputColumns: string[] = [];
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
+	export let inputSchemas: InputSchemaView[] = [];
 	export let nodeError: NodeExecutionError | null = null;
 	$: void onCommit;
 
@@ -36,14 +38,10 @@
 	$: errorAvailableColumns = Array.isArray(nodeError?.availableColumns)
 		? uniqueStrings(nodeError.availableColumns.map((c) => String(c).trim()).filter(Boolean))
 		: [];
-	$: schemaTypeByName = new Map(
-		(inputSchemaColumns ?? [])
-			.map((c) => ({
-				name: String(c?.name ?? '').trim(),
-				type: String(c?.type ?? 'unknown').trim() || 'unknown'
-			}))
-			.filter((c) => c.name.length > 0)
-			.map((c) => [c.name, c.type] as const)
+	$: schemaTypeByName = buildSchemaTypeMap(
+		(inputSchemaColumns?.length ?? 0) > 0
+			? inputSchemaColumns
+			: (inputSchemas ?? []).flatMap((schema) => schema.columns ?? [])
 	);
 	$: columnNames = uniqueStrings(
 		[...inputColumns, ...Array.from(schemaTypeByName.keys()), ...errorAvailableColumns]
@@ -52,6 +50,15 @@
 	).sort((a, b) => a.localeCompare(b));
 	$: columns = columnNames.map((name) => ({ name, type: schemaTypeByName.get(name) ?? 'unknown' }));
 	$: missingColumns = missingFilterColumnsFromError(nodeError);
+	$: if (columns.length > 0) {
+		console.debug('[filter-schema-prop] TransformFilterEditor.columns', {
+			nodeId: selectedNode?.id ?? '',
+			inputSchemaColumns,
+			inputSchemasCount: (inputSchemas ?? []).length,
+			schemaTypeByName: Array.from(schemaTypeByName.entries()),
+			columns
+		});
+	}
 
 	function missingFilterColumnsFromError(err: NodeExecutionError | null): string[] {
 		const code = String(err?.errorCode ?? '');
@@ -74,6 +81,27 @@
 		const nested = raw.filter;
 		if (isObject(nested) && typeof nested.expr === 'string') return String(nested.expr);
 		return '';
+	}
+
+	function buildSchemaTypeMap(
+		columns: Array<{ name: string; type?: string }>
+	): Map<string, string> {
+		const out = new Map<string, string>();
+		for (const col of columns) {
+			const name = String(col?.name ?? '').trim();
+			if (!name) continue;
+			const nextType = String(col?.type ?? 'unknown').trim() || 'unknown';
+			const prevType = out.get(name);
+			// Prefer concrete inferred types over unknown when multiple inputs share a name.
+			if (!prevType || prevType === 'unknown' || prevType.length === 0) {
+				out.set(name, nextType);
+				continue;
+			}
+			if (nextType !== 'unknown' && nextType.length > 0) {
+				out.set(name, nextType);
+			}
+		}
+		return out;
 	}
 
 	function draftExpr(nextExpr: string): void {

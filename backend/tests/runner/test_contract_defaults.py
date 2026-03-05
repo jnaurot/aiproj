@@ -290,6 +290,23 @@ def test_source_payload_schema_carries_coercion_from_source_metadata():
     assert payload.get("coercion", {}).get("mode") == "json_object_1row"
 
 
+def test_source_payload_schema_prefers_typed_table_columns_from_source_metadata():
+    source_meta = types.SimpleNamespace(
+        data_schema={
+            "table_columns": [
+                {"name": "id", "type": "int"},
+                {"name": "created_at", "type": "datetime"},
+            ]
+        }
+    )
+    payload = _source_payload_schema("table", [{"id": 1, "created_at": "2026-01-01"}], source_meta)
+    assert isinstance(payload, dict)
+    assert payload.get("columns") == [
+        {"name": "id", "type": "int"},
+        {"name": "created_at", "type": "datetime"},
+    ]
+
+
 def test_table_schema_envelope_places_coercion_under_table():
     env = _table_schema_envelope(
         columns=[{"name": "a", "type": "int"}],

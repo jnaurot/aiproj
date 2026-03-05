@@ -53,6 +53,8 @@ async def test_csv_table_sets_native_coercion_and_rows():
 	assert out.metadata is not None
 	assert out.metadata.row_count == 1
 	assert (out.metadata.data_schema or {}).get("table_coercion", {}).get("mode") == "native"
+	cols = (out.metadata.data_schema or {}).get("table_columns") or []
+	assert cols == [{"name": "a", "type": "int"}, {"name": "b", "type": "int"}]
 
 
 @pytest.mark.asyncio

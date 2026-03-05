@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -10,10 +11,20 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import httpx
 import pandas as pd
 import pyarrow.parquet as pq
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_float_dtype,
+    is_integer_dtype,
+    is_object_dtype,
+    is_string_dtype,
+)
 
 from ..runner.events import RunEventBus
 from ..runner.metadata import GraphContext, NodeOutput, FileMetadata
 from ..runner.schemas import SourceAPIParams, SourceDatabaseParams, SourceFileParams, normalize_source_params_frontend
+
+logger = logging.getLogger(__name__)
 
 try:
     import PyPDF2
@@ -112,6 +123,105 @@ def _canonical_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for row in rows:
         out.append({col: row.get(col) for col in cols})
     return out
+
+
+def _canonical_table_type_from_python(value: Any) -> str:
+    if value is None:
+        return "unknown"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "string"
+    if hasattr(value, "isoformat"):
+        return "datetime"
+    if isinstance(value, (dict, list)):
+        return "json"
+    return "unknown"
+
+
+def _merge_table_types(existing: str, incoming: str) -> str:
+    a = str(existing or "unknown").strip().lower()
+    b = str(incoming or "unknown").strip().lower()
+    if a == "unknown":
+        return b
+    if b == "unknown" or a == b:
+        return a
+    if {a, b} == {"int", "float"}:
+        return "float"
+    return "unknown"
+
+
+def _table_type_from_series(series: pd.Series) -> str:
+    dtype = series.dtype
+    if is_bool_dtype(dtype):
+        return "bool"
+    if is_integer_dtype(dtype):
+        return "int"
+    if is_float_dtype(dtype):
+        return "float"
+    if is_datetime64_any_dtype(dtype):
+        return "datetime"
+    if is_string_dtype(dtype) and not is_object_dtype(dtype):
+        return "string"
+    non_null = series.dropna()
+    if non_null.empty:
+        return "unknown"
+    inferred = "unknown"
+    # Bound sampling cost for large columns while keeping deterministic order.
+    for value in non_null.head(256):
+        inferred = _merge_table_types(inferred, _canonical_table_type_from_python(value))
+        if inferred == "unknown":
+            break
+    return inferred
+
+
+def _infer_table_columns_from_dataframe(df: pd.DataFrame) -> list[dict[str, str]]:
+    cols: list[dict[str, str]] = []
+    for col in list(df.columns):
+        name = str(col)
+        try:
+            col_type = _table_type_from_series(df[col])
+        except Exception:
+            col_type = "unknown"
+        cols.append({"name": name, "type": col_type})
+    return cols
+
+
+def _infer_table_columns_from_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    if not rows:
+        return []
+    seen: set[str] = set()
+    ordered: list[str] = []
+    inferred: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key, value in row.items():
+            col = str(key)
+            if col not in seen:
+                seen.add(col)
+                ordered.append(col)
+            incoming = _canonical_table_type_from_python(value)
+            prev = inferred.get(col, "unknown")
+            inferred[col] = _merge_table_types(prev, incoming)
+    return [{"name": col, "type": inferred.get(col, "unknown")} for col in ordered]
+
+
+def _log_source_inference(node_id: str, source_kind: str, columns: Optional[list[dict[str, str]]]) -> None:
+    if not isinstance(columns, list):
+        return
+    compact = [f"{str(c.get('name') or '').strip()}:{str(c.get('type') or 'unknown').strip() or 'unknown'}" for c in columns]
+    print(f"[source-infer] nodeId={str(node_id)} sourceKind={str(source_kind)} columns={compact}")
+    logger.info(
+        "[source-infer] nodeId=%s sourceKind=%s columns=%s",
+        str(node_id),
+        str(source_kind),
+        compact,
+    )
 
 
 def _table_rows_from_json_array(items: list[Any]) -> tuple[list[dict[str, Any]], str]:
@@ -325,6 +435,7 @@ async def _handle_file_source(
     json_data: Any = None
     binary_data: bytes | None = None
     table_coercion: Dict[str, Any] | None = None
+    table_columns: list[dict[str, str]] | None = None
 
     if schema.file_format in {"csv", "tsv"}:
         csv_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
@@ -334,10 +445,12 @@ async def _handle_file_source(
             encoding=schema.encoding,
         )
         rows = df.to_dict(orient="records")
+        table_columns = _infer_table_columns_from_dataframe(df)
     elif schema.file_format == "parquet":
         parquet_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pq.read_table(parquet_input).to_pandas()
         rows = df.to_dict(orient="records")
+        table_columns = _infer_table_columns_from_dataframe(df)
     elif schema.file_format == "json":
         raw_json = (
             (file_bytes or b"").decode(schema.encoding, errors="replace")
@@ -351,6 +464,7 @@ async def _handle_file_source(
         excel_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pd.read_excel(excel_input, sheet_name=schema.sheet_name or 0)
         rows = df.to_dict(orient="records")
+        table_columns = _infer_table_columns_from_dataframe(df)
     elif schema.file_format == "txt":
         text_data = (
             (file_bytes or b"").decode(schema.encoding, errors="replace")
@@ -391,6 +505,9 @@ async def _handle_file_source(
         else:
             data = []
             table_coercion = {"mode": "native", "lossy": False}
+        if table_columns is None:
+            table_columns = _infer_table_columns_from_rows(data if isinstance(data, list) else [])
+        _log_source_inference(node_id, "file", table_columns)
     elif output_mode == "json":
         if json_data is not None:
             data = json_data
@@ -430,6 +547,7 @@ async def _handle_file_source(
         schema_extra={
             "file_format": schema.file_format,
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
+            **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
         },
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
@@ -469,8 +587,10 @@ async def _handle_database_source(
             raise ValueError("Either query or table_name required")
 
         rows = df.to_dict(orient="records")
+        table_columns = _infer_table_columns_from_dataframe(df)
         if output_mode == "table":
             data: Any = _canonical_table_rows(rows)
+            _log_source_inference(node_id, "database", table_columns)
         elif output_mode == "json":
             data = rows
         elif output_mode == "binary":
@@ -485,6 +605,7 @@ async def _handle_database_source(
             output_mode=output_mode,
             data=data,
             params=params,
+            schema_extra={"table_columns": table_columns} if output_mode == "table" else None,
         )
         return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
     finally:
@@ -541,14 +662,22 @@ async def _handle_api_source(
     is_json = "application/json" in content_type
     json_payload: Any = response.json() if is_json else None
     text_payload = response.text if not is_json else json.dumps(json_payload, sort_keys=True, separators=(",", ":"))
+    table_coercion: Dict[str, Any] | None = None
+    table_columns: list[dict[str, str]] | None = None
 
     if output_mode == "table":
         if isinstance(json_payload, list):
-            data: Any = _canonical_table_rows(json_payload)
+            rows, json_mode = _table_rows_from_json_array(json_payload)
+            data = _canonical_table_rows(rows)
+            table_coercion = {"mode": json_mode, "lossy": False}
         elif isinstance(json_payload, dict):
             data = [json_payload]
+            table_coercion = {"mode": "json_object_1row", "lossy": False}
         else:
             data = [{"text": line} for line in text_payload.splitlines() if line.strip()]
+            table_coercion = {"mode": "text_1row", "lossy": False}
+        table_columns = _infer_table_columns_from_rows(data if isinstance(data, list) else [])
+        _log_source_inference(node_id, "api", table_columns)
     elif output_mode == "json":
         data = json_payload if json_payload is not None else {"text": text_payload}
     elif output_mode == "binary":
@@ -563,6 +692,12 @@ async def _handle_api_source(
         output_mode=output_mode,
         data=data,
         params=params,
+        schema_extra={
+            **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
+            **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
+        }
+        if output_mode == "table"
+        else None,
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
 
