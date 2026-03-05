@@ -22,10 +22,7 @@ export const defaultTransformSelectParams: TransformSelectParams = {
 };
 
 export const defaultTransformRenameParams: TransformRenameParams = {
-	map: {
-		text: 'description',
-		column0: 'value'
-	}
+	map: {}
 };
 
 export const defaultTransformDeriveParams: TransformDeriveParams = {

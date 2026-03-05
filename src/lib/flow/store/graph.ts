@@ -122,6 +122,25 @@ function normalizeTransformPatch(
   return out;
 }
 
+function patchIncludesRenameMap(patch: unknown): boolean {
+  if (!isObject(patch)) return false;
+  const renameBlock = patch.rename;
+  if (isObject(renameBlock) && isObject(renameBlock.map)) return true;
+  if (String(patch.op ?? "") === "rename" && isObject((patch as Record<string, unknown>).map)) return true;
+  return false;
+}
+
+function normalizeExistingForTransformPatch(existing: unknown, patch: unknown): unknown {
+  if (!isObject(existing) || !isObject(patch)) return existing;
+  if (!patchIncludesRenameMap(patch)) return existing;
+
+  const next: Record<string, unknown> = { ...existing };
+  const renameBlock = isObject(next.rename) ? { ...(next.rename as Record<string, unknown>) } : {};
+  renameBlock.map = {};
+  next.rename = renameBlock;
+  return next;
+}
+
 export function updateNodeParamsValidated(
   nodes: Node<PipelineNodeData>[],
   nodeId: string,
@@ -135,12 +154,28 @@ export function updateNodeParamsValidated(
     node.data.kind === "transform"
       ? normalizeTransformPatch((node.data as any).transformKind, existing, patch)
       : patch;
-  const pick = pickValidation(node.data, normalizedPatch, existing);
+  const existingForMerge =
+    node.data.kind === "transform"
+      ? normalizeExistingForTransformPatch(existing, normalizedPatch)
+      : existing;
+  const pick = pickValidation(node.data, normalizedPatch, existingForMerge);
+  const defaultsForMerge =
+    node.data.kind === "transform" && patchIncludesRenameMap(normalizedPatch) && isObject(pick.defaults)
+      ? (() => {
+          const nextDefaults = { ...(pick.defaults as Record<string, unknown>) };
+          const renameBlock = isObject(nextDefaults.rename)
+            ? { ...(nextDefaults.rename as Record<string, unknown>) }
+            : {};
+          renameBlock.map = {};
+          nextDefaults.rename = renameBlock;
+          return nextDefaults;
+        })()
+      : pick.defaults;
 
   const norm = normalizeWithDefaults(
     pick.schema as any,
-    pick.defaults as any,
-    existing,
+    defaultsForMerge as any,
+    existingForMerge,
     normalizedPatch
   );
 
