@@ -790,8 +790,27 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     errors.append("filter.expr is required")
                 elif op == "select":
                     cols = payload.get("columns")
-                    if not isinstance(cols, list) or len(cols) == 0:
-                        errors.append("select.columns must be a non-empty array")
+                    if not isinstance(cols, list):
+                        errors.append("select.columns must be an array")
+                    else:
+                        seen: set[str] = set()
+                        for i, col in enumerate(cols):
+                            name = str(col or "").strip()
+                            if not name:
+                                errors.append(f"select.columns[{i}] cannot be empty")
+                                continue
+                            if name in seen:
+                                errors.append(f"select.columns has duplicate column '{name}'")
+                            else:
+                                seen.add(name)
+                    mode = str(payload.get("mode") or "include").strip().lower()
+                    if mode not in {"include", "exclude"}:
+                        errors.append("select.mode must be one of: include, exclude")
+                    keep_order = str(payload.get("keepOrder") or "").strip().lower()
+                    if keep_order and keep_order not in {"input", "custom"}:
+                        errors.append("select.keepOrder must be one of: input, custom")
+                    if "strict" in payload and not isinstance(payload.get("strict"), bool):
+                        errors.append("select.strict must be boolean")
                 elif op == "rename":
                     mp = payload.get("map")
                     if not isinstance(mp, dict) or len(mp) == 0:

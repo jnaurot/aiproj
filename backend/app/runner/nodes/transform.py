@@ -54,6 +54,8 @@ AGG_OPS_NEEDS_COLUMN = {
     "min_length",
     "max_length",
 }
+SELECT_MODES = {"include", "exclude"}
+SELECT_KEEP_ORDER = {"input", "custom"}
 
 # ---- helpers ----
 
@@ -109,6 +111,30 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
     for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","sql","code"):
         if k != keep_key:
             p.pop(k, None)
+
+    if op == "select":
+        raw = p.get("select") if isinstance(p.get("select"), dict) else {}
+        mode = str(raw.get("mode") or "include").strip().lower()
+        if mode not in SELECT_MODES:
+            mode = "include"
+        keep_order = str(raw.get("keepOrder") or ("input" if mode == "exclude" else "custom")).strip().lower()
+        if keep_order not in SELECT_KEEP_ORDER:
+            keep_order = "input" if mode == "exclude" else "custom"
+        strict = bool(raw.get("strict", True))
+        cols_raw = raw.get("columns")
+        cols: List[str] = []
+        if isinstance(cols_raw, list):
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col:
+                    continue
+                cols.append(col)
+        p["select"] = {
+            "mode": mode,
+            "columns": cols,
+            "keepOrder": keep_order,
+            "strict": strict,
+        }
 
     if op == "dedupe":
         raw = p.get("dedupe") if isinstance(p.get("dedupe"), dict) else {}
@@ -608,8 +634,22 @@ def execute_transform_op(
             return con.execute(f"select * from {primary_name} where {expr}").df()
 
         elif op == "select":
-            cols = params["select"]["columns"]
-            col_sql = ", ".join([quote_ident(c) for c in cols])
+            spec = params["select"]
+            mode = str(spec.get("mode") or "include").strip().lower()
+            keep_order = str(spec.get("keepOrder") or ("input" if mode == "exclude" else "custom")).strip().lower()
+            cols = [str(c) for c in (spec.get("columns") or [])]
+            input_cols = [str(c) for c in list(primary_df.columns)]
+            input_set = set(input_cols)
+            selected_set = set(cols)
+            if mode == "exclude":
+                out_cols = [c for c in input_cols if c not in selected_set]
+            elif keep_order == "input":
+                out_cols = [c for c in input_cols if c in selected_set]
+            else:
+                out_cols = [c for c in cols if c in input_set]
+            if not out_cols:
+                return primary_df.iloc[:, 0:0].copy()
+            col_sql = ", ".join([quote_ident(c) for c in out_cols])
             return con.execute(f"select {col_sql} from {primary_name}").df()
 
         elif op == "rename":

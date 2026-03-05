@@ -79,7 +79,7 @@ const OP_TO_BLOCK: Record<string, string> = {
 
 const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   filter: ["expr"],
-  select: ["columns"],
+  select: ["mode", "columns", "keepOrder", "strict"],
   rename: ["map"],
   derive: ["columns"],
   aggregate: ["groupBy", "metrics"],

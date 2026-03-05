@@ -24,7 +24,32 @@ export const TransformFilterParamsSchema = z.object({
 }).strip();
 
 export const TransformSelectParamsSchema = z.object({
-  columns: z.array(z.string().min(1)).min(1, "Select must specify at least one column"),
+	mode: z.enum(["include", "exclude"]).default("include"),
+	columns: z.array(z.string().min(1)).default([]),
+	keepOrder: z.enum(["input", "custom"]).optional(),
+	strict: z.boolean().default(true),
+}).superRefine((val, ctx) => {
+	const seen = new Set<string>();
+	for (let i = 0; i < val.columns.length; i += 1) {
+		const col = String(val.columns[i] ?? "").trim();
+		if (!col) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["columns", i],
+				message: "Column name cannot be empty",
+			});
+			continue;
+		}
+		if (seen.has(col)) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["columns"],
+				message: `Duplicate selected column: ${col}`,
+			});
+			continue;
+		}
+		seen.add(col);
+	}
 }).strip();
 
 export const TransformRenameParamsSchema = z.object({

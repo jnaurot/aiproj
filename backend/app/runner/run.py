@@ -312,8 +312,19 @@ def _transform_output_columns(
     op_l = str(op or "").lower()
 
     if op_l == "select":
-        cols = [str(c) for c in ((norm.get("select") or {}).get("columns") or [])]
-        return canonical_table_columns([{"name": c, "type": "unknown"} for c in cols])
+        spec = norm.get("select") or {}
+        mode = str(spec.get("mode") or "include").lower().strip()
+        keep_order = str(spec.get("keepOrder") or ("input" if mode == "exclude" else "custom")).lower().strip()
+        cols = [str(c) for c in (spec.get("columns") or [])]
+        selected = set(cols)
+        primary_set = set(primary)
+        if mode == "exclude":
+            out = [c for c in primary if c not in selected]
+        elif keep_order == "input":
+            out = [c for c in primary if c in selected]
+        else:
+            out = [c for c in cols if c in primary_set]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
     if op_l == "rename":
         rename_map = (norm.get("rename") or {}).get("map") or {}
         out = [str(rename_map.get(c, c)) for c in primary]
@@ -1670,7 +1681,34 @@ async def run_graph(
                         input_artifact_ids = [aid for _, aid in input_refs]
 
                         if op == "select":
-                            expected_cols = [str(c) for c in ((norm.get("select") or {}).get("columns") or [])]
+                            select_spec = (norm.get("select") or {})
+                            mode = str(select_spec.get("mode") or "include").strip().lower()
+                            strict = bool(select_spec.get("strict", True))
+                            expected_cols = [str(c) for c in (select_spec.get("columns") or [])]
+                            seen_cols: set[str] = set()
+                            duplicate_cols: list[str] = []
+                            for col in expected_cols:
+                                if col in seen_cols and col not in duplicate_cols:
+                                    duplicate_cols.append(col)
+                                seen_cols.add(col)
+                            if duplicate_cols:
+                                available_cols, available_source = _available_columns_for_port(
+                                    port=primary_port,
+                                    input_schema_cols_by_port=input_schema_cols_by_port,
+                                    input_columns=input_columns,
+                                )
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: select has duplicate columns {duplicate_cols}",
+                                    code="DUPLICATE_COLUMN",
+                                    details={
+                                        "errorCode": "DUPLICATE_COLUMN",
+                                        "op": "select",
+                                        "paramPath": "select.columns",
+                                        "missingColumns": _stable_unique_strings(duplicate_cols),
+                                        "availableColumns": _stable_unique_strings(available_cols),
+                                        "availableColumnsSource": available_source,
+                                    },
+                                )
                             available_cols, available_source = _available_columns_for_port(
                                 port=primary_port,
                                 input_schema_cols_by_port=input_schema_cols_by_port,
@@ -1678,7 +1716,7 @@ async def run_graph(
                             )
                             available_set = set(available_cols)
                             missing_cols = [c for c in expected_cols if c not in available_set]
-                            if missing_cols:
+                            if strict and missing_cols:
                                 raise ContractMismatchError(
                                     f"Transform payload schema mismatch: select references missing columns {missing_cols}",
                                     code="MISSING_COLUMN",

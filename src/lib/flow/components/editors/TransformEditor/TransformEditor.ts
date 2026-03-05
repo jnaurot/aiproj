@@ -17,7 +17,7 @@ export type EditorCommitMode = 'draft' | 'immediate';
 
 export const TransformEditorCommitModeByKind = {
 	filter: 'draft',
-	select: 'draft',
+	select: 'immediate',
 	rename: 'draft',
 	derive: 'immediate',
 	aggregate: 'immediate',

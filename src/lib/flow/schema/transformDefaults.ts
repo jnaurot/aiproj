@@ -18,7 +18,10 @@ export const defaultTransformFilterParams: TransformFilterParams = {
 };
 
 export const defaultTransformSelectParams: TransformSelectParams = {
-	columns: ['text', 'id']
+	mode: 'include',
+	columns: [],
+	keepOrder: 'custom',
+	strict: true
 };
 
 export const defaultTransformRenameParams: TransformRenameParams = {
