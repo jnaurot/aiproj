@@ -599,7 +599,10 @@ class RuntimeManager:
                 prev = dict(b)
                 if status == "succeeded":
                     b["status"] = "succeeded_up_to_date"
-                    b["isUpToDate"] = bool(b.get("currentArtifactId"))
+                    # Container/alias nodes (e.g. component parent nodes) may not emit
+                    # node_output directly, but a succeeded finish still means their
+                    # current state is up-to-date for this run.
+                    b["isUpToDate"] = True
                     b["cacheValid"] = bool(b.get("currentArtifactId")) and bool(b.get("currentExecKey"))
                     b["staleReason"] = None
                     handle.node_status[nid] = "succeeded_up_to_date"
