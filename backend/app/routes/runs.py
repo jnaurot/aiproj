@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
+from ..feature_flags import get_feature_flags
 from ..runner.nodes.transform import load_table_from_artifact_bytes
 from ..runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from ..runner.run import _determinism_env_for_node, _normalized_params_for_exec_key
@@ -30,6 +31,45 @@ def _alpha_input_label(idx: int) -> str:
         n, rem = divmod(n - 1, 26)
         out = chr(65 + rem) + out
     return f"Input {out}"
+
+
+def _dual_write_graph_revision(
+    request: Request,
+    *,
+    graph_id: str,
+    graph: Dict[str, Any],
+    message: str,
+) -> Optional[str]:
+    """
+    Phase 2 dual-write hook:
+    - Existing path remains unchanged.
+    - Best-effort write to graph revision store when GRAPH_STORE_V2_WRITE is enabled.
+    """
+    flags = get_feature_flags()
+    if not flags.get("GRAPH_STORE_V2_WRITE", False):
+        return None
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        return None
+    try:
+        revision = store.create_revision(
+            graph_id=graph_id,
+            graph=graph,
+            message=message,
+            schema_version=1,
+        )
+        print(
+            "[graph-dual-write] graphId=%s revisionId=%s message=%s"
+            % (graph_id, revision.revision_id, message)
+        )
+        return str(revision.revision_id)
+    except Exception as ex:
+        # Best effort only; never fail existing endpoint behavior.
+        print(
+            "[graph-dual-write] skipped graphId=%s reason=%s"
+            % (graph_id, repr(ex))
+        )
+        return None
 
 class RunRequest(BaseModel):
     graphId: str
@@ -181,6 +221,12 @@ async def create_run(req: RunRequest, request: Request):
         raise HTTPException(400, "runMode='selected_only' requires runFrom")
 
     graph_id = str(req.graphId)
+    _dual_write_graph_revision(
+        request,
+        graph_id=graph_id,
+        graph=req.graph,
+        message="phase2:create_run",
+    )
     await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
     
     return RunCreated(schemaVersion=1, runId=run_id, graphId=graph_id)
@@ -217,6 +263,14 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
     h = rt.get_run(run_id)
     if not h:
         raise HTTPException(404, "Unknown runId")
+    graph_id = str(getattr(h, "graph_id", "") or "").strip()
+    if graph_id:
+        _dual_write_graph_revision(
+            request,
+            graph_id=graph_id,
+            graph=req.graph,
+            message=f"phase2:accept_params:{node_id}",
+        )
     try:
         out = await rt.accept_node_params(
             run_id=run_id,
