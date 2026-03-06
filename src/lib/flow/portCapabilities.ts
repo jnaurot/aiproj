@@ -22,7 +22,7 @@ function asPortTypes(values: unknown): PortType[] {
 		.filter((v): v is PortType => ['table', 'json', 'text', 'binary', 'embeddings'].includes(v));
 }
 
-export const NODE_CAPABILITIES: Record<'llm' | 'transform' | 'source' | 'tool', NodeCapabilities> = {
+export const NODE_CAPABILITIES: Record<'llm' | 'transform' | 'source' | 'tool' | 'component', NodeCapabilities> = {
 	llm: { in: asPortTypes(nodes.llm?.in), out: asPortTypes(nodes.llm?.out) },
 	transform: { in: asPortTypes(nodes.transform?.in), out: asPortTypes(nodes.transform?.out) },
 	source: { in: asPortTypes(nodes.source?.in), out: asPortTypes(nodes.source?.out) },
@@ -38,7 +38,8 @@ export const NODE_CAPABILITIES: Record<'llm' | 'transform' | 'source' | 'tool', 
 				asPortTypes((value as any)?.out)
 			])
 		)
-	}
+	},
+	component: { in: asPortTypes(nodes.component?.in), out: asPortTypes(nodes.component?.out) }
 };
 
 export function getAllowedPortsForNode(

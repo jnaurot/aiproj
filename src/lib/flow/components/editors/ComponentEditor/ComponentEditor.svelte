@@ -16,6 +16,8 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	let errorMessage = '';
 	let configDraft = '{}';
 	let configParseError = '';
+	let autoResolvedOnce = false;
+	let lastSelectedNodeId = '';
 
 	$: componentRef = (params?.componentRef ?? {}) as {
 		componentId?: string;
@@ -53,6 +55,11 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		revisions = [];
 	}
 
+	$: if (String(selectedNode?.id ?? '') !== lastSelectedNodeId) {
+		lastSelectedNodeId = String(selectedNode?.id ?? '');
+		autoResolvedOnce = false;
+	}
+
 	async function ensureCatalogLoaded(): Promise<void> {
 		if (loadingComponents || components.length > 0) return;
 		loadingComponents = true;
@@ -64,6 +71,13 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			return;
 		}
 		components = Array.isArray((res as any).components) ? (res as any).components : [];
+		// Heal default placeholder refs (e.g. component_example@rev_1) by selecting the first available component.
+		if (!componentId || !components.some((c) => c.componentId === componentId)) {
+			const first = components[0];
+			if (first?.componentId) {
+				draftComponentRef({ componentId: first.componentId, revisionId: '' });
+			}
+		}
 	}
 
 	async function ensureRevisionsLoaded(cid: string): Promise<void> {
@@ -78,6 +92,16 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			return;
 		}
 		revisions = Array.isArray((res as any).revisions) ? (res as any).revisions : [];
+		// Auto-pick newest revision once when current revision is invalid/missing.
+		if (
+			!autoResolvedOnce &&
+			componentId &&
+			revisions.length > 0 &&
+			!revisions.some((r) => r.revisionId === revisionId)
+		) {
+			autoResolvedOnce = true;
+			await applyRevision(String(revisions[0].revisionId));
+		}
 	}
 
 	function draftComponentRef(next: { componentId?: string; revisionId?: string; apiVersion?: string }): void {
