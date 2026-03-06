@@ -422,10 +422,28 @@ function ensureNormalizedBindingsForNodes(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
 	nodeBindings: Record<string, NormalizedNodeBinding>
 ): Record<string, NormalizedNodeBinding> {
-	const next: Record<string, NormalizedNodeBinding> = { ...(nodeBindings ?? {}) };
+	const liveNodeIds = new Set((nodes ?? []).map((n) => n.id).filter(Boolean));
+	const next: Record<string, NormalizedNodeBinding> = {};
+	for (const [nodeId, binding] of Object.entries(nodeBindings ?? {})) {
+		if (!liveNodeIds.has(nodeId)) continue;
+		next[nodeId] = binding;
+	}
 	for (const node of nodes ?? []) {
 		if (!node?.id) continue;
 		next[node.id] = _normalizeBinding(next[node.id], node.id);
+	}
+	return next;
+}
+
+function pruneNodeOutputsForNodes(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	nodeOutputs: Record<string, NodeOutputInfo>
+): Record<string, NodeOutputInfo> {
+	const liveNodeIds = new Set((nodes ?? []).map((n) => n.id).filter(Boolean));
+	const next: Record<string, NodeOutputInfo> = {};
+	for (const [nodeId, output] of Object.entries(nodeOutputs ?? {})) {
+		if (!liveNodeIds.has(nodeId)) continue;
+		next[nodeId] = output;
 	}
 	return next;
 }
@@ -593,13 +611,21 @@ function auditStateTransition(prev: GraphState, next: GraphState, ctx: AuditCont
 
 function withGraphMeta(state: GraphState): GraphState {
 	const normalizedBindings = ensureNormalizedBindingsForNodes(state.nodes, state.nodeBindings ?? {});
+	const normalizedOutputs = pruneNodeOutputsForNodes(state.nodes, state.nodeOutputs ?? {});
 	const { freshness, staleNodeCount } = computeGraphFreshness(normalizedBindings ?? {});
 	let lastRunStatus = state.lastRunStatus;
 	if (state.runStatus === 'succeeded') lastRunStatus = 'succeeded';
 	if (state.runStatus === 'failed') lastRunStatus = 'failed';
 	if (state.runStatus === 'canceled' || state.runStatus === 'cancelled') lastRunStatus = 'cancelled';
 	if (freshness === 'never_run') lastRunStatus = 'never_run';
-	return { ...state, freshness, staleNodeCount, lastRunStatus, nodeBindings: normalizedBindings };
+	return {
+		...state,
+		freshness,
+		staleNodeCount,
+		lastRunStatus,
+		nodeBindings: normalizedBindings,
+		nodeOutputs: normalizedOutputs
+	};
 }
 
 function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string): boolean {
@@ -2167,15 +2193,18 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const nodes = s.nodes.filter((n) => n.id !== nodeId);
 				const edges = s.edges.filter((e) => e.source !== nodeId && e.target !== nodeId);
 				const selectedNodeId = s.selectedNodeId === nodeId ? null : s.selectedNodeId;
+				const { [nodeId]: _dropBinding, ...nodeBindings } = s.nodeBindings;
+				const { [nodeId]: _dropOutput, ...nodeOutputs } = s.nodeOutputs;
 
 				const next = logPush(
-					{ ...s, nodes, edges, selectedNodeId },
+					{ ...s, nodes, edges, selectedNodeId, nodeBindings, nodeOutputs },
 					'info',
 					`Deleted node ${nodeId}`,
 					nodeId
 				);
-				persist(next);
-				return next;
+				const withMeta = withGraphMeta(next);
+				persist(withMeta);
+				return withMeta;
 			});
 		},
 
