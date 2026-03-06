@@ -18,7 +18,13 @@ import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
-import { getGraphFeatureFlags, getLatestGraphRevision } from '$lib/flow/client/graphs';
+import {
+	getGraphFeatureFlags,
+	getLatestGraphRevision,
+	getGraphRevision,
+	listGraphRevisions,
+	createGraphRevision
+} from '$lib/flow/client/graphs';
 import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
@@ -2364,6 +2370,117 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const next = buildHardResetState(freshGraphId);
 			persist(next);
 			set(next);
+		},
+
+		async saveGraphRevision(message?: string) {
+			const current = get({ subscribe } as any) as GraphState;
+			const graphId = String(current.graphId ?? '').trim();
+			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			const graph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			try {
+				const created = await createGraphRevision({
+					graphId,
+					message: String(message ?? '').trim() || undefined,
+					graph
+				});
+				return {
+					ok: true,
+					graphId: String(created.graphId),
+					revisionId: String(created.revisionId),
+					createdAt: String(created.createdAt)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'save_failed' as const, error: String(error) };
+			}
+		},
+
+		async saveAsGraphRevision(nextGraphId: string, message?: string) {
+			const targetGraphId = String(nextGraphId ?? '').trim();
+			if (!targetGraphId) return { ok: false, reason: 'missing_graph_id' as const };
+			const current = get({ subscribe } as any) as GraphState;
+			const graph = stripToDTO(current.nodes as any, current.edges as any, targetGraphId);
+			try {
+				const created = await createGraphRevision({
+					graphId: targetGraphId,
+					message: String(message ?? '').trim() || undefined,
+					graph
+				});
+				update((s) => {
+					const next = { ...s, graphId: targetGraphId };
+					persist(next);
+					return next;
+				});
+				return {
+					ok: true,
+					graphId: String(created.graphId),
+					revisionId: String(created.revisionId),
+					createdAt: String(created.createdAt)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'save_failed' as const, error: String(error) };
+			}
+		},
+
+		async listGraphRevisionHistory(limit = 30, offset = 0) {
+			const current = get({ subscribe } as any) as GraphState;
+			const graphId = String(current.graphId ?? '').trim();
+			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			try {
+				const listed = await listGraphRevisions(graphId, limit, offset);
+				return {
+					ok: true,
+					graphId,
+					revisions: Array.isArray(listed.revisions) ? listed.revisions : []
+				};
+			} catch (error) {
+				return { ok: false, reason: 'list_failed' as const, error: String(error) };
+			}
+		},
+
+		async restoreGraphRevision(revisionId: string) {
+			const current = get({ subscribe } as any) as GraphState;
+			const graphId = String(current.graphId ?? '').trim();
+			const rid = String(revisionId ?? '').trim();
+			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			if (!rid) return { ok: false, reason: 'missing_revision_id' as const };
+			try {
+				const restored = await getGraphRevision(graphId, rid);
+				const graph = (restored?.graph ?? {}) as any;
+				const nextNodes = Array.isArray(graph.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
+				const nextEdges = Array.isArray(graph.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
+				if (!nextNodes || !nextEdges) {
+					return { ok: false, reason: 'invalid_payload' as const };
+				}
+				update((s) => {
+					const nextState = withGraphMeta({
+						...s,
+						nodes: nextNodes,
+						edges: nextEdges,
+						selectedNodeId: null,
+						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
+						logs: [],
+						runStatus: IDLE,
+						lastRunStatus: 'never_run',
+						freshness: 'never_run',
+						staleNodeCount: 0,
+						activeRunMode: 'from_start',
+						activeRunFrom: null,
+						activeRunNodeSet: new Set<string>(),
+						nodeOutputs: {},
+						nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
+						activeRunId: null
+					});
+					persist(nextState);
+					return nextState;
+				}, { source: 'graph_edit' });
+				return {
+					ok: true,
+					graphId: String(restored.graphId),
+					revisionId: String(restored.revisionId)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'restore_failed' as const, error: String(error) };
+			}
 		},
 
 		async hydrateLatestGraphFromBackend() {

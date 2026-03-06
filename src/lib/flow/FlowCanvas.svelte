@@ -18,6 +18,7 @@
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
+	import type { GraphRevisionSummary } from '$lib/flow/client/graphs';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
@@ -141,6 +142,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let toastMessage: string | null = null;
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
+	let lastSavedGraphSnapshotKey: string | null = null;
 	const GlobalCacheModeLabels: Record<GlobalCacheMode, string> = {
 		default_on: 'Default on',
 		force_off: 'Forced off',
@@ -200,6 +202,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$graphStore.lastRunStatus === 'never_run'
 			? 'Never run'
 			: `${$graphStore.lastRunStatus === 'cancelled' ? 'Cancelled' : $graphStore.lastRunStatus.charAt(0).toUpperCase() + $graphStore.lastRunStatus.slice(1)}${$graphStore.freshness === 'stale' ? ` + Needs rerun${$graphStore.staleNodeCount > 0 ? ` (${$graphStore.staleNodeCount} stale)` : ''}` : ''}`;
+	$: currentGraphSnapshotKey = JSON.stringify({
+		graphId: $graphStore.graphId,
+		nodes,
+		edges
+	});
+	$: hasUnsavedGraphChanges =
+		typeof lastSavedGraphSnapshotKey === 'string' &&
+		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
 
 	// auto-fallback if you select a node without output
 	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
@@ -632,6 +642,71 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	function newGraph() {
 		graphStore.hardResetGraph();
+		lastSavedGraphSnapshotKey = null;
+	}
+
+	function formatRevisionLine(index: number, revision: GraphRevisionSummary): string {
+		const stamp = String(revision.created_at ?? '').replace('T', ' ').slice(0, 19);
+		const msg = String(revision.message ?? '').trim();
+		return `${index + 1}. ${revision.revision_id.slice(0, 10)}  ${stamp}${msg ? `  ${msg}` : ''}`;
+	}
+
+	async function saveGraphRevision() {
+		const note = window.prompt('Save note (optional)', '') ?? '';
+		const result = await graphStore.saveGraphRevision(note);
+		if (!(result as any)?.ok) {
+			showToast(`Save failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
+			return;
+		}
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		showToast(`Saved revision ${(result as any).revisionId.slice(0, 10)}`, 'info');
+	}
+
+	async function saveAsGraphRevision() {
+		const suggested = `${$graphStore.graphId}_copy`;
+		const nextGraphId = (window.prompt('New graph id', suggested) ?? '').trim();
+		if (!nextGraphId) return;
+		const note = window.prompt('Save note (optional)', '') ?? '';
+		const result = await graphStore.saveAsGraphRevision(nextGraphId, note);
+		if (!(result as any)?.ok) {
+			showToast(`Save As failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
+			return;
+		}
+		lastSavedGraphSnapshotKey = null;
+		showToast(`Saved graph ${nextGraphId}`, 'info');
+	}
+
+	async function restoreGraphRevision() {
+		const history = await graphStore.listGraphRevisionHistory(20, 0);
+		if (!(history as any)?.ok) {
+			showToast(`History load failed: ${(history as any)?.error ?? (history as any)?.reason ?? 'unknown'}`, 'error');
+			return;
+		}
+		const revisions = ((history as any).revisions ?? []) as GraphRevisionSummary[];
+		if (!Array.isArray(revisions) || revisions.length === 0) {
+			showToast('No saved history for this graph yet.', 'warn');
+			return;
+		}
+		const lines = revisions.map((r, i) => formatRevisionLine(i, r)).join('\n');
+		const raw = window.prompt(`Restore revision:\n${lines}\n\nEnter number (1-${revisions.length})`, '1');
+		if (!raw) return;
+		const pick = Number(raw);
+		if (!Number.isInteger(pick) || pick < 1 || pick > revisions.length) {
+			showToast('Invalid revision selection.', 'warn');
+			return;
+		}
+		const selected = revisions[pick - 1];
+		const confirmRestore = window.confirm(
+			`Restore revision ${selected.revision_id.slice(0, 10)}? Current unsaved graph edits will be replaced.`
+		);
+		if (!confirmRestore) return;
+		const restored = await graphStore.restoreGraphRevision(selected.revision_id);
+		if (!(restored as any)?.ok) {
+			showToast(`Restore failed: ${(restored as any)?.error ?? (restored as any)?.reason ?? 'unknown'}`, 'error');
+			return;
+		}
+		lastSavedGraphSnapshotKey = null;
+		showToast(`Restored revision ${selected.revision_id.slice(0, 10)}`, 'info');
 	}
 
 	function deleteSelectedPresetRef(): void {
@@ -695,6 +770,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		} catch (error) {
 			console.warn('Failed to hydrate graph from backend revision store', error);
 		}
+		await tick();
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 	});
 </script>
 
@@ -708,6 +785,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		<div class="topbar">
 			<div class="btnrow">
 				<button on:click={newGraph}>New Graph</button>
+				<button on:click={saveGraphRevision}>Save</button>
+				<button on:click={saveAsGraphRevision}>Save As</button>
+				<button on:click={restoreGraphRevision}>History</button>
 				<button on:click={resetRunUi}>Reset</button>
 				<button class="primary" on:click={() => graphStore.runRemote(null, 'from_start')}>
 					Run from start
@@ -720,7 +800,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					Run from selected
 				</button>
 
-				<span class="status">Graph: {graphHeaderStatus}</span>
+				<span class="status">Graph: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span>
 				<label class="cacheToggle">
 					<span>Cache</span>
 					<select
