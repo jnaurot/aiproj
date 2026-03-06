@@ -19,6 +19,9 @@ async def startup():
     app.state.runtime = RuntimeManager()
     app.state.graph_revisions = GraphRevisionStore("./data/graphs/graphs.sqlite")
     app.state.component_revisions = ComponentRevisionStore("./data/components/components.sqlite")
+    # Runner expansion reads component revisions from runtime_ref (RuntimeManager).
+    # Keep app.state and runtime_ref aligned.
+    app.state.runtime.component_revisions = app.state.component_revisions
     print("[feature-flags]", get_feature_flags())
     await app.state.runtime.recover_unfinished_runs()
     
