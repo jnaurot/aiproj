@@ -8,7 +8,7 @@
 
 	import { nodeTypes } from '$lib/flow/nodeTypes';
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
-	import type { SourceKind, LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
+	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
 	import type { InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
@@ -185,6 +185,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$: selectedToolProvider = (((inspectorParams as any)?.provider ??
 		($selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider);
+	$: selectedComponentKind =
+		(((inspectorParams as any)?.componentKind ??
+			($selectedNode?.data as any)?.componentKind ??
+			'graph_component') as ComponentKind);
 	$: hideInspectorApplyRow =
 		inspectorMode === 'edit' &&
 		$selectedNode?.data?.kind === 'transform' &&
@@ -192,6 +196,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: nodeError = (nodeOut as any)?.lastError ?? null;
+	$: selectedComponentHasUpdate =
+		$selectedNode?.data?.kind === 'component'
+			? Boolean(($selectedNode.data.meta as any)?.componentHasUpdate)
+			: false;
+	$: selectedComponentLatestRevisionId =
+		$selectedNode?.data?.kind === 'component'
+			? String(($selectedNode.data.meta as any)?.componentLatestRevisionId ?? '').trim()
+			: '';
 	$: hasInputs = Boolean($selectedNode && $selectedNode.data?.ports?.in !== null && $selectedNode.data?.ports?.in !== undefined);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -642,6 +654,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (kind === 'tool') {
 			graphStore.setToolProvider(nodeId, value as ToolProvider);
 			clearSubtypeError();
+			return;
+		}
+		if (kind === 'component') {
+			clearSubtypeError();
 		}
 	}
 
@@ -907,6 +923,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				<button on:click={() => addNode('transform')}>+ Transform</button>
 				<button on:click={() => addNode('llm')}>+ LLM</button>
 				<button on:click={() => addNode('tool')}>+ Tool</button>
+				<button on:click={() => addNode('component')}>+ Component</button>
 				<select
 					class="presetPicker"
 					aria-label="Add node from preset"
@@ -1025,6 +1042,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
 								{displayNodeStatus ?? 'idle'}
 							</span>
+							{#if selectedComponentHasUpdate}
+								<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
+									update {selectedComponentLatestRevisionId}
+								</span>
+							{/if}
 						</div>
 					</div>
 					<div class="inspectorTabs">
@@ -1070,7 +1092,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											? selectedLlmKind
 											: $selectedNode.data.kind === 'transform'
 												? selectedTransformKind
-												: selectedToolProvider
+												: $selectedNode.data.kind === 'tool'
+													? selectedToolProvider
+													: selectedComponentKind
 								}
 								on:change={(e) => setSelectedNodeSubtype((e.currentTarget as HTMLSelectElement).value)}
 							>
@@ -1102,6 +1126,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									<option value="shell">shell</option>
 									<option value="db">db</option>
 									<option value="builtin">builtin</option>
+								{:else if $selectedNode.data.kind === 'component'}
+									<option value="graph_component">graph_component</option>
 								{/if}
 							</select>
 						{/if}
@@ -1494,6 +1520,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	.pill-cache-mismatch {
+		border-color: #f2cc60;
+		background: rgba(242, 204, 96, 0.14);
+	}
+
+	.pill-update {
 		border-color: #f2cc60;
 		background: rgba(242, 204, 96, 0.14);
 	}

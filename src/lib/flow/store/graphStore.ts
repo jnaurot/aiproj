@@ -24,6 +24,12 @@ import {
 	listGraphRevisions,
 	createGraphRevision
 } from '$lib/flow/client/graphs';
+import {
+	getComponentRevision,
+	listComponentRevisions,
+	listComponents,
+	type ComponentApiContract
+} from '$lib/flow/client/components';
 import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
@@ -148,6 +154,23 @@ function defaultApiEditorUiState(params?: Record<string, any>): ApiEditorUiState
 		headersOpen: hasAnyKeys(params?.headers),
 		bodyOpen: bodyMode !== 'none'
 	};
+}
+
+function normalizeComponentPortType(value: unknown): PortType | null {
+	const t = String(value ?? '').trim().toLowerCase();
+	if (t === 'table' || t === 'text' || t === 'json' || t === 'binary' || t === 'embeddings') {
+		return t as PortType;
+	}
+	return null;
+}
+
+function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?: PortType | null } {
+	const contract = (api ?? {}) as ComponentApiContract;
+	const inputs = Array.isArray(contract?.inputs) ? contract.inputs : [];
+	const outputs = Array.isArray(contract?.outputs) ? contract.outputs : [];
+	const inPort = normalizeComponentPortType(inputs[0]?.portType ?? null);
+	const outPort = normalizeComponentPortType(outputs[0]?.portType ?? null);
+	return { in: inPort, out: outPort };
 }
 
 let logSeq = 0;
@@ -1446,9 +1469,14 @@ export const graphStore = (() => {
 				nodes = res.nodes;
 			}
 
+			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
+			const componentDerivedPorts =
+				currentNode.data.kind === 'component' ? derivePortsFromComponentApi((currentNode.data as any)?.params?.api) : null;
+			const effectivePorts = config.ports ?? componentDerivedPorts ?? undefined;
+
 			// ---- 2) ports (must be valid to commit) ----
-			if (config.ports) {
-				const { in: inPort, out: outPort } = config.ports;
+			if (effectivePorts) {
+				const { in: inPort, out: outPort } = effectivePorts;
 
 				if (inPort !== undefined && inPort !== null && !isPortType(inPort)) {
 					out = { ok: false, error: `Invalid input port type: ${String(inPort)}` };
@@ -2509,6 +2537,108 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return { ok: true, graphId: String(latest.graphId), revisionId: String(latest.revisionId) };
 			} catch (error) {
 				return { ok: false, reason: 'read_failed' as const, error: String(error) };
+			}
+		},
+
+		async listComponentCatalog(limit = 100, offset = 0) {
+			try {
+				const components = await listComponents(limit, offset);
+				return { ok: true, components };
+			} catch (error) {
+				return { ok: false, reason: 'list_components_failed' as const, error: String(error) };
+			}
+		},
+
+		async listComponentRevisionHistory(componentId: string, limit = 100, offset = 0) {
+			try {
+				const revisions = await listComponentRevisions(componentId, limit, offset);
+				return { ok: true, revisions };
+			} catch (error) {
+				return { ok: false, reason: 'list_revisions_failed' as const, error: String(error) };
+			}
+		},
+
+		async getComponentRevisionDetail(componentId: string, revisionId: string) {
+			try {
+				const detail = await getComponentRevision(componentId, revisionId);
+				return { ok: true, detail };
+			} catch (error) {
+				return { ok: false, reason: 'get_revision_failed' as const, error: String(error) };
+			}
+		},
+
+		async applyComponentRevisionToNode(nodeId: string, componentId: string, revisionId: string) {
+			const cid = String(componentId ?? '').trim();
+			const rid = String(revisionId ?? '').trim();
+			if (!cid || !rid) return { ok: false, reason: 'missing_component_ref' as const };
+			const node = (get({ subscribe } as any) as GraphState).nodes.find((n) => n.id === nodeId);
+			if (!node || node.data.kind !== 'component') return { ok: false, reason: 'node_not_component' as const };
+			try {
+				const detail = await getComponentRevision(cid, rid);
+				const api = (detail.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
+				const paramsPatch = {
+					componentRef: {
+						componentId: cid,
+						revisionId: rid,
+						apiVersion: String((node.data.params as any)?.componentRef?.apiVersion ?? 'v1')
+					},
+					api
+				};
+				const portsPatch = derivePortsFromComponentApi(api);
+				const result = updateNodeConfigImpl(nodeId, {
+					params: paramsPatch,
+					ports: portsPatch
+				});
+				if (!result.ok) return { ok: false, reason: 'update_failed' as const, error: result.error };
+				const revisions = await listComponentRevisions(cid, 20, 0);
+				const latestRevisionId = String(revisions?.[0]?.revisionId ?? '').trim() || null;
+				update((s) => {
+					const target = s.nodes.find((n) => n.id === nodeId);
+					if (!target) return s;
+					const refreshedParams = structuredClone((target.data.params ?? {}) as Record<string, unknown>);
+					const nodes = s.nodes.map((n) =>
+						n.id === nodeId
+							? {
+									...n,
+									data: {
+										...n.data,
+										params: refreshedParams,
+										meta: {
+											...(n.data.meta ?? {}),
+											componentLatestRevisionId: latestRevisionId,
+											componentHasUpdate: Boolean(latestRevisionId && latestRevisionId !== rid),
+											updatedAt: new Date().toISOString()
+										}
+									}
+								}
+							: n
+					);
+					const next = { ...s, nodes };
+					persist(next);
+					return next;
+				});
+				const stateAfter = get({ subscribe } as any) as GraphState;
+				const refreshedNode = stateAfter.nodes.find((n) => n.id === nodeId);
+				const refreshedParams = structuredClone((refreshedNode?.data.params ?? {}) as Record<string, unknown>);
+				update((s) => {
+					if (s.inspector.nodeId !== nodeId) return s;
+					return {
+						...s,
+						inspector: {
+							...s.inspector,
+							draftParams: refreshedParams,
+							dirty: false
+						}
+					};
+				});
+				return {
+					ok: true,
+					detail,
+					latestRevisionId,
+					hasUpdate: Boolean(latestRevisionId && latestRevisionId !== rid)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'apply_revision_failed' as const, error: String(error) };
 			}
 		},
 

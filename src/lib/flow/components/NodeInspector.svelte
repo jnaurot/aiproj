@@ -5,6 +5,7 @@
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
+	import ComponentEditor from '$lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
@@ -26,6 +27,7 @@
 	$: isLlm = kind === 'llm';
 	$: isTool = kind === 'tool';
 	$: isTransform = kind === 'transform';
+	$: isComponent = kind === 'component';
 
 	// inspector draft params (single source of truth for editors)
 	$: params = $graphStore.inspector?.draftParams ?? {};
@@ -187,6 +189,8 @@
 			{onDraft}
 			{onCommit}
 		/>
+	{:else if isComponent}
+		<ComponentEditor {selectedNode} {params} {onDraft} />
 		{:else if isTransform}
 			{#if transformKind === 'join'}
 				<svelte:component
