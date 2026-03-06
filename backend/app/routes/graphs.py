@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -103,10 +102,7 @@ async def graph_feature_flags():
 
 @router.put("/feature-flags")
 async def set_graph_feature_flags(req: GraphFeatureFlagsUpdateRequest):
-    updates = req.model_dump(exclude_none=True)
-    for key, value in updates.items():
-        os.environ[key] = "1" if bool(value) else "0"
-    return {"schemaVersion": 1, "flags": get_feature_flags()}
+    raise HTTPException(status_code=410, detail="Feature-flag mutation is disabled after Phase 8 cutover")
 
 
 @router.get("/{graph_id}/export")
@@ -117,12 +113,6 @@ async def export_graph_package_v2(
     include_artifacts: bool = Query(default=False),
     include_schemas: bool = Query(default=True),
 ):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_EXPORT_V2", False):
-        raise HTTPException(status_code=503, detail="GRAPH_EXPORT_V2 is disabled")
-    if not flags.get("GRAPH_STORE_V2_READ", False):
-        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_READ is disabled")
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
@@ -146,12 +136,6 @@ async def export_graph_package_v2(
 
 @router.post("/import")
 async def import_graph_package_v2(req: GraphImportRequest, request: Request):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_EXPORT_V2", False):
-        raise HTTPException(status_code=503, detail="GRAPH_EXPORT_V2 is disabled")
-    if not flags.get("GRAPH_STORE_V2_WRITE", False):
-        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_WRITE is disabled")
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
@@ -186,13 +170,6 @@ async def import_graph_package_v2(req: GraphImportRequest, request: Request):
 
 @router.post("")
 async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_STORE_V2_WRITE", False):
-        raise HTTPException(
-            status_code=503,
-            detail="GRAPH_STORE_V2_WRITE is disabled",
-        )
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
@@ -222,10 +199,6 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
 
 @router.get("/{graph_id}/latest")
 async def get_latest_graph_revision(graph_id: str, request: Request):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_STORE_V2_READ", False):
-        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_READ is disabled")
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
@@ -254,10 +227,6 @@ async def list_graph_revisions(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_STORE_V2_READ", False):
-        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_READ is disabled")
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
@@ -268,10 +237,6 @@ async def list_graph_revisions(
 
 @router.get("/{graph_id}/revisions/{revision_id}")
 async def get_graph_revision(graph_id: str, revision_id: str, request: Request):
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_STORE_V2_READ", False):
-        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_READ is disabled")
-
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")

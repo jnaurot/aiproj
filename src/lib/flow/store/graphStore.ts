@@ -19,7 +19,6 @@ import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
 import {
-	getGraphFeatureFlags,
 	getLatestGraphRevision,
 	getGraphRevision,
 	listGraphRevisions,
@@ -2500,10 +2499,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		async hydrateLatestGraphFromBackend() {
 			if (typeof window === 'undefined') return { ok: false, reason: 'non_browser' as const };
 			try {
-				const flags = await getGraphFeatureFlags();
-				if (!flags?.flags?.GRAPH_STORE_V2_READ) {
-					return { ok: false, reason: 'flag_disabled' as const };
-				}
 				const current = get({ subscribe } as any) as GraphState;
 				const graphId = String(current.graphId ?? '').trim();
 				if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };

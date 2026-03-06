@@ -29,7 +29,7 @@ def _minimal_graph():
 	}
 
 
-def test_phase2_dual_write_on_create_run(monkeypatch):
+def test_graph_revision_write_on_create_run(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "1")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -55,10 +55,10 @@ def test_phase2_dual_write_on_create_run(monkeypatch):
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
 		assert rev is not None
 		assert rev.graph_id == graph_id
-		assert rev.message == "phase2:create_run"
+		assert rev.message == "create_run"
 
 
-def test_phase2_dual_write_on_accept_params(monkeypatch):
+def test_graph_revision_write_on_accept_params(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "1")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -94,10 +94,10 @@ def test_phase2_dual_write_on_accept_params(monkeypatch):
 
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
 		assert rev is not None
-		assert rev.message == "phase2:accept_params:n1"
+		assert rev.message == "accept_params:n1"
 
 
-def test_phase2_dual_write_disabled(monkeypatch):
+def test_graph_revision_write_ignores_legacy_env_disable(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "0")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -120,4 +120,4 @@ def test_phase2_dual_write_disabled(monkeypatch):
 		)
 		assert res.status_code == 200, res.text
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
-		assert rev is None
+		assert rev is not None

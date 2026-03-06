@@ -114,32 +114,23 @@ export type ImportGraphPackageResponse = {
 	};
 };
 
-async function _fetchJsonWithFallback<T>(primary: string, fallback: string): Promise<T> {
-	let res = await fetch(primary);
-	if (res.status === 404) {
-		res = await fetch(fallback);
-	}
+async function _fetchJson<T>(url: string): Promise<T> {
+	const res = await fetch(url);
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
-		throw new Error(`${primary} failed: ${res.status} ${text}`);
+		throw new Error(`${url} failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as T;
 }
 
 export async function getGraphFeatureFlags(): Promise<GraphFeatureFlags> {
-	return await _fetchJsonWithFallback<GraphFeatureFlags>(
-		'/graphs/feature-flags',
-		'/api/graphs/feature-flags'
-	);
+	return await _fetchJson<GraphFeatureFlags>('/api/graphs/feature-flags');
 }
 
 export async function getLatestGraphRevision(graphId: string): Promise<LatestGraphRevisionResponse> {
 	const gid = String(graphId ?? '').trim();
 	if (!gid) throw new Error('graphId is required');
-	return await _fetchJsonWithFallback<LatestGraphRevisionResponse>(
-		`/graphs/${encodeURIComponent(gid)}/latest`,
-		`/api/graphs/${encodeURIComponent(gid)}/latest`
-	);
+	return await _fetchJson<LatestGraphRevisionResponse>(`/api/graphs/${encodeURIComponent(gid)}/latest`);
 }
 
 export async function listGraphRevisions(
@@ -150,8 +141,7 @@ export async function listGraphRevisions(
 	const gid = String(graphId ?? '').trim();
 	if (!gid) throw new Error('graphId is required');
 	const query = `limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
-	return await _fetchJsonWithFallback<ListGraphRevisionsResponse>(
-		`/graphs/${encodeURIComponent(gid)}/revisions?${query}`,
+	return await _fetchJson<ListGraphRevisionsResponse>(
 		`/api/graphs/${encodeURIComponent(gid)}/revisions?${query}`
 	);
 }
@@ -164,8 +154,7 @@ export async function getGraphRevision(
 	const rid = String(revisionId ?? '').trim();
 	if (!gid) throw new Error('graphId is required');
 	if (!rid) throw new Error('revisionId is required');
-	return await _fetchJsonWithFallback<LatestGraphRevisionResponse>(
-		`/graphs/${encodeURIComponent(gid)}/revisions/${encodeURIComponent(rid)}`,
+	return await _fetchJson<LatestGraphRevisionResponse>(
 		`/api/graphs/${encodeURIComponent(gid)}/revisions/${encodeURIComponent(rid)}`
 	);
 }
@@ -173,18 +162,11 @@ export async function getGraphRevision(
 export async function createGraphRevision(
 	req: CreateGraphRevisionRequest
 ): Promise<CreateGraphRevisionResponse> {
-	let res = await fetch('/graphs', {
+	const res = await fetch('/api/graphs', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(req)
 	});
-	if (res.status === 404) {
-		res = await fetch('/api/graphs', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(req)
-		});
-	}
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`createGraphRevision failed: ${res.status} ${text}`);
@@ -204,27 +186,17 @@ export async function exportGraphPackage(
 	if (typeof opts?.includeSchemas === 'boolean') params.set('include_schemas', String(opts.includeSchemas));
 	const query = params.toString();
 	const suffix = query ? `?${query}` : '';
-	return await _fetchJsonWithFallback<ExportGraphPackageResponse>(
-		`/graphs/${encodeURIComponent(gid)}/export${suffix}`,
-		`/api/graphs/${encodeURIComponent(gid)}/export${suffix}`
-	);
+	return await _fetchJson<ExportGraphPackageResponse>(`/api/graphs/${encodeURIComponent(gid)}/export${suffix}`);
 }
 
 export async function importGraphPackage(
 	req: ImportGraphPackageRequest
 ): Promise<ImportGraphPackageResponse> {
-	let res = await fetch('/graphs/import', {
+	const res = await fetch('/api/graphs/import', {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(req)
 	});
-	if (res.status === 404) {
-		res = await fetch('/api/graphs/import', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(req)
-		});
-	}
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`importGraphPackage failed: ${res.status} ${text}`);

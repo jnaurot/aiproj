@@ -27,7 +27,7 @@ def _graph_payload(label: str):
 	}
 
 
-def test_graph_read_switch_flag(monkeypatch):
+def test_graph_read_path_always_enabled(monkeypatch):
 	graph_id = "graph_phase3_read_switch"
 
 	# seed revision directly in store
@@ -39,10 +39,6 @@ def test_graph_read_switch_flag(monkeypatch):
 		)
 
 		monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
-		off = client.get(f"/graphs/{graph_id}/latest")
-		assert off.status_code == 503
-
-		monkeypatch.setenv("GRAPH_STORE_V2_READ", "1")
 		on = client.get(f"/graphs/{graph_id}/latest")
 		assert on.status_code == 200, on.text
 		body = on.json()
@@ -54,6 +50,10 @@ def test_graph_feature_flags_runtime_update():
 	with TestClient(app) as client:
 		before = client.get("/graphs/feature-flags")
 		assert before.status_code == 200, before.text
+		before_body = before.json()
+		assert before_body["flags"]["GRAPH_STORE_V2_READ"] is True
+		assert before_body["flags"]["GRAPH_STORE_V2_WRITE"] is True
+		assert before_body["flags"]["GRAPH_EXPORT_V2"] is True
 
 		res = client.put(
 			"/graphs/feature-flags",
@@ -63,24 +63,12 @@ def test_graph_feature_flags_runtime_update():
 				"GRAPH_EXPORT_V2": False,
 			},
 		)
-		assert res.status_code == 200, res.text
-		body = res.json()
-		assert body["flags"]["GRAPH_STORE_V2_READ"] is True
-		assert body["flags"]["GRAPH_STORE_V2_WRITE"] is True
-		assert body["flags"]["GRAPH_EXPORT_V2"] is False
+		assert res.status_code == 410, res.text
 
 
 def test_graph_export_import_package_v2():
 	graph_id = "graph_phase5_pkg"
 	with TestClient(app) as client:
-		client.put(
-			"/graphs/feature-flags",
-			json={
-				"GRAPH_STORE_V2_READ": True,
-				"GRAPH_STORE_V2_WRITE": True,
-				"GRAPH_EXPORT_V2": True,
-			},
-		)
 		created = client.post(
 			"/graphs",
 			json={

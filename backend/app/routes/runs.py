@@ -10,7 +10,6 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
-from ..feature_flags import get_feature_flags
 from ..runner.nodes.transform import load_table_from_artifact_bytes
 from ..runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from ..runner.run import _determinism_env_for_node, _normalized_params_for_exec_key
@@ -44,9 +43,6 @@ def _write_graph_revision_v2(
     V2 graph-revision write-through hook.
     Best effort only; run endpoint behavior must not fail because of revision-store issues.
     """
-    flags = get_feature_flags()
-    if not flags.get("GRAPH_STORE_V2_WRITE", False):
-        return None
     store = getattr(request.app.state, "graph_revisions", None)
     if store is None:
         return None
@@ -224,7 +220,7 @@ async def create_run(req: RunRequest, request: Request):
         request,
         graph_id=graph_id,
         graph=req.graph,
-        message="phase2:create_run",
+        message="create_run",
     )
     await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
     
@@ -268,7 +264,7 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
             request,
             graph_id=graph_id,
             graph=req.graph,
-            message=f"phase2:accept_params:{node_id}",
+            message=f"accept_params:{node_id}",
         )
     try:
         out = await rt.accept_node_params(
