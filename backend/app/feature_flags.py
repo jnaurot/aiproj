@@ -14,8 +14,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 def get_feature_flags() -> Dict[str, bool]:
     return {
-        "GRAPH_STORE_V2_READ": _env_bool("GRAPH_STORE_V2_READ", False),
-        "GRAPH_STORE_V2_WRITE": _env_bool("GRAPH_STORE_V2_WRITE", False),
-        "GRAPH_EXPORT_V2": _env_bool("GRAPH_EXPORT_V2", False),
+        "GRAPH_STORE_V2_READ": _env_bool("GRAPH_STORE_V2_READ", True),
+        "GRAPH_STORE_V2_WRITE": _env_bool("GRAPH_STORE_V2_WRITE", True),
+        "GRAPH_EXPORT_V2": _env_bool("GRAPH_EXPORT_V2", True),
     }
-
