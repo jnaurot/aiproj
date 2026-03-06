@@ -34,7 +34,6 @@
 	$: toolVersion = asString(params?.toolVersion, 'v1');
 	$: sideEffectMode = (params?.side_effect_mode ?? 'pure') as 'pure' | 'idempotent' | 'effectful';
 	$: armed = Boolean(params?.armed ?? false);
-	$: connectionRef = asString(params?.connectionRef, '');
 	$: timeoutMs = asNumberOrEmpty(params?.timeoutMs);
 	$: retry = { ...defaultRetry, ...(params?.retry ?? {}) } as RetryPolicy;
 	$: maxAttempts = asNumberOrEmpty(retry?.max_attempts ?? 1);
@@ -44,8 +43,6 @@
 	$: canFs = Boolean(permissions?.fs ?? false);
 	$: canEnv = Boolean(permissions?.env ?? false);
 	$: canSubprocess = Boolean(permissions?.subprocess ?? false);
-	$: provider = (params?.provider ?? 'mcp') as ToolParams['provider'];
-	$: showTopLevelConnectionRef = provider !== 'db';
 </script>
 
 <Section title="Tool Config">
@@ -101,23 +98,6 @@
 					<option value="effectful">effectful</option>
 				</select>
 			</Field>
-
-			{#if showTopLevelConnectionRef}
-				<Field label="connectionRef">
-					<Input
-						value={connectionRef}
-						placeholder="conn:default"
-						onInput={(event) => {
-							const value = (event.currentTarget as HTMLInputElement).value.trim();
-							onDraft({ connectionRef: value === '' ? undefined : value });
-						}}
-						onBlur={(event) => {
-							const value = (event.currentTarget as HTMLInputElement).value.trim();
-							onCommit({ connectionRef: value === '' ? undefined : value });
-						}}
-					/>
-				</Field>
-			{/if}
 
 			<Field label="timeoutMs">
 				<Input

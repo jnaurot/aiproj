@@ -3,7 +3,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
-	import { asNumberOrEmpty, parseOptionalInt, stringifyJson, tryParseJson } from '$lib/flow/components/editors/shared';
+	import { stringifyJson, tryParseJson } from '$lib/flow/components/editors/shared';
 
 	type ShellParams = Extract<ToolParams, { provider: 'shell' }>;
 
@@ -23,7 +23,6 @@
 
 	$: shell = params?.shell ?? defaultShell;
 	$: cwd = String(shell.cwd ?? '');
-	$: timeoutMs = asNumberOrEmpty(shell.timeout_ms);
 	$: failOnNonZero = Boolean(shell.fail_on_nonzero ?? true);
 	$: envHydrationSignature = JSON.stringify(shell.env ?? {});
 	$: if (envHydrationSignature !== lastEnvHydrationSignature) {
@@ -70,19 +69,6 @@
 				const value = (event.currentTarget as HTMLInputElement).value;
 				onCommit({ shell: { ...shell, cwd: value.trim() === '' ? undefined : value } });
 			}}
-		/>
-	</Field>
-
-	<Field label="timeout_ms">
-		<Input
-			type="number"
-			min="1"
-			step="1"
-			value={timeoutMs}
-			onInput={(event) =>
-				onDraft({ shell: { ...shell, timeout_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) } })}
-			onBlur={(event) =>
-				onCommit({ shell: { ...shell, timeout_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) } })}
 		/>
 	</Field>
 

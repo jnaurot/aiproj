@@ -7,7 +7,6 @@ const ToolCommonSchema = z.object({
   side_effect_mode: z.enum(["pure", "idempotent", "effectful"]).default("pure"),
   cache_enabled: z.boolean().optional().default(true),
   armed: z.boolean().optional().default(false),
-  connectionRef: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
   retry: z
     .object({
@@ -15,6 +14,7 @@ const ToolCommonSchema = z.object({
       backoff_ms: z.number().int().nonnegative().optional().default(0),
       on: z.array(z.enum(["timeout", "429", "5xx"])).optional().default(["timeout", "429", "5xx"])
     })
+    .strip()
     .optional(),
   permissions: z
     .object({
@@ -23,14 +23,15 @@ const ToolCommonSchema = z.object({
       env: z.boolean().optional().default(false),
       subprocess: z.boolean().optional().default(false),
     })
+    .strip()
     .optional(),
 
   input: z.object({
     schema: z.unknown().optional(),
     mapping: z.record(z.string(), z.string()).optional()
-  }).optional(),
-  output: z.object({ schema: z.unknown().optional(), mode: z.enum(["json", "text", "binary"]).optional() }).optional()
-});
+  }).strip().optional(),
+  output: z.object({ schema: z.unknown().optional() }).strip().optional()
+}).strip();
 
 const McpSchema = ToolCommonSchema.extend({
   provider: z.literal("mcp"),
@@ -39,8 +40,8 @@ const McpSchema = ToolCommonSchema.extend({
     toolName: z.string().min(1),
     args: z.record(z.string(), z.unknown()).optional()
 
-  })
-});
+  }).strip()
+}).strip();
 
 const HttpSchema = ToolCommonSchema.extend({
   provider: z.literal("http"),
@@ -50,8 +51,8 @@ const HttpSchema = ToolCommonSchema.extend({
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
     body: z.unknown().optional()
-  })
-});
+  }).strip()
+}).strip();
 
 const FunctionSchema = ToolCommonSchema.extend({
   provider: z.literal("function"),
@@ -61,8 +62,8 @@ const FunctionSchema = ToolCommonSchema.extend({
     args: z.record(z.string(), z.unknown()).optional(),
     capture_output: z.boolean().optional().default(true)
 
-  })
-});
+  }).strip()
+}).strip();
 
 const PythonSchema = ToolCommonSchema.extend({
   provider: z.literal("python"),
@@ -70,8 +71,8 @@ const PythonSchema = ToolCommonSchema.extend({
     code: z.string().min(1),
     args: z.record(z.string(), z.unknown()).optional(),
     capture_output: z.boolean().optional().default(true)
-  })
-});
+  }).strip()
+}).strip();
 
 const JsSchema = ToolCommonSchema.extend({
   provider: z.literal("js"),
@@ -79,8 +80,8 @@ const JsSchema = ToolCommonSchema.extend({
     code: z.string().min(1),
     args: z.record(z.string(), z.unknown()).optional(),
     capture_output: z.boolean().optional().default(true)
-  })
-});
+  }).strip()
+}).strip();
 
 const ShellSchema = ToolCommonSchema.extend({
   provider: z.literal("shell"),
@@ -88,10 +89,9 @@ const ShellSchema = ToolCommonSchema.extend({
     command: z.string().min(1),
     cwd: z.string().optional(),
     env: z.record(z.string(), z.string()).optional(),
-    timeout_ms: z.number().int().positive().optional(),
     fail_on_nonzero: z.boolean().optional().default(true)
-  })
-});
+  }).strip()
+}).strip();
 
 const DbSchema = ToolCommonSchema.extend({
   provider: z.literal("db"),
@@ -101,8 +101,8 @@ const DbSchema = ToolCommonSchema.extend({
     params: z.record(z.string(), z.unknown()).optional(),
     capture_output: z.boolean().optional().default(true)
 
-  })
-});
+  }).strip()
+}).strip();
 
 const BuiltinSchema = ToolCommonSchema.extend({
   provider: z.literal("builtin"),
@@ -110,8 +110,8 @@ const BuiltinSchema = ToolCommonSchema.extend({
     toolId: z.string().min(1),
     args: z.record(z.string(), z.unknown()).optional()
 
-  })
-});
+  }).strip()
+}).strip();
 
 export const ToolParamsSchema = z.discriminatedUnion("provider", [
   McpSchema,

@@ -1179,7 +1179,7 @@ async def exec_tool(
                         metadata=None,
                         execution_time_ms=elapsed_ms,
                         error=_contract_mismatch(
-                            "output.mode=json but response is not valid JSON"
+                            "outPort=json but response is not valid JSON"
                         ),
                     )
                 envelope = {"kind": "json", "payload": _redact_value(payload)}
