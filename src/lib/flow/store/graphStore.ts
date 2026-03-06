@@ -18,6 +18,7 @@ import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
+import { getGraphFeatureFlags, getLatestGraphRevision } from '$lib/flow/client/graphs';
 import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
@@ -2363,6 +2364,50 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const next = buildHardResetState(freshGraphId);
 			persist(next);
 			set(next);
+		},
+
+		async hydrateLatestGraphFromBackend() {
+			if (typeof window === 'undefined') return { ok: false, reason: 'non_browser' as const };
+			try {
+				const flags = await getGraphFeatureFlags();
+				if (!flags?.flags?.GRAPH_STORE_V2_READ) {
+					return { ok: false, reason: 'flag_disabled' as const };
+				}
+				const current = get({ subscribe } as any) as GraphState;
+				const graphId = String(current.graphId ?? '').trim();
+				if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+				const latest = await getLatestGraphRevision(graphId);
+				const graph = (latest?.graph ?? {}) as any;
+				const nextNodes = Array.isArray(graph.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
+				const nextEdges = Array.isArray(graph.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
+				if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' as const };
+				update((s) => {
+					const nextState = withGraphMeta({
+						...s,
+						graphId: String(latest.graphId || s.graphId),
+						nodes: nextNodes,
+						edges: nextEdges,
+						selectedNodeId: null,
+						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
+						logs: [],
+						runStatus: IDLE,
+						lastRunStatus: 'never_run',
+						freshness: 'never_run',
+						staleNodeCount: 0,
+						activeRunMode: 'from_start',
+						activeRunFrom: null,
+						activeRunNodeSet: new Set<string>(),
+						nodeOutputs: {},
+						nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
+						activeRunId: null
+					});
+					persist(nextState);
+					return nextState;
+				}, { source: 'graph_edit' });
+				return { ok: true, graphId: String(latest.graphId), revisionId: String(latest.revisionId) };
+			} catch (error) {
+				return { ok: false, reason: 'read_failed' as const, error: String(error) };
+			}
 		},
 
 		async runRemote(runFrom: string | null, runMode?: ActiveRunMode) {

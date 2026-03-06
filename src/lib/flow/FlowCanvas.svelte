@@ -685,6 +685,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		} catch (error) {
 			console.warn('Failed to load global cache config', error);
 		}
+		try {
+			const hydrated = await graphStore.hydrateLatestGraphFromBackend();
+			if ((hydrated as any)?.ok) {
+				console.log(
+					`[graph-v2-read] hydrated graphId=${(hydrated as any).graphId} revisionId=${(hydrated as any).revisionId}`
+				);
+			}
+		} catch (error) {
+			console.warn('Failed to hydrate graph from backend revision store', error);
+		}
 	});
 </script>
 
