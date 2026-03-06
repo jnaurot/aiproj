@@ -35,6 +35,14 @@ export type NodeMeta = {
   updatedAt?: string;     // ISO
   description?: string;
   tags?: string[];
+  presetRef?: {
+    id: string;
+    name: string;
+    subtype?: string;
+    appliedAt: string;
+    appliedParams: Record<string, unknown>;
+    appliedPorts?: { in?: PortType | null; out?: PortType | null };
+  };
 };
 
 export type BaseNodeData<K extends NodeKind, P> = {

@@ -19,6 +19,8 @@
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
+	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
+	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -132,8 +134,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let subtypeError: string | null = null;
 	let subtypeErrorNodeId: string | null = null;
 	let subtypeErrorTimer: ReturnType<typeof setTimeout> | null = null;
-	let globalCacheEnabled = true;
+	type GlobalCacheMode = 'default_on' | 'force_off' | 'force_on';
+	let globalCacheMode: GlobalCacheMode = 'default_on';
 	let globalCachePending = false;
+	let selectedPresetId = '';
+	let toastMessage: string | null = null;
+	let toastLevel: 'info' | 'warn' | 'error' = 'info';
+	let toastTimer: ReturnType<typeof setTimeout> | null = null;
+	const GlobalCacheModeLabels: Record<GlobalCacheMode, string> = {
+		default_on: 'Default on',
+		force_off: 'Forced off',
+		force_on: 'Forced on'
+	};
+	const PRESET_KINDS: NodeKind[] = ['source', 'transform', 'llm', 'tool'];
+	$: presets = [...$nodePresetStore];
+	$: hasPresets = presets.length > 0;
+	$: presetGroups = Object.fromEntries(
+		PRESET_KINDS.map((k) => [k, presets.filter((p) => p.kind === k)])
+	) as Record<NodeKind, NodePreset[]>;
+	$: selectedPresetRefId =
+		(($selectedNode?.data as any)?.meta?.presetRef?.id as string | undefined | null) ?? null;
+	$: selectedPresetRefExists = Boolean(
+		selectedPresetRefId && presets.some((preset) => preset.id === selectedPresetRefId)
+	);
 
 	$: selectedId = $selectedNode?.id;
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -281,7 +304,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function onnodeclick({ node }: { node: Node<PipelineNodeData> }) {
 		const id = node.id;
 		const now = performance.now();
-
 		const isDbl = lastClickNodeId === id && now - lastClickAt < DBL_MS;
 
 		lastClickAt = now;
@@ -317,6 +339,138 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 		const id = graphStore.addNode(kind, { x: pos.x, y: pos.y });
 		graphStore.selectNode(id);
+		setCenter(pos.x, pos.y, { zoom: vp.zoom, duration: 250 });
+	}
+
+	function saveSelectedNodeAsPreset(): void {
+		const node = $selectedNode;
+		if (!node) return;
+		const linkedPresetRef = (node.data.meta as any)?.presetRef as
+			| { id?: string; name?: string; subtype?: string }
+			| undefined;
+		const linkedPresetId = String(linkedPresetRef?.id ?? '').trim();
+		const linkedPreset = linkedPresetId ? nodePresetStore.getById(linkedPresetId) : null;
+		const suggested =
+			String(linkedPreset?.name ?? linkedPresetRef?.name ?? '').trim() ||
+			String(node.data.label ?? '').trim() ||
+			`${node.data.kind} preset`;
+		const promptText = linkedPreset
+			? `Preset name (overwriting "${linkedPreset.name}" by default):`
+			: 'Preset name';
+		const name = window.prompt(promptText, suggested)?.trim() ?? '';
+		if (!name) return;
+		const shouldOverwriteLinked =
+			Boolean(linkedPreset) &&
+			name.trim().toLowerCase() === String(linkedPreset?.name ?? '').trim().toLowerCase();
+		const result = nodePresetStore.upsertFromNodeData(node.data, name, {
+			overwritePresetId: shouldOverwriteLinked ? linkedPresetId : null
+		});
+		if (!result.ok) {
+			if (result.error === 'identical_preset_exists') {
+				showToast('Preset not saved: identical preset already exists.', 'warn');
+				return;
+			}
+			if (result.error === 'duplicate_name_in_scope') {
+				showToast(
+					'Preset not saved: that name already exists for this node kind/subtype.',
+					'warn'
+				);
+				return;
+			}
+			showToast('Could not save preset. Try again.', 'error');
+			return;
+		}
+		const preset = result.preset;
+		graphStore.setNodeMeta(node.id, {
+			presetRef: {
+				id: preset.id,
+				name: preset.name,
+				subtype: String(preset.subtype),
+				appliedAt: new Date().toISOString(),
+				appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>),
+				appliedPorts: {
+					in: node.data.ports?.in ?? null,
+					out: node.data.ports?.out ?? null
+				}
+			}
+		});
+		if (result.mode === 'updated') {
+			showToast(`Preset "${preset.name}" overwritten.`, 'info');
+		}
+	}
+
+	function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+		toastMessage = message;
+		toastLevel = level;
+		if (toastTimer) clearTimeout(toastTimer);
+		toastTimer = setTimeout(() => {
+			toastMessage = null;
+			toastTimer = null;
+		}, 2600);
+	}
+
+	function syncPresetBaselineFromNode(
+		nodeId: string,
+		fallbackRef?: { id: string; name: string; subtype?: string }
+	): void {
+		const state = get(graphStore as any);
+		const node = (state?.nodes ?? []).find((n: Node<PipelineNodeData>) => n.id === nodeId);
+		if (!node) return;
+		const currentRef = ((node.data as any)?.meta?.presetRef ??
+			fallbackRef ??
+			null) as
+			| { id?: string; name?: string; subtype?: string }
+			| null;
+		if (!currentRef?.id || !currentRef?.name) return;
+		graphStore.setNodeMeta(nodeId, {
+			presetRef: {
+				id: String(currentRef.id),
+				name: String(currentRef.name),
+				subtype: currentRef.subtype ? String(currentRef.subtype) : undefined,
+				appliedAt: new Date().toISOString(),
+				appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>),
+				appliedPorts: {
+					in: node.data.ports?.in ?? null,
+					out: node.data.ports?.out ?? null
+				}
+			}
+		});
+	}
+
+	function applyPresetToNode(nodeId: string, preset: NodePreset): void {
+		if (preset.kind === 'source') {
+			graphStore.setSourceKind(nodeId, preset.subtype as SourceKind);
+		} else if (preset.kind === 'transform') {
+			graphStore.setTransformKind(nodeId, preset.subtype as TransformKind);
+		} else if (preset.kind === 'llm') {
+			graphStore.setLlmKind(nodeId, preset.subtype as LlmKind);
+		} else {
+			graphStore.setToolProvider(nodeId, preset.subtype as ToolProvider);
+		}
+		graphStore.updateNodeConfig(nodeId, {
+			params: structuredClone(preset.params),
+			ports: {
+				in: preset.ports?.in ?? null,
+				out: preset.ports?.out ?? null
+			}
+		});
+		syncPresetBaselineFromNode(nodeId, {
+			id: preset.id,
+			name: preset.name,
+			subtype: String(preset.subtype)
+		});
+	}
+
+	function addNodeFromPresetId(presetId: string): void {
+		const preset = nodePresetStore.getById(presetId);
+		if (!preset) return;
+		const vp = getViewport();
+		const centerScreen = { x: window.innerWidth * 0.35, y: window.innerHeight * 0.55 };
+		const pos = screenToFlowPosition(centerScreen);
+		const nodeId = graphStore.addNode(preset.kind, { x: pos.x, y: pos.y });
+		applyPresetToNode(nodeId, preset);
+		graphStore.selectNode(nodeId);
+		nodePresetStore.markUsed(presetId);
 		setCenter(pos.x, pos.y, { zoom: vp.zoom, duration: 250 });
 	}
 
@@ -480,6 +634,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graphStore.hardResetGraph();
 	}
 
+	function deleteSelectedPresetRef(): void {
+		const node = $selectedNode;
+		const presetRef = (node?.data as any)?.meta?.presetRef as { id?: string; name?: string } | undefined;
+		const presetId = String(presetRef?.id ?? '').trim();
+		if (!node || !presetId) return;
+		const name = String(presetRef?.name ?? presetId);
+		const ok = window.confirm(`Delete preset "${name}"? This does not delete node parameters.`);
+		if (!ok) return;
+		nodePresetStore.delete(presetId);
+		graphStore.setNodeMeta(node.id, { presetRef: undefined });
+	}
+
 	function clampInspectorRatio(v: number): number {
 		return Math.max(0.2, Math.min(0.8, v));
 	}
@@ -508,12 +674,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
+		if (toastTimer) clearTimeout(toastTimer);
 	});
 
 	onMount(async () => {
 		try {
 			const config = await getGlobalCacheConfig();
-			globalCacheEnabled = Boolean(config.enabled);
+			globalCacheMode = (config.mode ??
+				(Boolean(config.enabled) ? 'default_on' : 'force_off')) as GlobalCacheMode;
 		} catch (error) {
 			console.warn('Failed to load global cache config', error);
 		}
@@ -524,6 +692,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 <div class="layout">
 	<div class="flow">
+		{#if toastMessage}
+			<div class={`toast toast-${toastLevel}`} role="status" aria-live="polite">{toastMessage}</div>
+		{/if}
 		<div class="topbar">
 			<div class="btnrow">
 				<button on:click={newGraph}>New Graph</button>
@@ -541,25 +712,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 				<span class="status">Graph: {graphHeaderStatus}</span>
 				<label class="cacheToggle">
-					<input
-						type="checkbox"
-						checked={globalCacheEnabled}
+					<span>Cache</span>
+					<select
+						value={globalCacheMode}
 						disabled={globalCachePending}
 						on:change={async (event) => {
-							const nextEnabled = (event.currentTarget as HTMLInputElement).checked;
+							const nextMode = (event.currentTarget as HTMLSelectElement).value as GlobalCacheMode;
 							globalCachePending = true;
 							try {
-								const result = await setGlobalCacheConfig(nextEnabled);
-								globalCacheEnabled = Boolean(result.enabled);
+								const result = await setGlobalCacheConfig({ mode: nextMode });
+								globalCacheMode = (result.mode ??
+									(Boolean(result.enabled) ? 'default_on' : 'force_off')) as GlobalCacheMode;
 							} catch (error) {
-								(event.currentTarget as HTMLInputElement).checked = globalCacheEnabled;
+								(event.currentTarget as HTMLSelectElement).value = globalCacheMode;
 								console.warn('Failed to update global cache config', error);
 							} finally {
 								globalCachePending = false;
 							}
 						}}
-					/>
-					Cache
+					>
+						<option value="default_on">{GlobalCacheModeLabels.default_on}</option>
+						<option value="force_off">{GlobalCacheModeLabels.force_off}</option>
+						<option value="force_on">{GlobalCacheModeLabels.force_on}</option>
+					</select>
 				</label>
 			</div>
 
@@ -568,6 +743,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				<button on:click={() => addNode('transform')}>+ Transform</button>
 				<button on:click={() => addNode('llm')}>+ LLM</button>
 				<button on:click={() => addNode('tool')}>+ Tool</button>
+				<select
+					class="presetPicker"
+					aria-label="Add node from preset"
+					bind:value={selectedPresetId}
+					on:change={(e) => {
+						const presetId = (e.currentTarget as HTMLSelectElement).value;
+						if (!presetId) return;
+						addNodeFromPresetId(presetId);
+						selectedPresetId = '';
+					}}
+				>
+					<option value="">+ From preset...</option>
+					{#if hasPresets}
+						{#each PRESET_KINDS as presetKind (presetKind)}
+							{#if (presetGroups[presetKind] ?? []).length > 0}
+								<optgroup label={presetKind}>
+									{#each presetGroups[presetKind] as preset (preset.id)}
+										<option value={preset.id}>
+											{preset.name} ({preset.subtype})
+										</option>
+									{/each}
+								</optgroup>
+							{/if}
+						{/each}
+					{/if}
+				</select>
 			</div>
 		</div>
 		<OutputModal bind:open={outputOpen} nodeId={outputNodeId} />
@@ -841,6 +1042,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					{#if inspectorMode === 'edit' && !hideInspectorApplyRow}
 						<!-- Apply row (applies to any draft-only fields in editors) -->
 						<div class="inspectorActions">
+							<button on:click={saveSelectedNodeAsPreset} disabled={!$selectedNode}>
+								Save Preset
+							</button>
+							<button
+								on:click={deleteSelectedPresetRef}
+								disabled={!selectedPresetRefExists}
+								title={selectedPresetRefExists
+									? 'Delete linked preset'
+									: 'No linked preset to delete'}
+							>
+								Delete Preset
+							</button>
 							<button
 								class="primary"
 								disabled={!$graphStore.inspector.dirty}
@@ -922,6 +1135,35 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		min-width: 0;
 		display: flex;
 		flex-direction: column;
+		position: relative;
+	}
+
+	.toast {
+		position: absolute;
+		right: 14px;
+		top: 12px;
+		z-index: 6;
+		padding: 8px 10px;
+		border-radius: 10px;
+		font-size: 12px;
+		border: 1px solid #2a3550;
+		background: #0f1626;
+		color: #e6e6e6;
+		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+	}
+
+	.toast-info {
+		border-color: #2a4b78;
+	}
+
+	.toast-warn {
+		border-color: #7a5b1f;
+		background: #1a150a;
+	}
+
+	.toast-error {
+		border-color: #7a2a2a;
+		background: #1f0f12;
 	}
 
 	.topbar {
@@ -953,10 +1195,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		opacity: 0.9;
 	}
 
-	.cacheToggle input[type='checkbox'] {
-		width: 14px;
-		height: 14px;
-		margin: 0;
+	.cacheToggle select {
+		border: 1px solid #2a3550;
+		background: #0f1626;
+		color: #e6e6e6;
+		padding: 4px 8px;
+		border-radius: 8px;
+		font-size: 12px;
+	}
+
+	.presetPicker {
+		border: 1px solid #2a3550;
+		background: #0f1626;
+		color: #e6e6e6;
+		padding: 6px 10px;
+		border-radius: 8px;
+		font-size: 12px;
+		min-width: 170px;
 	}
 
 	button {

@@ -2321,6 +2321,31 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			});
 		},
 
+		setNodeMeta(nodeId: string, patch: Record<string, unknown>) {
+			update((s) => {
+				const node = s.nodes.find((n) => n.id === nodeId);
+				if (!node) return s;
+				const nodes = s.nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									meta: {
+										...(n.data.meta ?? {}),
+										...patch,
+										updatedAt: new Date().toISOString()
+									}
+								}
+							}
+						: n
+				);
+				const next = { ...s, nodes };
+				persist(next);
+				return next;
+			});
+		},
+
 		//before extensive renovations
 
 		// ----- clear edges of prior run's status (uses edge highlighting) -----
