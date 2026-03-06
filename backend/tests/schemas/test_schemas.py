@@ -20,6 +20,7 @@ from app.runner.schemas import (
     get_schema_for_node,
     SCHEMA_REGISTRY,
     validate_node_params,
+    ComponentParams,
 )
 
 
@@ -840,6 +841,16 @@ class TestGetSchemaForNode:
         schema = get_schema_for_node(node)
         assert schema == TransformParamsCurrent
 
+    def test_component_node_schema(self):
+        node = {
+            "data": {
+                "kind": "component",
+                "params": {}
+            }
+        }
+        schema = get_schema_for_node(node)
+        assert schema == ComponentParams
+
 
 class TestSCHEMA_REGISTRY:
     """Test schema registry"""
@@ -853,9 +864,25 @@ class TestSCHEMA_REGISTRY:
         assert "transform" in SCHEMA_REGISTRY
         assert "tool:mcp" in SCHEMA_REGISTRY
         assert "tool" in SCHEMA_REGISTRY
+        assert "component" in SCHEMA_REGISTRY
     
     def test_schema_types(self):
         """Test correct schema types in registry"""
         assert SCHEMA_REGISTRY["source:file"] == SourceFileParams
         assert SCHEMA_REGISTRY["llm"] == LLMParams
         assert SCHEMA_REGISTRY["tool:mcp"] is not None  # Tool params type
+        assert SCHEMA_REGISTRY["component"] == ComponentParams
+
+
+class TestComponentValidation:
+    def test_component_requires_revision_id(self):
+        node = {
+            "data": {
+                "kind": "component",
+                "params": {
+                    "componentRef": {"componentId": "cmp_inventory", "revisionId": ""}
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("MISSING_REVISION_ID" in err for err in errors)

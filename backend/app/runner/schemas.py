@@ -1,5 +1,6 @@
 #C:\Users\Owner\Desktop\aiproj\backend\app\runner\schemas.py
 # from platform import node
+import json
 from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, model_validator, validator
 from enum import Enum
@@ -685,6 +686,59 @@ class ToolProviderParams(NodeParamSchema):
 ToolParams = Union[MCPToolParams, PythonToolParams, APIToolParams, BuiltinToolParams]
 
 # ============================================================================
+# COMPONENT NODE SCHEMAS
+# ============================================================================
+
+class ComponentTypedField(NodeParamSchema):
+    name: str
+    type: Literal["table", "json", "text", "binary", "embeddings", "unknown"]
+    nativeType: Optional[str] = None
+    nullable: bool = False
+
+
+class ComponentTypedSchema(NodeParamSchema):
+    type: Literal["table", "json", "text", "binary", "embeddings", "unknown"]
+    fields: List[ComponentTypedField] = Field(default_factory=list)
+
+
+class ComponentApiPort(NodeParamSchema):
+    name: str
+    portType: Literal["table", "json", "text", "binary", "embeddings"]
+    required: bool = True
+    typedSchema: ComponentTypedSchema
+
+
+class ComponentApiContract(NodeParamSchema):
+    inputs: List[ComponentApiPort] = Field(default_factory=list)
+    outputs: List[ComponentApiPort] = Field(default_factory=list)
+
+
+class ComponentRefParams(NodeParamSchema):
+    componentId: str
+    revisionId: str
+    apiVersion: str = "v1"
+
+
+class ComponentBindingsParams(NodeParamSchema):
+    inputs: Dict[str, str] = Field(default_factory=dict)
+    config: Dict[str, str] = Field(default_factory=dict)
+
+
+class ComponentParams(NodeParamSchema):
+    componentRef: ComponentRefParams
+    bindings: ComponentBindingsParams = Field(default_factory=ComponentBindingsParams)
+    config: Dict[str, Any] = Field(default_factory=dict)
+    api: Optional[ComponentApiContract] = None
+
+    def validate_required(self) -> List[str]:
+        errors: List[str] = []
+        if not str(getattr(self.componentRef, "componentId", "") or "").strip():
+            errors.append("componentRef.componentId is required")
+        if not str(getattr(self.componentRef, "revisionId", "") or "").strip():
+            errors.append("componentRef.revisionId is required")
+        return errors
+
+# ============================================================================
 # SCHEMA REGISTRY
 # ============================================================================
 
@@ -706,6 +760,7 @@ SCHEMA_REGISTRY: Dict[str, type[NodeParamSchema]] = {
     "tool:api": APIToolParams,
     "tool:builtin": BuiltinToolParams,
     "tool": ToolProviderParams,
+    "component": ComponentParams,
 }
 
 def get_schema_for_node(node: Dict[str, Any]) -> Optional[type[NodeParamSchema]]:
@@ -723,8 +778,18 @@ def get_schema_for_node(node: Dict[str, Any]) -> Optional[type[NodeParamSchema]]
 
     elif kind == "llm":
         return SCHEMA_REGISTRY.get("llm")
+    
+    elif kind == "component":
+        return SCHEMA_REGISTRY.get("component")
 
     return None
+
+
+def _machine_error(code: str, param_path: str, message: str, **extra: Any) -> str:
+    payload = {"errorCode": code, "paramPath": param_path, "message": message}
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, sort_keys=True)
 
 
 def validate_node_params(node: Dict[str, Any]) -> List[str]:
@@ -947,6 +1012,90 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
             norm_tool = normalize_tool_params_frontend(params)
             tool_model = ToolProviderParams.model_validate(norm_tool)
             errors.extend(tool_model.validate_required())
+        elif kind == "component":
+            component_ref = params.get("componentRef")
+            if not isinstance(component_ref, dict):
+                errors.append(
+                    _machine_error(
+                        "MISSING_COMPONENT_REF",
+                        "params.componentRef",
+                        "componentRef is required",
+                    )
+                )
+            else:
+                if not str(component_ref.get("componentId") or "").strip():
+                    errors.append(
+                        _machine_error(
+                            "MISSING_COMPONENT_ID",
+                            "params.componentRef.componentId",
+                            "componentRef.componentId is required",
+                        )
+                    )
+                if not str(component_ref.get("revisionId") or "").strip():
+                    errors.append(
+                        _machine_error(
+                            "MISSING_REVISION_ID",
+                            "params.componentRef.revisionId",
+                            "componentRef.revisionId is required",
+                        )
+                    )
+
+            api = params.get("api")
+            if api is not None:
+                if not isinstance(api, dict):
+                    errors.append(
+                        _machine_error(
+                            "INVALID_COMPONENT_API",
+                            "params.api",
+                            "api must be an object",
+                        )
+                    )
+                else:
+                    for section_name in ("inputs", "outputs"):
+                        section = api.get(section_name)
+                        if section is None:
+                            continue
+                        if not isinstance(section, list):
+                            errors.append(
+                                _machine_error(
+                                    "INVALID_COMPONENT_API_SECTION",
+                                    f"params.api.{section_name}",
+                                    f"{section_name} must be an array",
+                                )
+                            )
+                            continue
+                        for idx, port in enumerate(section):
+                            if not isinstance(port, dict):
+                                errors.append(
+                                    _machine_error(
+                                        "INVALID_COMPONENT_PORT",
+                                        f"params.api.{section_name}[{idx}]",
+                                        "port definition must be an object",
+                                    )
+                                )
+                                continue
+                            typed_schema = port.get("typedSchema")
+                            if not isinstance(typed_schema, dict):
+                                errors.append(
+                                    _machine_error(
+                                        "MISSING_TYPED_SCHEMA",
+                                        f"params.api.{section_name}[{idx}].typedSchema",
+                                        "typedSchema is required",
+                                    )
+                                )
+                                continue
+                            typed = str(typed_schema.get("type") or "").strip()
+                            if typed not in {"table", "json", "text", "binary", "embeddings", "unknown"}:
+                                errors.append(
+                                    _machine_error(
+                                        "INVALID_TYPED_SCHEMA_TYPE",
+                                        f"params.api.{section_name}[{idx}].typedSchema.type",
+                                        "typedSchema.type must be one of: table, json, text, binary, embeddings, unknown",
+                                    )
+                                )
+
+            component_model = ComponentParams.model_validate(params)
+            errors.extend(component_model.validate_required())
 
         # ... other kinds ...
 

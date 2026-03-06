@@ -4,6 +4,7 @@ import type {
 	SourceDatabaseParams,
 	SourceAPIParams
 } from '$lib/flow/schema/source';
+import type { ComponentParams } from '$lib/flow/schema/component';
 export type SourceKind = 'file' | 'database' | 'api';
 export type SourceParamsByKind = {
 	file: SourceFileParams;
@@ -66,3 +67,9 @@ export type TransformParamsByKind = {
 };
 
 export type ToolProvider = 'mcp' | 'http' | 'function' | 'python' | 'js' | 'shell' | 'db' | 'builtin';
+
+export type ComponentKind = 'graph_component';
+
+export type ComponentParamsByKind = {
+	graph_component: ComponentParams;
+};

@@ -2,6 +2,7 @@
 // import type { Node, Edge, XYPosition } from "@xyflow/svelte";
 import type { Node, Edge } from "@xyflow/svelte";
 import type { PipelineNodeData, PipelineEdgeData } from "$lib/flow/types";
+import type { PortType } from "$lib/flow/types/base";
 
 export type ViewportDTO = {
   x: number;
@@ -19,4 +20,36 @@ export type PipelineGraphDTO = {
     updatedAt?: string;
     name?: string;
   };
+};
+
+export type ComponentTypedPrimitive =
+	| "table"
+	| "json"
+	| "text"
+	| "binary"
+	| "embeddings"
+	| "unknown";
+
+export type ComponentTypedFieldDTO = {
+	name: string;
+	type: ComponentTypedPrimitive;
+	nativeType?: string;
+	nullable?: boolean;
+};
+
+export type ComponentTypedSchemaDTO = {
+	type: ComponentTypedPrimitive;
+	fields?: ComponentTypedFieldDTO[];
+};
+
+export type ComponentApiPortDTO = {
+	name: string;
+	portType: PortType;
+	required?: boolean;
+	typedSchema: ComponentTypedSchemaDTO;
+};
+
+export type ComponentApiContractDTO = {
+	inputs: ComponentApiPortDTO[];
+	outputs: ComponentApiPortDTO[];
 };

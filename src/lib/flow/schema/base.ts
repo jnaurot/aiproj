@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PORT_TYPES } from "../types";
 
-export const NodeTypesSchema = z.enum(["source", "transform", "llm", "tool"]);
+export const NodeTypesSchema = z.enum(["source", "transform", "llm", "tool", "component"]);
 
 export const NodeStatusSchema = z.enum([
   "idle",

@@ -6,6 +6,7 @@ import { defaultSourceNodeData } from "$lib/flow/schema/sourceDefaults";
 import { defaultTransformNodeData } from "$lib/flow/schema/transformDefaults";
 import { defaultLlmNodeData } from "$lib/flow/schema/llmDefaults";
 import { defaultToolNodeData } from "$lib/flow/schema/toolDefaults";
+import { defaultComponentNodeData } from "$lib/flow/schema/componentDefaults";
 
 export function defaultNodeData(kind: NodeKind): PipelineNodeData {
   switch (kind) {
@@ -20,6 +21,9 @@ export function defaultNodeData(kind: NodeKind): PipelineNodeData {
 
     case "tool":
       return structuredClone(defaultToolNodeData) as any;
+
+    case "component":
+      return structuredClone(defaultComponentNodeData) as any;
 
     default: {
       const _exhaustive: never = kind;

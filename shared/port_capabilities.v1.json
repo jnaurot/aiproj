@@ -51,6 +51,10 @@
           "out": ["text", "json"]
         }
       }
+    },
+    "component": {
+      "in": ["table", "json", "text", "binary", "embeddings"],
+      "out": ["table", "json", "text", "binary", "embeddings"]
     }
   }
 }

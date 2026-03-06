@@ -36,6 +36,7 @@ class GraphValidator:
         
         # 3. Schema validation
         errors.extend(self._validate_node_params_schema(graph))
+        errors.extend(self._validate_component_nodes(graph))
         
         # 4. Resource validation
         warnings.extend(self._check_resource_availability(graph))
@@ -76,6 +77,36 @@ class GraphValidator:
                     node_id=node_id
                 ))
         
+        return errors
+
+    def _validate_component_nodes(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        errors: List[ValidationError] = []
+        nodes = graph.get("nodes", [])
+        for node in nodes:
+            node_id = str(node.get("id") or "")
+            data = node.get("data", {}) or {}
+            if data.get("kind") != "component":
+                continue
+            params = data.get("params", {}) or {}
+            component_ref = params.get("componentRef")
+            if not isinstance(component_ref, dict):
+                errors.append(
+                    ValidationError(
+                        code="MISSING_COMPONENT_REF",
+                        message="Component node requires params.componentRef",
+                        node_id=node_id,
+                    )
+                )
+                continue
+            revision_id = str(component_ref.get("revisionId") or "").strip()
+            if not revision_id:
+                errors.append(
+                    ValidationError(
+                        code="MISSING_REVISION_ID",
+                        message="Component node requires params.componentRef.revisionId",
+                        node_id=node_id,
+                    )
+                )
         return errors
     
     def _check_cycles(self, graph: Dict[str, Any]) -> List[ValidationError]:

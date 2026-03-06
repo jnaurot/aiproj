@@ -12,6 +12,10 @@ _DEFAULT_CAPABILITIES: Dict[str, Any] = {
         "llm": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "transform": {"in": ["table"], "out": ["table"]},
         "source": {"in": [], "out": ["table", "json", "text", "binary"]},
+        "component": {
+            "in": ["table", "json", "text", "binary", "embeddings"],
+            "out": ["table", "json", "text", "binary", "embeddings"],
+        },
         "tool": {
             "in": ["table", "json", "text", "binary", "embeddings"],
             "out": ["text", "json", "binary"],

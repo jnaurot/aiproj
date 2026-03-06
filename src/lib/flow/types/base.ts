@@ -13,7 +13,7 @@ export type UpdateNodeConfig = {
   };
 };
 
-export type NodeKind = "source" | "transform" | "llm" | "tool";
+export type NodeKind = "source" | "transform" | "llm" | "tool" | "component";
 
 export type NodeStatus =
   | "idle"

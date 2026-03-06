@@ -9,6 +9,8 @@ import { defaultTransformParamsByKind } from "$lib/flow/schema/transformDefaults
 import { TransformParamsSchema } from "$lib/flow/schema/transform"
 import { ToolParamsSchema } from "$lib/flow/schema/tool";
 import { defaultToolParamsByProvider } from "$lib/flow/schema/toolDefaults";
+import { ComponentParamsSchema } from "$lib/flow/schema/component";
+import { defaultComponentParams } from "$lib/flow/schema/componentDefaults";
 
 // pick schema + defaults by kind
 type Pick = {
@@ -54,6 +56,9 @@ export function pickValidation(
       const defaults = defaultToolParamsByProvider[provider] ?? defaultToolParamsByProvider.mcp;
       return { schema: ToolParamsSchema, defaults };
     }
+
+    case "component":
+      return { schema: ComponentParamsSchema, defaults: defaultComponentParams };
 
     default:
       return { schema: ToolParamsSchema, defaults: defaultToolParamsByProvider.mcp };
