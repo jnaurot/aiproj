@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -26,8 +27,22 @@ class GraphRevisionWriteRequest(BaseModel):
         return v
 
 
+class GraphFeatureFlagsUpdateRequest(BaseModel):
+    GRAPH_STORE_V2_READ: Optional[bool] = None
+    GRAPH_STORE_V2_WRITE: Optional[bool] = None
+    GRAPH_EXPORT_V2: Optional[bool] = None
+
+
 @router.get("/feature-flags")
 async def graph_feature_flags():
+    return {"schemaVersion": 1, "flags": get_feature_flags()}
+
+
+@router.put("/feature-flags")
+async def set_graph_feature_flags(req: GraphFeatureFlagsUpdateRequest):
+    updates = req.model_dump(exclude_none=True)
+    for key, value in updates.items():
+        os.environ[key] = "1" if bool(value) else "0"
     return {"schemaVersion": 1, "flags": get_feature_flags()}
 
 
@@ -138,4 +153,3 @@ async def get_graph_revision(graph_id: str, revision_id: str, request: Request):
         "checksum": row.checksum,
         "graph": row.graph,
     }
-

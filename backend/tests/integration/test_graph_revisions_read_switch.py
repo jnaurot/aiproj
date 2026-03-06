@@ -49,3 +49,22 @@ def test_graph_read_switch_flag(monkeypatch):
 		assert body["graphId"] == graph_id
 		assert body["graph"]["nodes"][0]["data"]["label"] == "seeded"
 
+
+def test_graph_feature_flags_runtime_update():
+	with TestClient(app) as client:
+		before = client.get("/graphs/feature-flags")
+		assert before.status_code == 200, before.text
+
+		res = client.put(
+			"/graphs/feature-flags",
+			json={
+				"GRAPH_STORE_V2_READ": True,
+				"GRAPH_STORE_V2_WRITE": True,
+				"GRAPH_EXPORT_V2": False,
+			},
+		)
+		assert res.status_code == 200, res.text
+		body = res.json()
+		assert body["flags"]["GRAPH_STORE_V2_READ"] is True
+		assert body["flags"]["GRAPH_STORE_V2_WRITE"] is True
+		assert body["flags"]["GRAPH_EXPORT_V2"] is False
