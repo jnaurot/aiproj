@@ -15,6 +15,14 @@
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
+	import ToolbarMenu from './components/ToolbarMenu.svelte';
+	import {
+		buildAddMenuItems,
+		buildProjectMenuItems,
+		buildRunSelectedMenuItems,
+		dispatchAddMenuAction,
+		dispatchProjectMenuAction
+	} from './components/flowToolbarModel';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
@@ -26,6 +34,7 @@
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
+	import type { ToolbarMenuItem } from './components/toolbarMenu';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -142,7 +151,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	type GlobalCacheMode = 'default_on' | 'force_off' | 'force_on';
 	let globalCacheMode: GlobalCacheMode = 'default_on';
 	let globalCachePending = false;
-	let selectedPresetId = '';
+	let commandPaletteOpen = false;
+	let commandFilter = '';
+	let commandFilterInput: HTMLInputElement | null = null;
 	let toastMessage: string | null = null;
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -153,12 +164,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		force_off: 'Forced off',
 		force_on: 'Forced on'
 	};
-	const PRESET_KINDS: NodeKind[] = ['source', 'transform', 'llm', 'tool'];
+	type CommandItem = {
+		id: string;
+		label: string;
+		disabled?: boolean;
+		run: () => void;
+	};
 	$: presets = [...$nodePresetStore];
 	$: hasPresets = presets.length > 0;
-	$: presetGroups = Object.fromEntries(
-		PRESET_KINDS.map((k) => [k, presets.filter((p) => p.kind === k)])
-	) as Record<NodeKind, NodePreset[]>;
 	$: selectedPresetRefId =
 		(($selectedNode?.data as any)?.meta?.presetRef?.id as string | undefined | null) ?? null;
 	$: selectedPresetRefExists = Boolean(
@@ -227,6 +240,27 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: hasUnsavedGraphChanges =
 		typeof lastSavedGraphSnapshotKey === 'string' &&
 		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
+	$: projectMenuItems = buildProjectMenuItems() satisfies ToolbarMenuItem[];
+	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
+	$: runSelectedMenuItems = buildRunSelectedMenuItems(Boolean($selectedNode)) satisfies ToolbarMenuItem[];
+	$: commandItems = [
+		{ id: 'cmd_new_graph', label: 'New Graph', run: () => void newGraph() },
+		{ id: 'cmd_save', label: 'Save', run: () => void saveGraphRevision() },
+		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
+		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
+		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
+		{ id: 'cmd_add_transform', label: 'Add Transform', run: () => void addNode('transform') },
+		{ id: 'cmd_add_llm', label: 'Add LLM', run: () => void addNode('llm') },
+		{ id: 'cmd_add_tool', label: 'Add Tool', run: () => void addNode('tool') },
+		{ id: 'cmd_add_component', label: 'Add Component', run: () => void addNode('component') },
+		{ id: 'cmd_import', label: 'Import', run: () => void triggerImportGraphPackageV2() },
+		{ id: 'cmd_export', label: 'Export', run: () => void exportGraphPackageV2() }
+	] satisfies CommandItem[];
+	$: filteredCommandItems = commandItems.filter((item) => {
+		const f = commandFilter.trim().toLowerCase();
+		if (!f) return true;
+		return item.label.toLowerCase().includes(f);
+	});
 
 	// auto-fallback if you select a node without output
 	$: if (inspectorMode === 'output' && !hasOutput) inspectorMode = 'edit';
@@ -607,6 +641,92 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graphStore.resetRunUi();
 	}
 
+	function runFromStart() {
+		void graphStore.runRemote(null, 'from_start');
+	}
+
+	function runFromSelected() {
+		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward');
+	}
+
+	function onProjectMenuSelect(actionId: string) {
+		dispatchProjectMenuAction(actionId, {
+			newGraph,
+			save: () => void saveGraphRevision(),
+			saveAs: () => void saveAsGraphRevision(),
+			importGraph: triggerImportGraphPackageV2,
+			exportGraph: () => void exportGraphPackageV2(),
+			history: () => void restoreGraphRevision(),
+			reset: resetRunUi
+		});
+	}
+
+	function onAddMenuSelect(actionId: string) {
+		dispatchAddMenuAction(actionId, {
+			addSource: () => addNode('source'),
+			addTransform: () => addNode('transform'),
+			addLlm: () => addNode('llm'),
+			addTool: () => addNode('tool'),
+			addComponent: () => addNode('component'),
+			addFromPreset: openAddFromPresetPicker
+		});
+	}
+
+	function onRunSelectedMenuSelect(actionId: string) {
+		if (actionId === 'run_from_selected') {
+			runFromSelected();
+		}
+	}
+
+	function openAddFromPresetPicker() {
+		if (!hasPresets) {
+			showToast('No presets available.', 'warn');
+			return;
+		}
+		const lines = presets.map((preset, i) => `${i + 1}. ${preset.kind} / ${preset.name} (${preset.subtype})`).join('\n');
+		const raw = window.prompt(`Add from preset:\n${lines}\n\nEnter number (1-${presets.length})`, '1');
+		if (!raw) return;
+		const pick = Number(raw);
+		if (!Number.isInteger(pick) || pick < 1 || pick > presets.length) {
+			showToast('Invalid preset selection.', 'warn');
+			return;
+		}
+		const pickedPreset = presets[pick - 1];
+		addNodeFromPresetId(pickedPreset.id);
+	}
+
+	function toggleCommandPalette() {
+		commandPaletteOpen = !commandPaletteOpen;
+		if (commandPaletteOpen) {
+			commandFilter = '';
+			queueMicrotask(() => commandFilterInput?.focus());
+		}
+	}
+
+	function closeCommandPalette() {
+		commandPaletteOpen = false;
+		commandFilter = '';
+	}
+
+	function runCommand(command: CommandItem) {
+		if (command.disabled) return;
+		command.run();
+		closeCommandPalette();
+	}
+
+	function onWindowKeyDown(event: KeyboardEvent) {
+		const isCtrlK = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k';
+		if (isCtrlK) {
+			event.preventDefault();
+			toggleCommandPalette();
+			return;
+		}
+		if (commandPaletteOpen && event.key === 'Escape') {
+			event.preventDefault();
+			closeCommandPalette();
+		}
+	}
+
 	function clearSubtypeError(): void {
 		subtypeError = null;
 		subtypeErrorNodeId = null;
@@ -863,37 +983,46 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	});
 </script>
 
-<svelte:window on:pointermove={onInspectorSplitMove} on:pointerup={onInspectorSplitUp} />
+<svelte:window
+	on:pointermove={onInspectorSplitMove}
+	on:pointerup={onInspectorSplitUp}
+	on:keydown={onWindowKeyDown}
+/>
 
 <div class="layout">
 	<div class="flow">
 		{#if toastMessage}
 			<div class={`toast toast-${toastLevel}`} role="status" aria-live="polite">{toastMessage}</div>
 		{/if}
-		<div class="topbar">
-			<div class="btnrow">
-				<button on:click={newGraph}>New Graph</button>
-				<button on:click={saveGraphRevision}>Save</button>
-				<button on:click={saveAsGraphRevision}>Save As</button>
-				<button on:click={restoreGraphRevision}>History</button>
-				<button on:click={exportGraphPackageV2}>Export</button>
-				<button on:click={triggerImportGraphPackageV2}>Import</button>
-				<button on:click={resetRunUi}>Reset</button>
-				<button class="primary" on:click={() => graphStore.runRemote(null, 'from_start')}>
-					Run from start
-				</button>
-				<button
-					class="primary"
-					disabled={!$selectedNode}
-					on:click={() => graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward')}
-				>
-					Run from selected
-				</button>
+		<div class="topbar" role="toolbar" aria-label="Graph toolbar">
+			<div class="toolbarZone projectActions">
+				<ToolbarMenu
+					label="Project"
+					items={projectMenuItems}
+					onSelect={onProjectMenuSelect}
+					menuAriaLabel="Project actions"
+				/>
+			</div>
 
-				<span class="status">Graph: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span>
+			<div class="toolbarZone runActions">
+				<button class="primary runBtn" on:click={runFromStart}>▶ Run</button>
+				<ToolbarMenu
+					label="Run from selected"
+					items={runSelectedMenuItems}
+					onSelect={onRunSelectedMenuSelect}
+					menuAriaLabel="Run options"
+					buttonClass="runSecondary"
+				/>
+			</div>
+
+			<div class="toolbarZone statusIndicators">
+				<span class="status graphStatus"
+					>Graph: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span
+				>
 				<label class="cacheToggle">
-					<span>Cache</span>
+					<span>Cache:</span>
 					<select
+						aria-label="Cache mode"
 						value={globalCacheMode}
 						disabled={globalCachePending}
 						on:change={async (event) => {
@@ -918,40 +1047,53 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				</label>
 			</div>
 
-			<div class="btnrow">
-				<button on:click={() => addNode('source')}>+ Source</button>
-				<button on:click={() => addNode('transform')}>+ Transform</button>
-				<button on:click={() => addNode('llm')}>+ LLM</button>
-				<button on:click={() => addNode('tool')}>+ Tool</button>
-				<button on:click={() => addNode('component')}>+ Component</button>
-				<select
-					class="presetPicker"
-					aria-label="Add node from preset"
-					bind:value={selectedPresetId}
-					on:change={(e) => {
-						const presetId = (e.currentTarget as HTMLSelectElement).value;
-						if (!presetId) return;
-						addNodeFromPresetId(presetId);
-						selectedPresetId = '';
-					}}
-				>
-					<option value="">+ From preset...</option>
-					{#if hasPresets}
-						{#each PRESET_KINDS as presetKind (presetKind)}
-							{#if (presetGroups[presetKind] ?? []).length > 0}
-								<optgroup label={presetKind}>
-									{#each presetGroups[presetKind] as preset (preset.id)}
-										<option value={preset.id}>
-											{preset.name} ({preset.subtype})
-										</option>
-									{/each}
-								</optgroup>
-							{/if}
-						{/each}
-					{/if}
-				</select>
+			<div class="toolbarZone addActions">
+				<button class="commandEntry" on:click={toggleCommandPalette} aria-label="Open command palette">
+					Ctrl+K
+				</button>
+				<ToolbarMenu
+					label="+ Add"
+					items={addMenuItems}
+					onSelect={onAddMenuSelect}
+					align="right"
+					menuAriaLabel="Add node actions"
+				/>
 			</div>
 		</div>
+		{#if commandPaletteOpen}
+			<div class="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette">
+				<div class="commandPaletteCard">
+					<div class="commandPaletteHead">
+						<b>Command Palette</b>
+						<button class="commandClose" on:click={closeCommandPalette} aria-label="Close command palette">
+							✕
+						</button>
+					</div>
+					<input
+						bind:this={commandFilterInput}
+						class="commandFilter"
+						placeholder="Type a command..."
+						bind:value={commandFilter}
+					/>
+					<div class="commandList">
+						{#if filteredCommandItems.length === 0}
+							<div class="commandEmpty">No commands</div>
+						{:else}
+							{#each filteredCommandItems as cmd (cmd.id)}
+								<button
+									type="button"
+									class="commandItem"
+									disabled={cmd.disabled}
+									on:click={() => runCommand(cmd)}
+								>
+									{cmd.label}
+								</button>
+							{/each}
+						{/if}
+					</div>
+				</div>
+			</div>
+		{/if}
 		<input
 			bind:this={importFileInput}
 			type="file"
@@ -1366,22 +1508,46 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.topbar {
 		padding: 10px;
 		display: flex;
-		justify-content: space-between;
 		align-items: center;
+		gap: 12px;
 		border-bottom: 1px solid #1f2430;
 		background: #0b0c10;
 		color: #e6e6e6;
+		flex-wrap: nowrap;
+		overflow-x: auto;
 	}
 
-	.btnrow {
+	.toolbarZone {
 		display: flex;
 		gap: 8px;
 		align-items: center;
+		flex: 0 0 auto;
+	}
+
+	.projectActions {
+		padding-right: 10px;
+		border-right: 1px solid #222c3f;
+	}
+
+	.runActions {
+		padding-right: 10px;
+		border-right: 1px solid #222c3f;
+	}
+
+	.statusIndicators {
+		min-width: 0;
+		flex: 1 1 auto;
+		justify-content: flex-start;
+	}
+
+	.addActions {
+		margin-left: auto;
 	}
 
 	.status {
-		opacity: 0.85;
+		opacity: 0.68;
 		font-size: 13px;
+		white-space: nowrap;
 	}
 
 	.cacheToggle {
@@ -1389,7 +1555,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		align-items: center;
 		gap: 6px;
 		font-size: 13px;
-		opacity: 0.9;
+		opacity: 0.75;
+		white-space: nowrap;
 	}
 
 	.cacheToggle select {
@@ -1399,16 +1566,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		padding: 4px 8px;
 		border-radius: 8px;
 		font-size: 12px;
-	}
-
-	.presetPicker {
-		border: 1px solid #2a3550;
-		background: #0f1626;
-		color: #e6e6e6;
-		padding: 6px 10px;
-		border-radius: 8px;
-		font-size: 12px;
-		min-width: 170px;
 	}
 
 	button {
@@ -1422,6 +1579,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 	button.primary {
 		border-color: #4b8cff;
+		background: #14305f;
+	}
+
+	.runBtn {
+		min-width: 110px;
+	}
+
+	.commandEntry {
+		padding: 6px 8px;
+		font-size: 12px;
+		opacity: 0.8;
 	}
 	button:disabled {
 		opacity: 0.5;
@@ -1429,6 +1597,84 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 	button:hover:not(:disabled) {
 		filter: brightness(1.1);
+	}
+
+	.commandPaletteBackdrop {
+		position: absolute;
+		inset: 0;
+		background: rgba(2, 5, 10, 0.58);
+		z-index: 8;
+		display: grid;
+		place-items: start center;
+		padding-top: 64px;
+	}
+
+	.commandPaletteCard {
+		width: min(600px, calc(100% - 20px));
+		border-radius: 12px;
+		border: 1px solid #2a3550;
+		background: #0f1626;
+		box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+		padding: 10px;
+		display: grid;
+		gap: 8px;
+	}
+
+	.commandPaletteHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 13px;
+	}
+
+	.commandClose {
+		font-size: 12px;
+		padding: 4px 7px;
+	}
+
+	.commandFilter {
+		border: 1px solid #2a3550;
+		background: #0c1220;
+		color: #e6e6e6;
+		padding: 8px 10px;
+		border-radius: 8px;
+		font-size: 13px;
+	}
+
+	.commandList {
+		display: grid;
+		gap: 6px;
+		max-height: 300px;
+		overflow: auto;
+	}
+
+	.commandItem {
+		text-align: left;
+		padding: 8px 10px;
+	}
+
+	.commandEmpty {
+		padding: 10px;
+		opacity: 0.7;
+		font-size: 13px;
+	}
+
+	@media (max-width: 1260px) {
+		.graphStatus {
+			display: none;
+		}
+	}
+
+	@media (max-width: 1080px) {
+		.runActions :global(.menuRoot) {
+			display: none;
+		}
+	}
+
+	@media (max-width: 920px) {
+		.cacheToggle {
+			display: none;
+		}
 	}
 
 	.inspector {
