@@ -16,6 +16,7 @@ from app.runner.nodes.transform import (
 
 
 from .compile import compile_plan
+from .components import ComponentExpansionError, expand_graph_components
 from .events import RunEventBus
 from .validator import GraphValidator
 from .metadata import GraphContext, NodeOutput
@@ -623,6 +624,7 @@ def _artifact_metadata_v1(
     created_at_iso: str,
     run_id: Optional[str],
     graph_id: Optional[str],
+    component_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     out = {
         "metadataVersion": 1,
@@ -642,6 +644,13 @@ def _artifact_metadata_v1(
     }
     if isinstance(schema, dict):
         out["schema"] = schema
+    if isinstance(component_context, dict) and component_context:
+        out["component"] = {
+            "componentId": str(component_context.get("componentId") or ""),
+            "componentRevisionId": str(component_context.get("componentRevisionId") or ""),
+            "instanceNodeId": str(component_context.get("instanceNodeId") or ""),
+            "internalNodeId": str(component_context.get("internalNodeId") or ""),
+        }
     return out
 
 
@@ -1235,22 +1244,164 @@ async def run_graph(
             "nodeId": warning.node_id
         })
 
+    # ===== PHASE 1.5: COMPONENT EXPANSION =====
+    component_expansion = None
+    execution_graph = graph
+    component_store = getattr(runtime_ref, "component_revisions", None) if runtime_ref is not None else None
+    try:
+        component_expansion = expand_graph_components(
+            graph,
+            component_store=component_store,
+            max_depth=5,
+        )
+        execution_graph = component_expansion.graph
+    except ComponentExpansionError as ex:
+        await context.bus.emit({
+            "type": "log",
+            "runId": run_id,
+            "at": iso_now(),
+            "level": "error",
+            "message": f"[{ex.code}] {str(ex)}",
+            "code": ex.code,
+            "details": ex.details,
+        })
+        await context.bus.emit({
+            "type": "run_finished",
+            "runId": run_id,
+            "at": iso_now(),
+            "status": "failed",
+            "error": str(ex),
+            "errorCode": ex.code,
+            "errorDetails": ex.details,
+        })
+        return
+
     # ===== PHASE 2: EXECUTION =====
     try:
-        plan = compile_plan(graph, run_from, run_mode=run_mode)
+        plan = compile_plan(execution_graph, run_from, run_mode=run_mode)
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
+        planned_node_ids = sorted(list(plan.subgraph))
+        if component_expansion:
+            parent_ids = {
+                component_expansion.internal_to_parent.get(nid)
+                for nid in planned_node_ids
+                if nid in component_expansion.internal_to_parent
+            }
+            planned_node_ids = sorted({*planned_node_ids, *{p for p in parent_ids if p}})
         await context.bus.emit({
             "type": "run_started",
             "runId": run_id,
             "at": iso_now(),
             "runFrom": run_from,
             "runMode": effective_run_mode,
-            "plannedNodeIds": sorted(list(plan.subgraph)),
+            "plannedNodeIds": planned_node_ids,
         })
-        nodes = node_map(graph)
-        edges = edge_map(graph)
+        nodes = node_map(execution_graph)
+        edges = edge_map(execution_graph)
         get_current_artifact = context.bindings.get_current_artifact
+        component_runtime_state: Dict[str, Dict[str, Any]] = {}
+        component_parent_for_internal: Dict[str, str] = {}
+        component_meta_by_parent: Dict[str, Dict[str, Any]] = {}
+
+        if component_expansion:
+            component_parent_for_internal = dict(component_expansion.internal_to_parent)
+            component_meta_by_parent = dict(component_expansion.parent_component_meta)
+            for parent_node_id, internal_nodes in component_expansion.parent_to_internal.items():
+                planned_internal = [nid for nid in internal_nodes if nid in plan.subgraph]
+                if not planned_internal:
+                    continue
+                component_runtime_state[parent_node_id] = {
+                    "remaining": len(planned_internal),
+                    "started": False,
+                    "failed": False,
+                    "started_at": None,
+                }
+
+        async def _component_mark_node_start(node_id: str) -> None:
+            parent_node_id = component_parent_for_internal.get(node_id)
+            if not parent_node_id:
+                return
+            state = component_runtime_state.get(parent_node_id)
+            if not state or state.get("started"):
+                return
+            state["started"] = True
+            state["started_at"] = asyncio.get_running_loop().time()
+            meta = component_meta_by_parent.get(parent_node_id, {})
+            await context.bus.emit({
+                "type": "component_started",
+                "runId": run_id,
+                "at": iso_now(),
+                "nodeId": parent_node_id,
+                "componentId": str(meta.get("componentId") or ""),
+                "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+            })
+            await context.bus.emit({
+                "type": "node_started",
+                "runId": run_id,
+                "at": iso_now(),
+                "nodeId": parent_node_id,
+            })
+
+        async def _component_mark_node_finish(node_id: str, *, ok: bool, error: Optional[str] = None) -> None:
+            parent_node_id = component_parent_for_internal.get(node_id)
+            if not parent_node_id:
+                return
+            state = component_runtime_state.get(parent_node_id)
+            if not state:
+                return
+            remaining = int(state.get("remaining") or 0)
+            state["remaining"] = max(0, remaining - 1)
+            if not ok and not state.get("failed"):
+                state["failed"] = True
+                meta = component_meta_by_parent.get(parent_node_id, {})
+                elapsed_ms = max(
+                    0.0,
+                    (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
+                )
+                await context.bus.emit({
+                    "type": "component_failed",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": parent_node_id,
+                    "componentId": str(meta.get("componentId") or ""),
+                    "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+                    "error": str(error or "Component internal node failed"),
+                })
+                await context.bus.emit({
+                    "type": "node_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": parent_node_id,
+                    "status": "failed",
+                    "error": str(error or "Component internal node failed"),
+                    "execution_time_ms": elapsed_ms,
+                })
+                return
+
+            if state["remaining"] == 0 and not state.get("failed"):
+                meta = component_meta_by_parent.get(parent_node_id, {})
+                elapsed_ms = max(
+                    0.0,
+                    (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
+                )
+                await context.bus.emit({
+                    "type": "component_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": parent_node_id,
+                    "componentId": str(meta.get("componentId") or ""),
+                    "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+                    "status": "succeeded",
+                })
+                await context.bus.emit({
+                    "type": "node_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": parent_node_id,
+                    "status": "succeeded",
+                    "execution_time_ms": elapsed_ms,
+                })
 
         def _binding_snapshot(node_id: str) -> tuple[Optional[str], Optional[str]]:
             b = context.bindings.get(node_id)
@@ -1279,6 +1430,22 @@ async def run_graph(
             ports = (n.get("data", {}).get("ports", {}) or {})
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
+            component_ctx = (
+                (n.get("data", {}) or {}).get("_componentContext")
+                if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
+                else None
+            )
+            if isinstance(component_ctx, dict):
+                determinism_env = {
+                    **dict(determinism_env or {}),
+                    "component_instance": {
+                        "component_id": str(component_ctx.get("componentId") or ""),
+                        "component_revision_id": str(component_ctx.get("componentRevisionId") or ""),
+                        "instance_node_id": str(component_ctx.get("instanceNodeId") or ""),
+                        "component_config": component_ctx.get("componentConfig") if isinstance(component_ctx.get("componentConfig"), dict) else {},
+                        "component_bindings": component_ctx.get("componentBindings") if isinstance(component_ctx.get("componentBindings"), dict) else {},
+                    },
+                }
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
             source_kind = str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "")
             global_cache_mode = _global_cache_mode(runtime_ref)
@@ -2462,6 +2629,11 @@ async def run_graph(
                             created_at_iso=created_at_dt.isoformat(),
                             run_id=run_id,
                             graph_id=context.graph_id,
+                            component_context=(
+                                (n.get("data", {}) or {}).get("_componentContext")
+                                if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
+                                else None
+                            ),
                         )
                         artifact = Artifact(
                             artifact_id=artifact_id,
@@ -2945,6 +3117,11 @@ async def run_graph(
                         created_at_iso=created_at_dt.isoformat(),
                         run_id=run_id,
                         graph_id=context.graph_id,
+                        component_context=(
+                            (n.get("data", {}) or {}).get("_componentContext")
+                            if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
+                            else None
+                        ),
                     )
 
                     artifact = Artifact(
@@ -3136,13 +3313,20 @@ async def run_graph(
             kind = n.get("data", {}).get("kind")
             kind_sem = kind_sems.get(kind)
             t0 = asyncio.get_running_loop().time()
+            await _component_mark_node_start(node_id)
             async with global_sem:
                 inflight_current += 1
                 if inflight_current > peak_concurrency:
                     peak_concurrency = inflight_current
                 if kind_sem is None:
                     try:
-                        return await _execute_node(node_id)
+                        result = await _execute_node(node_id)
+                        await _component_mark_node_finish(
+                            node_id,
+                            ok=bool(result.get("ok")),
+                            error=None if result.get("ok") else str(result.get("error") or ""),
+                        )
+                        return result
                     except asyncio.CancelledError:
                         await context.bus.emit({
                             "type": "node_finished",
@@ -3152,6 +3336,7 @@ async def run_graph(
                             "status": "cancelled",
                             "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                         })
+                        await _component_mark_node_finish(node_id, ok=False, error="cancelled")
                         return {"ok": False, "cached": False, "cancelled": True}
                     except Exception as ex:
                         await context.bus.emit({
@@ -3163,16 +3348,23 @@ async def run_graph(
                             "error": str(ex),
                             "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                         })
+                        await _component_mark_node_finish(node_id, ok=False, error=str(ex))
                         return {"ok": False, "cached": False}
                     finally:
                         inflight_current -= 1
                 try:
                     async with kind_sem:
                         try:
-                            return await _execute_node(
+                            result = await _execute_node(
                                 node_id,
                                 cache_only=(node_id in plan.cache_only_nodes),
                             )
+                            await _component_mark_node_finish(
+                                node_id,
+                                ok=bool(result.get("ok")),
+                                error=None if result.get("ok") else str(result.get("error") or ""),
+                            )
+                            return result
                         except asyncio.CancelledError:
                             await context.bus.emit({
                                 "type": "node_finished",
@@ -3182,6 +3374,7 @@ async def run_graph(
                                 "status": "cancelled",
                                 "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                             })
+                            await _component_mark_node_finish(node_id, ok=False, error="cancelled")
                             return {"ok": False, "cached": False, "cancelled": True}
                         except Exception as ex:
                             await context.bus.emit({
@@ -3193,6 +3386,7 @@ async def run_graph(
                                 "error": str(ex),
                                 "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                             })
+                            await _component_mark_node_finish(node_id, ok=False, error=str(ex))
                             return {"ok": False, "cached": False}
                 finally:
                     inflight_current -= 1

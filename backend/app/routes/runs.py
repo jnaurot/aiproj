@@ -575,6 +575,22 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
     if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
         raise HTTPException(404, "Artifact not found")
     upstream_ids = art.upstream_ids or []
+    payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else None
+    artifact_meta = (
+        payload_schema.get("artifactMetadataV1")
+        if isinstance(payload_schema, dict) and isinstance(payload_schema.get("artifactMetadataV1"), dict)
+        else {}
+    )
+    component_meta = artifact_meta.get("component") if isinstance(artifact_meta.get("component"), dict) else None
+    producer = {
+        "nodeId": art.node_id,
+        "runId": art.run_id,
+        "graphId": art.graph_id,
+        "execKey": art.exec_key,
+    }
+    if component_meta:
+        producer["component"] = component_meta
+        producer["aliasNodeId"] = str(component_meta.get("instanceNodeId") or art.node_id or "")
     return {
         "schemaVersion": 1,
         "artifactId": art.artifact_id,
@@ -596,7 +612,8 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
         "producerRunId": art.run_id,
         "graphId": art.graph_id,
         "producerExecKey": art.exec_key,
-        "payloadSchema": art.payload_schema,
+        "producer": producer,
+        "payloadSchema": payload_schema,
     }
 
 
@@ -655,6 +672,21 @@ async def get_artifact_lineage(
         if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
             return {"artifactId": aid, "missing": True}
         payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else None
+        artifact_meta = (
+            payload_schema.get("artifactMetadataV1")
+            if isinstance(payload_schema, dict) and isinstance(payload_schema.get("artifactMetadataV1"), dict)
+            else {}
+        )
+        component_meta = artifact_meta.get("component") if isinstance(artifact_meta.get("component"), dict) else None
+        producer = {
+            "nodeId": art.node_id,
+            "runId": art.run_id,
+            "graphId": art.graph_id,
+            "execKey": art.exec_key,
+        }
+        if component_meta:
+            producer["component"] = component_meta
+            producer["aliasNodeId"] = str(component_meta.get("instanceNodeId") or art.node_id or "")
         node = {
             "artifactId": art.artifact_id,
             "nodeKind": art.node_kind,
@@ -663,12 +695,7 @@ async def get_artifact_lineage(
             "sizeBytes": art.size_bytes,
             "createdAt": art.created_at.isoformat(),
             "payloadSchema": payload_schema,
-            "producer": {
-                "nodeId": art.node_id,
-                "runId": art.run_id,
-                "graphId": art.graph_id,
-                "execKey": art.exec_key,
-            },
+            "producer": producer,
             "inputArtifactIds": art.upstream_ids or [],
             "inputRefs": [
                 {"artifactId": up_id, "label": _alpha_input_label(i)}
