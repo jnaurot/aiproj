@@ -661,6 +661,9 @@ _CACHE_REASONS = {
     "BUILD_CHANGED",
     "UNCACHEABLE_EFFECTFUL_TOOL",
     "SOURCE_CACHE_POLICY_NEVER",
+    "GLOBAL_FORCE_OFF",
+    "NODE_POLICY_PREFER_OFF",
+    "NODE_POLICY_FORCE_OFF",
     "CONTRACT_MISMATCH",
 }
 _DEFAULT_REASON_BY_DECISION = {
@@ -668,6 +671,43 @@ _DEFAULT_REASON_BY_DECISION = {
     "cache_miss": "CACHE_ENTRY_MISSING",
     "cache_hit_contract_mismatch": "CONTRACT_MISMATCH",
 }
+
+
+def _global_cache_mode(runtime_ref: Any) -> str:
+    if runtime_ref is None:
+        return "default_on"
+    if hasattr(runtime_ref, "get_global_cache_mode"):
+        mode = str(runtime_ref.get_global_cache_mode() or "").strip().lower()
+    else:
+        mode = "default_on" if bool(getattr(runtime_ref, "global_cache_enabled", True)) else "force_off"
+    if mode not in {"default_on", "force_off", "force_on"}:
+        return "default_on"
+    return mode
+
+
+def _node_cache_policy_mode(
+    *,
+    kind: str,
+    source_kind: str,
+    params: Dict[str, Any],
+) -> str:
+    """
+    Normalized node policy:
+    - inherit: default behavior
+    - prefer_off: node asks to bypass cache in normal mode
+    - force_off: explicit never-cache policy
+    """
+    cache_policy = params.get("cache_policy") if isinstance(params.get("cache_policy"), dict) else {}
+    policy_mode = str(cache_policy.get("mode") or "").strip().lower()
+    if policy_mode in {"force_off", "never"}:
+        return "force_off"
+    if policy_mode in {"prefer_off", "off", "disabled"}:
+        return "prefer_off"
+    if kind == "source" and source_kind == "file" and (not bool(params.get("cache_enabled", True))):
+        return "prefer_off"
+    if kind == "tool" and (not bool(params.get("cache_enabled", True))):
+        return "prefer_off"
+    return "inherit"
 
 
 class ContractMismatchError(RuntimeError):
@@ -1240,20 +1280,26 @@ async def run_graph(
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
-            tool_cache_enabled = bool(params.get("cache_enabled", True)) if kind == "tool" else True
             source_kind = str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "")
-            cache_policy = params.get("cache_policy") if isinstance(params.get("cache_policy"), dict) else {}
-            source_cache_enabled = bool(params.get("cache_enabled", True))
-            source_force_miss = (
-                kind == "source"
-                and (
-                    (source_kind == "api" and str(cache_policy.get("mode") or "default").lower() == "never")
-                    or (source_kind == "file" and not source_cache_enabled)
-                )
+            global_cache_mode = _global_cache_mode(runtime_ref)
+            node_cache_policy = _node_cache_policy_mode(
+                kind=kind,
+                source_kind=source_kind,
+                params=params,
             )
-            tool_force_miss = kind == "tool" and ((tool_mode == "effectful") or (not tool_cache_enabled))
-            runtime_cache_enabled = bool(getattr(runtime_ref, "global_cache_enabled", True))
-            use_cache_for_node = runtime_cache_enabled and (not tool_force_miss) and (not source_force_miss)
+            tool_uncacheable = kind == "tool" and (tool_mode == "effectful")
+            node_force_off = node_cache_policy == "force_off"
+            node_prefer_off = node_cache_policy == "prefer_off"
+            cache_bypass_reason: Optional[str] = None
+            if tool_uncacheable:
+                cache_bypass_reason = "UNCACHEABLE_EFFECTFUL_TOOL"
+            elif global_cache_mode == "force_off":
+                cache_bypass_reason = "GLOBAL_FORCE_OFF"
+            elif node_force_off:
+                cache_bypass_reason = "NODE_POLICY_FORCE_OFF"
+            elif global_cache_mode == "default_on" and node_prefer_off:
+                cache_bypass_reason = "NODE_POLICY_PREFER_OFF"
+            use_cache_for_node = cache_bypass_reason is None
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
@@ -1268,7 +1314,8 @@ async def run_graph(
                 debug_payload = {
                     "nodeId": node_id,
                     "sourceKind": source_kind,
-                    "cacheEnabled": source_cache_enabled,
+                    "globalCacheMode": global_cache_mode,
+                    "nodeCachePolicy": node_cache_policy,
                     "useCacheForNode": use_cache_for_node,
                     "snapshotId": normalized_params_for_hash.get("snapshot_id"),
                     "keys": sorted(list(normalized_params_for_hash.keys())),
@@ -1310,7 +1357,7 @@ async def run_graph(
                 "tool_provider": tool_provider,
                 "determinism_env": determinism_env,
                 "tool_mode": tool_mode,
-                "source_force_miss": source_force_miss,
+                "cache_bypass_reason": cache_bypass_reason,
                 "use_cache_for_node": use_cache_for_node,
                 "upstream_ids": upstream_ids,
                 "input_refs": input_refs,
@@ -1350,7 +1397,7 @@ async def run_graph(
             tool_provider = resolved["tool_provider"]
             determinism_env = resolved["determinism_env"]
             tool_mode = resolved["tool_mode"]
-            source_force_miss = resolved["source_force_miss"]
+            cache_bypass_reason = resolved["cache_bypass_reason"]
             use_cache_for_node = resolved["use_cache_for_node"]
             upstream_ids = resolved["upstream_ids"]
             input_refs = resolved["input_refs"]
@@ -1420,13 +1467,12 @@ async def run_graph(
             )
             print(f"[debug-exec-key] graphId={context.graph_id} nodeId={node_id} exec_key={exec_key}")
             if not use_cache_for_node:
-                miss_reason = "SOURCE_CACHE_POLICY_NEVER" if source_force_miss else "UNCACHEABLE_EFFECTFUL_TOOL"
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
                     decision="cache_miss",
                     exec_key=exec_key,
-                    reason=miss_reason,
+                    reason=str(cache_bypass_reason or "CACHE_ENTRY_MISSING"),
                 )
                 if cache_only:
                     msg = (

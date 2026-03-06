@@ -47,14 +47,26 @@ class RuntimeManager:
 
         self.runs: Dict[str, RunHandle] = {}
         self._artifact_owner: dict[str, str] = {}
-        self.global_cache_enabled: bool = True
+        self.global_cache_mode: str = "default_on"
         self.artifact_store, self.cache, self.event_store = self._build_storage()
 
     def set_global_cache_enabled(self, enabled: bool) -> None:
-        self.global_cache_enabled = bool(enabled)
+        self.set_global_cache_mode("default_on" if bool(enabled) else "force_off")
 
     def get_global_cache_enabled(self) -> bool:
-        return bool(self.global_cache_enabled)
+        return self.get_global_cache_mode() != "force_off"
+
+    def set_global_cache_mode(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+        if m not in {"default_on", "force_off", "force_on"}:
+            m = "default_on"
+        self.global_cache_mode = m
+
+    def get_global_cache_mode(self) -> str:
+        m = str(getattr(self, "global_cache_mode", "default_on")).strip().lower()
+        if m not in {"default_on", "force_off", "force_on"}:
+            return "default_on"
+        return m
 
     def _build_storage(self):
         store_kind = (os.getenv("ARTIFACT_STORE") or "disk").strip().lower()

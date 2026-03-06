@@ -239,20 +239,37 @@ export async function getGlobalCacheConfig() {
 		const text = await res.text().catch(() => '');
 		throw new Error(`getGlobalCacheConfig failed: ${res.status} ${text}`);
 	}
-	return (await res.json()) as { schemaVersion: number; enabled: boolean };
+	return (await res.json()) as {
+		schemaVersion: number;
+		enabled: boolean;
+		mode?: 'default_on' | 'force_off' | 'force_on';
+	};
 }
 
-export async function setGlobalCacheConfig(enabled: boolean) {
+export async function setGlobalCacheConfig(
+	config: boolean | { enabled?: boolean; mode?: 'default_on' | 'force_off' | 'force_on' }
+) {
+	const payload =
+		typeof config === 'boolean'
+			? { enabled: config }
+			: {
+					enabled: config.enabled,
+					mode: config.mode
+				};
 	const res = await fetch('/runs/cache/config', {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ enabled })
+		body: JSON.stringify(payload)
 	});
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`setGlobalCacheConfig failed: ${res.status} ${text}`);
 	}
-	return (await res.json()) as { schemaVersion: number; enabled: boolean };
+	return (await res.json()) as {
+		schemaVersion: number;
+		enabled: boolean;
+		mode?: 'default_on' | 'force_off' | 'force_on';
+	};
 }
 
 export type DbSchemaColumn = {

@@ -73,7 +73,18 @@ class AcceptNodeParamsRequest(BaseModel):
 
 
 class CacheConfigRequest(BaseModel):
-    enabled: bool
+    enabled: Optional[bool] = None
+    mode: Optional[str] = None
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, v):
+        if v is None:
+            return v
+        m = str(v).strip().lower()
+        if m not in {"default_on", "force_off", "force_on"}:
+            raise ValueError("mode must be one of: default_on, force_off, force_on")
+        return m
 
 class ResolveSourceRequest(BaseModel):
     graphId: str
@@ -132,18 +143,31 @@ async def list_runs(request: Request, include_deleted: bool = Query(default=Fals
 @router.get("/cache/config")
 async def get_cache_config(request: Request):
     rt = request.app.state.runtime
-    enabled = bool(getattr(rt, "global_cache_enabled", True))
-    return {"schemaVersion": 1, "enabled": enabled}
+    mode = (
+        rt.get_global_cache_mode()
+        if hasattr(rt, "get_global_cache_mode")
+        else ("default_on" if bool(getattr(rt, "global_cache_enabled", True)) else "force_off")
+    )
+    enabled = mode != "force_off"
+    return {"schemaVersion": 1, "enabled": enabled, "mode": mode}
 
 
 @router.put("/cache/config")
 async def set_cache_config(req: CacheConfigRequest, request: Request):
     rt = request.app.state.runtime
-    if hasattr(rt, "set_global_cache_enabled"):
-        rt.set_global_cache_enabled(req.enabled)
+    mode = req.mode
+    if mode is None:
+        mode = "default_on" if bool(req.enabled if req.enabled is not None else True) else "force_off"
+    if hasattr(rt, "set_global_cache_mode"):
+        rt.set_global_cache_mode(mode)
     else:
-        rt.global_cache_enabled = bool(req.enabled)
-    return {"schemaVersion": 1, "enabled": bool(getattr(rt, "global_cache_enabled", True))}
+        rt.global_cache_enabled = mode != "force_off"
+    resolved_mode = (
+        rt.get_global_cache_mode()
+        if hasattr(rt, "get_global_cache_mode")
+        else ("default_on" if bool(getattr(rt, "global_cache_enabled", True)) else "force_off")
+    )
+    return {"schemaVersion": 1, "enabled": resolved_mode != "force_off", "mode": resolved_mode}
 
 
 @router.post("", response_model=RunCreated)
@@ -236,6 +260,12 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
         params=params_raw,
     )
     source_cache_enabled = bool(normalized.get("cache_enabled", True))
+    runtime_cache_mode = (
+        request.app.state.runtime.get_global_cache_mode()
+        if hasattr(request.app.state.runtime, "get_global_cache_mode")
+        else ("default_on" if bool(getattr(request.app.state.runtime, "global_cache_enabled", True)) else "force_off")
+    )
+    runtime_cache_enabled = runtime_cache_mode != "force_off"
     determinism_env = _determinism_env_for_node("source", normalized)
     source_fingerprint = build_source_fingerprint(target, normalized)
     node_state_hash = build_node_state_hash(
@@ -258,7 +288,7 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
     store = request.app.state.runtime.artifact_store
     artifact_id: Optional[str] = None
     artifact_meta: Optional[Dict[str, Any]] = None
-    if source_cache_enabled and await store.exists(exec_key):
+    if runtime_cache_enabled and source_cache_enabled and await store.exists(exec_key):
         art = await store.get(exec_key)
         if getattr(art, "graph_id", None) and str(art.graph_id) == graph_id:
             artifact_id = exec_key
@@ -272,11 +302,12 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
             }
 
     print(
-        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s cache_enabled=%s exec_key=%s artifact=%s"
+        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s global_cache_mode=%s cache_enabled=%s exec_key=%s artifact=%s"
         % (
             graph_id,
             str(req.nodeId),
             str(normalized.get("snapshot_id") or ""),
+            str(runtime_cache_mode),
             str(source_cache_enabled).lower(),
             exec_key,
             str(artifact_id or ""),
