@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -33,6 +34,78 @@ class GraphFeatureFlagsUpdateRequest(BaseModel):
     GRAPH_EXPORT_V2: Optional[bool] = None
 
 
+class GraphImportRequest(BaseModel):
+    package: Dict[str, Any]
+    targetGraphId: Optional[str] = None
+    message: Optional[str] = None
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _build_graph_export_package(
+    *,
+    graph_id: str,
+    revision_id: str,
+    graph: Dict[str, Any],
+    include_artifacts: bool = False,
+    include_schemas: bool = True,
+) -> Dict[str, Any]:
+    warnings: list[str] = []
+    if include_artifacts:
+        warnings.append("Artifacts export is not implemented yet; package contains graph only.")
+    return {
+        "manifest": {
+            "packageType": "aipgraph",
+            "packageVersion": 2,
+            "schemaVersion": 1,
+            "engineVersion": "aiproj-flow",
+            "exportedAt": _iso_now(),
+            "source": {"graphId": graph_id, "revisionId": revision_id},
+            "includes": {
+                "artifacts": bool(include_artifacts and False),
+                "schemas": bool(include_schemas),
+            },
+            "warnings": warnings,
+        },
+        "graph": graph,
+        "schemas": {} if include_schemas else None,
+        "artifacts": [] if include_artifacts else None,
+    }
+
+
+def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("package must be an object")
+    manifest = payload.get("manifest")
+    graph = payload.get("graph")
+    if isinstance(manifest, dict) and isinstance(graph, dict):
+        ptype = str(manifest.get("packageType") or "").strip()
+        pver = int(manifest.get("packageVersion") or 0)
+        if ptype != "aipgraph":
+            raise ValueError("manifest.packageType must be 'aipgraph'")
+        if pver != 2:
+            raise ValueError("manifest.packageVersion must be 2")
+        if "nodes" not in graph or "edges" not in graph:
+            raise ValueError("package.graph must include nodes and edges")
+        return {
+            "graph": graph,
+            "migrationReport": {"format": "aipgraph_v2", "migrated": False, "warnings": []},
+        }
+    # Legacy fallback: raw graph object import
+    if "nodes" in payload and "edges" in payload:
+        return {
+            "graph": payload,
+            "migrationReport": {
+                "format": "legacy_graph_dto",
+                "migrated": True,
+                "warnings": ["Imported legacy graph payload without v2 manifest."],
+            },
+        }
+    raise ValueError("package must be a v2 aipgraph package or a legacy graph DTO")
+
+
 @router.get("/feature-flags")
 async def graph_feature_flags():
     return {"schemaVersion": 1, "flags": get_feature_flags()}
@@ -44,6 +117,81 @@ async def set_graph_feature_flags(req: GraphFeatureFlagsUpdateRequest):
     for key, value in updates.items():
         os.environ[key] = "1" if bool(value) else "0"
     return {"schemaVersion": 1, "flags": get_feature_flags()}
+
+
+@router.get("/{graph_id}/export")
+async def export_graph_package_v2(
+    graph_id: str,
+    request: Request,
+    revisionId: Optional[str] = Query(default=None),
+    include_artifacts: bool = Query(default=False),
+    include_schemas: bool = Query(default=True),
+):
+    flags = get_feature_flags()
+    if not flags.get("GRAPH_EXPORT_V2", False):
+        raise HTTPException(status_code=503, detail="GRAPH_EXPORT_V2 is disabled")
+    if not flags.get("GRAPH_STORE_V2_READ", False):
+        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_READ is disabled")
+
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="graph revision store unavailable")
+
+    if revisionId:
+        row = store.get_revision(graph_id, str(revisionId))
+    else:
+        row = store.get_latest(graph_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="graph not found")
+
+    pkg = _build_graph_export_package(
+        graph_id=str(row.graph_id),
+        revision_id=str(row.revision_id),
+        graph=row.graph,
+        include_artifacts=include_artifacts,
+        include_schemas=include_schemas,
+    )
+    return {"schemaVersion": 1, "package": pkg}
+
+
+@router.post("/import")
+async def import_graph_package_v2(req: GraphImportRequest, request: Request):
+    flags = get_feature_flags()
+    if not flags.get("GRAPH_EXPORT_V2", False):
+        raise HTTPException(status_code=503, detail="GRAPH_EXPORT_V2 is disabled")
+    if not flags.get("GRAPH_STORE_V2_WRITE", False):
+        raise HTTPException(status_code=503, detail="GRAPH_STORE_V2_WRITE is disabled")
+
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="graph revision store unavailable")
+    try:
+        normalized = _normalize_import_package(req.package)
+        graph = normalized["graph"]
+        report = normalized["migrationReport"]
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+
+    target_graph_id = str(req.targetGraphId or "").strip() or None
+    message = str(req.message).strip() if isinstance(req.message, str) and str(req.message).strip() else "import:v2"
+    try:
+        created = store.create_revision(
+            graph_id=target_graph_id,
+            graph=graph,
+            message=message,
+            schema_version=1,
+        )
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+
+    return {
+        "schemaVersion": 1,
+        "graphId": created.graph_id,
+        "revisionId": created.revision_id,
+        "createdAt": created.created_at,
+        "migrationReport": report,
+        "graph": created.graph,
+    }
 
 
 @router.post("")

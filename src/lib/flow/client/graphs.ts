@@ -25,12 +25,12 @@ export type LatestGraphRevisionResponse = {
 };
 
 export type GraphRevisionSummary = {
-	graph_id: string;
-	revision_id: string;
-	parent_revision_id?: string | null;
-	created_at: string;
+	graphId: string;
+	revisionId: string;
+	parentRevisionId?: string | null;
+	createdAt: string;
 	message?: string | null;
-	schema_version: number;
+	schemaVersion: number;
 	checksum: string;
 };
 
@@ -62,6 +62,56 @@ export type CreateGraphRevisionResponse = {
 	createdAt: string;
 	message?: string | null;
 	checksum: string;
+};
+
+export type GraphPackageV2 = {
+	manifest: {
+		packageType: 'aipgraph';
+		packageVersion: 2;
+		schemaVersion: number;
+		engineVersion: string;
+		exportedAt: string;
+		source?: { graphId?: string; revisionId?: string };
+		includes?: { artifacts?: boolean; schemas?: boolean };
+		warnings?: string[];
+	};
+	graph: {
+		version?: number;
+		nodes: unknown[];
+		edges: unknown[];
+		meta?: Record<string, unknown>;
+	};
+	schemas?: Record<string, unknown> | null;
+	artifacts?: unknown[] | null;
+};
+
+export type ExportGraphPackageResponse = {
+	schemaVersion: number;
+	package: GraphPackageV2;
+};
+
+export type ImportGraphPackageRequest = {
+	package: Record<string, unknown>;
+	targetGraphId?: string;
+	message?: string;
+};
+
+export type ImportGraphPackageResponse = {
+	schemaVersion: number;
+	graphId: string;
+	revisionId: string;
+	createdAt: string;
+	migrationReport: {
+		format: string;
+		migrated: boolean;
+		warnings: string[];
+	};
+	graph: {
+		version?: number;
+		nodes: unknown[];
+		edges: unknown[];
+		meta?: Record<string, unknown>;
+	};
 };
 
 async function _fetchJsonWithFallback<T>(primary: string, fallback: string): Promise<T> {
@@ -140,4 +190,44 @@ export async function createGraphRevision(
 		throw new Error(`createGraphRevision failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as CreateGraphRevisionResponse;
+}
+
+export async function exportGraphPackage(
+	graphId: string,
+	opts?: { revisionId?: string; includeArtifacts?: boolean; includeSchemas?: boolean }
+): Promise<ExportGraphPackageResponse> {
+	const gid = String(graphId ?? '').trim();
+	if (!gid) throw new Error('graphId is required');
+	const params = new URLSearchParams();
+	if (opts?.revisionId) params.set('revisionId', String(opts.revisionId));
+	if (typeof opts?.includeArtifacts === 'boolean') params.set('include_artifacts', String(opts.includeArtifacts));
+	if (typeof opts?.includeSchemas === 'boolean') params.set('include_schemas', String(opts.includeSchemas));
+	const query = params.toString();
+	const suffix = query ? `?${query}` : '';
+	return await _fetchJsonWithFallback<ExportGraphPackageResponse>(
+		`/graphs/${encodeURIComponent(gid)}/export${suffix}`,
+		`/api/graphs/${encodeURIComponent(gid)}/export${suffix}`
+	);
+}
+
+export async function importGraphPackage(
+	req: ImportGraphPackageRequest
+): Promise<ImportGraphPackageResponse> {
+	let res = await fetch('/graphs/import', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(req)
+	});
+	if (res.status === 404) {
+		res = await fetch('/api/graphs/import', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(req)
+		});
+	}
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`importGraphPackage failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as ImportGraphPackageResponse;
 }

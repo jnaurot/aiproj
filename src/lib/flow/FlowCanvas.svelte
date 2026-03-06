@@ -18,7 +18,11 @@
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
-	import type { GraphRevisionSummary } from '$lib/flow/client/graphs';
+	import {
+		exportGraphPackage,
+		importGraphPackage,
+		type GraphRevisionSummary
+	} from '$lib/flow/client/graphs';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
@@ -143,6 +147,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastSavedGraphSnapshotKey: string | null = null;
+	let importFileInput: HTMLInputElement | null = null;
 	const GlobalCacheModeLabels: Record<GlobalCacheMode, string> = {
 		default_on: 'Default on',
 		force_off: 'Forced off',
@@ -646,9 +651,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function formatRevisionLine(index: number, revision: GraphRevisionSummary): string {
-		const stamp = String(revision.created_at ?? '').replace('T', ' ').slice(0, 19);
+		const stamp = String(revision.createdAt ?? '').replace('T', ' ').slice(0, 19);
 		const msg = String(revision.message ?? '').trim();
-		return `${index + 1}. ${revision.revision_id.slice(0, 10)}  ${stamp}${msg ? `  ${msg}` : ''}`;
+		return `${index + 1}. ${revision.revisionId.slice(0, 10)}  ${stamp}${msg ? `  ${msg}` : ''}`;
 	}
 
 	async function saveGraphRevision() {
@@ -697,16 +702,83 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 		const selected = revisions[pick - 1];
 		const confirmRestore = window.confirm(
-			`Restore revision ${selected.revision_id.slice(0, 10)}? Current unsaved graph edits will be replaced.`
+			`Restore revision ${selected.revisionId.slice(0, 10)}? Current unsaved graph edits will be replaced.`
 		);
 		if (!confirmRestore) return;
-		const restored = await graphStore.restoreGraphRevision(selected.revision_id);
+		const restored = await graphStore.restoreGraphRevision(selected.revisionId);
 		if (!(restored as any)?.ok) {
 			showToast(`Restore failed: ${(restored as any)?.error ?? (restored as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
 		lastSavedGraphSnapshotKey = null;
-		showToast(`Restored revision ${selected.revision_id.slice(0, 10)}`, 'info');
+		showToast(`Restored revision ${selected.revisionId.slice(0, 10)}`, 'info');
+	}
+
+	async function exportGraphPackageV2() {
+		try {
+			const graphId = String($graphStore.graphId ?? '').trim();
+			if (!graphId) {
+				showToast('Export failed: missing graph id.', 'error');
+				return;
+			}
+			const exported = await exportGraphPackage(graphId, {
+				includeArtifacts: false,
+				includeSchemas: true
+			});
+			const payload = JSON.stringify(exported.package, null, 2);
+			const blob = new Blob([payload], { type: 'application/json' });
+			const href = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = href;
+			a.download = `${graphId}.aipgraph`;
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			URL.revokeObjectURL(href);
+			showToast('Exported .aipgraph package.', 'info');
+		} catch (error) {
+			showToast(`Export failed: ${String(error)}`, 'error');
+		}
+	}
+
+	function triggerImportGraphPackageV2() {
+		importFileInput?.click();
+	}
+
+	async function onImportGraphPackageV2(event: Event) {
+		const input = event.currentTarget as HTMLInputElement | null;
+		const file = input?.files?.[0] ?? null;
+		if (!file) return;
+		try {
+			const text = await file.text();
+			const parsed = JSON.parse(text);
+			const suggestedId =
+				String(parsed?.manifest?.source?.graphId ?? '').trim() ||
+				String($graphStore.graphId ?? '').trim();
+			const targetGraphId =
+				(window.prompt('Import graph id (optional)', suggestedId) ?? '').trim() || undefined;
+			const imported = await importGraphPackage({
+				package: parsed,
+				targetGraphId,
+				message: `import:file:${file.name}`
+			});
+			const loaded = graphStore.loadGraphDocument(imported.graph, imported.graphId);
+			if (!(loaded as any)?.ok) {
+				showToast('Import failed: invalid graph payload.', 'error');
+				return;
+			}
+			lastSavedGraphSnapshotKey = null;
+			const warnings = imported?.migrationReport?.warnings ?? [];
+			if (warnings.length > 0) {
+				showToast(`Imported with warnings: ${warnings.join(' | ')}`, 'warn');
+			} else {
+				showToast(`Imported graph ${imported.graphId}`, 'info');
+			}
+		} catch (error) {
+			showToast(`Import failed: ${String(error)}`, 'error');
+		} finally {
+			if (input) input.value = '';
+		}
 	}
 
 	function deleteSelectedPresetRef(): void {
@@ -788,6 +860,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				<button on:click={saveGraphRevision}>Save</button>
 				<button on:click={saveAsGraphRevision}>Save As</button>
 				<button on:click={restoreGraphRevision}>History</button>
+				<button on:click={exportGraphPackageV2}>Export</button>
+				<button on:click={triggerImportGraphPackageV2}>Import</button>
 				<button on:click={resetRunUi}>Reset</button>
 				<button class="primary" on:click={() => graphStore.runRemote(null, 'from_start')}>
 					Run from start
@@ -861,6 +935,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				</select>
 			</div>
 		</div>
+		<input
+			bind:this={importFileInput}
+			type="file"
+			accept=".aipgraph,application/json,.json"
+			style="display:none"
+			on:change={onImportGraphPackageV2}
+		/>
 		<OutputModal bind:open={outputOpen} nodeId={outputNodeId} />
 
 		<SvelteFlow

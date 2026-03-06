@@ -1870,6 +1870,39 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
 	}
 
+	function applyGraphDocument(
+		graph: { nodes: unknown[]; edges: unknown[] },
+		graphIdOverride?: string | null
+	): { ok: boolean; reason?: string } {
+		const nextNodes = Array.isArray(graph?.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
+		const nextEdges = Array.isArray(graph?.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
+		if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' };
+		update((s) => {
+			const nextState = withGraphMeta({
+				...s,
+				graphId: String(graphIdOverride || s.graphId),
+				nodes: nextNodes,
+				edges: nextEdges,
+				selectedNodeId: null,
+				inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
+				logs: [],
+				runStatus: IDLE,
+				lastRunStatus: 'never_run',
+				freshness: 'never_run',
+				staleNodeCount: 0,
+				activeRunMode: 'from_start',
+				activeRunFrom: null,
+				activeRunNodeSet: new Set<string>(),
+				nodeOutputs: {},
+				nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
+				activeRunId: null
+			});
+			persist(nextState);
+			return nextState;
+		}, { source: 'graph_edit' });
+		return { ok: true };
+	}
+
 	function hydrateFromRunSnapshot(
 		state: GraphState,
 		snap: RunSnapshotLike
@@ -2372,6 +2405,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			set(next);
 		},
 
+		loadGraphDocument(graph: { nodes: unknown[]; edges: unknown[] }, graphIdOverride?: string | null) {
+			const applied = applyGraphDocument(graph, graphIdOverride);
+			if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
+			return { ok: true };
+		},
+
 		async saveGraphRevision(message?: string) {
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
@@ -2446,33 +2485,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const restored = await getGraphRevision(graphId, rid);
 				const graph = (restored?.graph ?? {}) as any;
-				const nextNodes = Array.isArray(graph.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
-				const nextEdges = Array.isArray(graph.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
-				if (!nextNodes || !nextEdges) {
-					return { ok: false, reason: 'invalid_payload' as const };
-				}
-				update((s) => {
-					const nextState = withGraphMeta({
-						...s,
-						nodes: nextNodes,
-						edges: nextEdges,
-						selectedNodeId: null,
-						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
-						logs: [],
-						runStatus: IDLE,
-						lastRunStatus: 'never_run',
-						freshness: 'never_run',
-						staleNodeCount: 0,
-						activeRunMode: 'from_start',
-						activeRunFrom: null,
-						activeRunNodeSet: new Set<string>(),
-						nodeOutputs: {},
-						nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
-						activeRunId: null
-					});
-					persist(nextState);
-					return nextState;
-				}, { source: 'graph_edit' });
+				const applied = applyGraphDocument(graph, restored.graphId);
+				if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
 				return {
 					ok: true,
 					graphId: String(restored.graphId),
@@ -2495,32 +2509,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
 				const latest = await getLatestGraphRevision(graphId);
 				const graph = (latest?.graph ?? {}) as any;
-				const nextNodes = Array.isArray(graph.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
-				const nextEdges = Array.isArray(graph.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
-				if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' as const };
-				update((s) => {
-					const nextState = withGraphMeta({
-						...s,
-						graphId: String(latest.graphId || s.graphId),
-						nodes: nextNodes,
-						edges: nextEdges,
-						selectedNodeId: null,
-						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
-						logs: [],
-						runStatus: IDLE,
-						lastRunStatus: 'never_run',
-						freshness: 'never_run',
-						staleNodeCount: 0,
-						activeRunMode: 'from_start',
-						activeRunFrom: null,
-						activeRunNodeSet: new Set<string>(),
-						nodeOutputs: {},
-						nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
-						activeRunId: null
-					});
-					persist(nextState);
-					return nextState;
-				}, { source: 'graph_edit' });
+				const applied = applyGraphDocument(graph, latest.graphId);
+				if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
 				return { ok: true, graphId: String(latest.graphId), revisionId: String(latest.revisionId) };
 			} catch (error) {
 				return { ok: false, reason: 'read_failed' as const, error: String(error) };

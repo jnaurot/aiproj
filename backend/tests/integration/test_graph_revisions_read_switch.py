@@ -68,3 +68,44 @@ def test_graph_feature_flags_runtime_update():
 		assert body["flags"]["GRAPH_STORE_V2_READ"] is True
 		assert body["flags"]["GRAPH_STORE_V2_WRITE"] is True
 		assert body["flags"]["GRAPH_EXPORT_V2"] is False
+
+
+def test_graph_export_import_package_v2():
+	graph_id = "graph_phase5_pkg"
+	with TestClient(app) as client:
+		client.put(
+			"/graphs/feature-flags",
+			json={
+				"GRAPH_STORE_V2_READ": True,
+				"GRAPH_STORE_V2_WRITE": True,
+				"GRAPH_EXPORT_V2": True,
+			},
+		)
+		created = client.post(
+			"/graphs",
+			json={
+				"graphId": graph_id,
+				"message": "seed",
+				"graph": _graph_payload("phase5"),
+			},
+		)
+		assert created.status_code == 200, created.text
+
+		exported = client.get(f"/graphs/{graph_id}/export")
+		assert exported.status_code == 200, exported.text
+		pkg = exported.json()["package"]
+		assert pkg["manifest"]["packageType"] == "aipgraph"
+		assert int(pkg["manifest"]["packageVersion"]) == 2
+
+		imported = client.post(
+			"/graphs/import",
+			json={
+				"package": pkg,
+				"targetGraphId": f"{graph_id}_imported",
+				"message": "imported",
+			},
+		)
+		assert imported.status_code == 200, imported.text
+		body = imported.json()
+		assert body["graphId"] == f"{graph_id}_imported"
+		assert body["migrationReport"]["format"] == "aipgraph_v2"
