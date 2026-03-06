@@ -111,3 +111,9 @@ Adopt naming convention for future debug-only code:
 - Env flags: `ENABLE_*_DEBUG`, `ENABLE_*_MAINTENANCE`
 - Log prefixes: `[debug-*]`
 - Require all debug output to be behind a single flag per subsystem.
+
+## Components v1 Note
+
+- Component runtime behavior is production-path (not dev-only).
+- Export/import now includes component dependency metadata for validation/reporting.
+- See: `docs/components-v1.md`.

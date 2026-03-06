@@ -110,3 +110,82 @@ def test_graph_export_import_package_v2():
 			},
 		)
 		assert legacy.status_code == 400
+
+
+def test_graph_export_import_reports_component_dependencies():
+	graph_id = "graph_phase5_pkg_components"
+	with TestClient(app) as client:
+		created_component = client.post(
+			"/components",
+			json={
+				"componentId": "cmp_dep_test",
+				"message": "seed",
+				"graph": {"version": 1, "nodes": [], "edges": []},
+				"api": {"inputs": [], "outputs": []},
+				"configSchema": {},
+			},
+		)
+		assert created_component.status_code == 200, created_component.text
+		crev = created_component.json()["revisionId"]
+
+		created_graph = client.post(
+			"/graphs",
+			json={
+				"graphId": graph_id,
+				"message": "seed-components",
+				"graph": {
+					"version": 1,
+					"nodes": [
+						{
+							"id": "cmp_1",
+							"type": "component",
+							"position": {"x": 0, "y": 0},
+							"data": {
+								"kind": "component",
+								"label": "Component",
+								"ports": {"in": "json", "out": "json"},
+								"params": {
+									"componentRef": {
+										"componentId": "cmp_dep_test",
+										"revisionId": crev,
+										"apiVersion": "v1",
+									},
+									"bindings": {"inputs": {}, "config": {}},
+									"config": {},
+									"api": {"inputs": [], "outputs": []},
+								},
+							},
+						}
+					],
+					"edges": [],
+				},
+			},
+		)
+		assert created_graph.status_code == 200, created_graph.text
+
+		exported = client.get(f"/graphs/{graph_id}/export")
+		assert exported.status_code == 200, exported.text
+		pkg = exported.json()["package"]
+		component_deps = (((pkg.get("manifest") or {}).get("dependencies") or {}).get("components") or [])
+		assert len(component_deps) == 1
+		assert component_deps[0]["componentId"] == "cmp_dep_test"
+		assert component_deps[0]["revisionId"] == crev
+
+		# Force unresolved deps report by mutating package before import.
+		pkg["manifest"]["dependencies"]["components"].append(
+			{"componentId": "cmp_missing", "revisionId": "crev_missing", "apiVersion": "v1"}
+		)
+		imported = client.post(
+			"/graphs/import",
+			json={
+				"package": pkg,
+				"targetGraphId": f"{graph_id}_imported",
+				"message": "imported-components",
+			},
+		)
+		assert imported.status_code == 200, imported.text
+		report = imported.json()["migrationReport"]
+		assert isinstance(report.get("componentDependencies"), list)
+		assert any(d.get("componentId") == "cmp_dep_test" for d in report.get("componentDependencies", []))
+		unresolved = report.get("unresolvedComponentDependencies") or []
+		assert any(d.get("componentId") == "cmp_missing" for d in unresolved)

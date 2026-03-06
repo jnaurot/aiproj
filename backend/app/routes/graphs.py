@@ -51,6 +51,7 @@ def _build_graph_export_package(
     include_artifacts: bool = False,
     include_schemas: bool = True,
 ) -> Dict[str, Any]:
+    component_dependencies = _extract_component_dependencies(graph)
     warnings: list[str] = []
     if include_artifacts:
         warnings.append("Artifacts export is not implemented yet; package contains graph only.")
@@ -66,11 +67,79 @@ def _build_graph_export_package(
                 "artifacts": bool(include_artifacts and False),
                 "schemas": bool(include_schemas),
             },
+            "dependencies": {
+                "components": component_dependencies,
+            },
             "warnings": warnings,
         },
         "graph": graph,
         "schemas": {} if include_schemas else None,
         "artifacts": [] if include_artifacts else None,
+    }
+
+
+def _extract_component_dependencies(graph: Dict[str, Any]) -> list[Dict[str, str]]:
+    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+    deps: dict[tuple[str, str], Dict[str, str]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data", {}) if isinstance(node.get("data"), dict) else {}
+        if str(data.get("kind") or "") != "component":
+            continue
+        params = data.get("params", {}) if isinstance(data.get("params"), dict) else {}
+        component_ref = params.get("componentRef") if isinstance(params.get("componentRef"), dict) else {}
+        component_id = str(component_ref.get("componentId") or "").strip()
+        revision_id = str(component_ref.get("revisionId") or "").strip()
+        api_version = str(component_ref.get("apiVersion") or "v1").strip() or "v1"
+        if not component_id or not revision_id:
+            continue
+        deps[(component_id, revision_id)] = {
+            "componentId": component_id,
+            "revisionId": revision_id,
+            "apiVersion": api_version,
+        }
+    return sorted(deps.values(), key=lambda d: (str(d.get("componentId") or ""), str(d.get("revisionId") or "")))
+
+
+def _validate_component_dependencies(
+    *,
+    manifest: Dict[str, Any],
+    graph: Dict[str, Any],
+    component_store: Any,
+) -> Dict[str, Any]:
+    dependencies_obj = manifest.get("dependencies") if isinstance(manifest, dict) else {}
+    dependencies = dependencies_obj.get("components") if isinstance(dependencies_obj, dict) else None
+    declared = dependencies if isinstance(dependencies, list) else _extract_component_dependencies(graph)
+    unresolved: list[Dict[str, str]] = []
+    for dep in declared:
+        if not isinstance(dep, dict):
+            continue
+        component_id = str(dep.get("componentId") or "").strip()
+        revision_id = str(dep.get("revisionId") or "").strip()
+        if not component_id or not revision_id:
+            continue
+        if component_store is None:
+            unresolved.append(
+                {
+                    "componentId": component_id,
+                    "revisionId": revision_id,
+                    "reason": "component_store_unavailable",
+                }
+            )
+            continue
+        revision = component_store.get_revision(component_id, revision_id)
+        if revision is None:
+            unresolved.append(
+                {
+                    "componentId": component_id,
+                    "revisionId": revision_id,
+                    "reason": "revision_not_found",
+                }
+            )
+    return {
+        "declared": declared,
+        "unresolved": unresolved,
     }
 
 
@@ -90,6 +159,7 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "nodes" not in graph or "edges" not in graph:
         raise ValueError("package.graph must include nodes and edges")
     return {
+        "manifest": manifest,
         "graph": graph,
         "migrationReport": {"format": "aipgraph_v2", "migrated": False, "warnings": []},
     }
@@ -137,14 +207,27 @@ async def export_graph_package_v2(
 @router.post("/import")
 async def import_graph_package_v2(req: GraphImportRequest, request: Request):
     store = getattr(request.app.state, "graph_revisions", None)
+    component_store = getattr(request.app.state, "component_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
     try:
         normalized = _normalize_import_package(req.package)
+        manifest = normalized["manifest"]
         graph = normalized["graph"]
         report = normalized["migrationReport"]
     except ValueError as ex:
         raise HTTPException(status_code=400, detail=str(ex))
+
+    dependency_check = _validate_component_dependencies(
+        manifest=manifest,
+        graph=graph,
+        component_store=component_store,
+    )
+    unresolved = dependency_check.get("unresolved") if isinstance(dependency_check, dict) else []
+    if isinstance(unresolved, list) and unresolved:
+        report["warnings"].append("Some component dependencies are unresolved in this environment.")
+        report["unresolvedComponentDependencies"] = unresolved
+    report["componentDependencies"] = dependency_check.get("declared") if isinstance(dependency_check, dict) else []
 
     target_graph_id = str(req.targetGraphId or "").strip() or None
     message = str(req.message).strip() if isinstance(req.message, str) and str(req.message).strip() else "import:v2"

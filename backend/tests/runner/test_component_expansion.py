@@ -112,3 +112,36 @@ def test_expand_component_rejects_missing_revision():
         expand_graph_components(graph, component_store=store)
     assert ex.value.code == "COMPONENT_REVISION_NOT_FOUND"
 
+
+def test_expand_component_rejects_nested_component_nodes():
+    nested_definition = {
+        "graph": {
+            "nodes": [
+                {
+                    "id": "inner_component",
+                    "data": {
+                        "kind": "component",
+                        "params": {"componentRef": {"componentId": "cmp_nested", "revisionId": "rev_nested"}},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {"inputs": [], "outputs": []},
+    }
+    graph = {
+        "nodes": [
+            {
+                "id": "cmp_node",
+                "data": {
+                    "kind": "component",
+                    "params": {"componentRef": {"componentId": "cmp_parent", "revisionId": "rev_1"}},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    store = _ComponentStoreStub({("cmp_parent", "rev_1"): SimpleNamespace(definition=nested_definition)})
+    with pytest.raises(ComponentExpansionError) as ex:
+        expand_graph_components(graph, component_store=store)
+    assert ex.value.code == "COMPONENT_NESTING_UNSUPPORTED"

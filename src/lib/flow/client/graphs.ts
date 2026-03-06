@@ -73,6 +73,13 @@ export type GraphPackageV2 = {
 		exportedAt: string;
 		source?: { graphId?: string; revisionId?: string };
 		includes?: { artifacts?: boolean; schemas?: boolean };
+		dependencies?: {
+			components?: Array<{
+				componentId: string;
+				revisionId: string;
+				apiVersion?: string;
+			}>;
+		};
 		warnings?: string[];
 	};
 	graph: {
@@ -105,6 +112,16 @@ export type ImportGraphPackageResponse = {
 		format: string;
 		migrated: boolean;
 		warnings: string[];
+		componentDependencies?: Array<{
+			componentId: string;
+			revisionId: string;
+			apiVersion?: string;
+		}>;
+		unresolvedComponentDependencies?: Array<{
+			componentId: string;
+			revisionId: string;
+			reason: string;
+		}>;
 	};
 	graph: {
 		version?: number;
