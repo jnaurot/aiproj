@@ -118,3 +118,22 @@ async def test_binary_table_sets_binary_hex_1row_coercion():
 	assert out.metadata is not None
 	assert (out.metadata.data_schema or {}).get("table_coercion", {}).get("mode") == "binary_hex_1row"
 
+
+@pytest.mark.asyncio
+async def test_legacy_inline_text_file_source_does_not_touch_filesystem():
+	ctx = _context_with_snapshot_bytes(b"")
+	node = _file_node(
+		{
+			"source_type": "text",
+			"text": "hello from legacy text source",
+			"output_mode": "table",
+		}
+	)
+	out = await exec_source("r1", node, ctx)
+	assert out.status == "succeeded"
+	assert out.data == [{"text": "hello from legacy text source"}]
+	assert out.metadata is not None
+	assert (out.metadata.data_schema or {}).get("table_coercion", {}).get("mode") == "text_1row"
+	ctx.artifact_store.exists.assert_not_called()
+	ctx.artifact_store.read.assert_not_called()
+

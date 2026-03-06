@@ -389,6 +389,19 @@ async def _handle_file_source(
     artifact_store: Any,
     forced_output_mode: Optional[str] = None,
 ) -> NodeOutput:
+    inline_text_input: Optional[str] = None
+    if (
+        not params.get("snapshot_id")
+        and not params.get("snapshotId")
+        and not params.get("file_path")
+        and not params.get("filename")
+        and isinstance(params.get("text"), str)
+    ):
+        # Backward compatibility for legacy source text nodes persisted as sourceKind=file.
+        inline_text_input = str(params.get("text") or "")
+        params = dict(params)
+        params.setdefault("file_format", "txt")
+
     if isinstance(params.get("file_path"), str) and not params.get("filename"):
         legacy = Path(str(params.get("file_path")))
         params.setdefault("rel_path", str(legacy.parent) if str(legacy.parent) not in {"", "."} else ".")
@@ -398,7 +411,9 @@ async def _handle_file_source(
 
     file_bytes: Optional[bytes] = None
     file_path: Optional[Path] = None
-    if schema.snapshot_id:
+    if inline_text_input is not None:
+        file_bytes = inline_text_input.encode(schema.encoding, errors="replace")
+    elif schema.snapshot_id:
         sid = str(schema.snapshot_id).strip().lower()
         if not sid:
             raise ValueError("snapshot_id is empty")
