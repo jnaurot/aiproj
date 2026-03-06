@@ -15,6 +15,7 @@ export const defaultMcpToolParams = {
     name: "MCP Tool",
     toolVersion: "v1",
     side_effect_mode: "pure" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: true, fs: false, env: false, subprocess: false },
     mcp: {
@@ -29,6 +30,7 @@ export const defaultHttpToolParams = {
     name: "HTTP Tool",
     toolVersion: "v1",
     side_effect_mode: "idempotent" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: true, fs: false, env: false, subprocess: false },
     http: {
@@ -43,10 +45,13 @@ export const defaultPythonToolParams = {
     name: "Python Tool",
     toolVersion: "v1",
     side_effect_mode: "pure" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: false, env: false, subprocess: false },
     python: {
-        code: "# write python here"
+        code: "# write python here",
+        args: {},
+        capture_output: true
     }
 };
 
@@ -55,10 +60,13 @@ export const defaultJsToolParams = {
     name: "JavaScript Tool",
     toolVersion: "v1",
     side_effect_mode: "pure" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: false, env: false, subprocess: true },
     js: {
-        code: "result = { ok: true };"
+        code: "result = { ok: true };",
+        args: {},
+        capture_output: true
     }
 };
 
@@ -67,10 +75,13 @@ export const defaultShellToolParams = {
     name: "Shell Tool",
     toolVersion: "v1",
     side_effect_mode: "effectful" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: true, env: true, subprocess: true },
     shell: {
-        command: "echo hello"
+        command: "echo hello",
+        env: {},
+        fail_on_nonzero: true
     }
 };
 
@@ -79,12 +90,14 @@ export const defaultFunctionToolParams = {
     name: "Function Tool",
     toolVersion: "v1",
     side_effect_mode: "pure" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: false, env: false, subprocess: false },
     function: {
         module: "tools.module",
         export: "run",
-        args: {}
+        args: {},
+        capture_output: true
     }
 };
 
@@ -93,12 +106,14 @@ export const defaultDbToolParams = {
     name: "DB Tool",
     toolVersion: "v1",
     side_effect_mode: "idempotent" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: true, fs: false, env: false, subprocess: false },
     db: {
-        connectionRef: "conn:default",
+        connectionRef: ":memory:",
         sql: "select 1",
-        params: {}
+        params: {},
+        capture_output: true
     }
 };
 
@@ -107,6 +122,7 @@ export const defaultBuiltinToolParams = {
     name: "Builtin Tool",
     toolVersion: "v1",
     side_effect_mode: "pure" as const,
+    cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: false, env: false, subprocess: false },
     builtin: {

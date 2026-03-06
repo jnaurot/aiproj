@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, tick } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import { SvelteFlow, Background, Controls, MarkerType, useSvelteFlow } from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
@@ -17,6 +17,7 @@
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
+	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
@@ -131,6 +132,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let subtypeError: string | null = null;
 	let subtypeErrorNodeId: string | null = null;
 	let subtypeErrorTimer: ReturnType<typeof setTimeout> | null = null;
+	let globalCacheEnabled = true;
+	let globalCachePending = false;
 
 	$: selectedId = $selectedNode?.id;
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -506,6 +509,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 	});
+
+	onMount(async () => {
+		try {
+			const config = await getGlobalCacheConfig();
+			globalCacheEnabled = Boolean(config.enabled);
+		} catch (error) {
+			console.warn('Failed to load global cache config', error);
+		}
+	});
 </script>
 
 <svelte:window on:pointermove={onInspectorSplitMove} on:pointerup={onInspectorSplitUp} />
@@ -528,6 +540,27 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				</button>
 
 				<span class="status">Graph: {graphHeaderStatus}</span>
+				<label class="cacheToggle">
+					<input
+						type="checkbox"
+						checked={globalCacheEnabled}
+						disabled={globalCachePending}
+						on:change={async (event) => {
+							const nextEnabled = (event.currentTarget as HTMLInputElement).checked;
+							globalCachePending = true;
+							try {
+								const result = await setGlobalCacheConfig(nextEnabled);
+								globalCacheEnabled = Boolean(result.enabled);
+							} catch (error) {
+								(event.currentTarget as HTMLInputElement).checked = globalCacheEnabled;
+								console.warn('Failed to update global cache config', error);
+							} finally {
+								globalCachePending = false;
+							}
+						}}
+					/>
+					Cache
+				</label>
 			</div>
 
 			<div class="btnrow">
@@ -910,6 +943,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.status {
 		opacity: 0.85;
 		font-size: 13px;
+	}
+
+	.cacheToggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 13px;
+		opacity: 0.9;
+	}
+
+	.cacheToggle input[type='checkbox'] {
+		width: 14px;
+		height: 14px;
+		margin: 0;
 	}
 
 	button {

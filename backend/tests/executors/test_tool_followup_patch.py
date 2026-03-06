@@ -40,7 +40,7 @@ class _FakeSession:
     async def __aexit__(self, exc_type, exc, tb):
         return None
 
-    def request(self, method, url, headers=None, json=None):
+    def request(self, method, url, headers=None, params=None, json=None):
         return _FakeResponseCtx(self._response)
 
 
@@ -80,7 +80,14 @@ async def test_tool_binary_mime_propagates_to_artifact(monkeypatch):
         "edges": [],
     }
 
-    await run_mod.run_graph(run_id=run_id, graph=graph, run_from=None, bus=bus, artifact_store=artifact_store)
+    await run_mod.run_graph(
+        run_id=run_id,
+        graph=graph,
+        run_from=None,
+        bus=bus,
+        artifact_store=artifact_store,
+        graph_id="graph_tool_mime",
+    )
 
     node_output_events = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "tool_1"]
     assert node_output_events, "Expected node_output event for tool node"
@@ -105,6 +112,7 @@ async def test_http_json_invalid_body_is_contract_mismatch(monkeypatch):
         bus=RunEventBus(run_id),
         artifact_store=MemoryArtifactStore(),
         bindings=RunBindings(run_id),
+        graph_id="graph_tool_http_invalid_json",
     )
 
     node = {
@@ -125,3 +133,53 @@ async def test_http_json_invalid_body_is_contract_mismatch(monkeypatch):
         sys.modules["duckdb"] = types.SimpleNamespace()
     run_mod = importlib.import_module("app.runner.run")
     assert run_mod._is_contract_mismatch_error(out.error or "")
+
+
+@pytest.mark.asyncio
+async def test_http_query_is_forwarded_to_request(monkeypatch):
+    fake_response = _FakeResponse(
+        status=200,
+        content_type="application/json",
+        body=b'{"ok":true}',
+    )
+    captured_params = {}
+
+    class _CapturingSession(_FakeSession):
+        def request(self, method, url, headers=None, params=None, json=None):
+            captured_params["method"] = method
+            captured_params["url"] = url
+            captured_params["params"] = params
+            captured_params["json"] = json
+            return _FakeResponseCtx(self._response)
+
+    monkeypatch.setattr("aiohttp.ClientSession", lambda: _CapturingSession(fake_response))
+
+    run_id = "run-tool-http-query"
+    context = ExecutionContext(
+        run_id=run_id,
+        bus=RunEventBus(run_id),
+        artifact_store=MemoryArtifactStore(),
+        bindings=RunBindings(run_id),
+        graph_id="graph_tool_http_query",
+    )
+
+    node = {
+        "id": "tool_http",
+        "data": {
+            "params": {
+                "provider": "http",
+                "http": {
+                    "url": "https://example.test/data",
+                    "method": "GET",
+                    "query": {"q": "alpha", "limit": 10, "exact": True},
+                },
+                "output": {"mode": "json"},
+            }
+        },
+    }
+
+    out = await exec_tool(run_id=run_id, node=node, context=context, upstream_artifact_ids=[])
+    assert out.status == "succeeded"
+    assert captured_params["method"] == "GET"
+    assert captured_params["url"] == "https://example.test/data"
+    assert captured_params["params"] == {"q": "alpha", "limit": 10, "exact": True}

@@ -91,6 +91,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	$: effectiveMime = meta?.mimeType ?? mimeType ?? '';
 	$: effectivePortType = meta?.portType ?? portType ?? '-';
 	$: payloadType = String((meta?.payloadSchema as any)?.type ?? '-');
+	$: hasPayloadSchema = Boolean(meta?.payloadSchema && typeof meta.payloadSchema === 'object');
 	$: isTable =
 		((meta?.payloadSchema as any)?.type === 'table') ||
 		effectiveMime.includes('text/csv') ||
@@ -785,6 +786,18 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 			<JsonTreeNode value={jsonObj} />
 		</details>
 	</div>
+	{#if hasPayloadSchema}
+		<div class="block">
+			<div class="label">Typed Schema</div>
+			<div class="jsonTools">
+				<button on:click={() => navigator.clipboard.writeText(JSON.stringify(meta?.payloadSchema ?? {}, null, 2))}>Copy</button>
+			</div>
+			<details open={true}>
+				<summary>Schema</summary>
+				<JsonTreeNode value={meta?.payloadSchema} />
+			</details>
+		</div>
+	{/if}
 {:else if text !== null}
 	<div class="block">
 		<div class="label">{isMarkdown ? 'Markdown' : 'Content'}</div>
@@ -794,6 +807,18 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 			<pre>{text}</pre>
 		{/if}
 	</div>
+	{#if hasPayloadSchema}
+		<div class="block">
+			<div class="label">Typed Schema</div>
+			<div class="jsonTools">
+				<button on:click={() => navigator.clipboard.writeText(JSON.stringify(meta?.payloadSchema ?? {}, null, 2))}>Copy</button>
+			</div>
+			<details>
+				<summary>Schema</summary>
+				<JsonTreeNode value={meta?.payloadSchema} />
+			</details>
+		</div>
+	{/if}
 {:else if isTiff}
 	<div class="block">
 		<div class="label">Image</div>

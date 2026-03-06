@@ -232,3 +232,64 @@ export async function getSnapshot(snapshotId: string) {
 		};
 	};
 }
+
+export async function getGlobalCacheConfig() {
+	const res = await fetch('/runs/cache/config');
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getGlobalCacheConfig failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as { schemaVersion: number; enabled: boolean };
+}
+
+export async function setGlobalCacheConfig(enabled: boolean) {
+	const res = await fetch('/runs/cache/config', {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ enabled })
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`setGlobalCacheConfig failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as { schemaVersion: number; enabled: boolean };
+}
+
+export type DbSchemaColumn = {
+	name: string;
+	normalizedType: string;
+	nativeType: string;
+	nullable: boolean;
+	ordinal: number;
+};
+
+export type DbSchemaTable = {
+	schema: string;
+	name: string;
+	kind: 'table' | 'view';
+	columns: DbSchemaColumn[];
+};
+
+export async function getToolDbSchema(connectionRef: string) {
+	let res = await fetch('/runs/tools/db/schema', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ connectionRef })
+	});
+	if (res.status === 404) {
+		res = await fetch('/api/runs/tools/db/schema', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ connectionRef })
+		});
+	}
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getToolDbSchema failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: number;
+		connectionRef: string;
+		tables: DbSchemaTable[];
+	};
+}

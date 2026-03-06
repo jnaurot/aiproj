@@ -151,6 +151,21 @@
 		color: var(--pe-control-text);
 	}
 
+	:global(.portsTheme .field-inline) {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	:global(.portsTheme .field-inline .k) {
+		min-width: 52px;
+	}
+
+	:global(.portsTheme .field-inline .v) {
+		flex: 1 1 auto;
+		min-width: 0;
+	}
+
 	.divider {
 		border: 1px solid var(--pe-divider);
 		margin: 6px 0 3px;

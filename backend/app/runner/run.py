@@ -424,11 +424,18 @@ def _source_payload_schema(
             logger.info("[schema-types] nodeId=%s schema.table.columns=%s", node_id, compact)
         return payload
     if out_contract == "json":
-        return {
+        schema = _json_payload_value_schema(data_value)
+        root_type = str(schema.get("type") or "unknown")
+        json_shape = "object" if root_type == "object" else "array" if root_type == "array" else "unknown"
+        out: Dict[str, Any] = {
             "schema_version": 1,
             "type": "json",
-            "json_shape": "array" if isinstance(data_value, list) else "object",
+            "json_shape": json_shape,
+            "schema": schema,
         }
+        if isinstance(data_value, dict):
+            out["keys_sample"] = sorted(list(data_value.keys()))
+        return out
     if out_contract == "text":
         return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
     if out_contract == "binary":
@@ -454,16 +461,18 @@ def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, A
                 parsed = json.loads(parsed)
             except Exception:
                 return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
+        schema = _json_payload_value_schema(parsed)
+        root_type = str(schema.get("type") or "unknown")
+        json_shape = "object" if root_type == "object" else "array" if root_type == "array" else "unknown"
+        out: Dict[str, Any] = {
+            "schema_version": 1,
+            "type": "json",
+            "json_shape": json_shape,
+            "schema": schema,
+        }
         if isinstance(parsed, dict):
-            return {
-                "schema_version": 1,
-                "type": "json",
-                "json_shape": "object",
-                "keys_sample": sorted(list(parsed.keys())),
-            }
-        if isinstance(parsed, list):
-            return {"schema_version": 1, "type": "json", "json_shape": "array"}
-        return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
+            out["keys_sample"] = sorted(list(parsed.keys()))
+        return out
     if "text/markdown" in mt:
         return {"schema_version": 1, "type": "text", "encoding": "utf-8", "format": "markdown"}
     if "text/plain" in mt:
@@ -471,18 +480,126 @@ def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, A
     return None
 
 
+def _json_schema_sort_key(schema: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return str(schema)
+
+
+def _json_payload_value_schema(value: Any, *, depth: int = 0, max_depth: int = 24) -> Dict[str, Any]:
+    if depth >= max_depth:
+        return {"type": "unknown", "reason": "max_depth"}
+
+    if value is None:
+        return {"type": "null"}
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int):
+        return {"type": "integer"}
+    if isinstance(value, float):
+        return {"type": "number"}
+    if isinstance(value, str):
+        return {"type": "string"}
+
+    if isinstance(value, dict):
+        props: Dict[str, Any] = {}
+        required: list[str] = []
+        for raw_key in sorted(value.keys(), key=lambda k: str(k)):
+            key = str(raw_key)
+            props[key] = _json_payload_value_schema(value[raw_key], depth=depth + 1, max_depth=max_depth)
+            required.append(key)
+        return {
+            "type": "object",
+            "properties": props,
+            "required": required,
+            "additionalProperties": False,
+        }
+
+    if isinstance(value, list):
+        if not value:
+            return {"type": "array", "items": {"type": "unknown"}}
+
+        unique: Dict[str, Dict[str, Any]] = {}
+        for item in value:
+            item_schema = _json_payload_value_schema(item, depth=depth + 1, max_depth=max_depth)
+            unique[_json_schema_sort_key(item_schema)] = item_schema
+
+        ordered = [unique[k] for k in sorted(unique.keys())]
+        if len(ordered) == 1:
+            items_schema: Dict[str, Any] = ordered[0]
+        else:
+            items_schema = {"type": "union", "anyOf": ordered}
+
+        return {"type": "array", "items": items_schema}
+
+    return {"type": "unknown"}
+
+
+def _sample_external_payload(value: Any, *, depth: int = 0, max_depth: int = 2, max_items: int = 3) -> Any:
+    if depth >= max_depth:
+        return "<truncated>"
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+
+    if isinstance(value, str):
+        return value if len(value) <= 200 else f"{value[:200]}...(len={len(value)})"
+
+    if isinstance(value, bytes):
+        return {
+            "bytes_len": len(value),
+            "bytes_head_hex": value[:16].hex(),
+        }
+
+    if isinstance(value, list):
+        return [_sample_external_payload(v, depth=depth + 1, max_depth=max_depth, max_items=max_items) for v in value[:max_items]]
+
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        for k in sorted(value.keys(), key=lambda x: str(x))[:max_items]:
+            out[str(k)] = _sample_external_payload(value[k], depth=depth + 1, max_depth=max_depth, max_items=max_items)
+        return out
+
+    return str(value)
+
+
+def _emit_external_schema_debug(*, kind: str, node_id: str, schema: Dict[str, Any], payload: Any) -> None:
+    if kind not in {"source", "llm", "tool"}:
+        return
+    try:
+        schema_json = json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        schema_json = str(schema)
+    try:
+        sample_json = json.dumps(_sample_external_payload(payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        sample_json = str(_sample_external_payload(payload))
+    print(f"[external-schema] kind={kind} nodeId={node_id} schema={schema_json} sample={sample_json}")
+
+
 def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str, Any]]:
     if envelope_kind == "json":
+        schema = _json_payload_value_schema(payload)
+        root_type = str(schema.get("type") or "unknown")
+        if root_type == "object":
+            json_shape = "object"
+        elif root_type == "array":
+            json_shape = "array"
+        elif root_type == "unknown":
+            json_shape = "unknown"
+        else:
+            json_shape = "scalar"
+
+        out: Dict[str, Any] = {
+            "schema_version": 1,
+            "type": "json",
+            "json_shape": json_shape,
+            "schema": schema,
+        }
         if isinstance(payload, dict):
-            return {
-                "schema_version": 1,
-                "type": "json",
-                "json_shape": "object",
-                "keys_sample": sorted(list(payload.keys())),
-            }
-        if isinstance(payload, list):
-            return {"schema_version": 1, "type": "json", "json_shape": "array"}
-        return {"schema_version": 1, "type": "json", "json_shape": "unknown"}
+            out["keys_sample"] = sorted(list(payload.keys()))
+        return out
     if envelope_kind == "text":
         return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
     if envelope_kind == "binary":
@@ -1123,6 +1240,7 @@ async def run_graph(
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
             tool_mode = _tool_side_effect_mode(params) if kind == "tool" else None
+            tool_cache_enabled = bool(params.get("cache_enabled", True)) if kind == "tool" else True
             source_kind = str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "")
             cache_policy = params.get("cache_policy") if isinstance(params.get("cache_policy"), dict) else {}
             source_cache_enabled = bool(params.get("cache_enabled", True))
@@ -1133,7 +1251,9 @@ async def run_graph(
                     or (source_kind == "file" and not source_cache_enabled)
                 )
             )
-            use_cache_for_node = not (kind == "tool" and tool_mode == "effectful") and not source_force_miss
+            tool_force_miss = kind == "tool" and ((tool_mode == "effectful") or (not tool_cache_enabled))
+            runtime_cache_enabled = bool(getattr(runtime_ref, "global_cache_enabled", True))
+            use_cache_for_node = runtime_cache_enabled and (not tool_force_miss) and (not source_force_miss)
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
@@ -2412,6 +2532,7 @@ async def run_graph(
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")
+                    tool_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
                     tool_in_contract = str((ports.get("in") or "json"))
                     tool_allowed_in = _allowed_ports("tool", "in", provider=tool_provider)
                     if tool_in_contract not in tool_allowed_in:
@@ -2420,9 +2541,9 @@ async def run_graph(
                             details=_contract_details(
                                 expected={"allowedInPortTypes": sorted(tool_allowed_in)},
                                 actual={"inPortType": tool_in_contract},
-                            ),
-                        )
-                    for upstream_id in upstream_ids:
+                                ),
+                            )
+                    for upstream_id in tool_upstream_ids:
                         upstream_art = await context.artifact_store.get(upstream_id)
                         upstream_pt = _infer_artifact_port_type(upstream_art)
                         if upstream_pt not in tool_allowed_in:
@@ -2456,7 +2577,7 @@ async def run_graph(
                         run_id,
                         tool_node,
                         context,
-                        upstream_artifact_ids=upstream_ids,
+                        upstream_artifact_ids=tool_upstream_ids,
                     )
                 else:
                     raise RuntimeError(f"Unknown node kind: {kind}")
@@ -2729,6 +2850,16 @@ async def run_graph(
                         if kind == "tool"
                         else None
                     ) or {}
+                    if kind in {"source", "llm", "tool"}:
+                        debug_payload = data_value
+                        if kind == "tool" and isinstance(data_value, dict):
+                            debug_payload = data_value.get("payload")
+                        _emit_external_schema_debug(
+                            kind=str(kind),
+                            node_id=str(node_id),
+                            schema=base_payload_schema if isinstance(base_payload_schema, dict) else {},
+                            payload=debug_payload,
+                        )
                     table_schema_env: Optional[Dict[str, Any]] = None
                     if kind == "source" and str(artifact_port_type or "").lower() == "table":
                         payload_cols = _extract_table_columns_from_payload_schema(base_payload_schema)

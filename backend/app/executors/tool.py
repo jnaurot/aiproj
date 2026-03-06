@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import importlib
+import io
 import json
+import os
+import re
+import subprocess
 import shutil
-import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -71,11 +74,13 @@ def _permissions(params: Dict[str, Any]) -> Dict[str, bool]:
     }
 
 
-def _requested_output_mode(params: Dict[str, Any]) -> str:
-    out = params.get("output") if isinstance(params.get("output"), dict) else {}
-    mode = out.get("mode") if isinstance(out, dict) else None
-    if mode in ("json", "text", "binary"):
-        return mode
+def _requested_output_mode(node: Dict[str, Any], params: Dict[str, Any]) -> str:
+    ports = (node.get("data", {}).get("ports", {}) or {}) if isinstance(node, dict) else {}
+    out_port = str(ports.get("out") or "json").strip().lower()
+    if out_port in ("json", "text", "binary"):
+        return out_port
+    # Tool out ports currently support json/text/binary only.
+    # Fallback remains json for unknown/missing values.
     return "json"
 
 
@@ -91,11 +96,107 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
+def _table_df_from_tool_artifact(artifact: Dict[str, Any]):
+    try:
+        import pandas as pd
+    except Exception:
+        return None
+
+    mime_type = str(artifact.get("mime_type") or "").lower()
+    port_type = str(artifact.get("port_type") or "").lower()
+    text_value = artifact.get("text")
+    bytes_b64 = artifact.get("bytes_b64")
+    raw_bytes: Optional[bytes] = None
+    if isinstance(bytes_b64, str) and bytes_b64:
+        try:
+            raw_bytes = base64.b64decode(bytes_b64.encode("ascii"), validate=False)
+        except Exception:
+            raw_bytes = None
+
+    # Prefer the same loader used by Transform nodes so Tool DB accepts
+    # the same TABLE_V1-compatible payloads/mime combinations.
+    if raw_bytes is not None:
+        try:
+            from ..runner.nodes.transform import load_table_from_artifact_bytes
+
+            return load_table_from_artifact_bytes(mime_type, raw_bytes)
+        except Exception:
+            pass
+
+    # If the artifact is explicitly typed as table, try delimited parsing even when
+    # mime type is generic text/plain or unset.
+    if port_type == "table" and isinstance(text_value, str) and text_value.strip():
+        try:
+            return pd.read_csv(io.StringIO(text_value), sep=None, engine="python")
+        except Exception:
+            pass
+
+    if "csv" in mime_type:
+        if raw_bytes is not None:
+            return pd.read_csv(io.BytesIO(raw_bytes))
+        if isinstance(text_value, str):
+            return pd.read_csv(io.StringIO(text_value))
+    if "tab-separated-values" in mime_type:
+        if raw_bytes is not None:
+            return pd.read_csv(io.BytesIO(raw_bytes), sep="\t")
+        if isinstance(text_value, str):
+            return pd.read_csv(io.StringIO(text_value), sep="\t")
+    if "json" in mime_type and isinstance(text_value, str):
+        parsed = json.loads(text_value)
+        if isinstance(parsed, list):
+            return pd.DataFrame(parsed)
+        if isinstance(parsed, dict):
+            if parsed.get("kind") == "json" and isinstance(parsed.get("payload"), dict):
+                payload = parsed.get("payload") or {}
+                if isinstance(payload.get("rows"), list):
+                    return pd.DataFrame(payload.get("rows") or [])
+                result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+                if isinstance(result.get("rows"), list):
+                    return pd.DataFrame(result.get("rows") or [])
+            rows = parsed.get("rows")
+            if isinstance(rows, list):
+                return pd.DataFrame(rows)
+            return pd.DataFrame([parsed])
+    return None
+
+
+def _extract_typed_columns_from_payload_schema(payload_schema: Any) -> list[Dict[str, str]]:
+    if not isinstance(payload_schema, dict):
+        return []
+    schema_env = payload_schema.get("schema")
+    cols = None
+    if isinstance(schema_env, dict):
+        table = schema_env.get("table")
+        if isinstance(table, dict) and isinstance(table.get("columns"), list):
+            cols = table.get("columns")
+    if cols is None and isinstance(payload_schema.get("columns"), list):
+        cols = payload_schema.get("columns")
+    if not isinstance(cols, list):
+        return []
+    out: list[Dict[str, str]] = []
+    seen: set[str] = set()
+    for c in cols:
+        if not isinstance(c, dict):
+            continue
+        name = str(c.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        ctype = str(c.get("type") or "unknown").strip() or "unknown"
+        out.append({"name": name, "type": ctype})
+    return out
+
+
 async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids: list[str]) -> Dict[str, Any]:
     if not getattr(context, "graph_id", ""):
         raise ValueError("graphId is required for artifact lookup")
     artifacts: list[dict[str, Any]] = []
+    seen_artifacts: set[str] = set()
     for aid in upstream_artifact_ids:
+        aid_s = str(aid or "")
+        if not aid_s or aid_s in seen_artifacts:
+            continue
+        seen_artifacts.add(aid_s)
         art = await context.artifact_store.get(aid)
         b = await context.artifact_store.read(aid)
         mt = (art.mime_type or "application/octet-stream").lower()
@@ -112,6 +213,9 @@ async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids:
             {
                 "artifact_id": aid,
                 "mime_type": art.mime_type,
+                "port_type": art.port_type,
+                "payload_schema": art.payload_schema if isinstance(art.payload_schema, dict) else None,
+                "typed_columns": _extract_typed_columns_from_payload_schema(art.payload_schema),
                 "size_bytes": len(b),
                 "text": text_value,
                 "json": json_value,
@@ -151,6 +255,16 @@ def _contract_mismatch(message: str) -> str:
     return f"Tool output contract mismatch: {message}"
 
 
+def _exception_text(exc: BaseException) -> str:
+    text = str(exc).strip()
+    if text:
+        return text
+    rep = repr(exc).strip()
+    if rep:
+        return rep
+    return exc.__class__.__name__
+
+
 async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
@@ -170,7 +284,7 @@ async def exec_tool(
     request_fingerprint = params.get("_request_fingerprint")
     idempotency_key = params.get("_idempotency_key")
     tool_name, tool_version = _extract_tool_identity(params)
-    output_mode = _requested_output_mode(params)
+    output_mode = _requested_output_mode(node, params)
     started = time.perf_counter()
     input_ctx = await _materialize_tool_inputs(context, upstream_artifact_ids)
 
@@ -243,33 +357,94 @@ async def exec_tool(
     if provider == "python":
         try:
             py_cfg = params.get("python", {}) if isinstance(params.get("python"), dict) else {}
-            scope: Dict[str, Any] = {
-                "input": input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text"),
-                "inputs": input_ctx.get("artifacts"),
-                "input_text": input_ctx.get("input_text"),
-                "input_json": input_ctx.get("input_json"),
-                "input_b64": input_ctx.get("input_b64"),
-                "result": None,
-            }
-            exec(str(py_cfg.get("code") or ""), scope)
-            result = scope.get("result")
+            py_args = py_cfg.get("args") if isinstance(py_cfg.get("args"), dict) else {}
+            capture_output = bool(py_cfg.get("capture_output", True))
+            py_code = str(py_cfg.get("code") or "")
+            timeout_ms = params.get("timeoutMs")
+            timeout_s = None
+            if timeout_ms is not None:
+                timeout_s = max(0.001, float(timeout_ms) / 1000.0)
+
+            def _run_python() -> Any:
+                scope: Dict[str, Any] = {
+                    "input": input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text"),
+                    "inputs": input_ctx.get("artifacts"),
+                    "input_text": input_ctx.get("input_text"),
+                    "input_json": input_ctx.get("input_json"),
+                    "input_b64": input_ctx.get("input_b64"),
+                    "raw_input": input_ctx,
+                    "args": py_args,
+                    "result": None,
+                }
+                exec(py_code, scope)
+                return scope.get("result")
+
+            if timeout_s is None:
+                result = await asyncio.to_thread(_run_python)
+            else:
+                result = await asyncio.wait_for(asyncio.to_thread(_run_python), timeout=timeout_s)
             elapsed_ms = (time.perf_counter() - started) * 1000.0
+            payload = (
+                {
+                    "ok": True,
+                    "args": _redact_value(py_args),
+                    "result": _redact_value(result),
+                }
+                if capture_output
+                else _redact_value(result)
+            )
             return NodeOutput(
                 status="succeeded",
                 metadata=None,
                 execution_time_ms=elapsed_ms,
                 data=_format_output(
-                    _redact_value(result),
+                    payload,
                     output_mode,
                     _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
                 ),
             )
-        except Exception as e:
+        except asyncio.TimeoutError:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            timeout_val = params.get("timeoutMs")
+            timeout_text = int(float(timeout_val)) if timeout_val is not None else "unknown"
+            py_cfg = params.get("python", {}) if isinstance(params.get("python"), dict) else {}
+            error_payload = {
+                "ok": False,
+                "args": _redact_value(py_cfg.get("args") if isinstance(py_cfg.get("args"), dict) else {}),
+                "error": f"Python tool timed out after {timeout_text}ms",
+                "error_type": "TimeoutError",
+            }
             return NodeOutput(
                 status="failed",
                 metadata=None,
-                execution_time_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"Python tool execution failed: {str(e)}",
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"Python tool timed out after {timeout_text}ms",
+            )
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            err_text = _exception_text(e)
+            py_cfg = params.get("python", {}) if isinstance(params.get("python"), dict) else {}
+            error_payload = {
+                "ok": False,
+                "args": _redact_value(py_cfg.get("args") if isinstance(py_cfg.get("args"), dict) else {}),
+                "error": err_text,
+                "error_type": e.__class__.__name__,
+            }
+            return NodeOutput(
+                status="failed",
+                metadata=None,
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"Python tool execution failed: {err_text}",
             )
 
     if provider == "js":
@@ -288,18 +463,32 @@ async def exec_tool(
             js_code = str(js_cfg.get("code") or "").strip()
             if not js_code:
                 return NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="JS tool code is empty")
+            js_args = js_cfg.get("args") if isinstance(js_cfg.get("args"), dict) else {}
+            capture_output = bool(js_cfg.get("capture_output", True))
+            vm_timeout_ms = int(params.get("timeoutMs") or 5000)
+            vm_timeout_ms = max(1, vm_timeout_ms)
 
             runner = (
                 "const vm=require('node:vm');"
                 "const fs=require('node:fs');"
                 "const inputJson=process.env.TOOL_INPUT_JSON||'null';"
+                "const argsJson=process.env.TOOL_ARGS_JSON||'{}';"
+                "const vmTimeoutMs=Math.max(1,Number(process.env.TOOL_VM_TIMEOUT_MS||'5000'));"
                 "let input=null;try{input=JSON.parse(inputJson);}catch{input=null;}"
+                "let args={};try{args=JSON.parse(argsJson);}catch{args={};}"
                 "const code=fs.readFileSync(0,'utf8');"
                 "(async()=>{"
-                "const context={input, result:null, console:{log:()=>{}}};"
+                "const context={"
+                "input:(input&&input.input_json!==undefined&&input.input_json!==null)?input.input_json:((input&&input.input_text!==undefined)?input.input_text:null),"
+                "inputs:(input&&Array.isArray(input.artifacts))?input.artifacts:[],"
+                "raw_input:input,"
+                "args,"
+                "result:null,"
+                "console:{log:()=>{}}"
+                "};"
                 "vm.createContext(context);"
                 "try{"
-                "let ret=vm.runInContext(code,context,{timeout:5000});"
+                "let ret=vm.runInContext(code,context,{timeout:vmTimeoutMs});"
                 "if(ret&&typeof ret.then==='function'){ret=await ret;}"
                 "const out=(context.result!==null&&context.result!==undefined)?context.result:ret;"
                 "process.stdout.write(JSON.stringify({ok:true,result:(out===undefined?null:out)}));"
@@ -310,18 +499,43 @@ async def exec_tool(
                 "})();"
             )
 
-            proc = await asyncio.create_subprocess_exec(
-                node_bin,
-                "-e",
-                runner,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env={"TOOL_INPUT_JSON": json.dumps(_jsonable(input_ctx), ensure_ascii=False)},
+            child_env = dict(os.environ)
+            child_env.update(
+                {
+                    "TOOL_INPUT_JSON": json.dumps(_jsonable(input_ctx), ensure_ascii=False),
+                    "TOOL_ARGS_JSON": json.dumps(_jsonable(js_args), ensure_ascii=False),
+                    "TOOL_VM_TIMEOUT_MS": str(vm_timeout_ms),
+                }
             )
-            stdout_b, stderr_b = await proc.communicate(input=js_code.encode("utf-8"))
-            stdout_s = stdout_b.decode("utf-8", errors="replace").strip()
-            stderr_s = stderr_b.decode("utf-8", errors="replace").strip()
+
+            stdout_s = ""
+            stderr_s = ""
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    node_bin,
+                    "-e",
+                    runner,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=child_env,
+                )
+                stdout_b, stderr_b = await proc.communicate(input=js_code.encode("utf-8"))
+                stdout_s = stdout_b.decode("utf-8", errors="replace").strip()
+                stderr_s = stderr_b.decode("utf-8", errors="replace").strip()
+            except NotImplementedError:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    [node_bin, "-e", runner],
+                    input=js_code,
+                    text=True,
+                    capture_output=True,
+                    env=child_env,
+                    check=False,
+                )
+                stdout_s = str(completed.stdout or "").strip()
+                stderr_s = str(completed.stderr or "").strip()
+
             if not stdout_s:
                 return NodeOutput(
                     status="failed",
@@ -340,22 +554,45 @@ async def exec_tool(
                 )
             result = parsed.get("result")
             elapsed_ms = (time.perf_counter() - started) * 1000.0
+            payload = (
+                {
+                    "ok": True,
+                    "args": _redact_value(js_args),
+                    "result": _redact_value(result),
+                }
+                if capture_output
+                else _redact_value(result)
+            )
             return NodeOutput(
                 status="succeeded",
                 metadata=None,
                 execution_time_ms=elapsed_ms,
                 data=_format_output(
-                    _redact_value(result),
+                    payload,
                     output_mode,
                     _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
                 ),
             )
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            err_text = _exception_text(e)
+            js_cfg = params.get("js", {}) if isinstance(params.get("js"), dict) else {}
+            error_payload = {
+                "ok": False,
+                "args": _redact_value(js_cfg.get("args") if isinstance(js_cfg.get("args"), dict) else {}),
+                "error": err_text,
+                "error_type": e.__class__.__name__,
+            }
             return NodeOutput(
                 status="failed",
                 metadata=None,
-                execution_time_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"JS tool execution failed: {str(e)}",
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"JS tool execution failed: {err_text}",
             )
 
     if provider == "function":
@@ -363,7 +600,15 @@ async def exec_tool(
             fn_cfg = params.get("function", {}) if isinstance(params.get("function"), dict) else {}
             module_name = str(fn_cfg.get("module") or "").strip()
             export_name = str(fn_cfg.get("export") or "").strip()
+            if not module_name or not export_name:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=0.0,
+                    error="function.module and function.export are required",
+                )
             call_args = fn_cfg.get("args") if isinstance(fn_cfg.get("args"), dict) else {}
+            capture_output = bool(fn_cfg.get("capture_output", True))
             mod = importlib.import_module(module_name)
             fn = getattr(mod, export_name)
             call_input = {
@@ -374,22 +619,47 @@ async def exec_tool(
             if asyncio.iscoroutine(result):
                 result = await result
             elapsed_ms = (time.perf_counter() - started) * 1000.0
+            payload = (
+                {
+                    "ok": True,
+                    "module": module_name,
+                    "export": export_name,
+                    "args": call_args,
+                    "result": _redact_value(result),
+                }
+                if capture_output
+                else _redact_value(result)
+            )
             return NodeOutput(
                 status="succeeded",
                 metadata=None,
                 execution_time_ms=elapsed_ms,
                 data=_format_output(
-                    _redact_value(result),
+                    payload,
                     output_mode,
                     _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
                 ),
             )
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            err_text = _exception_text(e)
+            error_payload = {
+                "ok": False,
+                "module": str((params.get("function") or {}).get("module") or ""),
+                "export": str((params.get("function") or {}).get("export") or ""),
+                "error": err_text,
+                "error_type": e.__class__.__name__,
+            }
             return NodeOutput(
                 status="failed",
                 metadata=None,
-                execution_time_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"Function tool execution failed: {str(e)}",
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"Function tool execution failed: {err_text}",
             )
 
     if provider == "shell":
@@ -401,89 +671,399 @@ async def exec_tool(
             command = str(sh_cfg.get("command") or "").strip()
             if not command:
                 return NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="Shell command is empty")
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout_b, stderr_b = await proc.communicate()
-            result = {
-                "exit_code": int(proc.returncode),
-                "stdout": stdout_b.decode("utf-8", errors="replace"),
-                "stderr": stderr_b.decode("utf-8", errors="replace"),
+            cwd = str(sh_cfg.get("cwd") or "").strip() or None
+            timeout_ms = sh_cfg.get("timeout_ms") if sh_cfg.get("timeout_ms") is not None else params.get("timeoutMs")
+            timeout_s = None
+            if timeout_ms is not None:
+                timeout_s = max(0.001, float(timeout_ms) / 1000.0)
+            env_cfg = sh_cfg.get("env") if isinstance(sh_cfg.get("env"), dict) else {}
+            child_env = dict(os.environ)
+            for k, v in env_cfg.items():
+                child_env[str(k)] = str(v)
+            fail_on_nonzero = bool(sh_cfg.get("fail_on_nonzero", True))
+
+            timed_out = False
+            exit_code: Optional[int]
+            stdout_text = ""
+            stderr_text = ""
+            try:
+                proc = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=cwd,
+                    env=child_env,
+                )
+                try:
+                    if timeout_s is None:
+                        stdout_b, stderr_b = await proc.communicate()
+                    else:
+                        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    proc.kill()
+                    stdout_b, stderr_b = await proc.communicate()
+                exit_code = int(proc.returncode)
+                stdout_text = stdout_b.decode("utf-8", errors="replace")
+                stderr_text = stderr_b.decode("utf-8", errors="replace")
+            except NotImplementedError:
+                # Windows fallback when the active asyncio loop does not implement subprocess transports.
+                try:
+                    completed = await asyncio.to_thread(
+                        subprocess.run,
+                        command,
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        cwd=cwd,
+                        env=child_env,
+                        timeout=timeout_s,
+                        check=False,
+                    )
+                    exit_code = int(completed.returncode)
+                    stdout_text = str(completed.stdout or "")
+                    stderr_text = str(completed.stderr or "")
+                except subprocess.TimeoutExpired as tex:
+                    timed_out = True
+                    exit_code = None
+                    stdout_text = str(tex.stdout or "")
+                    stderr_text = str(tex.stderr or "")
+
+            captured = {
+                "ok": (int(exit_code or 0) == 0) and (not timed_out),
+                "exit_code": exit_code,
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "stdout_lines": stdout_text.count("\n"),
+                "stderr_lines": stderr_text.count("\n"),
+                "timed_out": timed_out,
+                "command": command,
             }
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            if proc.returncode != 0:
+            if timed_out:
                 return NodeOutput(
                     status="failed",
                     metadata=None,
                     execution_time_ms=elapsed_ms,
-                    error=f"Shell tool failed with exit code {proc.returncode}",
+                    data=_format_output(
+                        _redact_value(captured),
+                        "json",
+                        _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                    ),
+                    error=f"Shell tool timed out after {int(float(timeout_ms))}ms",
+                )
+            if int(exit_code or 0) != 0 and fail_on_nonzero:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=elapsed_ms,
+                    data=_format_output(
+                        _redact_value(captured),
+                        "json",
+                        _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                    ),
+                    error=f"Shell tool failed with exit code {exit_code}",
                 )
             return NodeOutput(
                 status="succeeded",
                 metadata=None,
                 execution_time_ms=elapsed_ms,
                 data=_format_output(
-                    _redact_value(result),
+                    _redact_value(captured),
                     output_mode,
                     _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
                 ),
             )
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            err_text = _exception_text(e)
+            sh_cfg = params.get("shell", {}) if isinstance(params.get("shell"), dict) else {}
+            cmd_fallback = str(sh_cfg.get("command") or "")
+            cwd_fallback = str(sh_cfg.get("cwd") or "") or None
+            error_payload = {
+                "ok": False,
+                "exit_code": None,
+                "stdout": "",
+                "stderr": "",
+                "stdout_lines": 0,
+                "stderr_lines": 0,
+                "timed_out": False,
+                "command": cmd_fallback,
+                "cwd": cwd_fallback,
+                "error": err_text,
+                "error_type": e.__class__.__name__,
+            }
             return NodeOutput(
                 status="failed",
                 metadata=None,
-                execution_time_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"Shell tool execution failed: {str(e)}",
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    _redact_value(error_payload),
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"Shell tool execution failed: {err_text}",
             )
 
     if provider == "db":
         try:
+            try:
+                import duckdb
+            except Exception:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=0.0,
+                    error="duckdb is required for Tool DB",
+                )
+
             db_cfg = params.get("db", {}) if isinstance(params.get("db"), dict) else {}
             conn_ref = str(db_cfg.get("connectionRef") or "").strip()
             sql = str(db_cfg.get("sql") or "").strip()
             sql_params = db_cfg.get("params") if isinstance(db_cfg.get("params"), dict) else {}
+            capture_output = bool(db_cfg.get("capture_output", True))
+            timeout_ms = params.get("timeoutMs")
+            timeout_s = None
+            if timeout_ms is not None:
+                timeout_s = max(0.001, float(timeout_ms) / 1000.0)
             if not conn_ref or not sql:
                 return NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="db.connectionRef and db.sql are required")
-            if conn_ref.startswith("sqlite:///"):
-                db_path = conn_ref.replace("sqlite:///", "", 1)
-            elif conn_ref == ":memory:":
+            if conn_ref == ":memory:":
                 db_path = ":memory:"
+            elif conn_ref.startswith("duckdb:///"):
+                db_path = conn_ref.replace("duckdb:///", "", 1)
             else:
                 return NodeOutput(
                     status="failed",
                     metadata=None,
                     execution_time_ms=0.0,
-                    error="Only sqlite:///... or :memory: connectionRef is supported in this runtime",
+                    error="Tool DB requires DuckDB connectionRef in format duckdb:///... or :memory:",
                 )
-            conn = sqlite3.connect(db_path)
-            try:
-                cur = conn.cursor()
-                cur.execute(sql, sql_params)
-                cols = [d[0] for d in (cur.description or [])]
-                rows = [dict(zip(cols, row)) for row in cur.fetchall()] if cols else []
-                conn.commit()
-            finally:
-                conn.close()
+
+            def _run_db() -> Dict[str, Any]:
+                conn = duckdb.connect(database=db_path)
+                try:
+                    registered_inputs: list[Dict[str, Any]] = []
+                    input_diagnostics: list[Dict[str, Any]] = []
+                    artifacts = input_ctx.get("artifacts") if isinstance(input_ctx.get("artifacts"), list) else []
+                    for idx, artifact in enumerate(artifacts):
+                        if not isinstance(artifact, dict):
+                            continue
+                        diag = {
+                            "artifact_id": str(artifact.get("artifact_id") or ""),
+                            "mime_type": str(artifact.get("mime_type") or ""),
+                            "size_bytes": int(artifact.get("size_bytes") or 0),
+                            "table": f"input_{idx}",
+                        }
+                        try:
+                            df = _table_df_from_tool_artifact(artifact)
+                        except Exception as parse_exc:
+                            df = None
+                            diag["parse_error"] = _exception_text(parse_exc)
+                        if df is None:
+                            diag["parsed"] = False
+                            input_diagnostics.append(diag)
+                            continue
+                        table_name = f"input_{idx}"
+                        # Avoid transient replacement-scan lifetimes by materializing into
+                        # a real temp table in DuckDB for the duration of this execution.
+                        staging_name = f"__input_stage_{idx}"
+                        conn.register(staging_name, df)
+                        try:
+                            conn.execute(f"create or replace temp table {table_name} as select * from {staging_name}")
+                        finally:
+                            try:
+                                conn.unregister(staging_name)
+                            except Exception:
+                                pass
+                        diag["parsed"] = True
+                        diag["rows"] = int(len(df.index))
+                        diag["columns"] = [str(c) for c in list(df.columns)]
+                        typed_from_artifact = (
+                            artifact.get("typed_columns")
+                            if isinstance(artifact.get("typed_columns"), list)
+                            else []
+                        )
+                        typed_map = {
+                            str(c.get("name") or ""): str(c.get("type") or "unknown")
+                            for c in typed_from_artifact
+                            if isinstance(c, dict) and str(c.get("name") or "").strip()
+                        }
+                        typed_columns = []
+                        for col in list(df.columns):
+                            col_name = str(col)
+                            try:
+                                native = str(getattr(df[col].dtype, "name", "unknown"))
+                            except Exception:
+                                native = "unknown"
+                            typed_columns.append(
+                                {
+                                    "name": col_name,
+                                    "type": str(typed_map.get(col_name, "unknown")),
+                                    "nativeType": native,
+                                }
+                            )
+                        diag["typed_columns"] = typed_columns
+                        input_diagnostics.append(diag)
+                        registered_inputs.append(
+                            {
+                                "table": table_name,
+                                "artifact_id": str(artifact.get("artifact_id") or ""),
+                                "rows": int(len(df.index)),
+                                "columns": [str(c) for c in list(df.columns)],
+                                "typed_columns": typed_columns,
+                            }
+                        )
+                    if (not registered_inputs) and re.search(r"\binput\b", sql, flags=re.IGNORECASE):
+                        raise RuntimeError(
+                            "No upstream table input was materialized for alias 'input'. "
+                            f"diagnostics={json.dumps(input_diagnostics, ensure_ascii=False)}"
+                        )
+
+                    resolved_sql = sql
+                    primary_input_count: Optional[int] = None
+                    if registered_inputs:
+                        primary_table = str(registered_inputs[0]["table"])
+                        try:
+                            probe = conn.execute(f"select count(*) as n from {primary_table}").fetchone()
+                            primary_input_count = int((probe or [0])[0] or 0)
+                        except Exception as probe_exc:
+                            raise RuntimeError(
+                                "Primary materialized input table is not queryable "
+                                f"({primary_table}): {_exception_text(probe_exc)}"
+                            ) from probe_exc
+                        # Resolve logical alias to the verified primary input table.
+                        resolved_sql = re.sub(
+                            r"\binput\b",
+                            primary_table,
+                            resolved_sql,
+                            flags=re.IGNORECASE,
+                        )
+                    try:
+                        print(
+                            "[tool-db-debug] execute",
+                            json.dumps(
+                                {
+                                    "impl": "tool_db_v3_temp_input_view",
+                                    "connectionRef": conn_ref,
+                                    "sql": sql,
+                                    "resolved_sql": resolved_sql,
+                                    "primary_input_count": primary_input_count,
+                                    "registered_inputs": registered_inputs,
+                                    "input_artifacts": input_diagnostics,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        res = conn.execute(resolved_sql, sql_params)
+                    except Exception as db_exc:
+                        dbg = {
+                            "impl": "tool_db_v3_temp_input_view",
+                            "connectionRef": conn_ref,
+                            "sql": sql,
+                            "resolved_sql": resolved_sql,
+                            "primary_input_count": primary_input_count,
+                            "registered_inputs": registered_inputs,
+                            "input_artifacts": input_diagnostics,
+                        }
+                        raise RuntimeError(
+                            f"{_exception_text(db_exc)} [tool-db-debug] {json.dumps(dbg, ensure_ascii=False)}"
+                        ) from db_exc
+                    cols = [d[0] for d in (res.description or [])]
+                    is_query = len(cols) > 0
+                    rows = [dict(zip(cols, row)) for row in res.fetchall()] if is_query else []
+                    rowcount = getattr(res, "rowcount", -1)
+                    affected_rows = None if is_query else max(0, int(rowcount if isinstance(rowcount, int) else -1))
+                    conn.commit()
+                    return {
+                        "rows": rows,
+                        "row_count": len(rows),
+                        "columns": cols,
+                        "affected_rows": affected_rows,
+                        "is_query": is_query,
+                        "resolved_sql": resolved_sql,
+                        "input_tables": registered_inputs,
+                        "input_artifacts": input_diagnostics,
+                    }
+                finally:
+                    conn.close()
+
+            if timeout_s is None:
+                result = await asyncio.to_thread(_run_db)
+            else:
+                result = await asyncio.wait_for(asyncio.to_thread(_run_db), timeout=timeout_s)
+
             elapsed_ms = (time.perf_counter() - started) * 1000.0
-            result = {"rows": rows, "row_count": len(rows)}
+            payload = (
+                {
+                    "ok": True,
+                    "connectionRef": conn_ref,
+                    "sql": sql,
+                    "params": _redact_value(sql_params),
+                    "result": _redact_value(result),
+                }
+                if capture_output
+                else _redact_value(result)
+            )
             return NodeOutput(
                 status="succeeded",
                 metadata=None,
                 execution_time_ms=elapsed_ms,
                 data=_format_output(
-                    _redact_value(result),
+                    payload,
                     output_mode,
                     _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
                 ),
             )
-        except Exception as e:
+        except asyncio.TimeoutError:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            timeout_val = params.get("timeoutMs")
+            timeout_text = int(float(timeout_val)) if timeout_val is not None else "unknown"
+            db_cfg = params.get("db", {}) if isinstance(params.get("db"), dict) else {}
+            error_payload = {
+                "ok": False,
+                "connectionRef": str(db_cfg.get("connectionRef") or ""),
+                "sql": str(db_cfg.get("sql") or ""),
+                "params": _redact_value(db_cfg.get("params") if isinstance(db_cfg.get("params"), dict) else {}),
+                "error": f"DB tool timed out after {timeout_text}ms",
+                "error_type": "TimeoutError",
+            }
             return NodeOutput(
                 status="failed",
                 metadata=None,
-                execution_time_ms=(time.perf_counter() - started) * 1000.0,
-                error=f"DB tool execution failed: {str(e)}",
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"DB tool timed out after {timeout_text}ms",
+            )
+        except Exception as e:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            err_text = _exception_text(e)
+            db_cfg = params.get("db", {}) if isinstance(params.get("db"), dict) else {}
+            error_payload = {
+                "ok": False,
+                "connectionRef": str(db_cfg.get("connectionRef") or ""),
+                "sql": str(db_cfg.get("sql") or ""),
+                "params": _redact_value(db_cfg.get("params") if isinstance(db_cfg.get("params"), dict) else {}),
+                "error": err_text,
+                "error_type": e.__class__.__name__,
+            }
+            return NodeOutput(
+                status="failed",
+                metadata=None,
+                execution_time_ms=elapsed_ms,
+                data=_format_output(
+                    error_payload,
+                    "json",
+                    _status_meta("error", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                ),
+                error=f"DB tool execution failed: {err_text}",
             )
 
     if provider == "builtin":
@@ -535,10 +1115,27 @@ async def exec_tool(
             url = http_cfg.get("url") or params.get("url") or ""
             method = (http_cfg.get("method") or params.get("method") or "GET").upper()
             headers = dict(http_cfg.get("headers") or params.get("headers") or {})
+            query_raw = (
+                http_cfg.get("query")
+                if "query" in http_cfg
+                else params.get("query")
+            )
             body = http_cfg.get("body") if "body" in http_cfg else params.get("body")
             retry_cfg = params.get("retry") or params.get("retries") or {}
             max_attempts = max(1, int(retry_cfg.get("max_attempts") or retry_cfg.get("max") or 1))
             backoff_ms = max(0, int(retry_cfg.get("backoff_ms") or retry_cfg.get("backoffMs") or 0))
+
+            if query_raw is None:
+                query = None
+            elif isinstance(query_raw, dict):
+                query = dict(query_raw)
+            else:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=0.0,
+                    error="http.query must be an object",
+                )
 
             if not url:
                 return NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="API URL not provided")
@@ -552,7 +1149,7 @@ async def exec_tool(
             async with aiohttp.ClientSession() as session:
                 while attempt < max_attempts:
                     attempt += 1
-                    async with session.request(method, url, headers=headers, json=body) as response:
+                    async with session.request(method, url, headers=headers, params=query, json=body) as response:
                         last_status = int(response.status)
                         last_ct = response.headers.get("content-type", "")
                         last_body = await response.read()

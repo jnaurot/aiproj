@@ -1,6 +1,7 @@
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -70,6 +71,10 @@ class AcceptNodeParamsRequest(BaseModel):
     graph: Dict[str, Any]
     params: Dict[str, Any]
 
+
+class CacheConfigRequest(BaseModel):
+    enabled: bool
+
 class ResolveSourceRequest(BaseModel):
     graphId: str
     graph: Dict[str, Any]
@@ -77,11 +82,68 @@ class ResolveSourceRequest(BaseModel):
     params: Optional[Dict[str, Any]] = None
 
 
+class DbSchemaRequest(BaseModel):
+    connectionRef: str
+
+    @field_validator("connectionRef")
+    @classmethod
+    def validate_connection_ref(cls, v):
+        ref = str(v or "").strip()
+        if not ref:
+            raise ValueError("connectionRef is required")
+        return ref
+
+
+def _duckdb_path_from_ref(connection_ref: str) -> str:
+    ref = str(connection_ref or "").strip()
+    if ref == ":memory:":
+        return ":memory:"
+    if ref.startswith("duckdb:///"):
+        return ref.replace("duckdb:///", "", 1)
+    raise ValueError("Tool DB requires DuckDB connectionRef in format duckdb:///... or :memory:")
+
+
+def _normalize_duckdb_type(native_type: str) -> str:
+    t = str(native_type or "").upper()
+    if "BOOL" in t:
+        return "bool"
+    if any(x in t for x in ("TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UBIGINT", "UINTEGER", "USMALLINT", "UTINYINT")):
+        return "int"
+    if any(x in t for x in ("FLOAT", "DOUBLE", "REAL", "DECIMAL", "NUMERIC")):
+        return "float"
+    if any(x in t for x in ("DATE", "TIME", "TIMESTAMP", "INTERVAL")):
+        return "date"
+    if any(x in t for x in ("JSON",)):
+        return "json"
+    if any(x in t for x in ("BLOB", "BYTEA", "BINARY", "VARBINARY")):
+        return "binary"
+    if any(x in t for x in ("CHAR", "TEXT", "VARCHAR", "UUID")):
+        return "string"
+    return "unknown"
+
+
 @router.get("")
 async def list_runs(request: Request, include_deleted: bool = Query(default=False)):
     rt = request.app.state.runtime
     rows = await rt.list_runs(include_deleted=include_deleted)
     return {"schemaVersion": 1, "runs": rows}
+
+
+@router.get("/cache/config")
+async def get_cache_config(request: Request):
+    rt = request.app.state.runtime
+    enabled = bool(getattr(rt, "global_cache_enabled", True))
+    return {"schemaVersion": 1, "enabled": enabled}
+
+
+@router.put("/cache/config")
+async def set_cache_config(req: CacheConfigRequest, request: Request):
+    rt = request.app.state.runtime
+    if hasattr(rt, "set_global_cache_enabled"):
+        rt.set_global_cache_enabled(req.enabled)
+    else:
+        rt.global_cache_enabled = bool(req.enabled)
+    return {"schemaVersion": 1, "enabled": bool(getattr(rt, "global_cache_enabled", True))}
 
 
 @router.post("", response_model=RunCreated)
@@ -229,6 +291,87 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
         "artifact": artifact_meta,
         "snapshotId": normalized.get("snapshot_id"),
     }
+
+
+@router.post("/tools/db/schema")
+async def get_db_schema(req: DbSchemaRequest):
+    try:
+        import duckdb
+    except Exception:
+        raise HTTPException(500, "duckdb is required for Tool DB schema discovery")
+
+    try:
+        db_path = _duckdb_path_from_ref(req.connectionRef)
+        if db_path != ":memory:":
+            db_path = os.path.abspath(db_path)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex))
+
+    try:
+        con = duckdb.connect(database=db_path)
+        try:
+            table_rows = con.execute(
+                """
+                SELECT table_schema, table_name, table_type
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                  AND table_type IN ('BASE TABLE', 'VIEW')
+                ORDER BY table_schema, table_name
+                """
+            ).fetchall()
+
+            col_rows = con.execute(
+                """
+                SELECT
+                    table_schema,
+                    table_name,
+                    column_name,
+                    data_type,
+                    is_nullable,
+                    ordinal_position
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                ORDER BY table_schema, table_name, ordinal_position
+                """
+            ).fetchall()
+        finally:
+            con.close()
+
+        col_map: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
+        for schema_name, table_name, column_name, data_type, is_nullable, ordinal_pos in col_rows:
+            key = (str(schema_name), str(table_name))
+            col_map.setdefault(key, []).append(
+                {
+                    "name": str(column_name),
+                    "normalizedType": _normalize_duckdb_type(str(data_type)),
+                    "nativeType": str(data_type),
+                    "nullable": str(is_nullable).upper() == "YES",
+                    "ordinal": int(ordinal_pos),
+                }
+            )
+
+        tables = []
+        for schema_name, table_name, table_type in table_rows:
+            key = (str(schema_name), str(table_name))
+            kind = "view" if str(table_type).upper() == "VIEW" else "table"
+            tables.append(
+                {
+                    "schema": str(schema_name),
+                    "name": str(table_name),
+                    "kind": kind,
+                    "columns": col_map.get(key, []),
+                }
+            )
+
+        return {
+            "schemaVersion": 1,
+            "connectionRef": req.connectionRef,
+            "tables": tables,
+        }
+    except HTTPException:
+        raise
+    except Exception as ex:
+        raise HTTPException(500, f"DB schema discovery failed: {str(ex)}")
 
 
 @router.delete("/{run_id}")

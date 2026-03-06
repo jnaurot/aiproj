@@ -5,6 +5,7 @@ const ToolCommonSchema = z.object({
   name: z.string().min(1),
   toolVersion: z.string().optional().default("v1"),
   side_effect_mode: z.enum(["pure", "idempotent", "effectful"]).default("pure"),
+  cache_enabled: z.boolean().optional().default(true),
   armed: z.boolean().optional().default(false),
   connectionRef: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
@@ -57,24 +58,39 @@ const FunctionSchema = ToolCommonSchema.extend({
   function: z.object({
     module: z.string().min(1),
     export: z.string().min(1),
-    args: z.record(z.string(), z.unknown()).optional()
+    args: z.record(z.string(), z.unknown()).optional(),
+    capture_output: z.boolean().optional().default(true)
 
   })
 });
 
 const PythonSchema = ToolCommonSchema.extend({
   provider: z.literal("python"),
-  python: z.object({ code: z.string().min(1) })
+  python: z.object({
+    code: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
+    capture_output: z.boolean().optional().default(true)
+  })
 });
 
 const JsSchema = ToolCommonSchema.extend({
   provider: z.literal("js"),
-  js: z.object({ code: z.string().min(1) })
+  js: z.object({
+    code: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
+    capture_output: z.boolean().optional().default(true)
+  })
 });
 
 const ShellSchema = ToolCommonSchema.extend({
   provider: z.literal("shell"),
-  shell: z.object({ command: z.string().min(1) })
+  shell: z.object({
+    command: z.string().min(1),
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    timeout_ms: z.number().int().positive().optional(),
+    fail_on_nonzero: z.boolean().optional().default(true)
+  })
 });
 
 const DbSchema = ToolCommonSchema.extend({
@@ -82,7 +98,8 @@ const DbSchema = ToolCommonSchema.extend({
   db: z.object({
     connectionRef: z.string().min(1),
     sql: z.string().min(1),
-    params: z.record(z.string(), z.unknown()).optional()
+    params: z.record(z.string(), z.unknown()).optional(),
+    capture_output: z.boolean().optional().default(true)
 
   })
 });

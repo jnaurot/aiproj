@@ -1,0 +1,29 @@
+{
+    "kind": "json",
+    "payload": {
+        "ok": true,
+        "exit_code": 0,
+        "stdout": "Server:  UnKnown\nAddress:  10.2.0.1\n\nName:    whitehouse.gov\nAddresses:  2a04:fa87:fffd::c000:4233\n\t  192.0.66.231\n\n",
+        "stderr": "Non-authoritative answer:\n\n",
+        "stdout_lines": 7,
+        "stderr_lines": 2,
+        "timed_out": false,
+        "command": "nslookup whitehouse.gov"
+    },
+    "meta": {
+        "status": "ok",
+        "tool_name": "Shell Tool",
+        "tool_version": "v1",
+        "request_fingerprint": "409f7a82cabd6c0b26ddb467718ba04f9f1360f5bd24e234635f3b1c52b65dcc",
+        "side_effect_mode": "idempotent",
+        "permissions": {
+            "net": false,
+            "fs": true,
+            "env": true,
+            "subprocess": true
+        },
+        "timings": {
+            "elapsed_ms": 372.8731000010157
+        }
+    }
+}

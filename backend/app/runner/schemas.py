@@ -621,6 +621,7 @@ class BuiltinToolParams(NodeParamSchema):
 class ToolProviderParams(NodeParamSchema):
     provider: Literal["mcp", "http", "function", "python", "js", "shell", "db", "builtin"]
     side_effect_mode: Literal["pure", "idempotent", "effectful"] = "pure"
+    cache_enabled: bool = True
     armed: bool = False
     output: Optional[Dict[str, Any]] = None
     mcp: Optional[Dict[str, Any]] = None
