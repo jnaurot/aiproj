@@ -99,6 +99,14 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_mode"] = out.get("mode")
         if "schema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("schema")
+    # Legacy alias support: older revisions used "rows" for table output.
+    if str(p.get("output_mode") or "").strip().lower() == "rows":
+        p["output_mode"] = "table"
+    if isinstance(p.get("output"), dict):
+        output_obj = p.get("output")
+        output_mode = output_obj.get("mode") if isinstance(output_obj, dict) else None
+        if str(output_mode or "").strip().lower() == "rows":
+            output_obj["mode"] = "table"
     if "contentType" in p and "content_type" not in p:
         p["content_type"] = p.pop("contentType")
     if "bodyMode" in p and "body_mode" not in p:

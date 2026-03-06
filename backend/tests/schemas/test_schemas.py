@@ -494,6 +494,14 @@ class TestSourceAPIParams:
 
 
 class TestNormalizeSourceParamsFrontend:
+    def test_legacy_rows_output_mode_is_normalized_to_table(self):
+        out = normalize_source_params_frontend({"output_mode": "rows"})
+        assert out["output_mode"] == "table"
+
+        out_nested = normalize_source_params_frontend({"output": {"mode": "rows"}})
+        assert out_nested["output_mode"] == "table"
+        assert out_nested["output"]["mode"] == "table"
+
     def test_api_camel_case_fields_are_normalized(self):
         raw = {
             "url": "https://api.example.com",
