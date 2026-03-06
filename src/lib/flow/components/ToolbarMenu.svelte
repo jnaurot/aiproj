@@ -201,7 +201,7 @@
 		border: 1px solid #2a3550;
 		background: #0f1626;
 		border-radius: 10px;
-		z-index: 30;
+		z-index: 120;
 		display: grid;
 		gap: 4px;
 		box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);

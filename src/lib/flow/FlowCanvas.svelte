@@ -1514,7 +1514,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		background: #0b0c10;
 		color: #e6e6e6;
 		flex-wrap: nowrap;
-		overflow-x: auto;
+		overflow: visible;
+		position: relative;
+		z-index: 25;
 	}
 
 	.toolbarZone {
