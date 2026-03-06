@@ -33,7 +33,7 @@ def _alpha_input_label(idx: int) -> str:
     return f"Input {out}"
 
 
-def _dual_write_graph_revision(
+def _write_graph_revision_v2(
     request: Request,
     *,
     graph_id: str,
@@ -41,9 +41,8 @@ def _dual_write_graph_revision(
     message: str,
 ) -> Optional[str]:
     """
-    Phase 2 dual-write hook:
-    - Existing path remains unchanged.
-    - Best-effort write to graph revision store when GRAPH_STORE_V2_WRITE is enabled.
+    V2 graph-revision write-through hook.
+    Best effort only; run endpoint behavior must not fail because of revision-store issues.
     """
     flags = get_feature_flags()
     if not flags.get("GRAPH_STORE_V2_WRITE", False):
@@ -59,14 +58,14 @@ def _dual_write_graph_revision(
             schema_version=1,
         )
         print(
-            "[graph-dual-write] graphId=%s revisionId=%s message=%s"
+            "[graph-v2-write] graphId=%s revisionId=%s message=%s"
             % (graph_id, revision.revision_id, message)
         )
         return str(revision.revision_id)
     except Exception as ex:
         # Best effort only; never fail existing endpoint behavior.
         print(
-            "[graph-dual-write] skipped graphId=%s reason=%s"
+            "[graph-v2-write] skipped graphId=%s reason=%s"
             % (graph_id, repr(ex))
         )
         return None
@@ -221,7 +220,7 @@ async def create_run(req: RunRequest, request: Request):
         raise HTTPException(400, "runMode='selected_only' requires runFrom")
 
     graph_id = str(req.graphId)
-    _dual_write_graph_revision(
+    _write_graph_revision_v2(
         request,
         graph_id=graph_id,
         graph=req.graph,
@@ -265,7 +264,7 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
         raise HTTPException(404, "Unknown runId")
     graph_id = str(getattr(h, "graph_id", "") or "").strip()
     if graph_id:
-        _dual_write_graph_revision(
+        _write_graph_revision_v2(
             request,
             graph_id=graph_id,
             graph=req.graph,

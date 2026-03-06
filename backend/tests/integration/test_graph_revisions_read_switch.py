@@ -109,3 +109,16 @@ def test_graph_export_import_package_v2():
 		body = imported.json()
 		assert body["graphId"] == f"{graph_id}_imported"
 		assert body["migrationReport"]["format"] == "aipgraph_v2"
+
+		legacy = client.post(
+			"/graphs/import",
+			json={
+				"package": {
+					"version": 1,
+					"nodes": [],
+					"edges": [],
+				},
+				"targetGraphId": f"{graph_id}_legacy",
+			},
+		)
+		assert legacy.status_code == 400

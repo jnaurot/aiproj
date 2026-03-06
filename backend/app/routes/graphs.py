@@ -80,30 +80,20 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("package must be an object")
     manifest = payload.get("manifest")
     graph = payload.get("graph")
-    if isinstance(manifest, dict) and isinstance(graph, dict):
-        ptype = str(manifest.get("packageType") or "").strip()
-        pver = int(manifest.get("packageVersion") or 0)
-        if ptype != "aipgraph":
-            raise ValueError("manifest.packageType must be 'aipgraph'")
-        if pver != 2:
-            raise ValueError("manifest.packageVersion must be 2")
-        if "nodes" not in graph or "edges" not in graph:
-            raise ValueError("package.graph must include nodes and edges")
-        return {
-            "graph": graph,
-            "migrationReport": {"format": "aipgraph_v2", "migrated": False, "warnings": []},
-        }
-    # Legacy fallback: raw graph object import
-    if "nodes" in payload and "edges" in payload:
-        return {
-            "graph": payload,
-            "migrationReport": {
-                "format": "legacy_graph_dto",
-                "migrated": True,
-                "warnings": ["Imported legacy graph payload without v2 manifest."],
-            },
-        }
-    raise ValueError("package must be a v2 aipgraph package or a legacy graph DTO")
+    if not isinstance(manifest, dict) or not isinstance(graph, dict):
+        raise ValueError("package must include manifest and graph")
+    ptype = str(manifest.get("packageType") or "").strip()
+    pver = int(manifest.get("packageVersion") or 0)
+    if ptype != "aipgraph":
+        raise ValueError("manifest.packageType must be 'aipgraph'")
+    if pver != 2:
+        raise ValueError("manifest.packageVersion must be 2")
+    if "nodes" not in graph or "edges" not in graph:
+        raise ValueError("package.graph must include nodes and edges")
+    return {
+        "graph": graph,
+        "migrationReport": {"format": "aipgraph_v2", "migrated": False, "warnings": []},
+    }
 
 
 @router.get("/feature-flags")
