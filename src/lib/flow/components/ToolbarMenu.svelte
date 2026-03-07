@@ -156,9 +156,9 @@
 	}
 
 	.menuButton {
-		border: 1px solid #283044;
-		background: #111522;
-		color: #e6e6e6;
+		border: 1px solid var(--color-control-border);
+		background: var(--color-button-bg);
+		color: var(--color-button-text);
 		padding: 8px 10px;
 		border-radius: 10px;
 		cursor: pointer;
@@ -172,8 +172,8 @@
 	}
 
 	.menuButton.runSecondary {
-		background: #0f1522;
-		border-color: #324464;
+		background: var(--color-control-bg);
+		border-color: var(--color-control-border);
 	}
 
 	.menuButton:disabled {
@@ -198,8 +198,8 @@
 		margin: 0;
 		padding: 6px;
 		list-style: none;
-		border: 1px solid #2a3550;
-		background: #0f1626;
+		border: 1px solid var(--color-control-border);
+		background: var(--color-control-option-bg);
 		border-radius: 10px;
 		z-index: 120;
 		display: grid;
@@ -220,7 +220,7 @@
 		text-align: left;
 		border: 1px solid transparent;
 		background: transparent;
-		color: #e6e6e6;
+		color: var(--color-control-option-text);
 		padding: 6px 8px;
 		border-radius: 8px;
 		cursor: pointer;
@@ -229,8 +229,8 @@
 
 	.menuItem:hover:not(:disabled),
 	.menuItem:focus-visible {
-		background: #1c2538;
-		border-color: #2f3d5a;
+		background: var(--color-control-option-active-bg);
+		border-color: var(--color-control-border);
 		outline: none;
 	}
 
@@ -240,6 +240,6 @@
 	}
 
 	.menuItem.danger {
-		color: #ff9c9c;
+		color: var(--color-danger-text);
 	}
 </style>

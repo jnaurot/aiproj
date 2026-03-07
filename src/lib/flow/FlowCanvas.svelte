@@ -1758,9 +1758,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	.cacheToggle select {
-		border: 1px solid #2a3550;
-		background: #0f1626;
-		color: #e6e6e6;
+		border: 1px solid var(--color-control-border);
+		background: var(--color-control-bg);
+		color: var(--color-control-text);
 		padding: 4px 8px;
 		border-radius: 8px;
 		font-size: 12px;
@@ -2130,33 +2130,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		font-size: 12px;
 		line-height: 1.2;
 		border-radius: 8px;
-		border: 1px solid #283044;
-		background: #0b1220;
-		color: #e5e7eb;
+		border: 1px solid var(--color-control-border);
+		background: var(--color-control-bg);
+		color: var(--color-control-text);
 	}
 
 	.nodeTypeSwitch option {
-		background: #0b1220;
-		color: #e5e7eb;
+		background: var(--color-control-option-bg);
+		color: var(--color-control-option-text);
 	}
 
 	.nodeTypeSwitch:focus {
 		outline: none;
 		border-color: #3b82f6;
 		box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
-	}
-
-	@media (prefers-color-scheme: light) {
-		.nodeTypeSwitch {
-			border: 1px solid #b9c5da;
-			background: #ffffff;
-			color: #1f2937;
-		}
-
-		.nodeTypeSwitch option {
-			background: #ffffff;
-			color: #1f2937;
-		}
 	}
 
 	.subtypeError {

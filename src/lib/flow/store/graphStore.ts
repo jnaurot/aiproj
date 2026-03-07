@@ -508,6 +508,9 @@ function captureStack(label: string): string {
 }
 
 function isAllowedSucceededRegression(nodeId: string, ctx: AuditContext): boolean {
+	if (ctx.expectedDirtyTransition && ctx.allowedNodeIds?.has(nodeId)) {
+		return true;
+	}
 	if (ctx.source === 'accept_params') {
 		if (ctx.expectedDirtyTransition) return true;
 		return Boolean(ctx.allowedNodeIds?.has(nodeId));
@@ -522,6 +525,9 @@ function isAllowedSucceededRegression(nodeId: string, ctx: AuditContext): boolea
 	) {
 		if (evt.type === 'cache_decision') return evt.decision !== 'cache_hit';
 		return true;
+	}
+	if (evt.type === 'run_started') {
+		return Boolean(ctx.allowedNodeIds?.has(nodeId));
 	}
 	return false;
 }

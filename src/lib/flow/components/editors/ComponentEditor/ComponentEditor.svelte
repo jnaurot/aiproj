@@ -42,6 +42,8 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 	const TYPED_TYPE_OPTIONS = ['table', 'json', 'text', 'binary', 'embeddings', 'unknown'] as const;
 	let outputFieldsJsonErrors: Record<number, string> = {};
+	let outputAdvancedOpen: Record<number, boolean> = {};
+	let outputFieldsEditorMode: Record<number, 'structured' | 'json'> = {};
 	$: latestRevisionId = String(revisions[0]?.revisionId ?? '').trim();
 	$: hasUpdate = Boolean(latestRevisionId && revisionId && latestRevisionId !== revisionId);
 	$: configObj = (params?.config ?? {}) as Record<string, unknown>;
@@ -281,11 +283,106 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		const nextErrors = { ...outputFieldsJsonErrors };
 		delete nextErrors[index];
 		outputFieldsJsonErrors = nextErrors;
+		const nextAdvancedOpen = { ...outputAdvancedOpen };
+		delete nextAdvancedOpen[index];
+		outputAdvancedOpen = nextAdvancedOpen;
+		const nextEditorMode = { ...outputFieldsEditorMode };
+		delete nextEditorMode[index];
+		outputFieldsEditorMode = nextEditorMode;
+	}
+
+	function isOutputAdvancedOpen(index: number): boolean {
+		return Boolean(outputAdvancedOpen[index]);
+	}
+
+	function toggleOutputAdvanced(index: number): void {
+		outputAdvancedOpen = {
+			...outputAdvancedOpen,
+			[index]: !isOutputAdvancedOpen(index)
+		};
+	}
+
+	function getFieldsEditorMode(index: number): 'structured' | 'json' {
+		return outputFieldsEditorMode[index] ?? 'structured';
+	}
+
+	function setFieldsEditorMode(index: number, mode: 'structured' | 'json'): void {
+		outputFieldsEditorMode = {
+			...outputFieldsEditorMode,
+			[index]: mode
+		};
+	}
+
+	function getOutputFields(index: number): Array<{ name: string; type: string; nativeType?: string; nullable?: boolean }> {
+		const fields = outputs[index]?.typedSchema?.fields;
+		if (!Array.isArray(fields)) return [];
+		return fields.map((f: any) => ({
+			name: String(f?.name ?? '').trim(),
+			type: String(f?.type ?? 'unknown').trim() || 'unknown',
+			nativeType: f?.nativeType == null ? undefined : String(f.nativeType),
+			nullable: Boolean(f?.nullable ?? false)
+		}));
+	}
+
+	function updateOutputField(
+		outputIndex: number,
+		fieldIndex: number,
+		patch: Partial<{ name: string; type: string; nativeType?: string; nullable?: boolean }>
+	): void {
+		const fields = getOutputFields(outputIndex);
+		const nextFields = fields.map((field, i) => (i === fieldIndex ? { ...field, ...patch } : field));
+		updateApiOutput(outputIndex, {
+			typedSchema: {
+				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				fields: nextFields
+			}
+		});
+	}
+
+	function addOutputField(outputIndex: number): void {
+		const fields = getOutputFields(outputIndex);
+		const nextFields = [...fields, { name: `field_${fields.length + 1}`, type: 'unknown', nullable: false }];
+		updateApiOutput(outputIndex, {
+			typedSchema: {
+				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				fields: nextFields
+			}
+		});
+	}
+
+	function removeOutputField(outputIndex: number, fieldIndex: number): void {
+		const fields = getOutputFields(outputIndex);
+		const nextFields = fields.filter((_, i) => i !== fieldIndex);
+		updateApiOutput(outputIndex, {
+			typedSchema: {
+				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				fields: nextFields
+			}
+		});
 	}
 
 	function onApiOutputFieldsJsonChange(index: number, raw: string): void {
 		try {
-			const parsed = raw.trim() ? JSON.parse(raw) : [];
+			let parsed: any = [];
+			const trimmed = raw.trim();
+			if (!trimmed) {
+				parsed = [];
+			} else {
+				try {
+					parsed = JSON.parse(trimmed);
+				} catch {
+					// Legacy shorthand support: [field_a, field_b]
+					const m = trimmed.match(/^\[\s*([^\]]*)\s*\]$/);
+					if (!m) throw new Error('typedSchema.fields must be valid JSON array');
+					const body = String(m[1] ?? '').trim();
+					const names = body
+						.split(',')
+						.map((s) => s.trim())
+						.filter((s) => s.length > 0)
+						.map((s) => s.replace(/^['"]|['"]$/g, ''));
+					parsed = names.map((name) => ({ name, type: 'unknown' }));
+				}
+			}
 			if (!Array.isArray(parsed)) {
 				outputFieldsJsonErrors = {
 					...outputFieldsJsonErrors,
@@ -583,60 +680,115 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			{#if outputs.length === 0}
 				<div class="muted">No output ports</div>
 			{:else}
-				{#each outputs as port, index (port.name)}
-					<div class="outputEditorRow">
-						<input
-							placeholder="output name"
-							value={String(port.name ?? '')}
-							on:input={(e) => updateApiOutput(index, { name: (e.currentTarget as HTMLInputElement).value })}
-						/>
-						<select
-							value={String(port.portType ?? 'json')}
-							on:change={(e) => updateApiOutput(index, { portType: (e.currentTarget as HTMLSelectElement).value as PortType })}
-						>
-							{#each PORT_TYPE_OPTIONS as p}
-								<option value={p}>{p}</option>
-							{/each}
-						</select>
-						<label class="requiredToggle">
+				{#each outputs as port, index (`${index}:${port.name}`)}
+					<div class="outputCard">
+						<div class="outputEditorRow">
 							<input
-								type="checkbox"
-								checked={Boolean(port.required ?? true)}
-								on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
+								placeholder="output name"
+								value={String(port.name ?? '')}
+								on:input={(e) => updateApiOutput(index, { name: (e.currentTarget as HTMLInputElement).value })}
 							/>
-							required
-						</label>
-						<button class="tabBtn small danger" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
-					</div>
-					<div class="outputSchemaRow">
-						<div class="schemaType">
-							<span class="k">typedSchema.type</span>
 							<select
-								value={String(port.typedSchema?.type ?? 'unknown')}
-								on:change={(e) =>
-									updateApiOutput(index, {
-										typedSchema: {
-											...(port.typedSchema ?? { fields: [] }),
-											type: (e.currentTarget as HTMLSelectElement).value as (typeof TYPED_TYPE_OPTIONS)[number]
-										}
-									})}
+								value={String(port.portType ?? 'json')}
+								on:change={(e) => updateApiOutput(index, { portType: (e.currentTarget as HTMLSelectElement).value as PortType })}
 							>
-								{#each TYPED_TYPE_OPTIONS as t}
-									<option value={t}>{t}</option>
+								{#each PORT_TYPE_OPTIONS as p}
+									<option value={p}>{p}</option>
 								{/each}
 							</select>
+							<label class="requiredToggle">
+								<input
+									type="checkbox"
+									checked={Boolean(port.required ?? true)}
+									on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
+								/>
+								required
+							</label>
+							<div class="outputActions">
+								<button class="tabBtn small" on:click={() => toggleOutputAdvanced(index)}>
+									{isOutputAdvancedOpen(index) ? 'Hide' : 'Advanced'}
+								</button>
+								<button class="tabBtn small danger" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
+							</div>
 						</div>
-						<div class="schemaFields">
-							<span class="k">typedSchema.fields (JSON array)</span>
-							<textarea
-								rows="3"
-								value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
-								on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
-							></textarea>
-							{#if outputFieldsJsonErrors[index]}
-								<div class="bindingErr">Invalid fields JSON: {outputFieldsJsonErrors[index]}</div>
-							{/if}
-						</div>
+						{#if isOutputAdvancedOpen(index)}
+							<div class="outputSchemaRow">
+								<div class="schemaType">
+									<span class="k">typedSchema.type</span>
+									<select
+										value={String(port.typedSchema?.type ?? 'unknown')}
+										on:change={(e) =>
+											updateApiOutput(index, {
+												typedSchema: {
+													...(port.typedSchema ?? { fields: [] }),
+													type: (e.currentTarget as HTMLSelectElement).value as (typeof TYPED_TYPE_OPTIONS)[number]
+												}
+											})}
+									>
+										{#each TYPED_TYPE_OPTIONS as t}
+											<option value={t}>{t}</option>
+										{/each}
+									</select>
+								</div>
+								<div class="schemaFields">
+									<div class="schemaFieldsHeader">
+										<span class="k">typedSchema.fields</span>
+										<div class="schemaFieldActions">
+											<button
+												class="tabBtn small"
+												on:click={() => setFieldsEditorMode(index, getFieldsEditorMode(index) === 'structured' ? 'json' : 'structured')}
+											>
+												{getFieldsEditorMode(index) === 'structured' ? 'JSON' : 'List'}
+											</button>
+											{#if getFieldsEditorMode(index) === 'structured'}
+												<button class="tabBtn small" on:click={() => addOutputField(index)}>+ field</button>
+											{/if}
+										</div>
+									</div>
+									{#if getFieldsEditorMode(index) === 'structured'}
+										{#if getOutputFields(index).length === 0}
+											<div class="muted">No fields</div>
+										{:else}
+											{#each getOutputFields(index) as field, fieldIndex (`${index}:${fieldIndex}:${field.name}`)}
+												<div class="fieldRow">
+													<input
+														placeholder="field name"
+														value={String(field.name ?? '')}
+														on:input={(e) => updateOutputField(index, fieldIndex, { name: (e.currentTarget as HTMLInputElement).value })}
+													/>
+													<select
+														value={String(field.type ?? 'unknown')}
+														on:change={(e) => updateOutputField(index, fieldIndex, { type: (e.currentTarget as HTMLSelectElement).value })}
+													>
+														{#each TYPED_TYPE_OPTIONS as t}
+															<option value={t}>{t}</option>
+														{/each}
+													</select>
+													<label class="requiredToggle">
+														<input
+															type="checkbox"
+															checked={Boolean(field.nullable ?? false)}
+															on:change={(e) => updateOutputField(index, fieldIndex, { nullable: (e.currentTarget as HTMLInputElement).checked })}
+														/>
+														nullable
+													</label>
+													<button class="tabBtn small danger" title="Remove field" on:click={() => removeOutputField(index, fieldIndex)}>-</button>
+												</div>
+											{/each}
+										{/if}
+									{:else}
+										<textarea
+											rows="3"
+											value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
+											on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
+										></textarea>
+										{#if outputFieldsJsonErrors[index]}
+											<div class="bindingErr">Invalid fields JSON: {outputFieldsJsonErrors[index]}</div>
+										{/if}
+									{/if}
+								</div>
+							</div>
+						{/if}
 					</div>
 				{/each}
 			{/if}
@@ -825,17 +977,30 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 	.outputEditorRow {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 96px) auto auto;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto auto;
 		gap: 8px;
 		align-items: center;
-		margin-bottom: 6px;
+		margin-bottom: 0;
+	}
+
+	.outputActions {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.outputCard {
+		border: 1px solid #1f2430;
+		border-radius: 8px;
+		padding: 8px;
+		margin-bottom: 8px;
 	}
 
 	.outputSchemaRow {
 		display: grid;
 		grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
 		gap: 8px;
-		margin-bottom: 8px;
+		margin-top: 8px;
 	}
 
 	.schemaType,
@@ -844,12 +1009,72 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		gap: 4px;
 	}
 
+	.schemaFieldsHeader {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.schemaFieldActions {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.fieldRow {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto auto;
+		gap: 8px;
+		align-items: center;
+	}
+
 	.requiredToggle {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
 		font-size: 12px;
 		opacity: 0.9;
+	}
+
+	/* Component-editor-local select skin for output/binding choosers */
+	.section :global(select) {
+		background: var(--color-control-bg);
+		color: var(--color-control-text);
+		border: 1px solid var(--color-control-border);
+		-webkit-text-fill-color: var(--color-control-text);
+	}
+
+	.section :global(select option),
+	.section :global(select optgroup) {
+		background: var(--color-control-option-bg) !important;
+		color: var(--color-control-option-text) !important;
+	}
+
+	.section :global(select option:checked),
+	.section :global(select option:hover) {
+		background: var(--color-control-option-active-bg) !important;
+		color: var(--color-control-option-text) !important;
+	}
+
+	:global(:root[data-theme='dark']) .section :global(select) {
+		color-scheme: dark;
+	}
+
+	:global(:root[data-theme='light']) .section :global(select) {
+		color-scheme: light;
+	}
+
+	@media (prefers-color-scheme: dark) {
+		:global(:root:not([data-theme])) .section :global(select) {
+			color-scheme: dark;
+		}
+	}
+
+	@media (prefers-color-scheme: light) {
+		:global(:root:not([data-theme])) .section :global(select) {
+			color-scheme: light;
+		}
 	}
 
 	.bindingOutputs {
@@ -882,6 +1107,11 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			justify-self: start;
 		}
 
+		.outputActions {
+			grid-column: 1 / -1;
+			justify-content: flex-end;
+		}
+
 		.outputEditorRow .danger {
 			grid-column: 2;
 			justify-self: end;
@@ -889,6 +1119,14 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 		.outputSchemaRow {
 			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.fieldRow {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 110px);
+		}
+
+		.fieldRow > input {
+			grid-column: 1 / -1;
 		}
 
 		.bindingRow {

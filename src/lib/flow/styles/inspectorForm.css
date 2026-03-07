@@ -11,16 +11,38 @@
 	background: var(--if-control-bg);
 	color: var(--if-control-text);
 	border: 1px solid var(--if-control-border);
+	-webkit-text-fill-color: var(--if-control-text);
 }
 
 :global(.inspector select option) {
-	background-color: var(--if-option-bg);
-	color: var(--if-option-text);
+	background-color: var(--if-option-bg) !important;
+	color: var(--if-option-text) !important;
 }
 
 :global(.inspector select option:checked),
 :global(.inspector select option:hover) {
-	background-color: var(--if-option-active-bg);
+	background-color: var(--if-option-active-bg) !important;
+	color: var(--if-option-text) !important;
+}
+
+:global(:root[data-theme='dark'] .inspector select) {
+	color-scheme: dark;
+}
+
+:global(:root[data-theme='light'] .inspector select) {
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:global(:root:not([data-theme]) .inspector select) {
+		color-scheme: dark;
+	}
+}
+
+@media (prefers-color-scheme: light) {
+	:global(:root:not([data-theme]) .inspector select) {
+		color-scheme: light;
+	}
 }
 
 .inspector .v :global(input),

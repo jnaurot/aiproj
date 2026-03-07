@@ -1,3 +1,15 @@
 @import '$lib/flow/styles/themes.css';
 @import '$lib/flow/styles/tokens.css';
 @import 'tailwindcss';
+
+:global(select) {
+	background: var(--color-control-bg);
+	color: var(--color-control-text);
+	border-color: var(--color-control-border);
+}
+
+:global(select option),
+:global(select optgroup) {
+	background: var(--color-control-option-bg);
+	color: var(--color-control-option-text);
+}
