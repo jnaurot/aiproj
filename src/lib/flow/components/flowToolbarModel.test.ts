@@ -14,6 +14,7 @@ describe('flowToolbarModel', () => {
 			'New Graph',
 			'Save',
 			'Save As',
+			'Save as Component',
 			'Import',
 			'Export',
 			'History',
@@ -44,6 +45,7 @@ describe('flowToolbarModel', () => {
 			newGraph: vi.fn(),
 			save: vi.fn(),
 			saveAs: vi.fn(),
+			saveAsComponent: vi.fn(),
 			importGraph: vi.fn(),
 			exportGraph: vi.fn(),
 			history: vi.fn(),
@@ -52,6 +54,7 @@ describe('flowToolbarModel', () => {
 		dispatchProjectMenuAction('new_graph', handlers);
 		dispatchProjectMenuAction('save_graph', handlers);
 		dispatchProjectMenuAction('save_as_graph', handlers);
+		dispatchProjectMenuAction('save_as_component', handlers);
 		dispatchProjectMenuAction('import_graph', handlers);
 		dispatchProjectMenuAction('export_graph', handlers);
 		dispatchProjectMenuAction('history_graph', handlers);
@@ -59,6 +62,7 @@ describe('flowToolbarModel', () => {
 		expect(handlers.newGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.save).toHaveBeenCalledTimes(1);
 		expect(handlers.saveAs).toHaveBeenCalledTimes(1);
+		expect(handlers.saveAsComponent).toHaveBeenCalledTimes(1);
 		expect(handlers.importGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.exportGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.history).toHaveBeenCalledTimes(1);

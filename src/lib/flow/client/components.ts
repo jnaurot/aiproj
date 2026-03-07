@@ -60,6 +60,30 @@ export type ComponentRevisionDetail = {
 	definition: ComponentRevisionDefinition;
 };
 
+export type CreateComponentRevisionRequest = {
+	componentId: string;
+	revisionId?: string;
+	parentRevisionId?: string;
+	message?: string;
+	schemaVersion?: number;
+	graph: {
+		nodes: unknown[];
+		edges: unknown[];
+	};
+	api: ComponentApiContract;
+	configSchema?: Record<string, unknown>;
+};
+
+export type CreateComponentRevisionResponse = {
+	schemaVersion: number;
+	componentId: string;
+	revisionId: string;
+	parentRevisionId?: string | null;
+	createdAt: string;
+	message?: string | null;
+	checksum: string;
+};
+
 type ListComponentsResponse = {
 	schemaVersion: number;
 	components: ComponentCatalogItem[];
@@ -111,4 +135,32 @@ export async function getComponentRevision(
 	return await _fetchJson<ComponentRevisionDetail>(
 		`/api/components/${encodeURIComponent(cid)}/revisions/${encodeURIComponent(rid)}`
 	);
+}
+
+export async function createComponentRevision(
+	req: CreateComponentRevisionRequest
+): Promise<CreateComponentRevisionResponse> {
+	const body = {
+		componentId: String(req.componentId ?? '').trim(),
+		revisionId: req.revisionId ? String(req.revisionId).trim() : undefined,
+		parentRevisionId: req.parentRevisionId ? String(req.parentRevisionId).trim() : undefined,
+		message: req.message ?? '',
+		schemaVersion: Number(req.schemaVersion ?? 1),
+		graph: req.graph,
+		api: req.api,
+		configSchema: req.configSchema ?? {}
+	};
+	if (!body.componentId) {
+		throw new Error('componentId is required');
+	}
+	const res = await fetch('/api/components', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`createComponentRevision failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as CreateComponentRevisionResponse;
 }

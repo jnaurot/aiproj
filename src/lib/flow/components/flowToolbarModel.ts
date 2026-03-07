@@ -5,6 +5,7 @@ export function buildProjectMenuItems(): ToolbarMenuItem[] {
 		{ id: 'new_graph', label: 'New Graph' },
 		{ id: 'save_graph', label: 'Save' },
 		{ id: 'save_as_graph', label: 'Save As' },
+		{ id: 'save_as_component', label: 'Save as Component' },
 		{ id: 'import_graph', label: 'Import' },
 		{ id: 'export_graph', label: 'Export' },
 		{ id: 'history_graph', label: 'History' },
@@ -37,6 +38,7 @@ export type ProjectToolbarHandlers = {
 	newGraph: () => void;
 	save: () => void;
 	saveAs: () => void;
+	saveAsComponent: () => void;
 	importGraph: () => void;
 	exportGraph: () => void;
 	history: () => void;
@@ -47,6 +49,7 @@ export function dispatchProjectMenuAction(actionId: string, handlers: ProjectToo
 	if (actionId === 'new_graph') handlers.newGraph();
 	if (actionId === 'save_graph') handlers.save();
 	if (actionId === 'save_as_graph') handlers.saveAs();
+	if (actionId === 'save_as_component') handlers.saveAsComponent();
 	if (actionId === 'import_graph') handlers.importGraph();
 	if (actionId === 'export_graph') handlers.exportGraph();
 	if (actionId === 'history_graph') handlers.history();

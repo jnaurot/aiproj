@@ -31,6 +31,7 @@
 		importGraphPackage,
 		type GraphRevisionSummary
 	} from '$lib/flow/client/graphs';
+	import { createComponentRevision, type ComponentApiContract } from '$lib/flow/client/components';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
@@ -246,6 +247,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: commandItems = [
 		{ id: 'cmd_new_graph', label: 'New Graph', run: () => void newGraph() },
 		{ id: 'cmd_save', label: 'Save', run: () => void saveGraphRevision() },
+		{ id: 'cmd_save_component', label: 'Save as Component', run: () => void saveGraphAsComponent() },
 		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
 		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
 		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
@@ -654,6 +656,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			newGraph,
 			save: () => void saveGraphRevision(),
 			saveAs: () => void saveAsGraphRevision(),
+			saveAsComponent: () => void saveGraphAsComponent(),
 			importGraph: triggerImportGraphPackageV2,
 			exportGraph: () => void exportGraphPackageV2(),
 			history: () => void restoreGraphRevision(),
@@ -790,6 +793,98 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const stamp = String(revision.createdAt ?? '').replace('T', ' ').slice(0, 19);
 		const msg = String(revision.message ?? '').trim();
 		return `${index + 1}. ${revision.revisionId.slice(0, 10)}  ${stamp}${msg ? `  ${msg}` : ''}`;
+	}
+
+	function deriveDefaultComponentApi(
+		graphNodes: Node<PipelineNodeData>[],
+		graphEdges: Edge<PipelineEdgeData>[]
+	): ComponentApiContract {
+		const nodeIds = new Set(graphNodes.map((n) => String(n.id)));
+		const inDegree = new Map<string, number>();
+		const outDegree = new Map<string, number>();
+		for (const id of nodeIds) {
+			inDegree.set(id, 0);
+			outDegree.set(id, 0);
+		}
+		for (const e of graphEdges) {
+			const source = String((e as any)?.source ?? '');
+			const target = String((e as any)?.target ?? '');
+			if (nodeIds.has(source)) outDegree.set(source, (outDegree.get(source) ?? 0) + 1);
+			if (nodeIds.has(target)) inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+		}
+		const roots = graphNodes.filter((n) => (inDegree.get(String(n.id)) ?? 0) === 0);
+		const leaves = graphNodes.filter((n) => (outDegree.get(String(n.id)) ?? 0) === 0);
+		const primaryRoot = roots[0];
+		const primaryLeaf = leaves[0];
+		const inputPortType = (primaryRoot?.data?.ports?.in ?? null) as PortType | null;
+		const outputPortType = (primaryLeaf?.data?.ports?.out ?? null) as PortType | null;
+		const inputs =
+			inputPortType == null
+				? []
+				: [
+						{
+							name: 'in_data',
+							portType: inputPortType,
+							required: true,
+							typedSchema: { type: inputPortType, fields: [] }
+						}
+					];
+		const outputs =
+			outputPortType == null
+				? []
+				: [
+						{
+							name: 'out_data',
+							portType: outputPortType,
+							required: true,
+							typedSchema: { type: outputPortType, fields: [] }
+						}
+					];
+		return { inputs, outputs };
+	}
+
+	async function saveGraphAsComponent() {
+		const current = get(graphStore) as any;
+		const currentNodes = (current?.nodes ?? []) as Node<PipelineNodeData>[];
+		const currentEdges = (current?.edges ?? []) as Edge<PipelineEdgeData>[];
+		if (currentNodes.length === 0) {
+			showToast('Save as Component failed: graph is empty.', 'warn');
+			return;
+		}
+		if (currentNodes.some((n) => n.data?.kind === 'component')) {
+			showToast('Save as Component failed: nested components are not supported in v1.', 'warn');
+			return;
+		}
+
+		const suggestedId = `cmp_${String(current.graphId ?? '').replace(/^graph_/, '')}`.slice(0, 64);
+		const componentId = (window.prompt('Component ID', suggestedId) ?? '').trim();
+		if (!componentId) return;
+		const revisionIdInput = (window.prompt('Revision ID (optional)', '') ?? '').trim();
+		const note = window.prompt('Revision message (optional)', 'save_as_component') ?? '';
+		const api = deriveDefaultComponentApi(currentNodes, currentEdges);
+		if (api.inputs.length === 0 || api.outputs.length === 0) {
+			const proceed = window.confirm(
+				`Derived API is incomplete (inputs=${api.inputs.length}, outputs=${api.outputs.length}). Continue anyway?`
+			);
+			if (!proceed) return;
+		}
+		try {
+			const created = await createComponentRevision({
+				componentId,
+				revisionId: revisionIdInput || undefined,
+				message: note,
+				schemaVersion: 1,
+				graph: {
+					nodes: structuredClone(currentNodes) as unknown[],
+					edges: structuredClone(currentEdges) as unknown[]
+				},
+				api,
+				configSchema: {}
+			});
+			showToast(`Saved component ${created.componentId}@${created.revisionId}`, 'info');
+		} catch (error) {
+			showToast(`Save as Component failed: ${String(error)}`, 'error');
+		}
 	}
 
 	async function saveGraphRevision() {
