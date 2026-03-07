@@ -116,6 +116,10 @@ async def test_component_run_emits_parent_lifecycle_and_artifact_component_meta(
     internal_output = next(
         e for e in events if e.get("type") == "node_output" and str(e.get("nodeId", "")).startswith("cmp:cmp_node:")
     )
+    parent_output = next(
+        e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "cmp_node"
+    )
+    assert str(parent_output.get("artifactId") or "") == str(internal_output.get("artifactId") or "")
     art = await store.get(str(internal_output["artifactId"]))
     payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else {}
     artifact_meta = payload_schema.get("artifactMetadataV1") if isinstance(payload_schema.get("artifactMetadataV1"), dict) else {}
@@ -123,6 +127,12 @@ async def test_component_run_emits_parent_lifecycle_and_artifact_component_meta(
     assert component_meta.get("instanceNodeId") == "cmp_node"
     assert component_meta.get("componentId") == "cmp_echo"
     assert component_meta.get("componentRevisionId") == "rev_1"
+    assert any(
+        e.get("type") == "log"
+        and e.get("nodeId") == "cmp_node"
+        and "Component output aliased from leaf artifact" in str(e.get("message") or "")
+        for e in events
+    )
 
 
 @pytest.mark.asyncio

@@ -1311,11 +1311,24 @@ async def run_graph(
                 planned_internal = [nid for nid in internal_nodes if nid in plan.subgraph]
                 if not planned_internal:
                     continue
+                internal_set = set(planned_internal)
+                internal_out_degree: Dict[str, int] = {nid: 0 for nid in planned_internal}
+                for e in execution_graph.get("edges", []) if isinstance(execution_graph, dict) else []:
+                    if not isinstance(e, dict):
+                        continue
+                    src = str(e.get("source") or "")
+                    tgt = str(e.get("target") or "")
+                    if src in internal_set and tgt in internal_set:
+                        internal_out_degree[src] = int(internal_out_degree.get(src, 0)) + 1
+                leaf_nodes = sorted([nid for nid in planned_internal if int(internal_out_degree.get(nid, 0)) == 0])
+                if not leaf_nodes:
+                    leaf_nodes = sorted(planned_internal)
                 component_runtime_state[parent_node_id] = {
                     "remaining": len(planned_internal),
                     "started": False,
                     "failed": False,
                     "started_at": None,
+                    "leaf_nodes": leaf_nodes,
                 }
 
         async def _component_mark_node_start(node_id: str) -> None:
@@ -1385,6 +1398,60 @@ async def run_graph(
                     0.0,
                     (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
                 )
+                leaf_nodes = [
+                    str(nid)
+                    for nid in (state.get("leaf_nodes") or [])
+                    if isinstance(nid, str) and str(nid).strip()
+                ]
+                alias_artifact_id: Optional[str] = None
+                alias_mime_type: Optional[str] = None
+                alias_port_type: Optional[str] = None
+                alias_leaf_node_id: Optional[str] = None
+                for leaf_node_id in leaf_nodes:
+                    leaf_binding = context.bindings.get(leaf_node_id)
+                    leaf_artifact_id = (
+                        str(getattr(leaf_binding, "artifact_id", "") or "").strip()
+                        if leaf_binding is not None
+                        else ""
+                    )
+                    if not leaf_artifact_id:
+                        continue
+                    try:
+                        leaf_artifact = await context.artifact_store.get(leaf_artifact_id)
+                    except Exception:
+                        continue
+                    alias_artifact_id = leaf_artifact_id
+                    alias_mime_type = str(getattr(leaf_artifact, "mime_type", "") or "").strip() or "application/octet-stream"
+                    alias_port_type = str(_infer_artifact_port_type(leaf_artifact) or "").strip() or "json"
+                    alias_leaf_node_id = leaf_node_id
+                    break
+
+                if alias_artifact_id:
+                    context.bindings.bind(
+                        node_id=parent_node_id,
+                        artifact_id=alias_artifact_id,
+                        status="computed",
+                    )
+                    await context.bus.emit({
+                        "type": "node_output",
+                        "runId": run_id,
+                        "nodeId": parent_node_id,
+                        "at": iso_now(),
+                        "artifactId": alias_artifact_id,
+                        "mimeType": alias_mime_type,
+                        "portType": alias_port_type,
+                    })
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "info",
+                        "message": (
+                            f"Component output aliased from leaf artifact: "
+                            f"leaf={alias_leaf_node_id or '-'} artifact={alias_artifact_id}"
+                        ),
+                        "nodeId": parent_node_id,
+                    })
                 await context.bus.emit({
                     "type": "component_finished",
                     "runId": run_id,
