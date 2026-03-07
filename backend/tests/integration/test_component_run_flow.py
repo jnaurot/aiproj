@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 from types import SimpleNamespace
@@ -38,11 +39,11 @@ def _component_definition():
             ],
             "edges": [],
         },
-        "api": {"inputs": [{"name": "in"}], "outputs": [{"name": "out"}]},
+        "api": {"inputs": [{"name": "in"}], "outputs": [{"name": "out", "portType": "json"}]},
     }
 
 
-def _graph(component_revision_id: str):
+def _graph(component_revision_id: str, *, output_artifact_mode: str = "current"):
     return {
         "nodes": [
             {
@@ -62,7 +63,11 @@ def _graph(component_revision_id: str):
                     "label": "Component",
                     "params": {
                         "componentRef": {"componentId": "cmp_echo", "revisionId": component_revision_id},
-                        "bindings": {"inputs": {}, "config": {}},
+                        "bindings": {
+                            "inputs": {},
+                            "outputs": {"out": {"nodeId": "inner_tool", "artifact": output_artifact_mode}},
+                            "config": {},
+                        },
                         "config": {"mode": "default"},
                     },
                     "ports": {"in": "text", "out": "json"},
@@ -119,20 +124,26 @@ async def test_component_run_emits_parent_lifecycle_and_artifact_component_meta(
     parent_output = next(
         e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "cmp_node"
     )
-    assert str(parent_output.get("artifactId") or "") == str(internal_output.get("artifactId") or "")
-    art = await store.get(str(internal_output["artifactId"]))
-    payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else {}
-    artifact_meta = payload_schema.get("artifactMetadataV1") if isinstance(payload_schema.get("artifactMetadataV1"), dict) else {}
-    component_meta = artifact_meta.get("component") if isinstance(artifact_meta.get("component"), dict) else {}
-    assert component_meta.get("instanceNodeId") == "cmp_node"
-    assert component_meta.get("componentId") == "cmp_echo"
-    assert component_meta.get("componentRevisionId") == "rev_1"
-    assert any(
-        e.get("type") == "log"
-        and e.get("nodeId") == "cmp_node"
-        and "Component output aliased from leaf artifact" in str(e.get("message") or "")
-        for e in events
+    assert str(parent_output.get("artifactId") or "") != str(internal_output.get("artifactId") or "")
+    art = await store.get(str(parent_output["artifactId"]))
+    wrapper_bytes = await store.read(str(art.artifact_id))
+    wrapper_data = json.loads(wrapper_bytes.decode("utf-8")) if isinstance(wrapper_bytes, (bytes, bytearray)) else {}
+    payload = (
+        wrapper_data
+        if isinstance(wrapper_data.get("component"), dict)
+        else (
+            wrapper_data.get("payload")
+            if isinstance(wrapper_data.get("payload"), dict)
+            else {}
+        )
     )
+    wrapper_component = payload.get("component") if isinstance(payload.get("component"), dict) else {}
+    assert wrapper_component.get("instanceNodeId") == "cmp_node"
+    assert wrapper_component.get("componentId") == "cmp_echo"
+    assert wrapper_component.get("revisionId") == "rev_1"
+    outputs = payload.get("outputs") if isinstance(payload.get("outputs"), dict) else {}
+    out_binding = outputs.get("out") if isinstance(outputs.get("out"), dict) else {}
+    assert str(out_binding.get("artifact_id") or "") == str(internal_output.get("artifactId") or "")
 
 
 @pytest.mark.asyncio
@@ -182,3 +193,84 @@ async def test_component_revision_change_busts_internal_exec_key(monkeypatch):
         output_artifact_ids.append(str(internal_output["artifactId"]))
 
     assert output_artifact_ids[0] != output_artifact_ids[1]
+
+
+@pytest.mark.asyncio
+async def test_component_output_binding_last_resolves_previous_internal_artifact(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+    store = MemoryArtifactStore()
+    cache = ExecutionCache()
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    runtime_ref = SimpleNamespace(
+        component_revisions=_ComponentStoreStub(
+            {
+                ("cmp_echo", "rev_1"): SimpleNamespace(definition=_component_definition()),
+                ("cmp_echo", "rev_2"): SimpleNamespace(definition=_component_definition()),
+            }
+        )
+    )
+
+    run1_events = []
+    await run_mod.run_graph(
+        run_id="run-component-last-1",
+        graph=_graph("rev_1", output_artifact_mode="current"),
+        run_from=None,
+        bus=RunEventBus("run-component-last-1", on_emit=lambda e: run1_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-last",
+    )
+    run1_internal = next(
+        e for e in run1_events if e.get("type") == "node_output" and str(e.get("nodeId", "")).startswith("cmp:cmp_node:")
+    )
+    run1_internal_artifact_id = str(run1_internal.get("artifactId") or "")
+
+    run2_events = []
+    await run_mod.run_graph(
+        run_id="run-component-last-2",
+        graph=_graph("rev_2", output_artifact_mode="last"),
+        run_from=None,
+        bus=RunEventBus("run-component-last-2", on_emit=lambda e: run2_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-last",
+    )
+    run2_internal = next(
+        e for e in run2_events if e.get("type") == "node_output" and str(e.get("nodeId", "")).startswith("cmp:cmp_node:")
+    )
+    run2_internal_artifact_id = str(run2_internal.get("artifactId") or "")
+    assert run2_internal_artifact_id != run1_internal_artifact_id
+
+    run2_parent = next(
+        e for e in run2_events if e.get("type") == "node_output" and e.get("nodeId") == "cmp_node"
+    )
+    run2_parent_art = await store.get(str(run2_parent.get("artifactId") or ""))
+    run2_parent_bytes = await store.read(str(run2_parent_art.artifact_id))
+    wrapper_data = json.loads(run2_parent_bytes.decode("utf-8")) if isinstance(run2_parent_bytes, (bytes, bytearray)) else {}
+    payload = (
+        wrapper_data
+        if isinstance(wrapper_data.get("component"), dict)
+        else (
+            wrapper_data.get("payload")
+            if isinstance(wrapper_data.get("payload"), dict)
+            else {}
+        )
+    )
+    outputs = payload.get("outputs") if isinstance(payload.get("outputs"), dict) else {}
+    out_binding = outputs.get("out") if isinstance(outputs.get("out"), dict) else {}
+    assert str(out_binding.get("artifact_id") or "") == run1_internal_artifact_id

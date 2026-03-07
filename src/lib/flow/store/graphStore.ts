@@ -28,6 +28,10 @@ import {
 	getComponentRevision,
 	listComponentRevisions,
 	listComponents,
+	createComponentRevision,
+	renameComponent,
+	deleteComponent,
+	deleteComponentRevision,
 	type ComponentApiContract
 } from '$lib/flow/client/components';
 import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
@@ -167,10 +171,8 @@ function normalizeComponentPortType(value: unknown): PortType | null {
 function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?: PortType | null } {
 	const contract = (api ?? {}) as ComponentApiContract;
 	const inputs = Array.isArray(contract?.inputs) ? contract.inputs : [];
-	const outputs = Array.isArray(contract?.outputs) ? contract.outputs : [];
 	const inPort = normalizeComponentPortType(inputs[0]?.portType ?? null);
-	const outPort = normalizeComponentPortType(outputs[0]?.portType ?? null);
-	return { in: inPort, out: outPort };
+	return { in: inPort, out: "json" };
 }
 
 let logSeq = 0;
@@ -853,36 +855,24 @@ function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, contex
 	}
 }
 
-function assertNoRunStartedStaleFlips(prev: GraphState, next: GraphState): void {
-	if (!DEV_MODE) return;
-	const flips = getStaleFlipNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
-	if (flips.length === 0) return;
-	console.error('[graphStore] stale flip detected on run_started', {
-		nodeIds: flips,
-		activeRunId: next.activeRunId,
-		runMode: next.activeRunMode,
-		runFrom: next.activeRunFrom,
-		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : []
-	});
-}
-
-function assertRunStartedNoBindingTouch(prev: GraphState, next: GraphState): void {
+function assertRunStartedBindingTouchInScope(prev: GraphState, next: GraphState): void {
 	if (!DEV_MODE) return;
 	const changed = changedBindingNodeIds(prev.nodeBindings ?? {}, next.nodeBindings ?? {});
 	if (changed.length === 0) return;
 	const outOfScope = changed.filter((id) => !next.activeRunNodeSet?.has(id));
-	console.error('[graphStore] run_started mutated nodeBindings (forbidden)', {
+	if (outOfScope.length === 0) return;
+	console.error('[graphStore] run_started mutated out-of-scope nodeBindings', {
 		changedNodeIds: changed,
 		outOfScopeNodeIds: outOfScope,
 		activeRunId: next.activeRunId,
 		runMode: next.activeRunMode,
 		runFrom: next.activeRunFrom,
 		activeRunNodeSet: next.activeRunNodeSet ? Array.from(next.activeRunNodeSet) : [],
-		bindingsBefore: changed.reduce(
+		bindingsBefore: outOfScope.reduce(
 			(acc, id) => ({ ...acc, [id]: prev.nodeBindings?.[id] ?? null }),
 			{} as Record<string, NormalizedNodeBinding | null>
 		),
-		bindingsAfter: changed.reduce(
+		bindingsAfter: outOfScope.reduce(
 			(acc, id) => ({ ...acc, [id]: next.nodeBindings?.[id] ?? null }),
 			{} as Record<string, NormalizedNodeBinding | null>
 		)
@@ -1006,6 +996,27 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					evt.runFrom ?? null,
 					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start')
 				);
+			const nodeBindings = { ...state.nodeBindings };
+			for (const nodeId of evtPlanned) {
+				const prevBinding = _normalizeBinding(nodeBindings[nodeId], nodeId);
+				const hasArtifact = Boolean(
+					prevBinding.current?.artifactId ??
+					prevBinding.currentArtifactId ??
+					prevBinding.last?.artifactId ??
+					prevBinding.lastArtifactId
+				);
+				if (!hasArtifact) continue;
+				if (isNodeStateFromActiveRunAndFresh(state, prevBinding)) continue;
+				nodeBindings[nodeId] = {
+					...prevBinding,
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: null,
+					staleReason: 'RUN_PENDING'
+				};
+			}
+			const nodeOutputs = clearNodeCacheUiForNodes(state.nodeOutputs, evtPlanned);
 			return withGraphMeta(
 				logPush(
 					{
@@ -1013,7 +1024,9 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						activeRunId: evt.runId ?? state.activeRunId,
 						activeRunMode: evtMode,
 						activeRunFrom: evt.runFrom ?? state.activeRunFrom,
-						activeRunNodeSet: evtPlanned
+						activeRunNodeSet: evtPlanned,
+						nodeBindings,
+						nodeOutputs
 					},
 					'info',
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
@@ -1045,6 +1058,69 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				}
 			};
 			return withGraphMeta(logPush({ ...state, nodeBindings, nodeOutputs }, 'info', 'Node started', evt.nodeId));
+		}
+		case 'component_started': {
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...prevBinding,
+					status: 'running',
+					currentRunId: evt.runId ?? runId,
+					staleReason: null
+				}
+			};
+			const nodeOutputs = {
+				...state.nodeOutputs,
+				[evt.nodeId]: {
+					...(state.nodeOutputs?.[evt.nodeId] ?? {}),
+					lastError: null
+				}
+			};
+			return withGraphMeta(
+				logPush({ ...state, nodeBindings, nodeOutputs }, 'info', 'Component started', evt.nodeId)
+			);
+		}
+		case 'component_finished': {
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
+			// Keep running until wrapper component node itself emits node_finished.
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...prevBinding,
+					status: 'running',
+					currentRunId: evt.runId ?? runId
+				}
+			};
+			return withGraphMeta(logPush({ ...state, nodeBindings }, 'info', 'Component internals finished', evt.nodeId));
+		}
+		case 'component_failed': {
+			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
+			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
+			const nodeBindings = {
+				...state.nodeBindings,
+				[evt.nodeId]: {
+					...prevBinding,
+					status: 'failed',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: evt.runId ?? runId,
+					staleReason: 'COMPONENT_FAILED'
+				}
+			};
+			const nodeOutputs = {
+				...state.nodeOutputs,
+				[evt.nodeId]: {
+					...(state.nodeOutputs?.[evt.nodeId] ?? {}),
+					lastError: {
+						message: String((evt as any).error ?? 'Component failed'),
+						errorCode: 'COMPONENT_FAILED'
+					}
+				}
+			};
+			return withGraphMeta(logPush({ ...state, nodeBindings, nodeOutputs }, 'error', 'Component failed', evt.nodeId));
 		}
 		case 'edge_exec': {
 			const edges = state.edges.map((e) =>
@@ -2567,6 +2643,176 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
+		async openComponentRevisionForEditing(componentId: string, revisionId: string) {
+			const cid = String(componentId ?? '').trim();
+			const rid = String(revisionId ?? '').trim();
+			if (!cid || !rid) return { ok: false, reason: 'missing_component_ref' as const };
+			try {
+				const detail = await getComponentRevision(cid, rid);
+				const graph = (detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] };
+				const applied = applyGraphDocument(
+					{
+						nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
+						edges: Array.isArray(graph?.edges) ? graph.edges : []
+					},
+					null
+				);
+				if (!applied.ok) {
+					return { ok: false, reason: 'invalid_payload' as const, error: String(applied.reason ?? 'invalid_payload') };
+				}
+				update((s) => {
+					const next = {
+						...s,
+						lastRunStatus: 'never_run' as const,
+						logs: [
+							...(Array.isArray(s.logs) ? s.logs : []),
+							{
+								id: ++logSeq,
+								ts: new Date().toLocaleTimeString(),
+								level: 'info' as const,
+								message: `[component-edit] Loaded internals: ${cid}@${rid}`
+							}
+						]
+					};
+					persist(next);
+					return next;
+				});
+				return { ok: true, detail };
+			} catch (error) {
+				return { ok: false, reason: 'open_component_failed' as const, error: String(error) };
+			}
+		},
+
+		async forkComponentRevisionToNode(
+			nodeId: string,
+			fromComponentId: string,
+			fromRevisionId: string,
+			nextComponentId: string,
+			opts?: { revisionId?: string; message?: string }
+		) {
+			const sourceComponentId = String(fromComponentId ?? '').trim();
+			const sourceRevisionId = String(fromRevisionId ?? '').trim();
+			const targetComponentId = String(nextComponentId ?? '').trim();
+			const targetRevisionId = String(opts?.revisionId ?? '').trim();
+			const message = String(opts?.message ?? '').trim() || `fork:${sourceComponentId}@${sourceRevisionId}`;
+			if (!nodeId) return { ok: false, reason: 'missing_node_id' as const };
+			if (!sourceComponentId || !sourceRevisionId) {
+				return { ok: false, reason: 'missing_source_ref' as const };
+			}
+			if (!targetComponentId) return { ok: false, reason: 'missing_target_component_id' as const };
+			try {
+				const source = await getComponentRevision(sourceComponentId, sourceRevisionId);
+				const created = await createComponentRevision({
+					componentId: targetComponentId,
+					revisionId: targetRevisionId || undefined,
+					parentRevisionId: undefined,
+					message,
+					schemaVersion: Number(source?.schemaVersion ?? 1) || 1,
+					graph: {
+						nodes: structuredClone(((source?.definition?.graph as any)?.nodes ?? []) as unknown[]),
+						edges: structuredClone(((source?.definition?.graph as any)?.edges ?? []) as unknown[])
+					},
+					api: structuredClone(
+						((source?.definition?.api as ComponentApiContract | undefined) ?? {
+							inputs: [],
+							outputs: []
+						}) as ComponentApiContract
+					),
+					configSchema: structuredClone((source?.definition?.configSchema ?? {}) as Record<string, unknown>)
+				});
+				const apply = await this.applyComponentRevisionToNode(
+					nodeId,
+					String(created.componentId ?? targetComponentId),
+					String(created.revisionId ?? '')
+				);
+				if (!(apply as any)?.ok) {
+					return {
+						ok: false,
+						reason: 'fork_apply_failed' as const,
+						error: String((apply as any)?.error ?? (apply as any)?.reason ?? 'unknown')
+					};
+				}
+				return { ok: true, created, applied: apply };
+			} catch (error) {
+				return { ok: false, reason: 'fork_failed' as const, error: String(error) };
+			}
+		},
+
+		async renameComponent(componentId: string, nextComponentId: string) {
+			try {
+				const renamed = await renameComponent(componentId, nextComponentId);
+				const fromId = String(componentId ?? '').trim();
+				const toId = String((renamed as any)?.componentId ?? nextComponentId ?? '').trim();
+				if (fromId && toId && fromId !== toId) {
+					const state = get({ subscribe } as any) as GraphState;
+					const componentNodeIds = state.nodes
+						.filter((n) => {
+							if (n.data.kind !== 'component') return false;
+							const currentId = String(((n.data.params as any)?.componentRef?.componentId ?? '')).trim();
+							return currentId === fromId;
+						})
+						.map((n) => n.id);
+					for (const nodeId of componentNodeIds) {
+						const node = (get({ subscribe } as any) as GraphState).nodes.find((n) => n.id === nodeId);
+						const existingRef = ((node?.data?.params as any)?.componentRef ?? {}) as Record<string, unknown>;
+						const patch = {
+							componentRef: {
+								...existingRef,
+								componentId: toId
+							}
+						};
+						const result = updateNodeConfigImpl(nodeId, { params: patch });
+						if (!result.ok) {
+							return {
+								ok: false,
+								reason: 'rename_component_failed' as const,
+								error: String(result.error ?? 'Failed to update component node reference')
+							};
+						}
+					}
+					update((s) => {
+						const draftComponentRef = ((s.inspector.draftParams ?? {}) as Record<string, any>)
+							.componentRef as Record<string, any> | undefined;
+						if (String(draftComponentRef?.componentId ?? '').trim() !== fromId) return s;
+						return {
+							...s,
+							inspector: {
+								...s.inspector,
+								draftParams: {
+									...(s.inspector.draftParams ?? {}),
+									componentRef: {
+										...(draftComponentRef ?? {}),
+										componentId: toId
+									}
+								}
+							}
+						};
+					});
+				}
+				return { ok: true, renamed };
+			} catch (error) {
+				return { ok: false, reason: 'rename_component_failed' as const, error: String(error) };
+			}
+		},
+
+		async deleteComponent(componentId: string) {
+			try {
+				const deleted = await deleteComponent(componentId);
+				return { ok: true, deleted };
+			} catch (error) {
+				return { ok: false, reason: 'delete_component_failed' as const, error: String(error) };
+			}
+		},
+
+		async deleteComponentRevision(componentId: string, revisionId: string) {
+			try {
+				const deleted = await deleteComponentRevision(componentId, revisionId);
+				return { ok: true, deleted };
+			} catch (error) {
+				return { ok: false, reason: 'delete_component_revision_failed' as const, error: String(error) };
+			}
+		},
+
 		async applyComponentRevisionToNode(nodeId: string, componentId: string, revisionId: string) {
 			const cid = String(componentId ?? '').trim();
 			const rid = String(revisionId ?? '').trim();
@@ -2576,11 +2822,57 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const detail = await getComponentRevision(cid, rid);
 				const api = (detail.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
+				const internalGraph = (detail.definition?.graph ?? { nodes: [], edges: [] }) as {
+					nodes?: Array<{ id?: string }>;
+					edges?: Array<{ source?: string; target?: string }>;
+				};
+				const internalNodes = Array.isArray(internalGraph.nodes) ? internalGraph.nodes : [];
+				const internalEdges = Array.isArray(internalGraph.edges) ? internalGraph.edges : [];
+				const nodeIds = new Set(
+					internalNodes
+						.map((n) => String(n?.id ?? '').trim())
+						.filter((id) => id.length > 0)
+				);
+				const outDegree = new Map<string, number>();
+				for (const id of nodeIds) outDegree.set(id, 0);
+				for (const e of internalEdges) {
+					const src = String(e?.source ?? '').trim();
+					if (nodeIds.has(src)) outDegree.set(src, (outDegree.get(src) ?? 0) + 1);
+				}
+				const leafNodeId =
+					Array.from(nodeIds).find((id) => (outDegree.get(id) ?? 0) === 0) ?? '';
+
+				const prevBindings = ((node.data.params as any)?.bindings ?? {}) as {
+					inputs?: Record<string, string>;
+					config?: Record<string, string>;
+					outputs?: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+				};
+				const prevOutputs = (prevBindings.outputs ?? {}) as Record<
+					string,
+					{ nodeId?: string; artifact?: 'current' | 'last' }
+				>;
+				const nextOutputs: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }> = {};
+				const apiOutputs = Array.isArray(api.outputs) ? api.outputs : [];
+				for (const out of apiOutputs) {
+					const outName = String((out as any)?.name ?? '').trim();
+					if (!outName) continue;
+					const existing = prevOutputs[outName] ?? {};
+					const existingNodeId = String(existing?.nodeId ?? '').trim();
+					nextOutputs[outName] = {
+						nodeId: existingNodeId || leafNodeId || undefined,
+						artifact: existing?.artifact === 'last' ? 'last' : 'current'
+					};
+				}
 				const paramsPatch = {
 					componentRef: {
 						componentId: cid,
 						revisionId: rid,
 						apiVersion: String((node.data.params as any)?.componentRef?.apiVersion ?? 'v1')
+					},
+					bindings: {
+						inputs: { ...(prevBindings.inputs ?? {}) },
+						config: { ...(prevBindings.config ?? {}) },
+						outputs: nextOutputs
 					},
 					api
 				};
@@ -2709,17 +3001,27 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						) {
 							return;
 						}
+						const auditCtx: AuditContext =
+							evt.type === 'run_started'
+								? {
+										source: 'event',
+										evt,
+										expectedDirtyTransition: true,
+										allowedNodeIds: new Set<string>(
+											Array.isArray((evt as any).plannedNodeIds) ? ((evt as any).plannedNodeIds as string[]) : []
+										)
+									}
+								: { source: 'event', evt };
 						update((s) => {
 							const nextState = reduceRunEventState(s, evt, runId);
 							debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
 							debugLogStaleFlips(s, nextState, evt.type);
 							assertNoOutOfScopeStaleFlips(s, nextState, evt.type);
 							if (evt.type === 'run_started') {
-								assertRunStartedNoBindingTouch(s, nextState);
-								assertNoRunStartedStaleFlips(s, nextState);
+								assertRunStartedBindingTouchInScope(s, nextState);
 							}
 							return nextState;
-						}, { source: 'event', evt });
+						}, auditCtx);
 
 						if (evt.type === 'run_finished') {
 							const cur = get({ subscribe } as any) as GraphState;

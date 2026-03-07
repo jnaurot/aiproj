@@ -84,6 +84,28 @@ export type CreateComponentRevisionResponse = {
 	checksum: string;
 };
 
+export type RenameComponentResponse = {
+	schemaVersion: number;
+	componentId: string;
+	renamedFrom: string;
+};
+
+export type DeleteComponentResponse = {
+	schemaVersion: number;
+	componentId: string;
+	deletedRevisions: number;
+	deletedComponents: number;
+};
+
+export type DeleteComponentRevisionResponse = {
+	schemaVersion: number;
+	componentId: string;
+	revisionId: string;
+	deletedRevisions: number;
+	remainingLatestRevisionId: string | null;
+	componentDeleted: boolean;
+};
+
 type ListComponentsResponse = {
 	schemaVersion: number;
 	components: ComponentCatalogItem[];
@@ -163,4 +185,56 @@ export async function createComponentRevision(
 		throw new Error(`createComponentRevision failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as CreateComponentRevisionResponse;
+}
+
+export async function renameComponent(
+	componentId: string,
+	nextComponentId: string
+): Promise<RenameComponentResponse> {
+	const cid = String(componentId ?? '').trim();
+	const next = String(nextComponentId ?? '').trim();
+	if (!cid) throw new Error('componentId is required');
+	if (!next) throw new Error('nextComponentId is required');
+	const res = await fetch(`/api/components/${encodeURIComponent(cid)}`, {
+		method: 'PATCH',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ componentId: next })
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`renameComponent failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as RenameComponentResponse;
+}
+
+export async function deleteComponent(componentId: string): Promise<DeleteComponentResponse> {
+	const cid = String(componentId ?? '').trim();
+	if (!cid) throw new Error('componentId is required');
+	const res = await fetch(`/api/components/${encodeURIComponent(cid)}`, {
+		method: 'DELETE'
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`deleteComponent failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as DeleteComponentResponse;
+}
+
+export async function deleteComponentRevision(
+	componentId: string,
+	revisionId: string
+): Promise<DeleteComponentRevisionResponse> {
+	const cid = String(componentId ?? '').trim();
+	const rid = String(revisionId ?? '').trim();
+	if (!cid) throw new Error('componentId is required');
+	if (!rid) throw new Error('revisionId is required');
+	const res = await fetch(
+		`/api/components/${encodeURIComponent(cid)}/revisions/${encodeURIComponent(rid)}`,
+		{ method: 'DELETE' }
+	);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`deleteComponentRevision failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as DeleteComponentRevisionResponse;
 }

@@ -730,6 +730,7 @@ class ComponentRefParams(NodeParamSchema):
 class ComponentBindingsParams(NodeParamSchema):
     inputs: Dict[str, str] = Field(default_factory=dict)
     config: Dict[str, str] = Field(default_factory=dict)
+    outputs: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
 
 class ComponentParams(NodeParamSchema):

@@ -84,7 +84,6 @@ describe('graphStore partial run scope events', () => {
 		const runId = 'run-1';
 		let state = makeState();
 		const beforeSibling = { ...state.nodeBindings.llm_a };
-		const beforeBindings = JSON.parse(JSON.stringify(state.nodeBindings));
 
 		const runStarted: KnownRunEvent = {
 			type: 'run_started',
@@ -92,11 +91,14 @@ describe('graphStore partial run scope events', () => {
 			at: '2026-02-25T00:00:00Z',
 			runFrom: 'llm_b',
 			runMode: 'from_selected_onward',
-			plannedNodeIds: ['src', 'xfm', 'llm_b']
-		};
+				plannedNodeIds: ['src', 'xfm', 'llm_b']
+			};
 		state = __applyRunEventForTest(state, runStarted, runId);
-		expect(state.nodeBindings).toEqual(beforeBindings);
 		expect(state.nodeBindings.llm_a).toEqual(beforeSibling);
+		expect(state.nodeBindings.src.status).toBe('stale');
+		expect(state.nodeBindings.xfm.status).toBe('stale');
+		expect(state.nodeBindings.llm_b.status).toBe('stale');
+		expect(state.nodeBindings.llm_a.status).toBe('succeeded_up_to_date');
 
 		const cacheEvents: KnownRunEvent[] = [
 			{
@@ -208,13 +210,10 @@ describe('graphStore partial run scope events', () => {
 		expect(next.nodeBindings.llm_a).toEqual(state.nodeBindings.llm_a);
 	});
 
-	it('run_started does not pre-stale bindings or regress succeeded displays', () => {
+	it('run_started pre-stales planned bindings while keeping out-of-scope siblings unchanged', () => {
 		const runId = 'run-1';
 		const state = makeState();
-		const beforeBindings = JSON.parse(JSON.stringify(state.nodeBindings));
-		const beforeDisplay = new Map(
-			Object.entries(state.nodeBindings).map(([id, b]) => [id, displayStatusFromBinding(b as any)])
-		);
+		const beforeSibling = { ...state.nodeBindings.llm_a };
 
 		const next = __applyRunEventForTest(
 			state,
@@ -229,10 +228,11 @@ describe('graphStore partial run scope events', () => {
 			runId
 		);
 
-		expect(next.nodeBindings).toEqual(beforeBindings);
-		for (const [id, status] of beforeDisplay.entries()) {
-			expect(displayStatusFromBinding(next.nodeBindings[id] as any)).toBe(status);
-		}
+		expect(displayStatusFromBinding(next.nodeBindings.src as any)).toBe('stale');
+		expect(displayStatusFromBinding(next.nodeBindings.xfm as any)).toBe('stale');
+		expect(displayStatusFromBinding(next.nodeBindings.llm_b as any)).toBe('stale');
+		expect(next.nodeBindings.llm_a).toEqual(beforeSibling);
+		expect(displayStatusFromBinding(next.nodeBindings.llm_a as any)).toBe('succeeded');
 	});
 
 	it('hard reset rotates graphId, clears bindings, and rejects old-graph updates', () => {

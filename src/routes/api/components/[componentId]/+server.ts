@@ -2,14 +2,15 @@ import { json } from '@sveltejs/kit';
 
 const BACKEND = 'http://127.0.0.1:8000';
 
-export async function GET({ params }) {
+export async function PATCH({ params, request }) {
 	const componentId = String(params.componentId ?? '').trim();
-	const revisionId = String(params.revisionId ?? '').trim();
 	if (!componentId) return new Response('componentId is required', { status: 400 });
-	if (!revisionId) return new Response('revisionId is required', { status: 400 });
-	const upstream = await fetch(
-		`${BACKEND}/components/${encodeURIComponent(componentId)}/revisions/${encodeURIComponent(revisionId)}`
-	);
+	const body = await request.text();
+	const upstream = await fetch(`${BACKEND}/components/${encodeURIComponent(componentId)}`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body
+	});
 	if (!upstream.ok) {
 		return new Response(await upstream.text(), { status: upstream.status });
 	}
@@ -18,13 +19,10 @@ export async function GET({ params }) {
 
 export async function DELETE({ params }) {
 	const componentId = String(params.componentId ?? '').trim();
-	const revisionId = String(params.revisionId ?? '').trim();
 	if (!componentId) return new Response('componentId is required', { status: 400 });
-	if (!revisionId) return new Response('revisionId is required', { status: 400 });
-	const upstream = await fetch(
-		`${BACKEND}/components/${encodeURIComponent(componentId)}/revisions/${encodeURIComponent(revisionId)}`,
-		{ method: 'DELETE' }
-	);
+	const upstream = await fetch(`${BACKEND}/components/${encodeURIComponent(componentId)}`, {
+		method: 'DELETE'
+	});
 	if (!upstream.ok) {
 		return new Response(await upstream.text(), { status: upstream.status });
 	}

@@ -55,14 +55,26 @@ export const ComponentRefSchema = z
 export const ComponentBindingsSchema = z
 	.object({
 		inputs: z.record(z.string(), z.string()).default({}),
-		config: z.record(z.string(), z.string()).optional().default({})
+		config: z.record(z.string(), z.string()).optional().default({}),
+		outputs: z
+			.record(
+				z.string(),
+				z
+					.object({
+						nodeId: z.string().min(1).optional(),
+						artifact: z.enum(["current", "last"]).optional().default("current")
+					})
+					.strip()
+			)
+			.optional()
+			.default({})
 	})
 	.strip();
 
 export const ComponentParamsSchema = z
 	.object({
 		componentRef: ComponentRefSchema,
-		bindings: ComponentBindingsSchema.default({ inputs: {}, config: {} }),
+		bindings: ComponentBindingsSchema.default({ inputs: {}, config: {}, outputs: {} }),
 		config: z.record(z.string(), z.unknown()).optional().default({}),
 		api: ComponentApiContractSchema.optional()
 	})

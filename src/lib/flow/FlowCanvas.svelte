@@ -19,7 +19,6 @@
 	import {
 		buildAddMenuItems,
 		buildProjectMenuItems,
-		buildRunSelectedMenuItems,
 		dispatchAddMenuAction,
 		dispatchProjectMenuAction
 	} from './components/flowToolbarModel';
@@ -31,7 +30,12 @@
 		importGraphPackage,
 		type GraphRevisionSummary
 	} from '$lib/flow/client/graphs';
-	import { createComponentRevision, type ComponentApiContract } from '$lib/flow/client/components';
+	import {
+		createComponentRevision,
+		type ComponentApiContract,
+		type ComponentCatalogItem,
+		type ComponentRevisionSummary
+	} from '$lib/flow/client/components';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
@@ -230,7 +234,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: displayNodeStatus = getHeaderNodeStatus(nodeBinding as any);
 	$: headerCachePill = getHeaderCachePill(nodeOut, nodeBinding as any, displayNodeStatus);
 	$: graphHeaderStatus =
-		$graphStore.lastRunStatus === 'never_run'
+		$graphStore.runStatus === 'running'
+			? 'Running'
+			: $graphStore.lastRunStatus === 'never_run'
 			? 'Never run'
 			: `${$graphStore.lastRunStatus === 'cancelled' ? 'Cancelled' : $graphStore.lastRunStatus.charAt(0).toUpperCase() + $graphStore.lastRunStatus.slice(1)}${$graphStore.freshness === 'stale' ? ` + Needs rerun${$graphStore.staleNodeCount > 0 ? ` (${$graphStore.staleNodeCount} stale)` : ''}` : ''}`;
 	$: currentGraphSnapshotKey = JSON.stringify({
@@ -243,7 +249,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
 	$: projectMenuItems = buildProjectMenuItems() satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
-	$: runSelectedMenuItems = buildRunSelectedMenuItems(Boolean($selectedNode)) satisfies ToolbarMenuItem[];
 	$: commandItems = [
 		{ id: 'cmd_new_graph', label: 'New Graph', run: () => void newGraph() },
 		{ id: 'cmd_save', label: 'Save', run: () => void saveGraphRevision() },
@@ -254,7 +259,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		{ id: 'cmd_add_transform', label: 'Add Transform', run: () => void addNode('transform') },
 		{ id: 'cmd_add_llm', label: 'Add LLM', run: () => void addNode('llm') },
 		{ id: 'cmd_add_tool', label: 'Add Tool', run: () => void addNode('tool') },
-		{ id: 'cmd_add_component', label: 'Add Component', run: () => void addNode('component') },
+		{ id: 'cmd_add_component', label: 'Add Component', run: () => void addComponentNodeWithPicker() },
 		{ id: 'cmd_import', label: 'Import', run: () => void triggerImportGraphPackageV2() },
 		{ id: 'cmd_export', label: 'Export', run: () => void exportGraphPackageV2() }
 	] satisfies CommandItem[];
@@ -395,7 +400,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graphStore.deleteEdge(edge.id);
 	}
 
-	function addNode(kind: NodeKind) {
+	function addNode(kind: NodeKind): string {
 		const vp = getViewport();
 		const centerScreen = { x: window.innerWidth * 0.35, y: window.innerHeight * 0.55 };
 		const pos = screenToFlowPosition(centerScreen);
@@ -403,6 +408,111 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const id = graphStore.addNode(kind, { x: pos.x, y: pos.y });
 		graphStore.selectNode(id);
 		setCenter(pos.x, pos.y, { zoom: vp.zoom, duration: 250 });
+		return id;
+	}
+
+	function formatComponentCatalogLine(index: number, component: ComponentCatalogItem): string {
+		const latest = String(component.latestRevisionId ?? '').trim();
+		const updated = String(component.updatedAt ?? '').replace('T', ' ').slice(0, 19);
+		return `${index + 1}. ${component.componentId}${latest ? `  latest:${latest.slice(0, 12)}` : ''}${updated ? `  updated:${updated}` : ''}`;
+	}
+
+	function formatComponentRevisionLine(index: number, revision: ComponentRevisionSummary): string {
+		const stamp = String(revision.createdAt ?? '').replace('T', ' ').slice(0, 19);
+		const msg = String(revision.message ?? '').trim();
+		return `${index + 1}. ${revision.revisionId.slice(0, 14)}${stamp ? `  ${stamp}` : ''}${msg ? `  ${msg}` : ''}`;
+	}
+
+	async function pickComponentAndRevision(): Promise<{ componentId: string; revisionId: string } | null> {
+		const catalogResult = await graphStore.listComponentCatalog(200, 0);
+		if (!(catalogResult as any)?.ok) {
+			showToast(
+				`Component catalog failed: ${(catalogResult as any)?.error ?? (catalogResult as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return null;
+		}
+		const components = (((catalogResult as any)?.components ?? []) as ComponentCatalogItem[]).filter(
+			(component) => String(component.componentId ?? '').trim().length > 0
+		);
+		if (components.length === 0) {
+			showToast('No components available. Save one from Project -> Save as Component first.', 'warn');
+			return null;
+		}
+		const componentLines = components.map((component, i) => formatComponentCatalogLine(i, component)).join('\n');
+		const componentRaw = window.prompt(
+			`Add Component:\n${componentLines}\n\nEnter component number (1-${components.length})`,
+			'1'
+		);
+		if (!componentRaw) return null;
+		const componentPick = Number(componentRaw);
+		if (!Number.isInteger(componentPick) || componentPick < 1 || componentPick > components.length) {
+			showToast('Invalid component selection.', 'warn');
+			return null;
+		}
+		const pickedComponent = components[componentPick - 1];
+		const componentId = String(pickedComponent.componentId ?? '').trim();
+		if (!componentId) {
+			showToast('Invalid component id.', 'error');
+			return null;
+		}
+		const revisionsResult = await graphStore.listComponentRevisionHistory(componentId, 50, 0);
+		if (!(revisionsResult as any)?.ok) {
+			showToast(
+				`Component revisions failed: ${(revisionsResult as any)?.error ?? (revisionsResult as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return null;
+		}
+		const revisions = (((revisionsResult as any)?.revisions ?? []) as ComponentRevisionSummary[]).filter(
+			(revision) => String(revision.revisionId ?? '').trim().length > 0
+		);
+		const fallbackRevisionId = String(pickedComponent.latestRevisionId ?? '').trim();
+		if (revisions.length === 0) {
+			if (!fallbackRevisionId) {
+				showToast(`No revisions found for component ${componentId}.`, 'warn');
+				return null;
+			}
+			return { componentId, revisionId: fallbackRevisionId };
+		}
+		const revisionLines = revisions.map((revision, i) => formatComponentRevisionLine(i, revision)).join('\n');
+		const revisionRaw = window.prompt(
+			`Select revision for ${componentId}:\n${revisionLines}\n\nEnter revision number (1-${revisions.length})`,
+			'1'
+		);
+		if (!revisionRaw) return null;
+		const revisionPick = Number(revisionRaw);
+		if (!Number.isInteger(revisionPick) || revisionPick < 1 || revisionPick > revisions.length) {
+			showToast('Invalid revision selection.', 'warn');
+			return null;
+		}
+		const pickedRevision = revisions[revisionPick - 1];
+		const revisionId = String(pickedRevision.revisionId ?? '').trim();
+		if (!revisionId) {
+			showToast('Invalid revision id.', 'error');
+			return null;
+		}
+		return { componentId, revisionId };
+	}
+
+	async function addComponentNodeWithPicker(): Promise<void> {
+		const picked = await pickComponentAndRevision();
+		if (!picked) return;
+		const nodeId = addNode('component');
+		const applied = await graphStore.applyComponentRevisionToNode(
+			nodeId,
+			picked.componentId,
+			picked.revisionId
+		);
+		if (!(applied as any)?.ok) {
+			graphStore.deleteNode(nodeId);
+			showToast(
+				`Add Component failed: ${(applied as any)?.error ?? (applied as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return;
+		}
+		graphStore.selectNode(nodeId);
 	}
 
 	function saveSelectedNodeAsPreset(): void {
@@ -670,15 +780,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			addTransform: () => addNode('transform'),
 			addLlm: () => addNode('llm'),
 			addTool: () => addNode('tool'),
-			addComponent: () => addNode('component'),
+			addComponent: () => void addComponentNodeWithPicker(),
 			addFromPreset: openAddFromPresetPicker
 		});
-	}
-
-	function onRunSelectedMenuSelect(actionId: string) {
-		if (actionId === 'run_from_selected') {
-			runFromSelected();
-		}
 	}
 
 	function openAddFromPresetPicker() {
@@ -1101,13 +1205,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 			<div class="toolbarZone runActions">
 				<button class="primary runBtn" on:click={runFromStart}>▶ Run</button>
-				<ToolbarMenu
-					label="Run from selected"
-					items={runSelectedMenuItems}
-					onSelect={onRunSelectedMenuSelect}
-					menuAriaLabel="Run options"
-					buttonClass="runSecondary"
-				/>
+				<button class="runSecondary" on:click={runFromSelected} disabled={!$selectedNode}>
+					Run from selected
+				</button>
 			</div>
 
 			<div class="toolbarZone statusIndicators">
@@ -1202,6 +1302,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			bind:nodes
 			edges={displayEdges}
 			{nodeTypes}
+			deleteKeyCode={['Delete']}
 			{onnodeclick}
 			{onnodecontextmenu}
 			{onedgecontextmenu}

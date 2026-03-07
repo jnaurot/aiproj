@@ -181,14 +181,34 @@ def expand_graph_components(
             )
 
         id_map: Dict[str, str] = {}
+        component_api = definition.get("api") if isinstance(definition.get("api"), dict) else (
+            params.get("api") if isinstance(params.get("api"), dict) else {}
+        )
         parent_meta = {
             "componentId": component_id,
             "componentRevisionId": revision_id,
             "instanceNodeId": instance_node_id,
             "componentConfig": params.get("config") if isinstance(params.get("config"), dict) else {},
             "componentBindings": params.get("bindings") if isinstance(params.get("bindings"), dict) else {},
+            "componentApi": component_api,
         }
         parent_component_meta[instance_node_id] = dict(parent_meta)
+
+        component_clone = copy.deepcopy(component_node)
+        component_clone_data = (
+            component_clone.get("data", {}) if isinstance(component_clone.get("data"), dict) else {}
+        )
+        component_clone_params = (
+            component_clone_data.get("params", {})
+            if isinstance(component_clone_data.get("params"), dict)
+            else {}
+        )
+        component_clone_params["api"] = component_api if isinstance(component_api, dict) else {}
+        component_clone_data["params"] = component_clone_params
+        ports = component_clone_data.get("ports", {}) if isinstance(component_clone_data.get("ports"), dict) else {}
+        component_clone_data["ports"] = {**ports, "out": "json"}
+        component_clone["data"] = component_clone_data
+        out_nodes.append(component_clone)
 
         for internal_node in internal_nodes:
             internal_id = str(internal_node.get("id") or "").strip()
@@ -248,11 +268,8 @@ def expand_graph_components(
             out_edges.append(edge_clone)
 
         ingress_targets = [id_map[r] for r in roots]
-        egress_sources = [id_map[l] for l in leaves]
         if len(ingress_targets) > 1:
             ingress_targets = ingress_targets[:1]
-        if len(egress_sources) > 1:
-            egress_sources = egress_sources[:1]
 
         for external_in in incoming_by_target.get(instance_node_id, []):
             for target_internal in ingress_targets:
@@ -262,11 +279,83 @@ def expand_graph_components(
                 out_edges.append(edge_clone)
 
         for external_out in outgoing_by_source.get(instance_node_id, []):
-            for source_internal in egress_sources:
-                edge_clone = copy.deepcopy(external_out)
-                edge_clone["id"] = f"ce:{instance_node_id}:egress:{str(external_out.get('id') or '')}:{source_internal}"
-                edge_clone["source"] = source_internal
-                out_edges.append(edge_clone)
+            out_edges.append(copy.deepcopy(external_out))
+
+        api_outputs = (
+            component_api.get("outputs")
+            if isinstance(component_api, dict) and isinstance(component_api.get("outputs"), list)
+            else []
+        )
+        bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
+        output_bindings = (
+            bindings.get("outputs")
+            if isinstance(bindings, dict) and isinstance(bindings.get("outputs"), dict)
+            else {}
+        )
+
+        for idx, out_port in enumerate(api_outputs):
+            if not isinstance(out_port, dict):
+                continue
+            out_name = str(out_port.get("name") or "").strip()
+            if not out_name:
+                continue
+            binding = output_bindings.get(out_name) if isinstance(output_bindings, dict) else None
+            if not isinstance(binding, dict):
+                raise ComponentExpansionError(
+                    f"Missing output binding for '{out_name}' in {component_id}@{revision_id}",
+                    code="COMPONENT_OUTPUT_BINDING_MISSING",
+                    details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
+                )
+            bound_internal_id = str(binding.get("nodeId") or "").strip()
+            bound_artifact = str(binding.get("artifact") or "current").strip().lower() or "current"
+            if not bound_internal_id:
+                raise ComponentExpansionError(
+                    f"Output binding nodeId is required for '{out_name}' in {component_id}@{revision_id}",
+                    code="COMPONENT_OUTPUT_BINDING_INVALID",
+                    details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
+                )
+            if bound_artifact not in {"current", "last"}:
+                raise ComponentExpansionError(
+                    f"Unsupported output binding artifact mode '{bound_artifact}' for '{out_name}'",
+                    code="COMPONENT_OUTPUT_BINDING_INVALID",
+                    details={
+                        "componentId": component_id,
+                        "revisionId": revision_id,
+                        "output": out_name,
+                        "artifact": bound_artifact,
+                    },
+                )
+            source_prefixed = id_map.get(bound_internal_id) or (
+                bound_internal_id
+                if bound_internal_id in id_map.values()
+                else None
+            )
+            if not source_prefixed:
+                raise ComponentExpansionError(
+                    f"Output binding references unknown internal node '{bound_internal_id}' for '{out_name}'",
+                    code="COMPONENT_OUTPUT_BINDING_NODE_NOT_FOUND",
+                    details={
+                        "componentId": component_id,
+                        "revisionId": revision_id,
+                        "output": out_name,
+                        "nodeId": bound_internal_id,
+                    },
+                )
+            out_edges.append(
+                {
+                    "id": f"ce:{instance_node_id}:output:{idx}:{out_name}",
+                    "source": source_prefixed,
+                    "target": instance_node_id,
+                    "targetHandle": out_name,
+                    "data": {
+                        "componentOutputBinding": {
+                            "output": out_name,
+                            "artifact": bound_artifact,
+                            "nodeId": bound_internal_id,
+                        }
+                    },
+                }
+            )
 
     return ExpandedComponentGraph(
         graph={"nodes": out_nodes, "edges": out_edges},

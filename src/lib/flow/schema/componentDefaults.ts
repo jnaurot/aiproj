@@ -8,7 +8,8 @@ export const defaultComponentParams: ComponentParams = {
 	},
 	bindings: {
 		inputs: {},
-		config: {}
+		config: {},
+		outputs: {}
 	},
 	config: {},
 	api: {

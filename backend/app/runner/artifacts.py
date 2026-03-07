@@ -155,6 +155,13 @@ class ArtifactStore(Protocol):
         mime_type: Optional[str] = None,
     ) -> str: ...
     async def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]: ...
+    async def get_latest_node_artifact(
+        self,
+        *,
+        graph_id: str,
+        node_id: str,
+        exclude_artifact_id: Optional[str] = None,
+    ) -> Optional[str]: ...
 
 
 # ----------------------------
@@ -447,6 +454,32 @@ class MemoryArtifactStore:
             return None
         meta = self._snapshots.get(sid)
         return dict(meta) if isinstance(meta, dict) else None
+
+    async def get_latest_node_artifact(
+        self,
+        *,
+        graph_id: str,
+        node_id: str,
+        exclude_artifact_id: Optional[str] = None,
+    ) -> Optional[str]:
+        gid = str(graph_id or "").strip()
+        nid = str(node_id or "").strip()
+        if not gid or not nid:
+            return None
+        ex = str(exclude_artifact_id or "").strip()
+        rows: List[Tuple[str, Artifact]] = []
+        for aid, art in self._meta.items():
+            if str(art.graph_id or "") != gid:
+                continue
+            if str(art.node_id or "") != nid:
+                continue
+            if ex and str(aid) == ex:
+                continue
+            rows.append((aid, art))
+        if not rows:
+            return None
+        rows.sort(key=lambda x: x[1].created_at, reverse=True)
+        return str(rows[0][0])
 
 
 class _SqliteArtifactIndex:
@@ -1008,6 +1041,44 @@ class _SqliteArtifactIndex:
         except Exception:
             return None
 
+    def latest_node_artifact_id(
+        self,
+        *,
+        graph_id: str,
+        node_id: str,
+        exclude_artifact_id: Optional[str] = None,
+    ) -> Optional[str]:
+        gid = str(graph_id or "").strip()
+        nid = str(node_id or "").strip()
+        if not gid or not nid:
+            return None
+        ex = str(exclude_artifact_id or "").strip()
+        with self._lock:
+            cur = self._conn.cursor()
+            if ex:
+                row = cur.execute(
+                    """
+                    SELECT artifact_id
+                    FROM artifacts
+                    WHERE graph_id=? AND node_id=? AND artifact_id<>?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (gid, nid, ex),
+                ).fetchone()
+            else:
+                row = cur.execute(
+                    """
+                    SELECT artifact_id
+                    FROM artifacts
+                    WHERE graph_id=? AND node_id=?
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (gid, nid),
+                ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
     def gc_orphan_blobs(
         self, mode: str = "dry_run", limit: Optional[int] = None, max_seconds: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -1281,6 +1352,19 @@ class DiskArtifactStore:
 
     async def get_snapshot_metadata(self, snapshot_id: str) -> Optional[Dict[str, Any]]:
         return self._index.get_snapshot_metadata(snapshot_id)
+
+    async def get_latest_node_artifact(
+        self,
+        *,
+        graph_id: str,
+        node_id: str,
+        exclude_artifact_id: Optional[str] = None,
+    ) -> Optional[str]:
+        return self._index.latest_node_artifact_id(
+            graph_id=graph_id,
+            node_id=node_id,
+            exclude_artifact_id=exclude_artifact_id,
+        )
 
 
 # ----------------------------

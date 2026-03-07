@@ -272,6 +272,182 @@ class ComponentRevisionStore:
                     return None
                 return self._row_to_revision(row)
 
+    def rename_component(self, *, from_component_id: str, to_component_id: str) -> Dict[str, Any]:
+        src = str(from_component_id or "").strip()
+        dst = str(to_component_id or "").strip()
+        if not src:
+            raise ValueError("from_component_id is required")
+        if not dst:
+            raise ValueError("to_component_id is required")
+        if src == dst:
+            raise ValueError("component id is unchanged")
+
+        with self._lock:
+            with self._connect() as conn:
+                src_row = conn.execute(
+                    "SELECT component_id FROM components WHERE component_id = ?",
+                    (src,),
+                ).fetchone()
+                if not src_row:
+                    return {"ok": False, "reason": "not_found"}
+                dst_row = conn.execute(
+                    "SELECT component_id FROM components WHERE component_id = ?",
+                    (dst,),
+                ).fetchone()
+                if dst_row:
+                    return {"ok": False, "reason": "already_exists"}
+                conn.execute("BEGIN")
+                try:
+                    conn.execute(
+                        """
+                        UPDATE component_revisions
+                        SET component_id = ?
+                        WHERE component_id = ?
+                        """,
+                        (dst, src),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE components
+                        SET component_id = ?, updated_at = ?
+                        WHERE component_id = ?
+                        """,
+                        (dst, _iso_now(), src),
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return {"ok": True, "componentId": dst}
+
+    def delete_component(self, component_id: str) -> Dict[str, Any]:
+        cid = str(component_id or "").strip()
+        if not cid:
+            raise ValueError("component_id is required")
+
+        with self._lock:
+            with self._connect() as conn:
+                exists = conn.execute(
+                    "SELECT component_id FROM components WHERE component_id = ?",
+                    (cid,),
+                ).fetchone()
+                if not exists:
+                    return {"ok": False, "reason": "not_found"}
+                conn.execute("BEGIN")
+                try:
+                    rev_count = conn.execute(
+                        "SELECT COUNT(*) AS c FROM component_revisions WHERE component_id = ?",
+                        (cid,),
+                    ).fetchone()
+                    deleted_revisions = int(rev_count["c"]) if rev_count else 0
+                    conn.execute(
+                        "DELETE FROM component_revisions WHERE component_id = ?",
+                        (cid,),
+                    )
+                    comp_del = conn.execute(
+                        "DELETE FROM components WHERE component_id = ?",
+                        (cid,),
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return {
+                    "ok": True,
+                    "componentId": cid,
+                    "deletedRevisions": deleted_revisions,
+                    "deletedComponents": int(comp_del.rowcount),
+                }
+
+    def delete_revision(self, component_id: str, revision_id: str) -> Dict[str, Any]:
+        cid = str(component_id or "").strip()
+        rid = str(revision_id or "").strip()
+        if not cid:
+            raise ValueError("component_id is required")
+        if not rid:
+            raise ValueError("revision_id is required")
+
+        with self._lock:
+            with self._connect() as conn:
+                rev = conn.execute(
+                    """
+                    SELECT revision_id, component_id
+                    FROM component_revisions
+                    WHERE component_id = ? AND revision_id = ?
+                    """,
+                    (cid, rid),
+                ).fetchone()
+                if not rev:
+                    return {"ok": False, "reason": "revision_not_found"}
+                comp = conn.execute(
+                    """
+                    SELECT latest_revision_id
+                    FROM components
+                    WHERE component_id = ?
+                    """,
+                    (cid,),
+                ).fetchone()
+                if not comp:
+                    return {"ok": False, "reason": "component_not_found"}
+                was_latest = str(comp["latest_revision_id"] or "") == rid
+
+                conn.execute("BEGIN")
+                try:
+                    conn.execute(
+                        """
+                        UPDATE component_revisions
+                        SET parent_revision_id = NULL
+                        WHERE component_id = ? AND parent_revision_id = ?
+                        """,
+                        (cid, rid),
+                    )
+                    deleted = conn.execute(
+                        """
+                        DELETE FROM component_revisions
+                        WHERE component_id = ? AND revision_id = ?
+                        """,
+                        (cid, rid),
+                    )
+
+                    newest = conn.execute(
+                        """
+                        SELECT revision_id
+                        FROM component_revisions
+                        WHERE component_id = ?
+                        ORDER BY created_at DESC, revision_id DESC
+                        LIMIT 1
+                        """,
+                        (cid,),
+                    ).fetchone()
+                    if newest:
+                        if was_latest:
+                            conn.execute(
+                                """
+                                UPDATE components
+                                SET latest_revision_id = ?, updated_at = ?
+                                WHERE component_id = ?
+                                """,
+                                (str(newest["revision_id"]), _iso_now(), cid),
+                            )
+                    else:
+                        conn.execute(
+                            "DELETE FROM components WHERE component_id = ?",
+                            (cid,),
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+                return {
+                    "ok": True,
+                    "componentId": cid,
+                    "revisionId": rid,
+                    "deletedRevisions": int(deleted.rowcount),
+                    "remainingLatestRevisionId": str(newest["revision_id"]) if newest else None,
+                    "componentDeleted": newest is None,
+                }
+
     def _row_to_revision(self, row: sqlite3.Row) -> ComponentRevision:
         definition = json.loads(str(row["definition_json"]))
         return ComponentRevision(

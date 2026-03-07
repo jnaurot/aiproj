@@ -35,6 +35,10 @@ class ComponentRevisionWriteRequest(BaseModel):
         return v
 
 
+class ComponentRenameRequest(BaseModel):
+    componentId: str
+
+
 @router.post("")
 async def create_component_revision(req: ComponentRevisionWriteRequest, request: Request):
     store = getattr(request.app.state, "component_revisions", None)
@@ -114,5 +118,81 @@ async def get_component_revision(component_id: str, revision_id: str, request: R
         "revisionSchemaVersion": row.schema_version,
         "checksum": row.checksum,
         "definition": row.definition,
+    }
+
+
+@router.patch("/{component_id}")
+async def rename_component(component_id: str, req: ComponentRenameRequest, request: Request):
+    store = getattr(request.app.state, "component_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="component revision store unavailable")
+    from_id = str(component_id or "").strip()
+    to_id = str(req.componentId or "").strip()
+    try:
+        result = store.rename_component(from_component_id=from_id, to_component_id=to_id)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "")
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail=f"component not found: {from_id}")
+        if reason == "already_exists":
+            raise HTTPException(status_code=409, detail=f"component already exists: {to_id}")
+        raise HTTPException(status_code=400, detail=f"rename failed: {reason or 'unknown'}")
+    return {
+        "schemaVersion": 1,
+        "componentId": str(result.get("componentId") or to_id),
+        "renamedFrom": from_id,
+    }
+
+
+@router.delete("/{component_id}")
+async def delete_component(component_id: str, request: Request):
+    store = getattr(request.app.state, "component_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="component revision store unavailable")
+    cid = str(component_id or "").strip()
+    try:
+        result = store.delete_component(cid)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "")
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail=f"component not found: {cid}")
+        raise HTTPException(status_code=400, detail=f"delete failed: {reason or 'unknown'}")
+    return {
+        "schemaVersion": 1,
+        "componentId": cid,
+        "deletedRevisions": int(result.get("deletedRevisions") or 0),
+        "deletedComponents": int(result.get("deletedComponents") or 0),
+    }
+
+
+@router.delete("/{component_id}/revisions/{revision_id}")
+async def delete_component_revision(component_id: str, revision_id: str, request: Request):
+    store = getattr(request.app.state, "component_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="component revision store unavailable")
+    cid = str(component_id or "").strip()
+    rid = str(revision_id or "").strip()
+    try:
+        result = store.delete_revision(cid, rid)
+    except ValueError as ex:
+        raise HTTPException(status_code=400, detail=str(ex))
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "")
+        if reason == "component_not_found":
+            raise HTTPException(status_code=404, detail=f"component not found: {cid}")
+        if reason == "revision_not_found":
+            raise HTTPException(status_code=404, detail=f"revision not found: {cid}@{rid}")
+        raise HTTPException(status_code=400, detail=f"delete failed: {reason or 'unknown'}")
+    return {
+        "schemaVersion": 1,
+        "componentId": cid,
+        "revisionId": rid,
+        "deletedRevisions": int(result.get("deletedRevisions") or 0),
+        "remainingLatestRevisionId": result.get("remainingLatestRevisionId"),
+        "componentDeleted": bool(result.get("componentDeleted")),
     }
 

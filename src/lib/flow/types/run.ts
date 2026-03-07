@@ -18,6 +18,32 @@ export type KnownRunEvent =
   | { type: "run_finished"; runId: string; at: string; status: RunStatus }
   | { type: "node_started"; runId: string; at: string; nodeId: string }
   | {
+      type: "component_started";
+      runId: string;
+      at: string;
+      nodeId: string;
+      componentId?: string;
+      componentRevisionId?: string;
+    }
+  | {
+      type: "component_finished";
+      runId: string;
+      at: string;
+      nodeId: string;
+      componentId?: string;
+      componentRevisionId?: string;
+      status?: "succeeded" | "failed";
+    }
+  | {
+      type: "component_failed";
+      runId: string;
+      at: string;
+      nodeId: string;
+      componentId?: string;
+      componentRevisionId?: string;
+      error?: string;
+    }
+  | {
       type: "node_finished";
       runId: string;
       at: string;

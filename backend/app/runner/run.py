@@ -224,6 +224,7 @@ def _node_impl_version(kind: str) -> str:
         "transform": "TRANSFORM@1",
         "llm": "LLM@1",
         "tool": "TOOL@1",
+        "component": "COMPONENT@1",
     }
     return mapping.get(str(kind or ""), "GENERIC@1")
 
@@ -1320,15 +1321,26 @@ async def run_graph(
                     tgt = str(e.get("target") or "")
                     if src in internal_set and tgt in internal_set:
                         internal_out_degree[src] = int(internal_out_degree.get(src, 0)) + 1
-                leaf_nodes = sorted([nid for nid in planned_internal if int(internal_out_degree.get(nid, 0)) == 0])
-                if not leaf_nodes:
-                    leaf_nodes = sorted(planned_internal)
+                output_binding_edges = []
+                for e in execution_graph.get("edges", []) if isinstance(execution_graph, dict) else []:
+                    if not isinstance(e, dict):
+                        continue
+                    src = str(e.get("source") or "")
+                    tgt = str(e.get("target") or "")
+                    if tgt != parent_node_id:
+                        continue
+                    if src not in internal_set:
+                        continue
+                    edge_data = e.get("data") if isinstance(e.get("data"), dict) else {}
+                    cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
+                    if isinstance(cob, dict):
+                        output_binding_edges.append(e)
                 component_runtime_state[parent_node_id] = {
                     "remaining": len(planned_internal),
                     "started": False,
                     "failed": False,
                     "started_at": None,
-                    "leaf_nodes": leaf_nodes,
+                    "output_binding_edges": output_binding_edges,
                 }
 
         async def _component_mark_node_start(node_id: str) -> None:
@@ -1348,12 +1360,6 @@ async def run_graph(
                 "nodeId": parent_node_id,
                 "componentId": str(meta.get("componentId") or ""),
                 "componentRevisionId": str(meta.get("componentRevisionId") or ""),
-            })
-            await context.bus.emit({
-                "type": "node_started",
-                "runId": run_id,
-                "at": iso_now(),
-                "nodeId": parent_node_id,
             })
 
         async def _component_mark_node_finish(node_id: str, *, ok: bool, error: Optional[str] = None) -> None:
@@ -1381,77 +1387,10 @@ async def run_graph(
                     "componentRevisionId": str(meta.get("componentRevisionId") or ""),
                     "error": str(error or "Component internal node failed"),
                 })
-                await context.bus.emit({
-                    "type": "node_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "nodeId": parent_node_id,
-                    "status": "failed",
-                    "error": str(error or "Component internal node failed"),
-                    "execution_time_ms": elapsed_ms,
-                })
                 return
 
             if state["remaining"] == 0 and not state.get("failed"):
                 meta = component_meta_by_parent.get(parent_node_id, {})
-                elapsed_ms = max(
-                    0.0,
-                    (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
-                )
-                leaf_nodes = [
-                    str(nid)
-                    for nid in (state.get("leaf_nodes") or [])
-                    if isinstance(nid, str) and str(nid).strip()
-                ]
-                alias_artifact_id: Optional[str] = None
-                alias_mime_type: Optional[str] = None
-                alias_port_type: Optional[str] = None
-                alias_leaf_node_id: Optional[str] = None
-                for leaf_node_id in leaf_nodes:
-                    leaf_binding = context.bindings.get(leaf_node_id)
-                    leaf_artifact_id = (
-                        str(getattr(leaf_binding, "artifact_id", "") or "").strip()
-                        if leaf_binding is not None
-                        else ""
-                    )
-                    if not leaf_artifact_id:
-                        continue
-                    try:
-                        leaf_artifact = await context.artifact_store.get(leaf_artifact_id)
-                    except Exception:
-                        continue
-                    alias_artifact_id = leaf_artifact_id
-                    alias_mime_type = str(getattr(leaf_artifact, "mime_type", "") or "").strip() or "application/octet-stream"
-                    alias_port_type = str(_infer_artifact_port_type(leaf_artifact) or "").strip() or "json"
-                    alias_leaf_node_id = leaf_node_id
-                    break
-
-                if alias_artifact_id:
-                    context.bindings.bind(
-                        node_id=parent_node_id,
-                        artifact_id=alias_artifact_id,
-                        status="computed",
-                    )
-                    await context.bus.emit({
-                        "type": "node_output",
-                        "runId": run_id,
-                        "nodeId": parent_node_id,
-                        "at": iso_now(),
-                        "artifactId": alias_artifact_id,
-                        "mimeType": alias_mime_type,
-                        "portType": alias_port_type,
-                    })
-                    await context.bus.emit({
-                        "type": "log",
-                        "runId": run_id,
-                        "at": iso_now(),
-                        "level": "info",
-                        "message": (
-                            f"Component output aliased from leaf artifact: "
-                            f"leaf={alias_leaf_node_id or '-'} artifact={alias_artifact_id}"
-                        ),
-                        "nodeId": parent_node_id,
-                    })
                 await context.bus.emit({
                     "type": "component_finished",
                     "runId": run_id,
@@ -1460,14 +1399,6 @@ async def run_graph(
                     "componentId": str(meta.get("componentId") or ""),
                     "componentRevisionId": str(meta.get("componentRevisionId") or ""),
                     "status": "succeeded",
-                })
-                await context.bus.emit({
-                    "type": "node_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "nodeId": parent_node_id,
-                    "status": "succeeded",
-                    "execution_time_ms": elapsed_ms,
                 })
 
         def _binding_snapshot(node_id: str) -> tuple[Optional[str], Optional[str]]:
@@ -2863,6 +2794,109 @@ async def run_graph(
                         tool_node,
                         context,
                         upstream_artifact_ids=tool_upstream_ids,
+                    )
+                elif kind == "component":
+                    component_ref = params.get("componentRef") if isinstance(params.get("componentRef"), dict) else {}
+                    component_api = params.get("api") if isinstance(params.get("api"), dict) else {}
+                    declared_outputs = (
+                        component_api.get("outputs")
+                        if isinstance(component_api.get("outputs"), list)
+                        else []
+                    )
+                    bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
+                    output_bindings = (
+                        bindings.get("outputs")
+                        if isinstance(bindings.get("outputs"), dict)
+                        else {}
+                    )
+                    refs_by_port: Dict[str, list[str]] = {}
+                    for port_name, aid in input_refs:
+                        p = str(port_name or "").strip()
+                        if not p:
+                            continue
+                        refs_by_port.setdefault(p, []).append(str(aid))
+
+                    wrapper_outputs: Dict[str, Any] = {}
+                    wrapper_upstream_ids: list[str] = []
+                    for out_decl in declared_outputs:
+                        if not isinstance(out_decl, dict):
+                            continue
+                        out_name = str(out_decl.get("name") or "").strip()
+                        if not out_name:
+                            continue
+                        binding = output_bindings.get(out_name) if isinstance(output_bindings, dict) else None
+                        if not isinstance(binding, dict):
+                            raise RuntimeError(f"Component output binding missing for '{out_name}'")
+                        mode = str(binding.get("artifact") or "current").strip().lower() or "current"
+                        if mode not in {"current", "last"}:
+                            raise RuntimeError(
+                                f"Component output binding for '{out_name}' has unsupported artifact mode '{mode}'"
+                            )
+                        candidates = refs_by_port.get(out_name, [])
+                        if not candidates:
+                            raise RuntimeError(
+                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.nodeId exists and produced an artifact."
+                            )
+                        current_artifact_id = str(candidates[0] or "").strip()
+                        bound_artifact_id = current_artifact_id
+                        if mode == "last":
+                            bound_node_id = str(binding.get("nodeId") or "").strip()
+                            if not bound_node_id:
+                                raise RuntimeError(
+                                    f"Component output binding for '{out_name}' requires nodeId when artifact='last'"
+                                )
+                            bound_runtime_node_id = (
+                                bound_node_id
+                                if bound_node_id.startswith("cmp:")
+                                else f"cmp:{node_id}:{bound_node_id}"
+                            )
+                            latest_lookup = getattr(context.artifact_store, "get_latest_node_artifact", None)
+                            if not callable(latest_lookup):
+                                raise RuntimeError(
+                                    "Component output binding artifact='last' requires artifact store support"
+                                )
+                            last_artifact_id = await latest_lookup(
+                                graph_id=graph_id,
+                                node_id=bound_runtime_node_id,
+                                exclude_artifact_id=current_artifact_id or None,
+                            )
+                            bound_artifact_id = str(last_artifact_id or "").strip()
+                            if not bound_artifact_id:
+                                raise RuntimeError(
+                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for node '{bound_node_id}'"
+                                )
+                        if not bound_artifact_id:
+                            raise RuntimeError(f"Component output '{out_name}' resolved to empty artifact id")
+                        bound_artifact = await context.artifact_store.get(bound_artifact_id)
+                        wrapper_upstream_ids.append(bound_artifact_id)
+                        wrapper_outputs[out_name] = {
+                            "artifact_id": bound_artifact_id,
+                            "mime_type": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
+                            "port_type": str(_infer_artifact_port_type(bound_artifact) or "").strip() or "json",
+                            "typed_schema": out_decl.get("typedSchema") if isinstance(out_decl.get("typedSchema"), dict) else None,
+                            "required": bool(out_decl.get("required", True)),
+                        }
+
+                    output = NodeOutput(
+                        status="succeeded",
+                        data={
+                            "ok": True,
+                            "component": {
+                                "componentId": str(component_ref.get("componentId") or ""),
+                                "revisionId": str(component_ref.get("revisionId") or ""),
+                                "apiVersion": str(component_ref.get("apiVersion") or "v1"),
+                                "instanceNodeId": node_id,
+                            },
+                            "outputs": wrapper_outputs,
+                            "meta": {
+                                "mime_type": "application/json",
+                                "port_type": "json",
+                                "input_refs": [{"port": p, "artifact_id": a} for p, a in input_refs],
+                                "upstream_artifact_ids": sorted(set(wrapper_upstream_ids)),
+                            },
+                        },
+                        metadata=None,
+                        execution_time_ms=0.0,
                     )
                 else:
                     raise RuntimeError(f"Unknown node kind: {kind}")

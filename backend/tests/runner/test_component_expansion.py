@@ -29,7 +29,7 @@ def _component_revision():
             ],
             "edges": [],
         },
-        "api": {"inputs": [{"name": "in"}], "outputs": [{"name": "out"}]},
+        "api": {"inputs": [{"name": "in"}], "outputs": [{"name": "out", "portType": "json"}]},
     }
     return SimpleNamespace(definition=definition)
 
@@ -53,7 +53,7 @@ def test_expand_component_rewrites_nodes_and_edges():
                     "label": "Component",
                     "params": {
                         "componentRef": {"componentId": "cmp_echo", "revisionId": "rev_1"},
-                        "bindings": {"inputs": {}, "config": {}},
+                        "bindings": {"inputs": {}, "outputs": {"out": {"nodeId": "inner_tool", "artifact": "current"}}, "config": {}},
                         "config": {},
                     },
                     "ports": {"in": "text", "out": "json"},
@@ -78,7 +78,7 @@ def test_expand_component_rewrites_nodes_and_edges():
     expanded = expand_graph_components(graph, component_store=store)
 
     node_ids = {str(n.get("id")) for n in expanded.graph["nodes"]}
-    assert "cmp_node" not in node_ids
+    assert "cmp_node" in node_ids
     assert "cmp:cmp_node:inner_tool" in node_ids
 
     internal_meta = next(n for n in expanded.graph["nodes"] if n["id"] == "cmp:cmp_node:inner_tool")["data"]["meta"]["component"]
@@ -88,7 +88,8 @@ def test_expand_component_rewrites_nodes_and_edges():
 
     edge_pairs = {(e["source"], e["target"]) for e in expanded.graph["edges"]}
     assert ("src", "cmp:cmp_node:inner_tool") in edge_pairs
-    assert ("cmp:cmp_node:inner_tool", "sink") in edge_pairs
+    assert ("cmp:cmp_node:inner_tool", "cmp_node") in edge_pairs
+    assert ("cmp_node", "sink") in edge_pairs
 
     assert expanded.internal_to_parent["cmp:cmp_node:inner_tool"] == "cmp_node"
     assert "cmp:cmp_node:inner_tool" in expanded.parent_to_internal["cmp_node"]
