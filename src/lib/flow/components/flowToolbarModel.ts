@@ -18,8 +18,8 @@ export function buildAddMenuItems(hasPresets: boolean): ToolbarMenuItem[] {
 		{ id: 'add_transform', label: 'Transform' },
 		{ id: 'add_llm', label: 'LLM' },
 		{ id: 'add_tool', label: 'Tool' },
+		{ id: 'add_from_preset', label: 'Preset', disabled: !hasPresets },
 		{ id: 'add_component', label: 'Component' },
-		{ id: 'add_from_preset', label: 'From preset', disabled: !hasPresets }
 	];
 }
 

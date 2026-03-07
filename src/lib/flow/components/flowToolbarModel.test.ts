@@ -21,15 +21,15 @@ describe('flowToolbarModel', () => {
 		]);
 	});
 
-	it('builds expected Add menu items including Component and From preset', () => {
+	it('builds expected Add menu items with Preset before Component', () => {
 		const items = buildAddMenuItems(true);
 		expect(items.map((i) => i.label)).toEqual([
 			'Source',
 			'Transform',
 			'LLM',
 			'Tool',
+			'Preset',
 			'Component',
-			'From preset'
 		]);
 		expect(buildAddMenuItems(false).find((i) => i.id === 'add_from_preset')?.disabled).toBe(true);
 	});
