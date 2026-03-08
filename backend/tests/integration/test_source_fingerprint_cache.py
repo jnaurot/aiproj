@@ -35,6 +35,30 @@ def _source_graph(file_path: str) -> dict:
     }
 
 
+def _source_graph_with_mode(file_path: str, *, mode: str, port: str) -> dict:
+    p = Path(file_path)
+    return {
+        "nodes": [
+            {
+                "id": "source_1",
+                "data": {
+                    "kind": "source",
+                    "label": "Source",
+                    "sourceKind": "file",
+                    "params": {
+                        "rel_path": str(p.parent),
+                        "filename": p.name,
+                        "file_format": "csv",
+                        "output_mode": mode,
+                    },
+                    "ports": {"in": None, "out": port},
+                },
+            }
+        ],
+        "edges": [],
+    }
+
+
 @pytest.mark.asyncio
 async def test_source_file_fingerprint_drives_cache_hit_and_miss(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
@@ -115,6 +139,145 @@ async def test_source_file_fingerprint_drives_cache_hit_and_miss(monkeypatch, tm
     assert decisions_3 and decisions_3[-1].get("decision") == "cache_miss"
     out_3 = [e for e in events_3 if e.get("type") == "node_output" and e.get("nodeId") == "source_1"]
     assert out_3 and out_3[-1]["artifactId"] != first_artifact_id
+    assert calls["source"] == 2
+
+
+@pytest.mark.asyncio
+async def test_source_output_mode_change_recomputes_cache_key(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"source": 0}
+    monkeypatch.setenv("WORKSPACE_ROOT_WORKSPACE", str(tmp_path))
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        calls["source"] += 1
+        params = node["data"]["params"]
+        p = (Path(params["rel_path"]) / params["filename"]).resolve()
+        output_mode = str(params.get("output_mode") or "text")
+        if output_mode == "table":
+            data = [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        elif output_mode == "json":
+            data = {"rows": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}
+        else:
+            data = p.read_text(encoding="utf-8")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data=data,
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+
+    file_path = tmp_path / "input.csv"
+    file_path.write_text("id,name\n1,Alice\n2,Bob\n", encoding="utf-8")
+
+    artifact_root = tmp_path / "artifact-root-mode-switch"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    graph_table = _source_graph_with_mode(str(file_path), mode="table", port="table")
+
+    events_1: list[dict] = []
+    await run_mod.run_graph(
+        run_id="run-source-mode-1",
+        graph=graph_table,
+        run_from=None,
+        bus=RunEventBus("run-source-mode-1", on_emit=lambda e: events_1.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-source-mode",
+    )
+    out_1 = [e for e in events_1 if e.get("type") == "node_output" and e.get("nodeId") == "source_1"]
+    decisions_1 = [e for e in events_1 if e.get("type") == "cache_decision" and e.get("nodeId") == "source_1"]
+    assert out_1
+    assert decisions_1 and decisions_1[-1].get("decision") == "cache_miss"
+    first_artifact_id = str(out_1[-1]["artifactId"])
+    assert calls["source"] == 1
+
+    events_2: list[dict] = []
+    await run_mod.run_graph(
+        run_id="run-source-mode-2",
+        graph=graph_table,
+        run_from=None,
+        bus=RunEventBus("run-source-mode-2", on_emit=lambda e: events_2.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-source-mode",
+    )
+    decisions_2 = [e for e in events_2 if e.get("type") == "cache_decision" and e.get("nodeId") == "source_1"]
+    assert decisions_2 and decisions_2[-1].get("decision") == "cache_hit"
+    assert calls["source"] == 1
+
+    graph_json = _source_graph_with_mode(str(file_path), mode="json", port="json")
+    events_3: list[dict] = []
+    await run_mod.run_graph(
+        run_id="run-source-mode-3",
+        graph=graph_json,
+        run_from=None,
+        bus=RunEventBus("run-source-mode-3", on_emit=lambda e: events_3.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-source-mode",
+    )
+    out_3 = [e for e in events_3 if e.get("type") == "node_output" and e.get("nodeId") == "source_1"]
+    decisions_3 = [e for e in events_3 if e.get("type") == "cache_decision" and e.get("nodeId") == "source_1"]
+    assert out_3
+    assert decisions_3 and decisions_3[-1].get("decision") == "cache_miss"
+    assert str(out_3[-1]["artifactId"]) != first_artifact_id
+    assert calls["source"] == 2
+
+
+@pytest.mark.asyncio
+async def test_global_force_off_disables_cache_even_when_source_cache_enabled(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"source": 0}
+    monkeypatch.setenv("WORKSPACE_ROOT_WORKSPACE", str(tmp_path))
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        calls["source"] += 1
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+
+    file_path = tmp_path / "input.txt"
+    file_path.write_text("alpha", encoding="utf-8")
+    graph = _source_graph(str(file_path))
+
+    artifact_root = tmp_path / "artifact-root-force-off"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    # Warm cache once in default mode.
+    await run_mod.run_graph(
+        run_id="run-force-off-1",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-force-off-1"),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-force-off",
+    )
+    assert calls["source"] == 1
+
+    class _ForceOffRuntime:
+        def get_global_cache_mode(self):
+            return "force_off"
+
+    events_2: list[dict] = []
+    await run_mod.run_graph(
+        run_id="run-force-off-2",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-force-off-2", on_emit=lambda e: events_2.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=_ForceOffRuntime(),
+        graph_id="graph-force-off",
+    )
+    decisions = [e for e in events_2 if e.get("type") == "cache_decision" and e.get("nodeId") == "source_1"]
+    assert decisions
+    assert decisions[-1].get("decision") == "cache_miss"
+    assert decisions[-1].get("reason") == "GLOBAL_FORCE_OFF"
     assert calls["source"] == 2
 
 

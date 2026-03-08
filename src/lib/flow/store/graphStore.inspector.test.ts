@@ -20,6 +20,21 @@ function sourceNodeParams(nodeId: string): Record<string, any> {
 }
 
 describe('graphStore snapshot scoped commit', () => {
+	it('source output port change syncs params.output.mode and marks node stale', () => {
+		const nodeId = setupSourceNode();
+		const initial = sourceNodeParams(nodeId);
+		expect(initial.output?.mode).toBeTruthy();
+
+		const result = graphStore.updateNodeConfig(nodeId, { ports: { out: 'json' } });
+		expect(result.ok).toBe(true);
+
+		const state = get(graphStore);
+		const params = sourceNodeParams(nodeId);
+		expect(params.output?.mode).toBe('json');
+		expect(state.nodeBindings[nodeId]?.staleReason).toBe('PORTS_CHANGED');
+		expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('stale');
+	});
+
 	it('selecting_previous_upload_commits_snapshot_without_dirty_state', async () => {
 		const nodeId = setupSourceNode();
 		const snapshotId = 'a'.repeat(64);

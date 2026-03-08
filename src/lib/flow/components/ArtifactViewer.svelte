@@ -8,6 +8,7 @@
 		getArtifactPreviewUrl,
 		getArtifactUrl
 	} from '$lib/flow/client/runs';
+	import { extractComponentWrapperOutputs } from '$lib/flow/components/artifactWrapper';
 
 export let artifactId: string;
 export let graphId: string;
@@ -553,6 +554,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	}
 
 	$: jsonRootOpen = jsonEstimatedSize > 0 && jsonEstimatedSize <= 200_000;
+	$: componentWrapperOutputs = extractComponentWrapperOutputs(jsonObj);
 
 	function isTableLike(ct: string, payloadSchema: Record<string, any> | null | undefined): boolean {
 		const t = String(ct ?? '').toLowerCase();
@@ -786,6 +788,21 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 			<JsonTreeNode value={jsonObj} />
 		</details>
 	</div>
+	{#if componentWrapperOutputs.length > 0}
+		<div class="block">
+			<div class="label">Component Outputs</div>
+			<div class="inputsList">
+				{#each componentWrapperOutputs as outRef (`${outRef.name}:${outRef.artifactId}`)}
+					<button class="inputItem" on:click={() => openArtifact(outRef.artifactId)}>
+						<span class="inputLabel">{outRef.name}</span>
+						<span class="inputId">{shortId(outRef.artifactId)}</span>
+						<span class="inputMeta">{outRef.portType}</span>
+						<span class="inputMeta">{outRef.mimeType}</span>
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
 	{#if hasPayloadSchema}
 		<div class="block">
 			<div class="label">Typed Schema</div>

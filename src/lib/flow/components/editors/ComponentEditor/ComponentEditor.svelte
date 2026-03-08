@@ -4,8 +4,14 @@
 	import type { ToolbarMenuItem } from '$lib/flow/components/toolbarMenu';
 	import { graphStore } from '$lib/flow/store/graphStore';
 	import type { ComponentNodeData } from '$lib/flow/types';
-	import type { ComponentApiPort, ComponentCatalogItem, ComponentRevisionSummary } from '$lib/flow/client/components';
+	import type {
+		ComponentApiPort,
+		ComponentCatalogItem,
+		ComponentRevisionSummary,
+		ComponentTypedField
+	} from '$lib/flow/client/components';
 	import type { PortType } from '$lib/flow/types';
+	import { syncOutputBindings, validateComponentOutputs } from './validation';
 
 export let selectedNode: any;
 export let params: Record<string, any> = {};
@@ -41,9 +47,12 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	$: outputs = Array.isArray(api.outputs) ? api.outputs : [];
 	const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 	const TYPED_TYPE_OPTIONS = ['table', 'json', 'text', 'binary', 'embeddings', 'unknown'] as const;
+	type TypedFieldType = ComponentTypedField['type'];
 	let outputFieldsJsonErrors: Record<number, string> = {};
 	let outputAdvancedOpen: Record<number, boolean> = {};
 	let outputFieldsEditorMode: Record<number, 'structured' | 'json'> = {};
+	let outputNameDraftByIndex: Record<number, string> = {};
+	let outputSyncSignature = '';
 	$: latestRevisionId = String(revisions[0]?.revisionId ?? '').trim();
 	$: hasUpdate = Boolean(latestRevisionId && revisionId && latestRevisionId !== revisionId);
 	$: configObj = (params?.config ?? {}) as Record<string, unknown>;
@@ -57,6 +66,31 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		outputs?: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
 	};
 	$: outputBindings = (bindings?.outputs ?? {}) as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+	$: outputValidation = validateComponentOutputs(outputs, outputBindings);
+	$: outputValidationSummary = outputValidation.hasErrors
+		? `${Object.keys(outputValidation.outputErrors).length} output issue(s), ${Object.keys(outputValidation.bindingErrors).length} binding issue(s)`
+		: '';
+
+	$: {
+		const synced = syncOutputBindings(
+			outputs,
+			outputBindings,
+			internalNodeOptions.map((n) => String(n.id ?? '').trim()).filter((id) => id.length > 0)
+		);
+		if (synced.changed) {
+			const nextSignature = JSON.stringify(synced.next);
+			if (nextSignature !== outputSyncSignature) {
+				outputSyncSignature = nextSignature;
+				onDraft({
+					bindings: {
+						inputs: { ...(bindings?.inputs ?? {}) },
+						config: { ...(bindings?.config ?? {}) },
+						outputs: synced.next
+					}
+				});
+			}
+		}
+	}
 
 	$: if (selectedNode?.id) {
 		void ensureCatalogLoaded();
@@ -247,11 +281,62 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		index: number,
 		patch: Partial<ComponentApiPort>
 	): void {
+		const previousName = String(outputs[index]?.name ?? '').trim();
 		const next = outputs.map((out, i) => (i === index ? { ...out, ...patch } : out));
 		draftApiOutputs(next as ComponentApiPort[]);
+		const nextName = String(next[index]?.name ?? '').trim();
+		if (previousName && nextName && previousName !== nextName) {
+			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<
+				string,
+				{ nodeId?: string; artifact?: 'current' | 'last' }
+			>;
+			const moved = nextBindings[previousName];
+			if (moved) {
+				delete nextBindings[previousName];
+				nextBindings[nextName] = moved;
+				onDraft({
+					bindings: {
+						inputs: { ...(bindings?.inputs ?? {}) },
+						config: { ...(bindings?.config ?? {}) },
+						outputs: nextBindings
+					}
+				});
+			}
+		}
+	}
+
+	function getOutputNameDraft(index: number, currentName: string): string {
+		return Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)
+			? String(outputNameDraftByIndex[index] ?? '')
+			: currentName;
+	}
+
+	function setOutputNameDraft(index: number, value: string): void {
+		outputNameDraftByIndex = {
+			...outputNameDraftByIndex,
+			[index]: value
+		};
+	}
+
+	function cancelOutputNameDraft(index: number): void {
+		if (!Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)) return;
+		const next = { ...outputNameDraftByIndex };
+		delete next[index];
+		outputNameDraftByIndex = next;
+	}
+
+	function commitOutputNameDraft(index: number): void {
+		if (!Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)) return;
+		const nextName = String(outputNameDraftByIndex[index] ?? '');
+		const currentName = String(outputs[index]?.name ?? '');
+		if (nextName !== currentName) {
+			updateApiOutput(index, { name: nextName });
+		}
+		cancelOutputNameDraft(index);
 	}
 
 	function addApiOutput(): void {
+		outputNameDraftByIndex = {};
 		const nextName = `out_${outputs.length + 1}`;
 		const next = [
 			...outputs,
@@ -263,9 +348,32 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			}
 		];
 		draftApiOutputs(next as ComponentApiPort[]);
+		const fallbackNodeId = String(internalNodeOptions[0]?.id ?? '').trim() || undefined;
+		onDraft({
+			bindings: {
+				inputs: { ...(bindings?.inputs ?? {}) },
+				config: { ...(bindings?.config ?? {}) },
+				outputs: {
+					...(bindings?.outputs ?? {}),
+					[nextName]: {
+						nodeId: fallbackNodeId,
+						artifact: 'current'
+					}
+				}
+			}
+		});
+	}
+
+	function isOutputBindingCurrent(name: string): boolean {
+		return String(outputBindings?.[name]?.artifact ?? 'current') !== 'last';
+	}
+
+	function toggleOutputBindingArtifact(name: string): void {
+		onOutputBindingArtifactChange(name, isOutputBindingCurrent(name) ? 'last' : 'current');
 	}
 
 	function removeApiOutput(index: number): void {
+		outputNameDraftByIndex = {};
 		const removed = outputs[index];
 		const next = outputs.filter((_, i) => i !== index);
 		draftApiOutputs(next as ComponentApiPort[]);
@@ -313,12 +421,17 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		};
 	}
 
-	function getOutputFields(index: number): Array<{ name: string; type: string; nativeType?: string; nullable?: boolean }> {
+	function normalizeTypedFieldType(value: unknown): TypedFieldType {
+		const t = String(value ?? '').trim();
+		return (TYPED_TYPE_OPTIONS as readonly string[]).includes(t) ? (t as TypedFieldType) : 'unknown';
+	}
+
+	function getOutputFields(index: number): ComponentTypedField[] {
 		const fields = outputs[index]?.typedSchema?.fields;
 		if (!Array.isArray(fields)) return [];
 		return fields.map((f: any) => ({
 			name: String(f?.name ?? '').trim(),
-			type: String(f?.type ?? 'unknown').trim() || 'unknown',
+			type: normalizeTypedFieldType(f?.type),
 			nativeType: f?.nativeType == null ? undefined : String(f.nativeType),
 			nullable: Boolean(f?.nullable ?? false)
 		}));
@@ -327,7 +440,7 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	function updateOutputField(
 		outputIndex: number,
 		fieldIndex: number,
-		patch: Partial<{ name: string; type: string; nativeType?: string; nullable?: boolean }>
+		patch: Partial<ComponentTypedField>
 	): void {
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.map((field, i) => (i === fieldIndex ? { ...field, ...patch } : field));
@@ -341,7 +454,12 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 	function addOutputField(outputIndex: number): void {
 		const fields = getOutputFields(outputIndex);
-		const nextFields = [...fields, { name: `field_${fields.length + 1}`, type: 'unknown', nullable: false }];
+		const newField: ComponentTypedField = {
+			name: `field_${fields.length + 1}`,
+			type: 'unknown',
+			nullable: false
+		};
+		const nextFields = [...fields, newField];
 		updateApiOutput(outputIndex, {
 			typedSchema: {
 				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
@@ -390,9 +508,9 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 				};
 				return;
 			}
-			const normalized = parsed.map((f) => ({
+			const normalized: ComponentTypedField[] = parsed.map((f) => ({
 				name: String((f as any)?.name ?? '').trim(),
-				type: String((f as any)?.type ?? 'unknown').trim() || 'unknown',
+				type: normalizeTypedFieldType((f as any)?.type),
 				nativeType:
 					(f as any)?.nativeType == null ? undefined : String((f as any).nativeType),
 				nullable: Boolean((f as any)?.nullable ?? false)
@@ -677,16 +795,33 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			<div class="outputControls">
 				<button class="tabBtn small" on:click={addApiOutput}>+ Add output</button>
 			</div>
+			{#if outputValidation.hasErrors}
+				<div class="validationSummary">Resolve output/binding issues before Accept: {outputValidationSummary}</div>
+			{/if}
 			{#if outputs.length === 0}
 				<div class="muted">No output ports</div>
 			{:else}
 				{#each outputs as port, index (`${index}:${port.name}`)}
 					<div class="outputCard">
-						<div class="outputEditorRow">
+						<div class="outputEditorRow outputEditorRowPrimary">
 							<input
 								placeholder="output name"
-								value={String(port.name ?? '')}
-								on:input={(e) => updateApiOutput(index, { name: (e.currentTarget as HTMLInputElement).value })}
+								value={getOutputNameDraft(index, String(port.name ?? ''))}
+								on:input={(e) =>
+									setOutputNameDraft(index, (e.currentTarget as HTMLInputElement).value)}
+								on:blur={() => commitOutputNameDraft(index)}
+								on:keydown={(e) => {
+									const key = (e as KeyboardEvent).key;
+									if (key === 'Enter') {
+										e.preventDefault();
+										commitOutputNameDraft(index);
+										return;
+									}
+									if (key === 'Escape') {
+										e.preventDefault();
+										cancelOutputNameDraft(index);
+									}
+								}}
 							/>
 							<select
 								value={String(port.portType ?? 'json')}
@@ -696,6 +831,33 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 									<option value={p}>{p}</option>
 								{/each}
 							</select>
+							<div class="outputActions">
+								<button class="tabBtn small danger" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
+							</div>
+						</div>
+						<div class="outputEditorRow outputEditorRowSecondary">
+							<select
+								value={String(outputBindings?.[port.name]?.nodeId ?? '')}
+								on:change={(e) => onOutputBindingNodeIdChange(port.name, (e.currentTarget as HTMLSelectElement).value)}
+							>
+								<option value="">internal node</option>
+								{#if String(outputBindings?.[port.name]?.nodeId ?? '').trim() && !internalNodeOptions.some((n) => n.id === String(outputBindings?.[port.name]?.nodeId ?? '').trim())}
+									<option value={String(outputBindings?.[port.name]?.nodeId ?? '').trim()}>
+										missing: {String(outputBindings?.[port.name]?.nodeId ?? '').trim()}
+									</option>
+								{/if}
+								{#each internalNodeOptions as opt (opt.id)}
+									<option value={opt.id}>{opt.label}</option>
+								{/each}
+							</select>
+							<button
+								class={`tabBtn small toggleMode ${isOutputBindingCurrent(port.name) ? 'active' : ''}`}
+								type="button"
+								title="Toggle current/last artifact"
+								on:click={() => toggleOutputBindingArtifact(port.name)}
+							>
+								{isOutputBindingCurrent(port.name) ? 'current' : 'last'}
+							</button>
 							<label class="requiredToggle">
 								<input
 									type="checkbox"
@@ -706,9 +868,8 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 							</label>
 							<div class="outputActions">
 								<button class="tabBtn small" on:click={() => toggleOutputAdvanced(index)}>
-									{isOutputAdvancedOpen(index) ? 'Hide' : 'Advanced'}
+									{isOutputAdvancedOpen(index) ? 'Hide Adv' : 'Adv'}
 								</button>
-								<button class="tabBtn small danger" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
 							</div>
 						</div>
 						{#if isOutputAdvancedOpen(index)}
@@ -758,7 +919,12 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 													/>
 													<select
 														value={String(field.type ?? 'unknown')}
-														on:change={(e) => updateOutputField(index, fieldIndex, { type: (e.currentTarget as HTMLSelectElement).value })}
+														on:change={(e) =>
+															updateOutputField(index, fieldIndex, {
+																type: normalizeTypedFieldType(
+																	(e.currentTarget as HTMLSelectElement).value
+																)
+															})}
 													>
 														{#each TYPED_TYPE_OPTIONS as t}
 															<option value={t}>{t}</option>
@@ -789,6 +955,23 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 								</div>
 							</div>
 						{/if}
+						{#if !String(outputBindings?.[port.name]?.nodeId ?? '').trim()}
+							<div class="bindingErr">bindings.outputs.{port.name}.nodeId is required</div>
+						{/if}
+						{#if outputValidation.bindingErrors[port.name]?.length}
+							<div class="bindingErr">
+								{#each outputValidation.bindingErrors[port.name] as issue}
+									<div>{issue}</div>
+								{/each}
+							</div>
+						{/if}
+						{#if outputValidation.outputErrors[index]?.length}
+							<div class="bindingErr">
+								{#each outputValidation.outputErrors[index] as issue}
+									<div>{issue}</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				{/each}
 			{/if}
@@ -811,47 +994,12 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		onChange={onBindingsConfigChange}
 		stacked={true}
 	/>
-	<div class="bindingOutputs">
-		<div class="groupTitle">outputs</div>
-		{#if outputs.length === 0}
-			<div class="muted">No declared API outputs</div>
-		{:else}
-			{#each outputs as outPort (outPort.name)}
-				<div class="bindingRow">
-					<div class="mono">{outPort.name}</div>
-					<select
-						value={String(outputBindings?.[outPort.name]?.nodeId ?? '')}
-						on:change={(e) => onOutputBindingNodeIdChange(outPort.name, (e.currentTarget as HTMLSelectElement).value)}
-					>
-						<option value="">internal node</option>
-						{#if String(outputBindings?.[outPort.name]?.nodeId ?? '').trim() && !internalNodeOptions.some((n) => n.id === String(outputBindings?.[outPort.name]?.nodeId ?? '').trim())}
-							<option value={String(outputBindings?.[outPort.name]?.nodeId ?? '').trim()}>
-								missing: {String(outputBindings?.[outPort.name]?.nodeId ?? '').trim()}
-							</option>
-						{/if}
-						{#each internalNodeOptions as opt (opt.id)}
-							<option value={opt.id}>{opt.label}</option>
-						{/each}
-					</select>
-					<select
-						value={String(outputBindings?.[outPort.name]?.artifact ?? 'current')}
-						on:change={(e) => onOutputBindingArtifactChange(outPort.name, (e.currentTarget as HTMLSelectElement).value)}
-					>
-						<option value="current">current</option>
-						<option value="last">last</option>
-					</select>
-				</div>
-				{#if !String(outputBindings?.[outPort.name]?.nodeId ?? '').trim()}
-					<div class="bindingErr">bindings.outputs.{outPort.name}.nodeId is required</div>
-				{/if}
-			{/each}
-		{/if}
-		{#if loadingRevisionDetail}
-			<div class="muted">Loading internal nodes...</div>
-		{:else if !loadingRevisionDetail && internalNodeOptions.length === 0}
-			<div class="muted">No internal nodes found for selected revision.</div>
-		{/if}
-	</div>
+	<div class="muted">Output bindings and mode are configured in API Contract &gt; Outputs.</div>
+	{#if loadingRevisionDetail}
+		<div class="muted">Loading internal nodes...</div>
+	{:else if !loadingRevisionDetail && internalNodeOptions.length === 0}
+		<div class="muted">No internal nodes found for selected revision.</div>
+	{/if}
 </div>
 
 <div class="section">
@@ -977,16 +1125,31 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 	.outputEditorRow {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto auto;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto;
 		gap: 8px;
 		align-items: center;
 		margin-bottom: 0;
+	}
+
+	.outputEditorRowSecondary {
+		grid-template-columns: minmax(0, 1fr) 86px auto auto;
+		margin-top: 8px;
 	}
 
 	.outputActions {
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
+	}
+
+	.toggleMode {
+		min-width: 74px;
+		text-transform: lowercase;
+	}
+
+	.toggleMode.active {
+		border-color: rgba(59, 130, 246, 0.55);
+		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.outputCard {
@@ -1077,28 +1240,16 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		}
 	}
 
-	.bindingOutputs {
-		margin-top: 8px;
-		border: 1px solid #1f2430;
-		border-radius: 8px;
-		padding: 8px;
-		overflow-x: hidden;
-	}
-
-	.bindingRow {
-		display: grid;
-		grid-template-columns: 1fr minmax(0, 1.4fr) 120px;
-		gap: 8px;
-		align-items: center;
-		margin-bottom: 6px;
-	}
-
 	@media (max-width: 760px) {
 		.outputEditorRow {
-			grid-template-columns: minmax(0, 1fr) minmax(0, 110px);
+			grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto;
 		}
 
-		.outputEditorRow > input {
+		.outputEditorRowSecondary {
+			grid-template-columns: minmax(0, 1fr) 86px;
+		}
+
+		.outputEditorRowPrimary > input {
 			grid-column: 1 / -1;
 		}
 
@@ -1108,13 +1259,12 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		}
 
 		.outputActions {
-			grid-column: 1 / -1;
+			grid-column: 2 / -1;
 			justify-content: flex-end;
 		}
 
-		.outputEditorRow .danger {
-			grid-column: 2;
-			justify-self: end;
+		.outputEditorRowSecondary > select:first-child {
+			grid-column: 1 / -1;
 		}
 
 		.outputSchemaRow {
@@ -1129,15 +1279,18 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			grid-column: 1 / -1;
 		}
 
-		.bindingRow {
-			grid-template-columns: minmax(0, 1fr);
-		}
 	}
 
 	.bindingErr {
 		margin: -2px 0 8px 0;
 		font-size: 12px;
 		color: #ff7b72;
+	}
+
+	.validationSummary {
+		margin: 0 0 8px 0;
+		font-size: 12px;
+		color: #ffb86b;
 	}
 
 	.muted {

@@ -759,6 +759,12 @@ function stableJson(value: unknown): string {
 	}
 }
 
+function sourceOutputModeForPort(port: PortType | null | undefined): 'table' | 'text' | 'json' | 'binary' | null {
+	if (!port) return null;
+	if (port === 'table' || port === 'text' || port === 'json' || port === 'binary') return port;
+	return null;
+}
+
 function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
 	const out = new Set<string>([nodeId]);
 	const q = [nodeId];
@@ -1312,7 +1318,64 @@ function getPortType(
 	return (n.data.ports?.[whichPort as 'in' | 'out'] ?? null) as PortType | null;
 }
 
-function sourcePayloadHint(node: Node<PipelineNodeData>, whichPort: 'in' | 'out') {
+function componentApiOutputPortType(
+	node: Node<PipelineNodeData>,
+	sourceHandle: string
+): PortType | null {
+	if (node.data.kind !== 'component') return null;
+	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
+		? ((node.data as any).params.api.outputs as any[])
+		: [];
+	const handle = String(sourceHandle ?? '').trim();
+	if (!handle || handle === 'out') return (node.data.ports?.out ?? null) as PortType | null;
+	const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
+	return normalizeComponentPortType((decl as any)?.portType ?? null);
+}
+
+function sourcePortTypeForEdge(
+	nodes: Node<PipelineNodeData>[],
+	edge: Edge<PipelineEdgeData>
+): PortType | null {
+	const node = nodes.find((x) => x.id === edge.source);
+	if (!node) return null;
+	if (node.data.kind === 'component') {
+		return componentApiOutputPortType(node, String((edge as any).sourceHandle ?? 'out'));
+	}
+	return (node.data.ports?.out ?? null) as PortType | null;
+}
+
+function sourcePayloadHint(
+	node: Node<PipelineNodeData>,
+	whichPort: 'in' | 'out',
+	handleId: string = 'out'
+) {
+	if (node.data.kind === 'component' && whichPort === 'out') {
+		const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
+			? ((node.data as any).params.api.outputs as any[])
+			: [];
+		const handle = String(handleId ?? '').trim();
+		const decl =
+			handle && handle !== 'out'
+				? outputs.find((o) => String((o as any)?.name ?? '').trim() === handle)
+				: null;
+		const typed = (decl as any)?.typedSchema ?? null;
+		const typedType = String((typed as any)?.type ?? '').trim().toLowerCase();
+		if (typedType === 'table') {
+			const fields = Array.isArray((typed as any)?.fields) ? (typed as any).fields : [];
+			const columns = fields
+				.map((f: any) => String(f?.name ?? '').trim())
+				.filter((name: string) => name.length > 0);
+			return columns.length > 0 ? { type: 'table', columns } : { type: 'table' };
+		}
+		if (typedType === 'json') return { type: 'json' };
+		if (typedType === 'text') return { type: 'string' };
+		if (typedType === 'binary') return { type: 'binary' };
+		const declared = normalizeComponentPortType((decl as any)?.portType ?? null);
+		if (declared === 'table') return { type: 'table' };
+		if (declared === 'json') return { type: 'json' };
+		if (declared === 'text') return { type: 'string' };
+		if (declared === 'binary') return { type: 'binary' };
+	}
 	const port = node.data.ports?.[whichPort] ?? null;
 	if (port === 'table') {
 		let columns: string[] | undefined;
@@ -1356,7 +1419,7 @@ type EdgeCheck =
 	| { ok: false; reason: EdgeInvalidReason };
 
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
-	const outPort = getPortType(nodes, e.source, 'out');
+	const outPort = sourcePortTypeForEdge(nodes, e);
 	const inPort = getPortType(nodes, e.target, 'in');
 
 	if (outPort == null || inPort == null) {
@@ -1435,7 +1498,11 @@ function pruneAndRecontractEdgesStrict(
 					out: chk.out,
 					in: chk.in,
 					payload: {
-						source: sourcePayloadHint(nodes.find((n) => n.id === e.source)! as any, 'out'),
+						source: sourcePayloadHint(
+							nodes.find((n) => n.id === e.source)! as any,
+							'out',
+							String((e as any).sourceHandle ?? 'out')
+						),
 						target: targetPayloadHint(nodes.find((n) => n.id === e.target)! as any)
 					}
 				}
@@ -1540,6 +1607,7 @@ export const graphStore = (() => {
 		config: { params?: unknown; ports?: { in?: PortType | null; out?: PortType | null } }
 	) {
 		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
+		let invalidateFromPortChange = false;
 
 		update((s) => {
 			let nodes = s.nodes;
@@ -1566,6 +1634,7 @@ export const graphStore = (() => {
 			const componentDerivedPorts =
 				currentNode.data.kind === 'component' ? derivePortsFromComponentApi((currentNode.data as any)?.params?.api) : null;
 			const effectivePorts = config.ports ?? componentDerivedPorts ?? undefined;
+			const previousOutPort = (currentNode.data.ports?.out ?? null) as PortType | null;
 
 			// ---- 2) ports (must be valid to commit) ----
 			if (effectivePorts) {
@@ -1624,6 +1693,25 @@ export const graphStore = (() => {
 				const updatedNode = nodes.find((n) => n.id === nodeId)!;
 				const pin = updatedNode.data.ports?.in ?? null;
 				const pout = updatedNode.data.ports?.out ?? null;
+				const outPortChanged = previousOutPort !== (pout as PortType | null);
+
+				// Source output port controls execution output mode and must stay in sync with params.
+				if (outPortChanged && updatedNode.data.kind === 'source') {
+					const nextMode = sourceOutputModeForPort(pout as PortType | null);
+					if (!nextMode) {
+						out = { ok: false, error: `Unsupported source output port '${String(pout)}'` };
+						return logPush(s, 'warn', out.error!, nodeId);
+					}
+					const existingOutput = ((updatedNode.data.params as any)?.output ?? {}) as Record<string, unknown>;
+					const paramsPatch = { output: { ...existingOutput, mode: nextMode } };
+					const paramsRes = updateNodeParamsValidated(nodes, nodeId, paramsPatch);
+					if (paramsRes.error) {
+						out = { ok: false, error: paramsRes.error };
+						return logPush(s, 'error', paramsRes.error, nodeId);
+					}
+					nodes = paramsRes.nodes;
+					invalidateFromPortChange = true;
+				}
 
 				// Invariant: cannot null a port that is currently used by edges
 				if (incoming.length > 0 && pin == null) {
@@ -1654,6 +1742,10 @@ export const graphStore = (() => {
 			persist(next);
 			return next;
 		});
+
+		if (out.ok && invalidateFromPortChange) {
+			applyLocalStaleInvalidation(nodeId, 'PORTS_CHANGED');
+		}
 
 		return out;
 	}
@@ -2999,6 +3091,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				}
 				const leafNodeId =
 					Array.from(nodeIds).find((id) => (outDegree.get(id) ?? 0) === 0) ?? '';
+				const firstNodeId = Array.from(nodeIds)[0] ?? '';
 
 				const prevBindings = ((node.data.params as any)?.bindings ?? {}) as {
 					inputs?: Record<string, string>;
@@ -3017,7 +3110,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					const existing = prevOutputs[outName] ?? {};
 					const existingNodeId = String(existing?.nodeId ?? '').trim();
 					nextOutputs[outName] = {
-						nodeId: existingNodeId || leafNodeId || undefined,
+						nodeId: existingNodeId || leafNodeId || firstNodeId || undefined,
 						artifact: existing?.artifact === 'last' ? 'last' : 'current'
 					};
 				}

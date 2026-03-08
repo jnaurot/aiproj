@@ -10,7 +10,7 @@
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
 	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
-	import type { InputResolution } from '$lib/flow/store/graphStore';
+	import type { GraphState, InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
@@ -39,6 +39,7 @@
 		type ComponentCatalogItem,
 		type ComponentRevisionSummary
 	} from '$lib/flow/client/components';
+	import { summarizeComponentPreflight } from '$lib/flow/components/componentPublishPreflight';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
@@ -557,11 +558,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			overwritePresetId: shouldOverwriteLinked ? linkedPresetId : null
 		});
 		if (!result.ok) {
-			if (result.error === 'identical_preset_exists') {
+			const err = 'error' in result ? result.error : null;
+			if (err === 'identical_preset_exists') {
 				showToast('Preset not saved: identical preset already exists.', 'warn');
 				return;
 			}
-			if (result.error === 'duplicate_name_in_scope') {
+			if (err === 'duplicate_name_in_scope') {
 				showToast(
 					'Preset not saved: that name already exists for this node kind/subtype.',
 					'warn'
@@ -604,7 +606,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		nodeId: string,
 		fallbackRef?: { id: string; name: string; subtype?: string }
 	): void {
-		const state = get(graphStore as any);
+		const state = get(graphStore) as GraphState;
 		const node = (state?.nodes ?? []).find((n: Node<PipelineNodeData>) => n.id === nodeId);
 		if (!node) return;
 		const currentRef = ((node.data as any)?.meta?.presetRef ??
@@ -673,9 +675,25 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return null;
 	}
 
-	function getType(nodeId: string, whichPort: string): PortType | null {
+	function getComponentOutputType(nodeId: string, sourceHandle?: string | null): PortType | null {
+		const n = nodes.find((x) => x.id === nodeId);
+		if (!n || n.data.kind !== 'component') return null;
+		const handle = String(sourceHandle ?? 'out').trim() || 'out';
+		if (handle === 'out') return n.data.ports?.out ?? null;
+		const outputs = Array.isArray((n.data as any)?.params?.api?.outputs)
+			? ((n.data as any).params.api.outputs as any[])
+			: [];
+		const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
+		const pt = String((decl as any)?.portType ?? '').trim().toLowerCase();
+		return coercePortType(pt);
+	}
+
+	function getType(nodeId: string, whichPort: string, handleId?: string | null): PortType | null {
 		const n = nodes.find((x) => x.id === nodeId);
 		if (!n) return null;
+		if (whichPort === 'out' && n.data.kind === 'component') {
+			return getComponentOutputType(nodeId, handleId);
+		}
 
 		// const hid = handleId ?? 'in';
 		// const t = (n.data as any)?.ports?.[in] ?? (n.data as any)?.inputs?.in;
@@ -701,8 +719,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (reaches(conn.target, conn.source)) return false;
 
 		//port checking out === in
-		const outPort = getType(conn.source, 'out');
-		const inPort = getType(conn.target, 'in');
+		const outPort = getType(conn.source, 'out', conn.sourceHandle);
+		const inPort = getType(conn.target, 'in', conn.targetHandle);
 
 		// if you can't resolve types, fail closed (or choose fail open)
 		if (!outPort || !inPort) return false;
@@ -719,14 +737,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function onconnect(conn: Connection) {
 		if (!isValidConnection(conn)) return;
 
-		const outPort = getType(conn.source, 'out');
-		const inPort = getType(conn.target, 'in');
+		const outPort = getType(conn.source, 'out', conn.sourceHandle);
+		const inPort = getType(conn.target, 'in', conn.targetHandle);
 		if (!outPort || !inPort) return;
 
 		const e: Edge<PipelineEdgeData> = {
 			id: `e_${crypto.randomUUID()}`,
 			source: conn.source!,
 			target: conn.target!,
+			sourceHandle: conn.sourceHandle ?? undefined,
+			targetHandle: conn.targetHandle ?? undefined,
 			markerEnd: { type: MarkerType.ArrowClosed },
 			data: {
 				exec: 'idle',
@@ -942,7 +962,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const primaryLeaf = leaves[0];
 		const inputPortType = (primaryRoot?.data?.ports?.in ?? null) as PortType | null;
 		const outputPortType = (primaryLeaf?.data?.ports?.out ?? null) as PortType | null;
-		const inputs =
+		const inputs: ComponentApiContract['inputs'] =
 			inputPortType == null
 				? []
 				: [
@@ -950,10 +970,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							name: 'in_data',
 							portType: inputPortType,
 							required: true,
-							typedSchema: { type: inputPortType, fields: [] }
+							typedSchema: {
+								type:
+									inputPortType as ComponentApiContract['inputs'][number]['typedSchema']['type'],
+								fields: []
+							}
 						}
 					];
-		const outputs =
+		const outputs: ComponentApiContract['outputs'] =
 			outputPortType == null
 				? []
 				: [
@@ -961,14 +985,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							name: 'out_data',
 							portType: outputPortType,
 							required: true,
-							typedSchema: { type: outputPortType, fields: [] }
+							typedSchema: {
+								type:
+									outputPortType as ComponentApiContract['outputs'][number]['typedSchema']['type'],
+								fields: []
+							}
 						}
 					];
 		return { inputs, outputs };
 	}
 
 	async function saveGraphAsComponent() {
-		const current = get(graphStore) as any;
+		const current = get(graphStore) as GraphState;
 		const currentNodes = (current?.nodes ?? []) as Node<PipelineNodeData>[];
 		const currentEdges = (current?.edges ?? []) as Edge<PipelineEdgeData>[];
 		if (currentNodes.length === 0) {
@@ -1002,22 +1030,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				api,
 				configSchema: {}
 			});
-			if (!preflight.ok) {
-				const diagnostics = (Array.isArray(preflight.diagnostics) ? preflight.diagnostics : []) as Array<{
-					code?: string;
-					path?: string;
-					severity?: string;
-				}>;
-				const top = diagnostics
-					.filter((d) => String(d?.severity ?? 'error') === 'error')
-					.slice(0, 3)
-					.map((d) => `${String(d?.code ?? 'ERROR')}: ${String(d?.path ?? '')}`)
-					.join(' | ');
-				showToast(
-					`Save as Component blocked by preflight validation${top ? `: ${top}` : ''}`,
-					'error'
-				);
+			const summary = summarizeComponentPreflight(
+				Boolean(preflight?.ok),
+				preflight?.diagnostics ?? [],
+				componentId,
+				revisionIdInput || '(new)'
+			);
+			if (!summary.ok) {
+				window.alert(`${summary.headline}\n\n${summary.detail}`);
+				showToast('Save as Component blocked by preflight validation.', 'error');
 				return;
+			}
+			if (summary.warningCount > 0) {
+				const proceed = window.confirm(`${summary.headline}\n\n${summary.detail}\n\nPublish anyway?`);
+				if (!proceed) return;
 			}
 			const created = await createComponentRevision({
 				componentId,
@@ -1471,7 +1497,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			bind:nodes
 			edges={displayEdges}
 			{nodeTypes}
-			deleteKeyCode={['Delete']}
+			deleteKey={['Delete']}
 			{onnodeclick}
 			{onnodecontextmenu}
 			{onedgecontextmenu}
@@ -1721,6 +1747,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<ArtifactViewer
 												artifactId={inputPreviewArtifactId}
 												graphId={$graphStore.graphId}
+												mimeType={inputMetaByArtifactId[inputPreviewArtifactId]?.mimeType}
+												portType={inputMetaByArtifactId[inputPreviewArtifactId]?.contract}
+												preview={undefined}
 												onJumpToNode={jumpToNodeFromArtifact}
 											/>
 										</div>

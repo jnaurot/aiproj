@@ -277,6 +277,25 @@ class GraphValidator:
             target_ports = (target_node["data"].get("ports") or {})
 
             source_type = source_ports.get("out")
+            if (source_node.get("data") or {}).get("kind") == "component":
+                params = ((source_node.get("data") or {}).get("params") or {})
+                api = params.get("api") if isinstance(params.get("api"), dict) else {}
+                outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
+                sh = str(source_handle or "out")
+                if sh and sh != "out":
+                    decl = next(
+                        (
+                            o
+                            for o in outputs
+                            if isinstance(o, dict) and str(o.get("name") or "").strip() == sh
+                        ),
+                        None,
+                    )
+                    source_type = (
+                        str(decl.get("portType") or "").strip().lower()
+                        if isinstance(decl, dict)
+                        else None
+                    )
             target_type = target_ports.get("in")
 
             

@@ -282,4 +282,64 @@ describe('graphStore component integration', () => {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
+
+	it('defaults output bindings to first internal node when no leaf exists', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/components/cmp_cycle/revisions/crev_1')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_cycle',
+						revisionId: 'crev_1',
+						parentRevisionId: null,
+						createdAt: '2026-03-08T00:00:00Z',
+						message: 'cycle',
+						revisionSchemaVersion: 1,
+						checksum: 'abc',
+						definition: {
+							graph: {
+								nodes: [{ id: 'n1' }, { id: 'n2' }],
+								edges: [{ source: 'n1', target: 'n2' }, { source: 'n2', target: 'n1' }]
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'out_data', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components/cmp_cycle/revisions?')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_cycle',
+						revisions: [{ revisionId: 'crev_1', componentId: 'cmp_cycle', createdAt: '2026-03-08T00:00:00Z', schemaVersion: 1, checksum: 'abc' }]
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const res = await graphStore.applyComponentRevisionToNode(nodeId, 'cmp_cycle', 'crev_1');
+			expect((res as any)?.ok).toBe(true);
+			const state = get(graphStore);
+			const node = state.nodes.find((n) => n.id === nodeId);
+			const outBinding = (node?.data?.params as any)?.bindings?.outputs?.out_data;
+			expect(String(outBinding?.nodeId ?? '')).toBe('n1');
+			expect(String(outBinding?.artifact ?? '')).toBe('current');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
 });

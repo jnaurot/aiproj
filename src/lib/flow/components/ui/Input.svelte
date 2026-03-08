@@ -17,6 +17,7 @@
 	export let onInput: (e: Event) => void = () => {};
 	export let onBlur: (e: Event) => void = () => {};
 	export let onChange: (e: Event) => void = () => {};
+	export let onKeydown: (e: KeyboardEvent) => void = () => {};
 </script>
 
 {#if multiline}
@@ -28,6 +29,7 @@
 		{readonly}
 		on:input={onInput}
 		on:blur={onBlur}
+		on:keydown={onKeydown}
 	>{String(value ?? '')}</textarea>
 {:else if type === 'checkbox'}
 	<input
@@ -38,6 +40,7 @@
 		{readonly}
 		on:change={onChange}
 		on:blur={onBlur}
+		on:keydown={onKeydown}
 	/>
 {:else}
 	<input
@@ -54,6 +57,7 @@
 		on:input={onInput}
 		on:blur={onBlur}
 		on:change={onChange}
+		on:keydown={onKeydown}
 	/>
 {/if}
 

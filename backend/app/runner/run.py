@@ -55,10 +55,35 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
-def resolve_input_refs(
+async def _resolve_component_output_artifact_from_wrapper(
+    artifact_store,
+    wrapper_artifact_id: str,
+    output_name: str,
+) -> Optional[str]:
+    try:
+        raw = await artifact_store.read(wrapper_artifact_id)
+        text = raw.decode("utf-8")
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    outputs = parsed.get("outputs")
+    if not isinstance(outputs, dict):
+        return None
+    out_env = outputs.get(output_name)
+    if not isinstance(out_env, dict):
+        return None
+    aid = str(out_env.get("artifact_id") or "").strip()
+    return aid or None
+
+
+async def resolve_input_refs(
     edges: Dict[str, Dict[str, Any]],
     node_id: str,
     get_current_artifact,
+    get_node_by_id,
+    artifact_store,
 ) -> list[tuple[str, str]]:
     """
     Returns stable (port, upstream_artifact_id) pairs for edges targeting node_id.
@@ -66,6 +91,7 @@ def resolve_input_refs(
     Only includes edges whose source node has produced an artifact via bindings.
     """
     refs: list[tuple[str, str]] = []
+    wrapper_cache: Dict[tuple[str, str], Optional[str]] = {}
     for e in edges.values():
         if e.get("target") != node_id:
             continue
@@ -75,6 +101,22 @@ def resolve_input_refs(
         aid = get_current_artifact(src)
         if not aid:
             continue
+        source_handle = str(e.get("sourceHandle") or "out")
+        if source_handle and source_handle != "out":
+            src_node = get_node_by_id(src) or {}
+            src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
+            if src_kind == "component":
+                cache_key = (str(aid), source_handle)
+                if cache_key not in wrapper_cache:
+                    wrapper_cache[cache_key] = await _resolve_component_output_artifact_from_wrapper(
+                        artifact_store=artifact_store,
+                        wrapper_artifact_id=str(aid),
+                        output_name=source_handle,
+                    )
+                resolved = wrapper_cache.get(cache_key)
+                if not resolved:
+                    continue
+                aid = resolved
         port = e.get("targetHandle") or "in"
         refs.append((port, aid))
     # stable order
@@ -1574,7 +1616,13 @@ async def run_graph(
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
-            input_refs = resolve_input_refs(edges, node_id, get_current_artifact)
+            input_refs = await resolve_input_refs(
+                edges,
+                node_id,
+                get_current_artifact,
+                lambda nid: nodes.get(nid),
+                context.artifact_store,
+            )
 
             normalized_params_for_hash = _normalized_params_for_exec_key(
                 kind=kind,
@@ -2110,7 +2158,13 @@ async def run_graph(
                         output = NodeOutput(status="succeeded", data=None, metadata=None, execution_time_ms=0.0)
                     else:
                         # 1) collect upstream artifacts (port -> artifact_id)
-                        input_refs = resolve_input_refs(edges, node_id, get_current_artifact)  # [(port, artifact_id), ...]
+                        input_refs = await resolve_input_refs(
+                            edges,
+                            node_id,
+                            get_current_artifact,
+                            lambda nid: nodes.get(nid),
+                            context.artifact_store,
+                        )  # [(port, artifact_id), ...]
                         input_tables = {}  # port -> DataFrame
                         input_columns: dict[str, list[str]] = {}
                         input_schema_cols_by_port: dict[str, list[Dict[str, Any]]] = {}
