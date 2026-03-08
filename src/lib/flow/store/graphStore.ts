@@ -1506,7 +1506,12 @@ function componentApiOutputPortType(
 		? ((node.data as any).params.api.outputs as any[])
 		: [];
 	const handle = String(sourceHandle ?? '').trim();
-	if (!handle || handle === 'out') return (node.data.ports?.out ?? null) as PortType | null;
+	if (!handle || handle === 'out') {
+		if (outputs.length === 1) {
+			return normalizeComponentPortType((outputs[0] as any)?.portType ?? null);
+		}
+		return null;
+	}
 	const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
 	return normalizeComponentPortType((decl as any)?.portType ?? null);
 }
@@ -1554,6 +1559,8 @@ function sourcePayloadHint(
 		if (declared === 'json') return { type: 'json' };
 		if (declared === 'text') return { type: 'string' };
 		if (declared === 'binary') return { type: 'binary' };
+		// Component edge payload hint must come from selected API output only.
+		return { type: 'unknown' };
 	}
 	const port = node.data.ports?.[whichPort] ?? null;
 	if (port === 'table') {

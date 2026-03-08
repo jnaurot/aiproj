@@ -499,6 +499,55 @@ describe('graphStore component integration', () => {
 		const state = get(graphStore);
 		const edge = state.edges.find((e) => e.id === 'e_named');
 		expect(edge).toBeTruthy();
+		expect((edge as any)?.data?.contract?.out).toBe('text');
+		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
+	});
+
+	it('derives component edge source contract from API output even when ports.out conflicts', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{
+							name: 'only_out',
+							portType: 'text',
+							required: true,
+							typedSchema: { type: 'text', fields: [] }
+						}
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: { only_out: { nodeId: 'n1', artifact: 'current' } }
+				},
+				config: {}
+			},
+			// Intentionally conflicting with API output portType.
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		const addRes = graphStore.addEdge({
+			id: 'e_conflicting_ports_out',
+			source: componentId,
+			sourceHandle: 'out',
+			target: llmId,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		expect(addRes.ok).toBe(true);
+
+		const state = get(graphStore);
+		const edge = state.edges.find((e) => e.id === 'e_conflicting_ports_out');
+		expect(edge).toBeTruthy();
+		expect((edge as any)?.sourceHandle).toBe('only_out');
+		expect((edge as any)?.data?.contract?.out).toBe('text');
 		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
 	});
 
