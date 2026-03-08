@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
 from ..feature_flags import get_feature_flags
+from ..graph_migrations import canonicalize_graph_payload
 
 router = APIRouter()
 
@@ -161,10 +162,16 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("manifest.packageVersion must be 2")
     if "nodes" not in graph or "edges" not in graph:
         raise ValueError("package.graph must include nodes and edges")
+    normalized_graph, migration_notes = canonicalize_graph_payload(graph)
     return {
         "manifest": manifest,
-        "graph": graph,
-        "migrationReport": {"format": "aipgraph_v2", "migrated": False, "warnings": []},
+        "graph": normalized_graph,
+        "migrationReport": {
+            "format": "aipgraph_v2",
+            "migrated": bool(len(migration_notes) > 0),
+            "warnings": [],
+            "notes": migration_notes,
+        },
     }
 
 
@@ -261,10 +268,11 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
 
+    normalized_graph, migration_notes = canonicalize_graph_payload(req.graph)
     try:
         revision = store.create_revision(
             graph_id=req.graphId,
-            graph=req.graph,
+            graph=normalized_graph,
             message=req.message,
             graph_name=req.graphName,
             version_name=req.versionName,
@@ -287,6 +295,7 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
         "versionName": revision.version_name,
         "revisionKind": revision.revision_kind,
         "checksum": revision.checksum,
+        "migrationNotes": migration_notes,
     }
 
 

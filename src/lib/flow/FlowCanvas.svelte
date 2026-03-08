@@ -1180,6 +1180,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
+	async function acceptInspectorDraftAction(): Promise<void> {
+		const result = await graphStore.applyInspectorDraft();
+		if (!(result as any)?.ok) {
+			showToast(
+				`Accept blocked: ${String((result as any)?.error ?? (result as any)?.reason ?? 'validation failed')}`,
+				'warn'
+			);
+		}
+	}
+
 	async function saveGraphAction() {
 		const graphNameInput = window.prompt('Graph name (optional)', '') ?? '';
 		const note = window.prompt('Save note (optional)', '') ?? '';
@@ -1928,7 +1938,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							<button
 								class="primary"
 								disabled={!$graphStore.inspector.dirty}
-								on:click={() => graphStore.applyInspectorDraft()}
+								on:click={() => void acceptInspectorDraftAction()}
 							>
 								Accept
 							</button>

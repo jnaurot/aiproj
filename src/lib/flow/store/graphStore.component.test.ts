@@ -534,4 +534,212 @@ describe('graphStore component integration', () => {
 		expect(Object.keys(outputBindings).sort()).toEqual(['source', 'summary']);
 		expect(outputBindings.out_data).toBeUndefined();
 	});
+
+	it('blocks Accept when a declared component output is missing binding nodeId', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(componentId);
+		graphStore.patchInspectorDraft({
+			api: {
+				inputs: [],
+				outputs: [
+					{
+						name: 'summary',
+						portType: 'text',
+						required: true,
+						typedSchema: { type: 'text', fields: [] }
+					}
+				]
+			},
+			bindings: {
+				inputs: {},
+				config: {},
+				outputs: {
+					summary: { nodeId: '', artifact: 'current' }
+				}
+			}
+		});
+
+		const result = await graphStore.applyInspectorDraft();
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
+		expect(String((result as any)?.error ?? '')).toContain('requires a bound internal node');
+	});
+
+	it('blocks Accept when typedSchema.type is not aligned with component output portType', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(componentId);
+		graphStore.patchInspectorDraft({
+			api: {
+				inputs: [],
+				outputs: [
+					{
+						name: 'summary',
+						portType: 'text',
+						required: true,
+						typedSchema: { type: 'json', fields: [] }
+					}
+				]
+			},
+			bindings: {
+				inputs: {},
+				config: {},
+				outputs: {
+					summary: { nodeId: 'n_any', artifact: 'current' }
+				}
+			}
+		});
+
+		const result = await graphStore.applyInspectorDraft();
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
+		expect(String((result as any)?.error ?? '')).toContain('typedSchema.type aligned with portType');
+	});
+
+	it('recomputes component edge contract payload source from sourceHandle on load', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_text: { nodeId: 'n1', artifact: 'current' },
+						out_json: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		const state = get(graphStore);
+		const staleEdge = {
+			id: 'e_loaded_stale',
+			source: componentId,
+			sourceHandle: 'out_text',
+			target: llmId,
+			targetHandle: 'in',
+			data: {
+				exec: 'idle',
+				contract: {
+					out: 'text',
+					in: 'text',
+					payload: {
+						source: { type: 'json' },
+						target: { type: 'string' }
+					}
+				}
+			}
+		} as any;
+
+		const loaded = graphStore.loadGraphDocument(
+			{ nodes: state.nodes as any, edges: [staleEdge] as any },
+			null
+		);
+		expect((loaded as any)?.ok).toBe(true);
+
+		const after = get(graphStore);
+		const edge = after.edges.find((e) => e.id === 'e_loaded_stale');
+		expect(edge).toBeTruthy();
+		expect((edge as any)?.sourceHandle).toBe('out_text');
+		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
+		expect((edge as any)?.data?.contract?.out).toBe('text');
+	});
+
+	it('recomputes component edge contract payload source from sourceHandle on save', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_text: { nodeId: 'n1', artifact: 'current' },
+						out_json: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		const addRes = graphStore.addEdge({
+			id: 'e_to_save',
+			source: componentId,
+			sourceHandle: 'out_text',
+			target: llmId,
+			targetHandle: 'in',
+			data: {
+				exec: 'idle',
+				contract: {
+					out: 'text',
+					in: 'text',
+					payload: {
+						source: { type: 'json' },
+						target: { type: 'string' }
+					}
+				}
+			}
+		} as any);
+		expect(addRes.ok).toBe(true);
+
+		let postedGraph: any = null;
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/graphs') && method === 'POST') {
+				postedGraph = JSON.parse(String(init?.body ?? '{}'))?.graph ?? null;
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						graphId: 'graph_saved',
+						revisionId: 'rev_saved',
+						graphName: null,
+						versionName: null,
+						createdAt: '2026-03-08T00:00:00Z'
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const result = await graphStore.saveGraph('save');
+			expect((result as any)?.ok).toBe(true);
+			expect(postedGraph).toBeTruthy();
+			const savedEdge = (postedGraph?.edges ?? []).find((e: any) => String(e?.id ?? '') === 'e_to_save');
+			expect(savedEdge).toBeTruthy();
+			expect(String(savedEdge?.sourceHandle ?? '')).toBe('out_text');
+			expect(savedEdge?.data?.contract?.payload?.source?.type).toBe('string');
+			expect(savedEdge?.data?.contract?.out).toBe('text');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
 });

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import sqlite3
@@ -13,6 +12,7 @@ from app.component_contracts import (
 	canonicalize_component_definition,
 	validate_component_definition,
 )
+from app.graph_migrations import canonicalize_graph_payload
 
 
 def _stable_dump(value: Dict[str, Any]) -> str:
@@ -21,42 +21,6 @@ def _stable_dump(value: Dict[str, Any]) -> str:
 
 def _sha256_json(value: Dict[str, Any]) -> str:
 	return hashlib.sha256(_stable_dump(value).encode("utf-8")).hexdigest()
-
-
-def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-	notes: List[str] = []
-	graph = copy.deepcopy(raw if isinstance(raw, dict) else {})
-	if not isinstance(graph.get("nodes"), list):
-		graph["nodes"] = []
-		notes.append("graph.nodes defaulted to []")
-	if not isinstance(graph.get("edges"), list):
-		graph["edges"] = []
-		notes.append("graph.edges defaulted to []")
-
-	canonical_nodes: List[Dict[str, Any]] = []
-	for idx, node in enumerate(graph.get("nodes", [])):
-		if not isinstance(node, dict):
-			notes.append(f"graph.nodes[{idx}] dropped (not an object)")
-			continue
-		next_node = copy.deepcopy(node)
-		data = next_node.get("data")
-		if not isinstance(data, dict):
-			data = {}
-			next_node["data"] = data
-			notes.append(f"graph.nodes[{idx}].data defaulted to {{}}")
-		kind = str(data.get("kind") or "").strip().lower()
-		if kind:
-			data["kind"] = kind
-		ports = data.get("ports")
-		if isinstance(ports, dict):
-			for direction in ("in", "out"):
-				value = ports.get(direction)
-				if isinstance(value, str):
-					norm = value.strip().lower()
-					ports[direction] = norm if norm else None
-		canonical_nodes.append(next_node)
-	graph["nodes"] = canonical_nodes
-	return graph, notes
 
 
 def migrate_graph_revisions(db_path: str, *, dry_run: bool = True) -> Dict[str, Any]:
@@ -214,4 +178,3 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
-

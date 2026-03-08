@@ -1,25 +1,15 @@
-import json
-
 import pytest
 
 from app.runner.run import ContractMismatchError, resolve_input_refs
 
 
-class _ArtifactStore:
+class _NoopArtifactStore:
     async def read(self, artifact_id: str) -> bytes:
-        assert artifact_id == "wrapper_a1"
-        return json.dumps(
-            {
-                "outputs": {
-                    "SOD": {"artifact_id": "text_art_1"},
-                    "Source": {"artifact_id": "text_art_2"},
-                }
-            }
-        ).encode("utf-8")
+        return b"{}"
 
 
 @pytest.mark.asyncio
-async def test_resolve_input_refs_component_out_handle_infers_named_output_from_contract():
+async def test_resolve_input_refs_component_out_handle_is_rejected_for_multi_outputs():
     edges = {
         "e1": {
             "id": "e1",
@@ -45,19 +35,20 @@ async def test_resolve_input_refs_component_out_handle_infers_named_output_from_
         },
     }
 
-    refs = await resolve_input_refs(
-        edges=edges,
-        node_id="llm1",
-        get_current_artifact=lambda node_id: "wrapper_a1" if node_id == "cmp1" else None,
-        get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
-        artifact_store=_ArtifactStore(),
-    )
+    with pytest.raises(ContractMismatchError) as exc:
+        await resolve_input_refs(
+            edges=edges,
+            node_id="llm1",
+            get_current_artifact=lambda node_id: "wrapper_a1" if node_id == "cmp1" else None,
+            get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
+            artifact_store=_NoopArtifactStore(),
+        )
 
-    assert refs == [("in", "text_art_1")]
+    assert exc.value.code == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"
 
 
 @pytest.mark.asyncio
-async def test_resolve_input_refs_component_uses_component_output_binding_when_present():
+async def test_resolve_input_refs_component_uses_component_output_binding_when_direct_binding_present():
     edges = {
         "e1": {
             "id": "e1",
@@ -81,7 +72,8 @@ async def test_resolve_input_refs_component_uses_component_output_binding_when_p
                         {"name": "SOD", "portType": "text"},
                         {"name": "Source", "portType": "text"},
                     ]
-                }
+                },
+                "bindings": {"outputs": {"Source": {"nodeId": "n_source", "artifact": "current"}}},
             },
         },
     }
@@ -89,16 +81,20 @@ async def test_resolve_input_refs_component_uses_component_output_binding_when_p
     refs = await resolve_input_refs(
         edges=edges,
         node_id="llm1",
-        get_current_artifact=lambda node_id: "wrapper_a1" if node_id == "cmp1" else None,
+        get_current_artifact=lambda node_id: (
+            "wrapper_a1"
+            if node_id == "cmp1"
+            else ("direct_art_source" if node_id == "cmp:cmp1:n_source" else None)
+        ),
         get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
-        artifact_store=_ArtifactStore(),
+        artifact_store=_NoopArtifactStore(),
     )
 
-    assert refs == [("in", "text_art_2")]
+    assert refs == [("in", "direct_art_source")]
 
 
 @pytest.mark.asyncio
-async def test_resolve_input_refs_component_explicit_named_handle_does_not_fall_back_to_wrapper_json():
+async def test_resolve_input_refs_component_explicit_named_handle_requires_binding():
     edges = {
         "e1": {
             "id": "e1",
@@ -124,18 +120,13 @@ async def test_resolve_input_refs_component_explicit_named_handle_does_not_fall_
         },
     }
 
-    class _MissingOutputArtifactStore:
-        async def read(self, artifact_id: str) -> bytes:
-            assert artifact_id == "wrapper_a1"
-            return json.dumps({"outputs": {"out_data": {"artifact_id": "text_art_1"}}}).encode("utf-8")
-
     with pytest.raises(ContractMismatchError) as exc:
         await resolve_input_refs(
             edges=edges,
             node_id="llm1",
             get_current_artifact=lambda node_id: "wrapper_a1" if node_id == "cmp1" else None,
             get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
-            artifact_store=_MissingOutputArtifactStore(),
+            artifact_store=_NoopArtifactStore(),
         )
 
     assert exc.value.code == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"
@@ -164,11 +155,6 @@ async def test_resolve_input_refs_component_uses_direct_binding_artifact_before_
         },
     }
 
-    class _BadWrapperArtifactStore:
-        async def read(self, artifact_id: str) -> bytes:
-            # Wrapper has no "source" field; resolver must not depend on this path
-            return json.dumps({"outputs": {"other": {"artifact_id": "wrapper_other"}}}).encode("utf-8")
-
     refs = await resolve_input_refs(
         edges=edges,
         node_id="llm1",
@@ -178,7 +164,7 @@ async def test_resolve_input_refs_component_uses_direct_binding_artifact_before_
             else ("direct_art_source" if node_id == "cmp:cmp1:n_source" else None)
         ),
         get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
-        artifact_store=_BadWrapperArtifactStore(),
+        artifact_store=_NoopArtifactStore(),
     )
 
     assert refs == [("in", "direct_art_source")]
@@ -207,17 +193,13 @@ async def test_resolve_input_refs_component_named_binding_without_artifact_raise
         },
     }
 
-    class _WrapperWouldResolveButShouldNotBeUsed:
-        async def read(self, artifact_id: str) -> bytes:
-            return json.dumps({"outputs": {"source": {"artifact_id": "wrapper_art_source"}}}).encode("utf-8")
-
     with pytest.raises(ContractMismatchError) as exc:
         await resolve_input_refs(
             edges=edges,
             node_id="llm1",
             get_current_artifact=lambda node_id: "wrapper_a1" if node_id == "cmp1" else None,
             get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
-            artifact_store=_WrapperWouldResolveButShouldNotBeUsed(),
+            artifact_store=_NoopArtifactStore(),
         )
 
     assert exc.value.code == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"

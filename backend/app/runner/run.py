@@ -56,29 +56,6 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
-async def _resolve_component_output_artifact_from_wrapper(
-    artifact_store,
-    wrapper_artifact_id: str,
-    output_name: str,
-) -> Optional[str]:
-    try:
-        raw = await artifact_store.read(wrapper_artifact_id)
-        text = raw.decode("utf-8")
-        parsed = json.loads(text)
-    except Exception:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    outputs = parsed.get("outputs")
-    if not isinstance(outputs, dict):
-        return None
-    out_env = outputs.get(output_name)
-    if not isinstance(out_env, dict):
-        return None
-    aid = str(out_env.get("artifact_id") or "").strip()
-    return aid or None
-
-
 def _infer_component_output_handle_for_edge(
     edge: Dict[str, Any],
     src_node: Dict[str, Any],
@@ -100,22 +77,8 @@ def _infer_component_output_handle_for_edge(
     if len(outputs) == 1:
         only_name = str((outputs[0] or {}).get("name") or "").strip()
         return only_name or None
-    contract = edge_data.get("contract") if isinstance(edge_data, dict) else None
-    desired_out = str((contract.get("out") if isinstance(contract, dict) else "") or "").strip().lower()
-    if not desired_out:
-        return None
-    candidates: list[str] = []
-    for out in outputs:
-        if not isinstance(out, dict):
-            continue
-        out_name = str(out.get("name") or "").strip()
-        out_port = str(out.get("portType") or "").strip().lower()
-        if out_name and out_port and out_port == desired_out:
-            candidates.append(out_name)
-    if len(candidates) >= 1:
-        # Legacy fallback for edges that still point to generic "out":
-        # pick first matching declared output deterministically.
-        return candidates[0]
+    # Strict routing: do not infer from contract/port type when multiple outputs exist.
+    # Caller must provide explicit sourceHandle/componentOutputBinding.
     return None
 
 
@@ -158,7 +121,6 @@ async def resolve_input_refs(
     Only includes edges whose source node has produced an artifact via bindings.
     """
     refs: list[tuple[str, str]] = []
-    wrapper_cache: Dict[tuple[str, str], Optional[str]] = {}
     for e in edges.values():
         if e.get("target") != node_id:
             continue
@@ -201,30 +163,18 @@ async def resolve_input_refs(
                         ),
                     )
                 else:
-                    # Legacy fallback: read named output from wrapper envelope for older graphs.
-                    cache_key = (str(aid), source_handle)
-                    if cache_key not in wrapper_cache:
-                        wrapper_cache[cache_key] = await _resolve_component_output_artifact_from_wrapper(
-                            artifact_store=artifact_store,
-                            wrapper_artifact_id=str(aid),
-                            output_name=source_handle,
-                        )
-                    resolved = wrapper_cache.get(cache_key)
-                    if resolved:
-                        aid = resolved
-                    elif has_explicit_named_output:
-                        raise ContractMismatchError(
-                            f"Component output '{source_handle}' could not be resolved from wrapper artifact",
-                            code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                            details=_contract_details(
-                                expected={"sourceHandle": source_handle, "resolvedArtifact": True},
-                                actual={
-                                    "edgeId": str(e.get("id") or ""),
-                                    "wrapperArtifactId": str(aid),
-                                    "resolvedArtifact": False,
-                                },
-                            ),
-                        )
+                    raise ContractMismatchError(
+                        f"Component output '{source_handle}' requires explicit bound artifact",
+                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                        details=_contract_details(
+                            expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                            actual={
+                                "edgeId": str(e.get("id") or ""),
+                                "wrapperArtifactId": str(aid),
+                                "resolvedArtifact": False,
+                            },
+                        ),
+                    )
             elif has_explicit_named_output:
                 raise ContractMismatchError(
                     "Component edge references unresolved named output handle",
@@ -238,6 +188,33 @@ async def resolve_input_refs(
                         },
                     ),
                 )
+            else:
+                params = (src_node.get("data") or {}).get("params")
+                api = params.get("api") if isinstance(params, dict) else None
+                outputs = (
+                    api.get("outputs")
+                    if isinstance(api, dict) and isinstance(api.get("outputs"), list)
+                    else []
+                )
+                if len(outputs) > 1:
+                    raise ContractMismatchError(
+                        "Component edge sourceHandle must name an output when component has multiple outputs",
+                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                        details=_contract_details(
+                            expected={
+                                "sourceHandle": "named output",
+                                "outputNames": [
+                                    str((o or {}).get("name") or "").strip()
+                                    for o in outputs
+                                    if isinstance(o, dict)
+                                ],
+                            },
+                            actual={
+                                "edgeId": str(e.get("id") or ""),
+                                "sourceHandle": explicit_source_handle,
+                            },
+                        ),
+                    )
         port = e.get("targetHandle") or "in"
         refs.append((port, aid))
     # stable order

@@ -4,6 +4,8 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
+from .graph_migrations import canonicalize_graph_payload
+
 COMPONENT_SCHEMA_VERSION = 1
 ALLOWED_PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
 ALLOWED_TYPED_TYPES = {"table", "json", "text", "binary", "embeddings", "unknown"}
@@ -109,13 +111,10 @@ def migrate_component_definition(
             }
         )
     current["api"] = _canonical_api_contract(current.get("api"))
-    if not isinstance(current.get("graph"), dict):
-        current["graph"] = {"nodes": [], "edges": []}
-    graph = current["graph"]
-    if not isinstance(graph.get("nodes"), list):
-        graph["nodes"] = []
-    if not isinstance(graph.get("edges"), list):
-        graph["edges"] = []
+    normalized_graph, graph_notes = canonicalize_graph_payload(current.get("graph"))
+    current["graph"] = normalized_graph
+    for note in graph_notes:
+        notes.append({"action": "graph_canonicalize", **note})
     config_schema = current.get("configSchema")
     if not isinstance(config_schema, dict):
         current["configSchema"] = {}

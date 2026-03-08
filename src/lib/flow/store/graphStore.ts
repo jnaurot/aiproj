@@ -217,6 +217,39 @@ function sanitizeComponentDraftParams(params: Record<string, any>): Record<strin
 	};
 }
 
+function validateComponentDraftForAccept(params: Record<string, any>): { ok: true } | { ok: false; errors: string[] } {
+	const api = params?.api;
+	const bindings = params?.bindings;
+	const outputs = Array.isArray(api?.outputs) ? (api.outputs as any[]) : [];
+	const outputBindings =
+		bindings && typeof bindings.outputs === 'object' && bindings.outputs
+			? (bindings.outputs as Record<string, any>)
+			: {};
+	const errors: string[] = [];
+	for (const output of outputs) {
+		const outputName = String(output?.name ?? '').trim();
+		if (!outputName) {
+			errors.push('Component output name is required before Accept.');
+			continue;
+		}
+		const binding = outputBindings[outputName];
+		const boundNodeId = String(binding?.nodeId ?? '').trim();
+		if (!boundNodeId) {
+			errors.push(`Component output "${outputName}" requires a bound internal node before Accept.`);
+		}
+		const portType = normalizeComponentPortType(output?.portType);
+		if (portType == null) {
+			errors.push(`Component output "${outputName}" has no derivable output type.`);
+		}
+		const typedSchemaType = normalizeComponentPortType(output?.typedSchema?.type);
+		if (typedSchemaType == null || typedSchemaType !== portType) {
+			errors.push(`Component output "${outputName}" must keep typedSchema.type aligned with portType.`);
+		}
+	}
+	if (errors.length > 0) return { ok: false, errors };
+	return { ok: true };
+}
+
 function listComponentOutputNames(node: Node<PipelineNodeData>): string[] {
 	if (node.data.kind !== 'component') return [];
 	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
@@ -1431,7 +1464,11 @@ function stripToDTO(
 	edges: Edge<PipelineEdgeData>[],
 	graphId?: string
 ): PipelineGraphDTO {
-	const dto: PipelineGraphDTO = { version: 1, nodes, edges };
+	const dto: PipelineGraphDTO = {
+		version: 1,
+		nodes,
+		edges: recomputeEdgeContractsBestEffort(nodes, edges)
+	};
 	if (graphId) {
 		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
 	}
@@ -1643,6 +1680,83 @@ function pruneAndRecontractEdgesStrict(
 	return { ok: true, edges: next, prunedIds };
 }
 
+function canonicalizeComponentEdgeSourceHandles(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[],
+	mode: 'strict' | 'best_effort'
+):
+	| { ok: true; edges: Edge<PipelineEdgeData>[] }
+	| { ok: false; error: string } {
+	const next: Edge<PipelineEdgeData>[] = [];
+	for (const edge of edges) {
+		const sourceNode = nodes.find((n) => n.id === edge.source);
+		if (!sourceNode || sourceNode.data.kind !== 'component') {
+			next.push(edge);
+			continue;
+		}
+		const canonicalSourceHandle = canonicalComponentSourceHandleForEdge(nodes, edge);
+		if (canonicalSourceHandle == null) {
+			if (mode === 'strict') {
+				return {
+					ok: false,
+					error: `Edge ${String(edge.id ?? '')} has unresolved component source handle (source=${String(edge.source ?? '')}:${String((edge as any).sourceHandle ?? 'out')})`
+				};
+			}
+			next.push(edge);
+			continue;
+		}
+		next.push({
+			...edge,
+			sourceHandle: canonicalSourceHandle
+		});
+	}
+	return { ok: true, edges: next };
+}
+
+function recomputeEdgeContractsBestEffort(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[]
+): Edge<PipelineEdgeData>[] {
+	const canonicalized = canonicalizeComponentEdgeSourceHandles(nodes, edges, 'best_effort');
+	const working = canonicalized.ok ? canonicalized.edges : edges;
+	return working.map((edge) => {
+		const sourceNode = nodes.find((n) => n.id === edge.source);
+		const targetNode = nodes.find((n) => n.id === edge.target);
+		if (!sourceNode || !targetNode) return edge;
+		const chk = isEdgeStillValid(nodes, edge);
+		const existingContract = ((edge.data ?? {}) as any).contract ?? {};
+		const sourceHandle = String((edge as any).sourceHandle ?? 'out');
+		const payload = {
+			source: sourcePayloadHint(sourceNode as any, 'out', sourceHandle),
+			target: targetPayloadHint(targetNode as any)
+		};
+		if (chk.ok) {
+			return {
+				...edge,
+				data: {
+					...(edge.data ?? {}),
+					contract: {
+						out: chk.out,
+						in: chk.in,
+						payload
+					}
+				}
+			};
+		}
+		return {
+			...edge,
+			data: {
+				...(edge.data ?? {}),
+				contract: {
+					out: existingContract?.out,
+					in: existingContract?.in,
+					payload
+				}
+			}
+		};
+	});
+}
+
 function topoFrom(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
@@ -1699,11 +1813,26 @@ function topoFrom(
 }
 
 const loaded = loadGraphFromLocalStorage(emptyGraph);
+const loadedNodes = Array.isArray((loaded as any)?.nodes)
+	? ((loaded as any).nodes as Node<PipelineNodeData>[])
+	: [];
+const loadedEdgesRaw = Array.isArray((loaded as any)?.edges)
+	? ((loaded as any).edges as Edge<PipelineEdgeData>[])
+	: [];
+const loadedCanonicalized = canonicalizeComponentEdgeSourceHandles(
+	loadedNodes,
+	loadedEdgesRaw,
+	'best_effort'
+);
+const loadedEdges = recomputeEdgeContractsBestEffort(
+	loadedNodes,
+	loadedCanonicalized.ok ? loadedCanonicalized.edges : loadedEdgesRaw
+);
 
 const initialState: GraphState = {
 	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
-	nodes: loaded.nodes,
-	edges: loaded.edges,
+	nodes: loadedNodes,
+	edges: loadedEdges,
 	selectedNodeId: null,
 	inspector: initialInspector,
 	logs: [],
@@ -1715,7 +1844,7 @@ const initialState: GraphState = {
 	activeRunFrom: null,
 	activeRunNodeSet: new Set<string>(),
 	nodeOutputs: {},
-	nodeBindings: ensureNormalizedBindingsForNodes(loaded.nodes, {}),
+	nodeBindings: ensureNormalizedBindingsForNodes(loadedNodes, {}),
 	activeRunId: null
 };
 
@@ -2197,6 +2326,24 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			beforeNode?.data?.kind === 'component'
 				? sanitizeComponentDraftParams(s.inspector.draftParams as Record<string, any>)
 				: (s.inspector.draftParams as Record<string, any>);
+		if (beforeNode?.data?.kind === 'component') {
+			const validation = validateComponentDraftForAccept(paramsForCommit);
+			if (!validation.ok) {
+				update((cur) => {
+					let next = cur;
+					for (const issue of validation.errors) {
+						next = logPush(next, 'warn', issue, nodeId);
+					}
+					return next;
+				});
+				return {
+					ok: false,
+					reason: 'component_accept_blocked',
+					error: validation.errors[0] ?? 'Component output bindings are invalid.',
+					details: validation.errors
+				} as const;
+			}
+		}
 
 		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit });
 
@@ -2250,12 +2397,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		const nextNodes = Array.isArray(graph?.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
 		const nextEdges = Array.isArray(graph?.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
 		if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' };
+		const canonicalized = canonicalizeComponentEdgeSourceHandles(nextNodes, nextEdges, 'strict');
+		if (!canonicalized.ok) return { ok: false, reason: canonicalized.error };
+		const rechecked = pruneAndRecontractEdgesStrict(nextNodes, canonicalized.edges);
+		if (!rechecked.ok) return { ok: false, reason: rechecked.error };
 		update((s) => {
 			const nextState = withGraphMeta({
 				...s,
 				graphId: String(graphIdOverride || s.graphId),
 				nodes: nextNodes,
-				edges: nextEdges,
+				edges: rechecked.edges,
 				selectedNodeId: null,
 				inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
 				logs: [],

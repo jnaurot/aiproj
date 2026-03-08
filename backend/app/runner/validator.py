@@ -283,7 +283,22 @@ class GraphValidator:
                 api = params.get("api") if isinstance(params.get("api"), dict) else {}
                 outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
                 sh = str(source_handle or "out")
-                if sh and sh != "out":
+                if sh == "out":
+                    if len(outputs) == 1 and isinstance(outputs[0], dict):
+                        source_type = str(outputs[0].get("portType") or "").strip().lower() or None
+                    elif len(outputs) > 1:
+                        errors.append(
+                            ValidationError(
+                                code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                                message=(
+                                    "Component edge sourceHandle must name an output when component has multiple outputs"
+                                ),
+                                edge_id=edge_id,
+                                node_id=source_id,
+                            )
+                        )
+                        continue
+                elif sh:
                     decl = next(
                         (
                             o
@@ -292,11 +307,17 @@ class GraphValidator:
                         ),
                         None,
                     )
-                    source_type = (
-                        str(decl.get("portType") or "").strip().lower()
-                        if isinstance(decl, dict)
-                        else None
-                    )
+                    if not isinstance(decl, dict):
+                        errors.append(
+                            ValidationError(
+                                code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                                message=f"Component output handle '{sh}' is not declared in component API outputs",
+                                edge_id=edge_id,
+                                node_id=source_id,
+                            )
+                        )
+                        continue
+                    source_type = str(decl.get("portType") or "").strip().lower() or None
             target_type = target_ports.get("in")
 
             
