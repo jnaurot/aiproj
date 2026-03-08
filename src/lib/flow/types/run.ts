@@ -64,7 +64,24 @@ export type KnownRunEvent =
   | { type: "edge_exec"; runId: string; at: string; edgeId: string; exec: "idle" | "active" | "done" }
   | { type: "log"; runId: string; at: string; level: "info" | "warn" | "error"; message: string; nodeId?: string }
   | { type: "node_output"; runId: string; at: string; nodeId: string; artifactId: string; mimeType?: string; portType?: string; preview?: string; cached?: boolean }
-  | { type: "cache_decision"; schema_version?: number; runId: string; at: string; nodeId: string; nodeKind: string; decision: "cache_hit" | "cache_miss" | "cache_hit_contract_mismatch"; execKey: string; artifactId?: string; expectedPortType?: string; actualPortType?: string; producerExecKey?: string };
+  | { type: "cache_decision"; schema_version?: number; runId: string; at: string; nodeId: string; nodeKind: string; decision: "cache_hit" | "cache_miss" | "cache_hit_contract_mismatch"; execKey: string; artifactId?: string; expectedPortType?: string; actualPortType?: string; producerExecKey?: string }
+  | { type: "cache_summary"; schema_version?: number; runId: string; at: string; cache_hit: number; cache_miss: number; cache_hit_contract_mismatch: number }
+  | {
+      type: "run_telemetry";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      runtime_ms: number;
+      peak_concurrency: number;
+      executed: number;
+      cached: number;
+      failed: number;
+      planned?: number;
+      cache_hit: number;
+      cache_miss: number;
+      cache_hit_contract_mismatch: number;
+      schema_infer?: { hit: number; miss: number; bypass: number };
+    };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };
 

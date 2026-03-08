@@ -181,8 +181,14 @@ def expand_graph_components(
             )
 
         id_map: Dict[str, str] = {}
-        component_api = definition.get("api") if isinstance(definition.get("api"), dict) else (
-            params.get("api") if isinstance(params.get("api"), dict) else {}
+        component_api = (
+            definition.get("contractSnapshot")
+            if isinstance(definition.get("contractSnapshot"), dict)
+            else definition.get("api")
+            if isinstance(definition.get("api"), dict)
+            else params.get("api")
+            if isinstance(params.get("api"), dict)
+            else {}
         )
         parent_meta = {
             "componentId": component_id,

@@ -5,6 +5,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
+from app.component_contracts import (
+    COMPONENT_SCHEMA_VERSION,
+    canonicalize_component_definition,
+    validate_component_definition,
+)
+
 router = APIRouter()
 
 
@@ -13,7 +19,7 @@ class ComponentRevisionWriteRequest(BaseModel):
     revisionId: Optional[str] = None
     parentRevisionId: Optional[str] = None
     message: Optional[str] = None
-    schemaVersion: int = 1
+    schemaVersion: int = COMPONENT_SCHEMA_VERSION
     graph: Dict[str, Any]
     api: Dict[str, Any]
     configSchema: Optional[Dict[str, Any]] = None
@@ -39,24 +45,81 @@ class ComponentRenameRequest(BaseModel):
     componentId: str
 
 
+class ComponentValidateRequest(BaseModel):
+    graph: Dict[str, Any]
+    api: Dict[str, Any]
+    configSchema: Optional[Dict[str, Any]] = None
+    schemaVersion: int = COMPONENT_SCHEMA_VERSION
+
+
+@router.post("/validate")
+async def validate_component_revision(req: ComponentValidateRequest):
+    raw_definition = {
+        "graph": req.graph,
+        "api": req.api,
+        "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
+    }
+    raw_diagnostics = [d.as_dict() for d in validate_component_definition(raw_definition)]
+    normalized_definition, migration_notes = canonicalize_component_definition(
+        raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
+    )
+    normalized_diagnostics = [d.as_dict() for d in validate_component_definition(normalized_definition)]
+    diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
+    ok = len([d for d in diagnostics if d.get("severity") == "error"]) == 0
+    return {
+        "schemaVersion": 1,
+        "componentSchemaVersion": COMPONENT_SCHEMA_VERSION,
+        "ok": ok,
+        "diagnostics": diagnostics,
+        "migrationNotes": migration_notes,
+        "normalizedDefinition": normalized_definition,
+    }
+
+
 @router.post("")
 async def create_component_revision(req: ComponentRevisionWriteRequest, request: Request):
     store = getattr(request.app.state, "component_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="component revision store unavailable")
 
-    definition = {
+    raw_definition = {
         "graph": req.graph,
         "api": req.api,
         "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
     }
+    raw_diagnostics = [d.as_dict() for d in validate_component_definition(raw_definition)]
+    raw_errors = [d for d in raw_diagnostics if d.get("severity") == "error"]
+    if raw_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "COMPONENT_VALIDATION_FAILED",
+                "message": "Component definition failed preflight validation",
+                "diagnostics": raw_errors,
+            },
+        )
+    definition, migration_notes = canonicalize_component_definition(
+        raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
+    )
+    diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
+    errors = [d for d in diagnostics if d.get("severity") == "error"]
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "COMPONENT_VALIDATION_FAILED",
+                "message": "Component definition failed preflight validation",
+                "diagnostics": errors,
+            },
+        )
+
     try:
         revision = store.create_revision(
             component_id=req.componentId,
             revision_id=req.revisionId,
             parent_revision_id=req.parentRevisionId,
             message=req.message,
-            schema_version=req.schemaVersion,
+            schema_version=COMPONENT_SCHEMA_VERSION,
             definition=definition,
         )
     except ValueError as ex:
@@ -70,6 +133,8 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
         "createdAt": revision.created_at,
         "message": revision.message,
         "checksum": revision.checksum,
+        "componentSchemaVersion": COMPONENT_SCHEMA_VERSION,
+        "migrationNotes": migration_notes,
     }
 
 
@@ -110,6 +175,7 @@ async def get_component_revision(component_id: str, revision_id: str, request: R
         raise HTTPException(status_code=404, detail="revision not found")
     return {
         "schemaVersion": 1,
+        "componentSchemaVersion": COMPONENT_SCHEMA_VERSION,
         "componentId": row.component_id,
         "revisionId": row.revision_id,
         "parentRevisionId": row.parent_revision_id,
@@ -118,6 +184,9 @@ async def get_component_revision(component_id: str, revision_id: str, request: R
         "revisionSchemaVersion": row.schema_version,
         "checksum": row.checksum,
         "definition": row.definition,
+        "contractSnapshot": row.definition.get("contractSnapshot")
+        if isinstance(row.definition, dict)
+        else None,
     }
 
 

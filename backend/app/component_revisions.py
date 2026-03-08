@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sqlite3
@@ -9,6 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from .component_contracts import (
+    COMPONENT_SCHEMA_VERSION,
+    canonicalize_component_definition,
+)
 
 
 def _iso_now() -> str:
@@ -114,12 +120,19 @@ class ComponentRevisionStore:
         message: Optional[str] = None,
         parent_revision_id: Optional[str] = None,
         revision_id: Optional[str] = None,
-        schema_version: int = 1,
+        schema_version: int = COMPONENT_SCHEMA_VERSION,
     ) -> ComponentRevision:
         if not isinstance(definition, dict):
             raise ValueError("definition must be an object")
-        graph = definition.get("graph")
-        api = definition.get("api")
+        normalized_definition, _notes = canonicalize_component_definition(
+            definition, int(schema_version or COMPONENT_SCHEMA_VERSION)
+        )
+        # Publish-time immutable contract snapshot.
+        normalized_definition["contractSnapshot"] = copy.deepcopy(
+            normalized_definition.get("api") if isinstance(normalized_definition.get("api"), dict) else {"inputs": [], "outputs": []}
+        )
+        graph = normalized_definition.get("graph")
+        api = normalized_definition.get("api")
         if not isinstance(graph, dict) or "nodes" not in graph or "edges" not in graph:
             raise ValueError("definition.graph must include nodes and edges")
         if not isinstance(api, dict):
@@ -131,8 +144,8 @@ class ComponentRevisionStore:
         rid = str(revision_id or "").strip() or f"crev_{uuid4()}"
         created_at = _iso_now()
         msg = str(message).strip() if isinstance(message, str) and str(message).strip() else None
-        checksum = _sha256_json(definition)
-        definition_json = _stable_dump(definition)
+        checksum = _sha256_json(normalized_definition)
+        definition_json = _stable_dump(normalized_definition)
 
         with self._lock:
             with self._connect() as conn:
@@ -193,7 +206,7 @@ class ComponentRevisionStore:
             message=msg,
             schema_version=int(schema_version),
             checksum=checksum,
-            definition=definition,
+            definition=normalized_definition,
         )
 
     def list_components(self, *, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
@@ -449,14 +462,20 @@ class ComponentRevisionStore:
                 }
 
     def _row_to_revision(self, row: sqlite3.Row) -> ComponentRevision:
-        definition = json.loads(str(row["definition_json"]))
+        raw_definition = json.loads(str(row["definition_json"]))
+        schema_version = int(row["schema_version"])
+        definition, _notes = canonicalize_component_definition(raw_definition, schema_version)
+        if not isinstance(definition.get("contractSnapshot"), dict):
+            definition["contractSnapshot"] = copy.deepcopy(
+                definition.get("api") if isinstance(definition.get("api"), dict) else {"inputs": [], "outputs": []}
+            )
         return ComponentRevision(
             component_id=str(row["component_id"]),
             revision_id=str(row["revision_id"]),
             parent_revision_id=str(row["parent_revision_id"]) if row["parent_revision_id"] else None,
             created_at=str(row["created_at"]),
             message=str(row["message"]) if row["message"] else None,
-            schema_version=int(row["schema_version"]),
+            schema_version=schema_version,
             checksum=str(row["checksum"]),
             definition=definition,
         )

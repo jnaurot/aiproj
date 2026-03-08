@@ -20,6 +20,11 @@
 	--color-danger-bg: var(--theme-danger-bg);
 	--color-danger-border: var(--theme-danger-border);
 	--color-danger-text: var(--theme-danger-text);
+	--color-status-success: var(--theme-status-success);
+	--color-status-danger: var(--theme-status-danger);
+	--color-status-warning: var(--theme-status-warning);
+	--color-status-info: var(--theme-status-info);
+	--color-status-muted: var(--theme-status-muted);
 
 	--radius-sm: 6px;
 	--radius-md: 8px;

@@ -12,12 +12,14 @@ describe('flowToolbarModel', () => {
 		const items = buildProjectMenuItems();
 		expect(items.map((i) => i.label)).toEqual([
 			'New Graph',
-			'Save',
-			'Save As',
+			'Save Graph',
+			'Save Version',
+			'Save Graph As',
+			'Load Graph',
 			'Save as Component',
 			'Import',
 			'Export',
-			'History',
+			'Delete Graph',
 			'Reset'
 		]);
 	});
@@ -43,29 +45,35 @@ describe('flowToolbarModel', () => {
 	it('dispatches project actions to handlers', () => {
 		const handlers = {
 			newGraph: vi.fn(),
-			save: vi.fn(),
-			saveAs: vi.fn(),
+			saveGraph: vi.fn(),
+			saveVersion: vi.fn(),
+			saveGraphAs: vi.fn(),
+			loadGraph: vi.fn(),
 			saveAsComponent: vi.fn(),
 			importGraph: vi.fn(),
 			exportGraph: vi.fn(),
-			history: vi.fn(),
+			deleteGraph: vi.fn(),
 			reset: vi.fn()
 		};
 		dispatchProjectMenuAction('new_graph', handlers);
 		dispatchProjectMenuAction('save_graph', handlers);
+		dispatchProjectMenuAction('save_version', handlers);
 		dispatchProjectMenuAction('save_as_graph', handlers);
+		dispatchProjectMenuAction('load_graph', handlers);
 		dispatchProjectMenuAction('save_as_component', handlers);
 		dispatchProjectMenuAction('import_graph', handlers);
 		dispatchProjectMenuAction('export_graph', handlers);
-		dispatchProjectMenuAction('history_graph', handlers);
+		dispatchProjectMenuAction('delete_graph', handlers);
 		dispatchProjectMenuAction('reset_graph', handlers);
 		expect(handlers.newGraph).toHaveBeenCalledTimes(1);
-		expect(handlers.save).toHaveBeenCalledTimes(1);
-		expect(handlers.saveAs).toHaveBeenCalledTimes(1);
+		expect(handlers.saveGraph).toHaveBeenCalledTimes(1);
+		expect(handlers.saveVersion).toHaveBeenCalledTimes(1);
+		expect(handlers.saveGraphAs).toHaveBeenCalledTimes(1);
+		expect(handlers.loadGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.saveAsComponent).toHaveBeenCalledTimes(1);
 		expect(handlers.importGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.exportGraph).toHaveBeenCalledTimes(1);
-		expect(handlers.history).toHaveBeenCalledTimes(1);
+		expect(handlers.deleteGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.reset).toHaveBeenCalledTimes(1);
 	});
 

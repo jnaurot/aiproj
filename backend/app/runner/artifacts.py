@@ -180,6 +180,14 @@ class MemoryArtifactStore:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._consumers: Dict[str, List[Dict[str, Any]]] = {}
         self._snapshots: Dict[str, Dict[str, Any]] = {}
+        self._meta_cache: Dict[str, Artifact] = {}
+        self._blob_cache: Dict[str, bytes] = {}
+        self._memo_stats: Dict[str, int] = {
+            "meta_hit": 0,
+            "meta_miss": 0,
+            "blob_hit": 0,
+            "blob_miss": 0,
+        }
 
     def _prune_node_artifacts(self, *, graph_id: str, node_id: str, keep_last: int = 5) -> List[str]:
         if not graph_id or not node_id:
@@ -198,6 +206,8 @@ class MemoryArtifactStore:
         for aid in to_delete:
             self._meta.pop(aid, None)
             self._blob.pop(aid, None)
+            self._meta_cache.pop(aid, None)
+            self._blob_cache.pop(aid, None)
         for input_id, consumers in list(self._consumers.items()):
             self._consumers[input_id] = [c for c in consumers if c.get("outputArtifactId") not in delete_set]
             if not self._consumers[input_id]:
@@ -208,14 +218,28 @@ class MemoryArtifactStore:
         return artifact_id in self._meta
 
     async def get(self, artifact_id: str) -> Artifact:
+        cached = self._meta_cache.get(artifact_id)
+        if cached is not None:
+            self._memo_stats["meta_hit"] += 1
+            return cached
+        self._memo_stats["meta_miss"] += 1
         if artifact_id not in self._meta:
             raise KeyError(f"Artifact not found: {artifact_id}")
-        return self._meta[artifact_id]
+        art = self._meta[artifact_id]
+        self._meta_cache[artifact_id] = art
+        return art
 
     async def read(self, artifact_id: str) -> bytes:
+        cached = self._blob_cache.get(artifact_id)
+        if cached is not None:
+            self._memo_stats["blob_hit"] += 1
+            return cached
+        self._memo_stats["blob_miss"] += 1
         if artifact_id not in self._blob:
             raise KeyError(f"Artifact bytes not found: {artifact_id}")
-        return self._blob[artifact_id]
+        data = self._blob[artifact_id]
+        self._blob_cache[artifact_id] = data
+        return data
 
     async def open_payload(self, artifact_id: str) -> AsyncIterator[bytes]:
         data = await self.read(artifact_id)
@@ -262,6 +286,8 @@ class MemoryArtifactStore:
         # 3) validate committed artifact
         self._blob[artifact.artifact_id] = data
         self._meta[artifact.artifact_id] = artifact_to_store
+        self._blob_cache[artifact.artifact_id] = data
+        self._meta_cache[artifact.artifact_id] = artifact_to_store
         committed = self._meta.get(artifact.artifact_id)
         if committed is None:
             raise RuntimeError(f"Artifact metadata commit failed: {artifact.artifact_id}")
@@ -326,6 +352,8 @@ class MemoryArtifactStore:
                 artifact_ids.append(aid)
                 self._meta.pop(aid, None)
                 self._blob.pop(aid, None)
+                self._meta_cache.pop(aid, None)
+                self._blob_cache.pop(aid, None)
         for input_id, rows in list(self._consumers.items()):
             self._consumers[input_id] = [
                 r
@@ -406,6 +434,8 @@ class MemoryArtifactStore:
         for aid in ids:
             self._meta.pop(aid, None)
             self._blob.pop(aid, None)
+            self._meta_cache.pop(aid, None)
+            self._blob_cache.pop(aid, None)
         for input_id, consumers in list(self._consumers.items()):
             self._consumers[input_id] = [c for c in consumers if c.get("outputArtifactId") not in delete_set]
             if not self._consumers[input_id]:
@@ -481,6 +511,13 @@ class MemoryArtifactStore:
         rows.sort(key=lambda x: x[1].created_at, reverse=True)
         return str(rows[0][0])
 
+    def get_memo_stats(self) -> Dict[str, int]:
+        return {
+            **self._memo_stats,
+            "meta_entries": int(len(self._meta_cache)),
+            "blob_entries": int(len(self._blob_cache)),
+        }
+
 
 class _SqliteArtifactIndex:
     def __init__(self, db_path: Path, *, blob_root: Optional[Path] = None) -> None:
@@ -524,13 +561,6 @@ class _SqliteArtifactIndex:
                 )
                 """
             )
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_id ON artifacts(graph_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_node_id ON artifacts(node_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node ON artifacts(graph_id, node_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node_created ON artifacts(graph_id, node_id, created_at DESC)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
             # Migration: older DBs won't have port_type.
             cols = [r[1] for r in cur.execute("PRAGMA table_info(artifacts)").fetchall()]
             if "port_type" not in cols:
@@ -541,6 +571,13 @@ class _SqliteArtifactIndex:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN node_id TEXT")
             if "exec_key" not in cols:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN exec_key TEXT")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_run_id ON artifacts(run_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_id ON artifacts(graph_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_node_id ON artifacts(node_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node ON artifacts(graph_id, node_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node_created ON artifacts(graph_id, node_id, created_at DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_port_type ON artifacts(port_type)")
             # Backfill legacy rows with null port_type.
             null_rows = cur.execute(
@@ -1142,6 +1179,14 @@ class DiskArtifactStore:
             self._root / "meta" / "artifacts.sqlite",
             blob_root=self._blob_root,
         )
+        self._meta_cache: Dict[str, Artifact] = {}
+        self._blob_cache: Dict[str, bytes] = {}
+        self._memo_stats: Dict[str, int] = {
+            "meta_hit": 0,
+            "meta_miss": 0,
+            "blob_hit": 0,
+            "blob_miss": 0,
+        }
 
     def _blob_path(self, content_hash: str) -> Path:
         ch = content_hash.lower()
@@ -1175,16 +1220,30 @@ class DiskArtifactStore:
         return self._index.exists(artifact_id)
 
     async def get(self, artifact_id: str) -> Artifact:
-        return self._index.get(artifact_id)
+        cached = self._meta_cache.get(artifact_id)
+        if cached is not None:
+            self._memo_stats["meta_hit"] += 1
+            return cached
+        self._memo_stats["meta_miss"] += 1
+        art = self._index.get(artifact_id)
+        self._meta_cache[artifact_id] = art
+        return art
 
     async def read(self, artifact_id: str) -> bytes:
-        art = self._index.get(artifact_id)
+        cached = self._blob_cache.get(artifact_id)
+        if cached is not None:
+            self._memo_stats["blob_hit"] += 1
+            return cached
+        self._memo_stats["blob_miss"] += 1
+        art = await self.get(artifact_id)
         if not art.content_hash:
             raise KeyError(f"Artifact missing content hash: {artifact_id}")
         path = self._blob_path(art.content_hash)
         if not path.exists():
             raise KeyError(f"Artifact bytes not found: {artifact_id}")
-        return path.read_bytes()
+        data = path.read_bytes()
+        self._blob_cache[artifact_id] = data
+        return data
 
     async def open_payload(self, artifact_id: str) -> AsyncIterator[bytes]:
         art = self._index.get(artifact_id)
@@ -1246,6 +1305,8 @@ class DiskArtifactStore:
         # 3) validate committed artifact
         self._index.put(artifact_to_store)
         committed = self._index.get(artifact.artifact_id)
+        self._meta_cache[artifact.artifact_id] = committed
+        self._blob_cache[artifact.artifact_id] = data
         if str(committed.content_hash or "") != content_hash:
             raise RuntimeError(
                 f"Artifact commit validation failed (content_hash mismatch): {artifact.artifact_id}"
@@ -1274,7 +1335,11 @@ class DiskArtifactStore:
         return self._index.list_runs(include_deleted=include_deleted)
 
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
-        return self._index.delete_run(run_id, mode=mode, gc=gc)
+        out = self._index.delete_run(run_id, mode=mode, gc=gc)
+        for aid in list(out.get("artifactIdsRemoved") or []):
+            self._meta_cache.pop(str(aid), None)
+            self._blob_cache.pop(str(aid), None)
+        return out
 
     async def record_consumers(
         self,
@@ -1302,7 +1367,11 @@ class DiskArtifactStore:
         return self._index.gc_orphan_blobs(mode=mode, limit=limit, max_seconds=max_seconds)
 
     async def delete_node_artifacts(self, *, graph_id: str, node_id: str) -> Dict[str, Any]:
-        return self._index.delete_node_artifacts(graph_id=graph_id, node_id=node_id)
+        out = self._index.delete_node_artifacts(graph_id=graph_id, node_id=node_id)
+        for aid in list(out.get("artifactIdsRemoved") or []):
+            self._meta_cache.pop(str(aid), None)
+            self._blob_cache.pop(str(aid), None)
+        return out
 
     async def write_snapshot_from_file(
         self,
@@ -1365,6 +1434,13 @@ class DiskArtifactStore:
             node_id=node_id,
             exclude_artifact_id=exclude_artifact_id,
         )
+
+    def get_memo_stats(self) -> Dict[str, int]:
+        return {
+            **self._memo_stats,
+            "meta_entries": int(len(self._meta_cache)),
+            "blob_entries": int(len(self._blob_cache)),
+        }
 
 
 # ----------------------------

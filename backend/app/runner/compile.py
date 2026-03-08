@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set
 
 @dataclass
 class RunPlan:
@@ -39,7 +39,23 @@ def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
                 q.append(prev)
     return seen
 
-def compile_plan(graph: Dict[str, Any], run_from: Optional[str], run_mode: Optional[str] = None) -> RunPlan:
+def _expand_dirty_subgraph(dirty_ids: Set[str], edges: List[Dict[str, Any]]) -> Set[str]:
+    if not dirty_ids:
+        return set()
+    out: Set[str] = set()
+    for nid in dirty_ids:
+        out.add(nid)
+        out |= _upstream(nid, edges)
+        out |= _downstream(nid, edges)
+    return out
+
+
+def compile_plan(
+    graph: Dict[str, Any],
+    run_from: Optional[str],
+    run_mode: Optional[str] = None,
+    dirty_node_ids: Optional[Set[str]] = None,
+) -> RunPlan:
     print("IN COMPILE_PLAN")
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
@@ -76,10 +92,16 @@ def compile_plan(graph: Dict[str, Any], run_from: Optional[str], run_mode: Optio
             execute_nodes = set(sub)
     else:
         mode = "full"
-        roots = [nid for nid, d in indeg.items() if d == 0]
-        for r in roots:
-            sub.add(r)
-            sub |= _downstream(r, edges)
+        requested_dirty = {
+            nid for nid in (dirty_node_ids or set()) if isinstance(nid, str) and nid in adj
+        }
+        if requested_dirty:
+            sub = _expand_dirty_subgraph(requested_dirty, edges)
+        else:
+            roots = [nid for nid, d in indeg.items() if d == 0]
+            for r in roots:
+                sub.add(r)
+                sub |= _downstream(r, edges)
         execute_nodes = set(sub)
 
     # Recompute indegree restricted to subgraph

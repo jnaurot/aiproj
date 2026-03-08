@@ -1,5 +1,58 @@
 import type { RunEvent } from "$lib/flow/types/run";
 
+export type EventBatcherOptions = {
+	maxBatchSize?: number;
+	maxDelayMs?: number;
+};
+
+export function createEventBatcher<T>(
+	onBatch: (events: T[]) => void,
+	options?: EventBatcherOptions
+) {
+	const maxBatchSize = Math.max(1, Number(options?.maxBatchSize ?? 32));
+	const maxDelayMs = Math.max(1, Number(options?.maxDelayMs ?? 16));
+	let queue: T[] = [];
+	let timer: ReturnType<typeof setTimeout> | null = null;
+
+	const flush = () => {
+		if (timer) {
+			clearTimeout(timer);
+			timer = null;
+		}
+		if (queue.length === 0) return;
+		const batch = queue;
+		queue = [];
+		onBatch(batch);
+	};
+
+	const schedule = () => {
+		if (timer) return;
+		timer = setTimeout(() => {
+			timer = null;
+			flush();
+		}, maxDelayMs);
+	};
+
+	return {
+		push(event: T) {
+			queue.push(event);
+			if (queue.length >= maxBatchSize) {
+				flush();
+				return;
+			}
+			schedule();
+		},
+		flush,
+		clear() {
+			if (timer) {
+				clearTimeout(timer);
+				timer = null;
+			}
+			queue = [];
+		}
+	};
+}
+
 function requireGraphId(graphId: string): string {
   const g = String(graphId ?? "").trim();
   if (!g) throw new Error("graphId is required for artifact requests");
@@ -150,21 +203,39 @@ export function streamRunEvents(
   onError: (err: unknown) => void
 ) {
   const es = new EventSource(`/api/runs/${runId}/events`);
+  let closed = false;
+  let terminalSeen = false;
 
   es.onmessage = (msg) => {
+    if (closed) return;
     try {
-      onEvent(JSON.parse(msg.data));
+      const parsed = JSON.parse(msg.data) as RunEvent;
+      if ((parsed as any)?.type === 'run_finished') terminalSeen = true;
+      onEvent(parsed);
     } catch (e) {
       onError(e);
     }
   };
 
   es.onerror = (e) => {
+    if (closed) return;
+    if (terminalSeen || es.readyState === EventSource.CLOSED) {
+      closed = true;
+      es.close();
+      return;
+    }
+    closed = true;
     es.close();
     onError(e);
   };
 
-  return { close: () => es.close() };
+  return {
+    close: () => {
+      if (closed) return;
+      closed = true;
+      es.close();
+    }
+  };
 }
 
 export async function uploadSnapshot(file: File) {

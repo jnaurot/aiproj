@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import MethodType
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -29,7 +30,7 @@ def _minimal_graph():
 	}
 
 
-def test_graph_revision_write_on_create_run(monkeypatch):
+def test_graph_revision_not_written_on_create_run(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "1")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -45,7 +46,7 @@ def test_graph_revision_write_on_create_run(monkeypatch):
 
 		rt.start_run = MethodType(_fake_start_run, rt)
 
-		graph_id = "graph_phase2_dual_write_create"
+		graph_id = f"graph_phase2_dual_write_create_{uuid4().hex[:8]}"
 		res = client.post(
 			"/runs",
 			json={"graphId": graph_id, "runFrom": None, "graph": _minimal_graph()},
@@ -53,12 +54,10 @@ def test_graph_revision_write_on_create_run(monkeypatch):
 		assert res.status_code == 200, res.text
 
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
-		assert rev is not None
-		assert rev.graph_id == graph_id
-		assert rev.message == "create_run"
+		assert rev is None
 
 
-def test_graph_revision_write_on_accept_params(monkeypatch):
+def test_graph_revision_not_written_on_accept_params(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "1")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -73,7 +72,7 @@ def test_graph_revision_write_on_accept_params(monkeypatch):
 				h.status = "finished"
 
 		rt.start_run = MethodType(_fake_start_run, rt)
-		graph_id = "graph_phase2_dual_write_accept"
+		graph_id = f"graph_phase2_dual_write_accept_{uuid4().hex[:8]}"
 		create_res = client.post(
 			"/runs",
 			json={"graphId": graph_id, "runFrom": None, "graph": _minimal_graph()},
@@ -93,11 +92,10 @@ def test_graph_revision_write_on_accept_params(monkeypatch):
 		assert res.status_code == 200, res.text
 
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
-		assert rev is not None
-		assert rev.message == "accept_params:n1"
+		assert rev is None
 
 
-def test_graph_revision_write_ignores_legacy_env_disable(monkeypatch):
+def test_graph_revision_not_written_even_with_legacy_env(monkeypatch):
 	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "0")
 	monkeypatch.setenv("GRAPH_STORE_V2_READ", "0")
 
@@ -113,11 +111,11 @@ def test_graph_revision_write_ignores_legacy_env_disable(monkeypatch):
 
 		rt.start_run = MethodType(_fake_start_run, rt)
 
-		graph_id = "graph_phase2_dual_write_off"
+		graph_id = f"graph_phase2_dual_write_off_{uuid4().hex[:8]}"
 		res = client.post(
 			"/runs",
 			json={"graphId": graph_id, "runFrom": None, "graph": _minimal_graph()},
 		)
 		assert res.status_code == 200, res.text
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
-		assert rev is not None
+		assert rev is None

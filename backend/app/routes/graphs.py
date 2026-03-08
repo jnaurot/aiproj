@@ -13,6 +13,9 @@ router = APIRouter()
 
 class GraphRevisionWriteRequest(BaseModel):
     graphId: Optional[str] = None
+    graphName: Optional[str] = None
+    versionName: Optional[str] = None
+    revisionKind: Optional[str] = None
     revisionId: Optional[str] = None
     parentRevisionId: Optional[str] = None
     message: Optional[str] = None
@@ -236,6 +239,7 @@ async def import_graph_package_v2(req: GraphImportRequest, request: Request):
             graph_id=target_graph_id,
             graph=graph,
             message=message,
+            revision_kind="import",
             schema_version=1,
         )
     except ValueError as ex:
@@ -262,6 +266,9 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
             graph_id=req.graphId,
             graph=req.graph,
             message=req.message,
+            graph_name=req.graphName,
+            version_name=req.versionName,
+            revision_kind=req.revisionKind or "save_graph",
             parent_revision_id=req.parentRevisionId,
             revision_id=req.revisionId,
             schema_version=req.schemaVersion,
@@ -272,12 +279,28 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
     return {
         "schemaVersion": 1,
         "graphId": revision.graph_id,
+        "graphName": revision.graph_name,
         "revisionId": revision.revision_id,
         "parentRevisionId": revision.parent_revision_id,
         "createdAt": revision.created_at,
         "message": revision.message,
+        "versionName": revision.version_name,
+        "revisionKind": revision.revision_kind,
         "checksum": revision.checksum,
     }
+
+
+@router.get("")
+async def list_graphs(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="graph revision store unavailable")
+    rows = store.list_graphs(limit=limit, offset=offset)
+    return {"schemaVersion": 1, "graphs": rows}
 
 
 @router.get("/{graph_id}/latest")
@@ -293,10 +316,13 @@ async def get_latest_graph_revision(graph_id: str, request: Request):
     return {
         "schemaVersion": 1,
         "graphId": row.graph_id,
+        "graphName": row.graph_name,
         "revisionId": row.revision_id,
         "parentRevisionId": row.parent_revision_id,
         "createdAt": row.created_at,
         "message": row.message,
+        "versionName": row.version_name,
+        "revisionKind": row.revision_kind,
         "revisionSchemaVersion": row.schema_version,
         "checksum": row.checksum,
         "graph": row.graph,
@@ -331,11 +357,42 @@ async def get_graph_revision(graph_id: str, revision_id: str, request: Request):
     return {
         "schemaVersion": 1,
         "graphId": row.graph_id,
+        "graphName": row.graph_name,
         "revisionId": row.revision_id,
         "parentRevisionId": row.parent_revision_id,
         "createdAt": row.created_at,
         "message": row.message,
+        "versionName": row.version_name,
+        "revisionKind": row.revision_kind,
         "revisionSchemaVersion": row.schema_version,
         "checksum": row.checksum,
         "graph": row.graph,
     }
+
+
+@router.delete("/{graph_id}")
+async def delete_graph(graph_id: str, request: Request):
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="graph revision store unavailable")
+    result = store.delete_graph(graph_id)
+    if not result.get("deleted"):
+        reason = str(result.get("reason") or "delete_failed")
+        if reason == "graph_not_found":
+            raise HTTPException(status_code=404, detail="graph not found")
+        raise HTTPException(status_code=400, detail=reason)
+    return {"schemaVersion": 1, **result}
+
+
+@router.delete("/{graph_id}/revisions/{revision_id}")
+async def delete_graph_revision(graph_id: str, revision_id: str, request: Request):
+    store = getattr(request.app.state, "graph_revisions", None)
+    if store is None:
+        raise HTTPException(status_code=500, detail="graph revision store unavailable")
+    result = store.delete_revision(graph_id, revision_id)
+    if not result.get("deleted"):
+        reason = str(result.get("reason") or "delete_failed")
+        if reason in {"graph_not_found", "revision_not_found"}:
+            raise HTTPException(status_code=404, detail=reason)
+        raise HTTPException(status_code=400, detail=reason)
+    return {"schemaVersion": 1, **result}

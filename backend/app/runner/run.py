@@ -31,6 +31,7 @@ from .contracts import (
     default_contract_for_node,
     schema_fingerprint as contract_schema_fingerprint,
 )
+from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
 
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
@@ -329,6 +330,110 @@ def _extract_table_columns_from_payload_schema(payload_schema: Any) -> list[Dict
     return []
 
 
+def _coercion_policy_for_node(node: Dict[str, Any]) -> str:
+    data = node.get("data", {}) if isinstance(node, dict) else {}
+    params = data.get("params", {}) if isinstance(data, dict) and isinstance(data.get("params"), dict) else {}
+    policy = (
+        params.get("coercion_policy")
+        or params.get("coercionPolicy")
+        or (params.get("coercion") or {}).get("policy")
+        if isinstance(params.get("coercion"), dict)
+        else None
+    )
+    value = str(policy or "safe_only").strip().lower()
+    if value not in {"forbid", "safe_only", "allow_lossy"}:
+        return "safe_only"
+    return value
+
+
+def _artifact_typed_schema(artifact: Artifact) -> Dict[str, Any]:
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    ptype = str(_infer_artifact_port_type(artifact) or "unknown").strip().lower() or "unknown"
+    if ptype == "table":
+        cols = _extract_table_columns_from_payload_schema(ps)
+        fields = [
+            {
+                "name": str(c.get("name") or "").strip(),
+                "type": str(c.get("type") or "unknown").strip() or "unknown",
+                "nullable": True,
+            }
+            for c in cols
+            if isinstance(c, dict) and str(c.get("name") or "").strip()
+        ]
+        return {"type": "table", "fields": fields}
+    if ptype in {"json", "text", "binary", "embeddings"}:
+        return {"type": ptype, "fields": []}
+    return {"type": "unknown", "fields": []}
+
+
+def _declared_component_input_schema(node: Dict[str, Any], port_name: str) -> Optional[Dict[str, Any]]:
+    data = node.get("data", {}) if isinstance(node, dict) else {}
+    if str(data.get("kind") or "") != "component":
+        return None
+    params = data.get("params", {}) if isinstance(data.get("params"), dict) else {}
+    api = params.get("api") if isinstance(params.get("api"), dict) else {}
+    inputs = api.get("inputs") if isinstance(api.get("inputs"), list) else []
+    target = str(port_name or "in").strip()
+    for port in inputs:
+        if not isinstance(port, dict):
+            continue
+        if str(port.get("name") or "").strip() != target:
+            continue
+        ts = port.get("typedSchema")
+        return ts if isinstance(ts, dict) else None
+    return None
+
+
+def _typed_schema_compatibility(
+    *,
+    expected: Optional[Dict[str, Any]],
+    actual: Optional[Dict[str, Any]],
+    policy: str,
+) -> tuple[bool, Dict[str, Any]]:
+    exp = expected if isinstance(expected, dict) else None
+    act = actual if isinstance(actual, dict) else None
+    if exp is None or act is None:
+        return True, {"coercionApplied": False, "missingColumns": []}
+    exp_t = str(exp.get("type") or "unknown").strip().lower() or "unknown"
+    act_t = str(act.get("type") or "unknown").strip().lower() or "unknown"
+    coercion_applied = False
+    if exp_t != "unknown" and act_t != "unknown" and exp_t != act_t:
+        if policy == "allow_lossy":
+            coercion_applied = True
+        else:
+            return False, {"coercionApplied": False, "reason": "type_mismatch", "expectedType": exp_t, "actualType": act_t, "missingColumns": []}
+    if exp_t == "table" and act_t == "table":
+        exp_fields = exp.get("fields") if isinstance(exp.get("fields"), list) else []
+        act_fields = act.get("fields") if isinstance(act.get("fields"), list) else []
+        exp_names = [str(f.get("name") or "").strip() for f in exp_fields if isinstance(f, dict)]
+        act_names = {str(f.get("name") or "").strip() for f in act_fields if isinstance(f, dict)}
+        missing = sorted([n for n in exp_names if n and n not in act_names])
+        if missing:
+            if policy == "allow_lossy":
+                coercion_applied = True
+            else:
+                return False, {"coercionApplied": False, "reason": "missing_columns", "missingColumns": missing}
+    return True, {"coercionApplied": coercion_applied, "missingColumns": []}
+
+
+def _component_output_port_compatible(
+    *,
+    declared_port_type: str,
+    actual_port_type: str,
+    artifact: Artifact,
+) -> bool:
+    if declared_port_type == actual_port_type:
+        return True
+    # Source text-mode can materialize as a 1-row table with "text" column.
+    if declared_port_type == "text" and actual_port_type == "table":
+        ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+        coercion = ps.get("coercion") if isinstance(ps.get("coercion"), dict) else {}
+        mode = str(coercion.get("mode") or "").strip().lower()
+        if mode == "text_1row":
+            return True
+    return False
+
+
 def _transform_output_columns(
     *,
     op: str,
@@ -482,60 +587,12 @@ def _llm_payload_schema(mime_type: str, data_value: Any) -> Optional[Dict[str, A
     return None
 
 
-def _json_schema_sort_key(schema: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    except Exception:
-        return str(schema)
-
-
 def _json_payload_value_schema(value: Any, *, depth: int = 0, max_depth: int = 24) -> Dict[str, Any]:
-    if depth >= max_depth:
-        return {"type": "unknown", "reason": "max_depth"}
-
-    if value is None:
-        return {"type": "null"}
-    if isinstance(value, bool):
-        return {"type": "boolean"}
-    if isinstance(value, int):
-        return {"type": "integer"}
-    if isinstance(value, float):
-        return {"type": "number"}
-    if isinstance(value, str):
-        return {"type": "string"}
-
-    if isinstance(value, dict):
-        props: Dict[str, Any] = {}
-        required: list[str] = []
-        for raw_key in sorted(value.keys(), key=lambda k: str(k)):
-            key = str(raw_key)
-            props[key] = _json_payload_value_schema(value[raw_key], depth=depth + 1, max_depth=max_depth)
-            required.append(key)
-        return {
-            "type": "object",
-            "properties": props,
-            "required": required,
-            "additionalProperties": False,
-        }
-
-    if isinstance(value, list):
-        if not value:
-            return {"type": "array", "items": {"type": "unknown"}}
-
-        unique: Dict[str, Dict[str, Any]] = {}
-        for item in value:
-            item_schema = _json_payload_value_schema(item, depth=depth + 1, max_depth=max_depth)
-            unique[_json_schema_sort_key(item_schema)] = item_schema
-
-        ordered = [unique[k] for k in sorted(unique.keys())]
-        if len(ordered) == 1:
-            items_schema: Dict[str, Any] = ordered[0]
-        else:
-            items_schema = {"type": "union", "anyOf": ordered}
-
-        return {"type": "array", "items": items_schema}
-
-    return {"type": "unknown"}
+    # Memoize top-level JSON-shape inference by canonical payload digest.
+    # Deeper recursive calls are handled by schema_infer internals.
+    if depth <= 0:
+        return infer_json_schema_cached(value, max_depth=max_depth)
+    return infer_json_schema_cached(value, max_depth=max_depth)
 
 
 def _sample_external_payload(value: Any, *, depth: int = 0, max_depth: int = 2, max_items: int = 3) -> Any:
@@ -1145,6 +1202,41 @@ async def run_graph(
     cache = cache or ExecutionCache()
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
     cache_summary_emitted = False
+    run_telemetry_emitted = False
+    schema_stats_start = get_schema_infer_stats()
+    run_started_t = asyncio.get_running_loop().time()
+    peak_concurrency = 0
+    total_cached = 0
+    total_succeeded = 0
+    total_failed = 0
+
+    async def _emit_run_telemetry_once() -> None:
+        nonlocal run_telemetry_emitted
+        if run_telemetry_emitted:
+            return
+        run_telemetry_emitted = True
+        schema_stats_end = get_schema_infer_stats()
+        schema_delta = {
+            "hit": int(schema_stats_end.get("hit", 0) - schema_stats_start.get("hit", 0)),
+            "miss": int(schema_stats_end.get("miss", 0) - schema_stats_start.get("miss", 0)),
+            "bypass": int(schema_stats_end.get("bypass", 0) - schema_stats_start.get("bypass", 0)),
+        }
+        await context.bus.emit({
+            "type": "run_telemetry",
+            "schema_version": 1,
+            "runId": run_id,
+            "at": iso_now(),
+            "runtime_ms": max(0, int((asyncio.get_running_loop().time() - run_started_t) * 1000.0)),
+            "peak_concurrency": int(peak_concurrency),
+            "executed": int(total_succeeded + total_failed),
+            "cached": int(total_cached),
+            "failed": int(total_failed),
+            "planned": int(len(getattr(getattr(context, "planner_ref", None), "subgraph", []) or [])),
+            "cache_hit": int(cache_stats["hit"]),
+            "cache_miss": int(cache_stats["miss"]),
+            "cache_hit_contract_mismatch": int(cache_stats["hit_contract_mismatch"]),
+            "schema_infer": schema_delta,
+        })
 
     async def _emit_cache_decision(
         *,
@@ -1203,6 +1295,7 @@ async def run_graph(
         if cache_summary_emitted:
             return
         cache_summary_emitted = True
+        await _emit_run_telemetry_once()
         await context.bus.emit({
             "type": "cache_summary",
             "schema_version": 1,
@@ -1233,6 +1326,7 @@ async def run_graph(
             "at": iso_now(),
             "status": "failed"
         })
+        await _emit_cache_summary_once()
         return
 
     for warning in validation.warnings:
@@ -1275,11 +1369,23 @@ async def run_graph(
             "errorCode": ex.code,
             "errorDetails": ex.details,
         })
+        await _emit_cache_summary_once()
         return
 
     # ===== PHASE 2: EXECUTION =====
     try:
-        plan = compile_plan(execution_graph, run_from, run_mode=run_mode)
+        raw_hints = graph.get("__executionHints") if isinstance(graph, dict) else None
+        dirty_hint_ids = set()
+        if isinstance(raw_hints, dict):
+            raw_dirty = raw_hints.get("dirtyNodeIds")
+            if isinstance(raw_dirty, list):
+                dirty_hint_ids = {str(nid) for nid in raw_dirty if isinstance(nid, str) and str(nid).strip()}
+        plan = compile_plan(
+            execution_graph,
+            run_from,
+            run_mode=run_mode,
+            dirty_node_ids=dirty_hint_ids,
+        )
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
         planned_node_ids = sorted(list(plan.subgraph))
@@ -1620,6 +1726,73 @@ async def run_graph(
                         actual={"outPortType": str(declared_out)},
                     ),
                 )
+            # TKT-006/TKT-007: enforce edge-level input compatibility with explicit coercion policy.
+            if preflight_error is None and kind not in {"source", "component"} and input_refs:
+                coercion_policy = _coercion_policy_for_node(n)
+                for input_port, upstream_id in input_refs:
+                    upstream_art = await context.artifact_store.get(upstream_id)
+                    upstream_pt = _infer_artifact_port_type(upstream_art)
+                    expected_in = str(declared_in or "").strip()
+                    if expected_in and upstream_pt != expected_in:
+                        if coercion_policy == "allow_lossy":
+                            await context.bus.emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:{input_port} "
+                                    f"port type {upstream_pt} coerced to {expected_in} (policy=allow_lossy)"
+                                ),
+                                "nodeId": node_id,
+                            })
+                        else:
+                            preflight_error = ContractMismatchError(
+                                "Input edge contract mismatch: upstream artifact port type does not match input port",
+                                code="CONTRACT_EDGE_PORT_TYPE_MISMATCH",
+                                details=_contract_details(
+                                    expected={"inPortType": expected_in, "coercionPolicy": coercion_policy},
+                                    actual={"artifactId": upstream_id, "portType": upstream_pt, "inputPort": input_port},
+                                ),
+                            )
+                            break
+                    expected_ts = _declared_component_input_schema(n, str(input_port or "in"))
+                    actual_ts = _artifact_typed_schema(upstream_art)
+                    ok_ts, ts_info = _typed_schema_compatibility(
+                        expected=expected_ts,
+                        actual=actual_ts,
+                        policy=coercion_policy,
+                    )
+                    if not ok_ts:
+                        preflight_error = ContractMismatchError(
+                            "Input edge contract mismatch: typed schema incompatibility",
+                            code="CONTRACT_EDGE_TYPED_SCHEMA_MISMATCH",
+                            details=_contract_details(
+                                missing_columns=ts_info.get("missingColumns") if isinstance(ts_info, dict) else [],
+                                expected={
+                                    "typedSchema": expected_ts or {},
+                                    "coercionPolicy": coercion_policy,
+                                    "inputPort": input_port,
+                                },
+                                actual={
+                                    "artifactId": upstream_id,
+                                    "typedSchema": actual_ts or {},
+                                },
+                            ),
+                        )
+                        break
+                    if bool(ts_info.get("coercionApplied")):
+                        await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "warn",
+                            "message": (
+                                f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:{input_port} "
+                                f"typed schema adapted (policy={coercion_policy})"
+                            ),
+                            "nodeId": node_id,
+                        })
 
             logger.debug(
                 "exec_key_generated run_id=%s node_id=%s kind=%s exec_key=%s run_from=%s run_mode=%s",
@@ -2708,6 +2881,7 @@ async def run_graph(
                     if llm_in_contract not in llm_allowed_in:
                         raise ContractMismatchError(
                             f"LLM input contract mismatch: unsupported input port '{llm_in_contract}'",
+                            code="LLM_INPUT_PORT_UNSUPPORTED",
                             details=_contract_details(
                                 expected={"allowedInPortTypes": sorted(llm_allowed_in)},
                                 actual={"inPortType": llm_in_contract},
@@ -2724,6 +2898,7 @@ async def run_graph(
                         if upstream_pt not in llm_allowed_in:
                             raise ContractMismatchError(
                                 f"LLM input contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
+                                code="LLM_UPSTREAM_PORT_UNSUPPORTED",
                                 details=_contract_details(
                                     expected={"allowedInPortTypes": sorted(llm_allowed_in)},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
@@ -2733,6 +2908,7 @@ async def run_graph(
                         if upstream_pt != llm_in_contract:
                             raise ContractMismatchError(
                                 "LLM input contract mismatch: upstream artifact port_type does not match node in port",
+                                code="LLM_INPUT_PORT_MISMATCH",
                                 details=_contract_details(
                                     expected={"inPortType": llm_in_contract},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
@@ -2754,6 +2930,7 @@ async def run_graph(
                     if tool_in_contract not in tool_allowed_in:
                         raise ContractMismatchError(
                             f"Tool output contract mismatch: unsupported input port '{tool_in_contract}'",
+                            code="TOOL_INPUT_PORT_UNSUPPORTED",
                             details=_contract_details(
                                 expected={"allowedInPortTypes": sorted(tool_allowed_in)},
                                 actual={"inPortType": tool_in_contract},
@@ -2765,6 +2942,7 @@ async def run_graph(
                         if upstream_pt not in tool_allowed_in:
                             raise ContractMismatchError(
                                 f"Tool output contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
+                                code="TOOL_UPSTREAM_PORT_UNSUPPORTED",
                                 details=_contract_details(
                                     expected={"allowedInPortTypes": sorted(tool_allowed_in)},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
@@ -2773,6 +2951,7 @@ async def run_graph(
                         if upstream_pt != tool_in_contract:
                             raise ContractMismatchError(
                                 "Tool output contract mismatch: upstream artifact port_type does not match node in port",
+                                code="TOOL_INPUT_PORT_MISMATCH",
                                 details=_contract_details(
                                     expected={"inPortType": tool_in_contract},
                                     actual={"artifactId": upstream_id, "portType": upstream_pt},
@@ -2826,24 +3005,46 @@ async def run_graph(
                             continue
                         binding = output_bindings.get(out_name) if isinstance(output_bindings, dict) else None
                         if not isinstance(binding, dict):
-                            raise RuntimeError(f"Component output binding missing for '{out_name}'")
+                            raise ContractMismatchError(
+                                f"Component output binding missing for '{out_name}'",
+                                code="COMPONENT_OUTPUT_BINDING_MISSING",
+                                details=_contract_details(
+                                    expected={"output": out_name, "binding": "required"},
+                                    actual={"binding": None},
+                                ),
+                            )
                         mode = str(binding.get("artifact") or "current").strip().lower() or "current"
                         if mode not in {"current", "last"}:
-                            raise RuntimeError(
-                                f"Component output binding for '{out_name}' has unsupported artifact mode '{mode}'"
+                            raise ContractMismatchError(
+                                f"Component output binding for '{out_name}' has unsupported artifact mode '{mode}'",
+                                code="COMPONENT_OUTPUT_BINDING_INVALID",
+                                details=_contract_details(
+                                    expected={"output": out_name, "artifactMode": ["current", "last"]},
+                                    actual={"artifactMode": mode},
+                                ),
                             )
                         candidates = refs_by_port.get(out_name, [])
                         if not candidates:
-                            raise RuntimeError(
-                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.nodeId exists and produced an artifact."
+                            raise ContractMismatchError(
+                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.nodeId exists and produced an artifact.",
+                                code="COMPONENT_OUTPUT_NOT_RESOLVED",
+                                details=_contract_details(
+                                    expected={"output": out_name, "resolvedArtifact": True},
+                                    actual={"resolvedArtifact": False},
+                                ),
                             )
                         current_artifact_id = str(candidates[0] or "").strip()
                         bound_artifact_id = current_artifact_id
                         if mode == "last":
                             bound_node_id = str(binding.get("nodeId") or "").strip()
                             if not bound_node_id:
-                                raise RuntimeError(
-                                    f"Component output binding for '{out_name}' requires nodeId when artifact='last'"
+                                raise ContractMismatchError(
+                                    f"Component output binding for '{out_name}' requires nodeId when artifact='last'",
+                                    code="COMPONENT_OUTPUT_BINDING_INVALID",
+                                    details=_contract_details(
+                                        expected={"output": out_name, "nodeId": "required when artifact='last'"},
+                                        actual={"nodeId": ""},
+                                    ),
                                 )
                             bound_runtime_node_id = (
                                 bound_node_id
@@ -2852,8 +3053,13 @@ async def run_graph(
                             )
                             latest_lookup = getattr(context.artifact_store, "get_latest_node_artifact", None)
                             if not callable(latest_lookup):
-                                raise RuntimeError(
-                                    "Component output binding artifact='last' requires artifact store support"
+                                raise ContractMismatchError(
+                                    "Component output binding artifact='last' requires artifact store support",
+                                    code="COMPONENT_OUTPUT_BINDING_UNSUPPORTED",
+                                    details=_contract_details(
+                                        expected={"artifactStoreCapability": "get_latest_node_artifact"},
+                                        actual={"artifactStoreCapability": "missing"},
+                                    ),
                                 )
                             last_artifact_id = await latest_lookup(
                                 graph_id=graph_id,
@@ -2862,20 +3068,81 @@ async def run_graph(
                             )
                             bound_artifact_id = str(last_artifact_id or "").strip()
                             if not bound_artifact_id:
-                                raise RuntimeError(
-                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for node '{bound_node_id}'"
+                                raise ContractMismatchError(
+                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for node '{bound_node_id}'",
+                                    code="COMPONENT_OUTPUT_LAST_NOT_FOUND",
+                                    details=_contract_details(
+                                        expected={"output": out_name, "artifact": "last"},
+                                        actual={"nodeId": bound_node_id, "artifactFound": False},
+                                    ),
                                 )
                         if not bound_artifact_id:
-                            raise RuntimeError(f"Component output '{out_name}' resolved to empty artifact id")
+                            raise ContractMismatchError(
+                                f"Component output '{out_name}' resolved to empty artifact id",
+                                code="COMPONENT_OUTPUT_INVALID_ARTIFACT_ID",
+                                details=_contract_details(
+                                    expected={"output": out_name, "artifactId": "non-empty"},
+                                    actual={"artifactId": ""},
+                                ),
+                            )
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
+                        declared_port_type = str(out_decl.get("portType") or "json").strip().lower() or "json"
+                        actual_port_type = str(_infer_artifact_port_type(bound_artifact) or "json").strip().lower() or "json"
+                        coercion_policy = _coercion_policy_for_node(n)
+                        port_compatible = _component_output_port_compatible(
+                            declared_port_type=declared_port_type,
+                            actual_port_type=actual_port_type,
+                            artifact=bound_artifact,
+                        )
+                        if (not port_compatible) and coercion_policy != "allow_lossy":
+                            raise ContractMismatchError(
+                                f"Component output '{out_name}' port type mismatch",
+                                code="COMPONENT_OUTPUT_CONTRACT_MISMATCH",
+                                details=_contract_details(
+                                    expected={"output": out_name, "portType": declared_port_type, "coercionPolicy": coercion_policy},
+                                    actual={"artifactId": bound_artifact_id, "portType": actual_port_type},
+                                ),
+                            )
+                        declared_typed = out_decl.get("typedSchema") if isinstance(out_decl.get("typedSchema"), dict) else None
+                        actual_typed = _artifact_typed_schema(bound_artifact)
+                        ts_ok, ts_info = _typed_schema_compatibility(
+                            expected=declared_typed,
+                            actual=actual_typed,
+                            policy=coercion_policy,
+                        )
+                        if not ts_ok:
+                            raise ContractMismatchError(
+                                f"Component output '{out_name}' typed schema mismatch",
+                                code="COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH",
+                                details=_contract_details(
+                                    missing_columns=ts_info.get("missingColumns") if isinstance(ts_info, dict) else [],
+                                    expected={"output": out_name, "typedSchema": declared_typed or {}, "coercionPolicy": coercion_policy},
+                                    actual={"artifactId": bound_artifact_id, "typedSchema": actual_typed or {}},
+                                ),
+                            )
                         wrapper_upstream_ids.append(bound_artifact_id)
                         wrapper_outputs[out_name] = {
                             "artifact_id": bound_artifact_id,
                             "mime_type": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
-                            "port_type": str(_infer_artifact_port_type(bound_artifact) or "").strip() or "json",
-                            "typed_schema": out_decl.get("typedSchema") if isinstance(out_decl.get("typedSchema"), dict) else None,
+                            "port_type": actual_port_type,
+                            "typed_schema": declared_typed,
                             "required": bool(out_decl.get("required", True)),
                         }
+                    for out_decl in declared_outputs:
+                        if not isinstance(out_decl, dict):
+                            continue
+                        out_name = str(out_decl.get("name") or "").strip()
+                        if not out_name:
+                            continue
+                        if bool(out_decl.get("required", True)) and out_name not in wrapper_outputs:
+                            raise ContractMismatchError(
+                                f"Required component output '{out_name}' was not produced",
+                                code="COMPONENT_OUTPUT_REQUIRED_MISSING",
+                                details=_contract_details(
+                                    expected={"output": out_name, "required": True},
+                                    actual={"produced": False},
+                                ),
+                            )
 
                     output = NodeOutput(
                         status="succeeded",

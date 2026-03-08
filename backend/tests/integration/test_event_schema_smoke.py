@@ -32,6 +32,7 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "run_cancelled",
     "node_cancelled",
     "scheduler_cancelled",
+    "run_telemetry",
 }
 
 ALLOWED_CACHE_REASONS = {

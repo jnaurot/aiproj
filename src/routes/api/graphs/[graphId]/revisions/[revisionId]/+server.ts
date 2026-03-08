@@ -16,3 +16,20 @@ export async function GET({ params }) {
 	return json(await upstream.json());
 }
 
+export async function DELETE({ params }) {
+	const graphId = String(params.graphId ?? '').trim();
+	const revisionId = String(params.revisionId ?? '').trim();
+	if (!graphId) return new Response('graphId is required', { status: 400 });
+	if (!revisionId) return new Response('revisionId is required', { status: 400 });
+	const upstream = await fetch(
+		`${BACKEND}/graphs/${encodeURIComponent(graphId)}/revisions/${encodeURIComponent(revisionId)}`,
+		{
+			method: 'DELETE'
+		}
+	);
+	if (!upstream.ok) {
+		return new Response(await upstream.text(), { status: upstream.status });
+	}
+	return json(await upstream.json());
+}
+

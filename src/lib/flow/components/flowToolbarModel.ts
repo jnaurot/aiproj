@@ -3,12 +3,14 @@ import type { ToolbarMenuItem } from './toolbarMenu';
 export function buildProjectMenuItems(): ToolbarMenuItem[] {
 	return [
 		{ id: 'new_graph', label: 'New Graph' },
-		{ id: 'save_graph', label: 'Save' },
-		{ id: 'save_as_graph', label: 'Save As' },
+		{ id: 'save_graph', label: 'Save Graph' },
+		{ id: 'save_version', label: 'Save Version' },
+		{ id: 'save_as_graph', label: 'Save Graph As' },
+		{ id: 'load_graph', label: 'Load Graph' },
 		{ id: 'save_as_component', label: 'Save as Component' },
 		{ id: 'import_graph', label: 'Import' },
 		{ id: 'export_graph', label: 'Export' },
-		{ id: 'history_graph', label: 'History' },
+		{ id: 'delete_graph', label: 'Delete Graph', danger: true },
 		{ id: 'reset_graph', label: 'Reset', danger: true }
 	];
 }
@@ -36,23 +38,27 @@ export function buildRunSelectedMenuItems(hasSelectedNode: boolean): ToolbarMenu
 
 export type ProjectToolbarHandlers = {
 	newGraph: () => void;
-	save: () => void;
-	saveAs: () => void;
+	saveGraph: () => void;
+	saveVersion: () => void;
+	saveGraphAs: () => void;
+	loadGraph: () => void;
 	saveAsComponent: () => void;
 	importGraph: () => void;
 	exportGraph: () => void;
-	history: () => void;
+	deleteGraph: () => void;
 	reset: () => void;
 };
 
 export function dispatchProjectMenuAction(actionId: string, handlers: ProjectToolbarHandlers): void {
 	if (actionId === 'new_graph') handlers.newGraph();
-	if (actionId === 'save_graph') handlers.save();
-	if (actionId === 'save_as_graph') handlers.saveAs();
+	if (actionId === 'save_graph') handlers.saveGraph();
+	if (actionId === 'save_version') handlers.saveVersion();
+	if (actionId === 'save_as_graph') handlers.saveGraphAs();
+	if (actionId === 'load_graph') handlers.loadGraph();
 	if (actionId === 'save_as_component') handlers.saveAsComponent();
 	if (actionId === 'import_graph') handlers.importGraph();
 	if (actionId === 'export_graph') handlers.exportGraph();
-	if (actionId === 'history_graph') handlers.history();
+	if (actionId === 'delete_graph') handlers.deleteGraph();
 	if (actionId === 'reset_graph') handlers.reset();
 }
 

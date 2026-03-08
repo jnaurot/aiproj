@@ -15,17 +15,8 @@ export type ComponentRevisionSummary = {
 	checksum: string;
 };
 
-export type ComponentTypedField = {
-	name: string;
-	type: string;
-	nativeType?: string;
-	nullable?: boolean;
-};
-
-export type ComponentTypedSchema = {
-	type: string;
-	fields?: ComponentTypedField[];
-};
+export type ComponentTypedField = CanonicalComponentTypedField;
+export type ComponentTypedSchema = CanonicalComponentTypedSchema;
 
 export type ComponentApiPort = {
 	name: string;
@@ -50,6 +41,7 @@ export type ComponentRevisionDefinition = {
 
 export type ComponentRevisionDetail = {
 	schemaVersion: number;
+	componentSchemaVersion?: number;
 	componentId: string;
 	revisionId: string;
 	parentRevisionId?: string | null;
@@ -58,6 +50,7 @@ export type ComponentRevisionDetail = {
 	revisionSchemaVersion: number;
 	checksum: string;
 	definition: ComponentRevisionDefinition;
+	contractSnapshot?: ComponentApiContract;
 };
 
 export type CreateComponentRevisionRequest = {
@@ -76,12 +69,40 @@ export type CreateComponentRevisionRequest = {
 
 export type CreateComponentRevisionResponse = {
 	schemaVersion: number;
+	componentSchemaVersion?: number;
 	componentId: string;
 	revisionId: string;
 	parentRevisionId?: string | null;
 	createdAt: string;
 	message?: string | null;
 	checksum: string;
+	migrationNotes?: Array<Record<string, unknown>>;
+};
+
+export type ComponentValidationDiagnostic = {
+	code: string;
+	path: string;
+	message: string;
+	severity: 'error' | 'warning';
+};
+
+export type ValidateComponentRevisionRequest = {
+	graph: {
+		nodes: unknown[];
+		edges: unknown[];
+	};
+	api: ComponentApiContract;
+	configSchema?: Record<string, unknown>;
+	schemaVersion?: number;
+};
+
+export type ValidateComponentRevisionResponse = {
+	schemaVersion: number;
+	componentSchemaVersion: number;
+	ok: boolean;
+	diagnostics: ComponentValidationDiagnostic[];
+	migrationNotes: Array<Record<string, unknown>>;
+	normalizedDefinition: ComponentRevisionDefinition;
 };
 
 export type RenameComponentResponse = {
@@ -187,6 +208,26 @@ export async function createComponentRevision(
 	return (await res.json()) as CreateComponentRevisionResponse;
 }
 
+export async function validateComponentRevision(
+	req: ValidateComponentRevisionRequest
+): Promise<ValidateComponentRevisionResponse> {
+	const res = await fetch('/api/components/validate', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({
+			graph: req.graph,
+			api: req.api,
+			configSchema: req.configSchema ?? {},
+			schemaVersion: Number(req.schemaVersion ?? 1)
+		})
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`validateComponentRevision failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as ValidateComponentRevisionResponse;
+}
+
 export async function renameComponent(
 	componentId: string,
 	nextComponentId: string
@@ -238,3 +279,7 @@ export async function deleteComponentRevision(
 	}
 	return (await res.json()) as DeleteComponentRevisionResponse;
 }
+import type {
+	ComponentTypedField as CanonicalComponentTypedField,
+	ComponentTypedSchema as CanonicalComponentTypedSchema
+} from '$lib/flow/schema/component';

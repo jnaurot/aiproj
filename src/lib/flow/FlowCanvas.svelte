@@ -28,10 +28,13 @@
 	import {
 		exportGraphPackage,
 		importGraphPackage,
-		type GraphRevisionSummary
+		type GraphRevisionSummary,
+		type GraphCatalogItem
 	} from '$lib/flow/client/graphs';
+	import { getGraphDraftInfo } from '$lib/flow/store/persist';
 	import {
 		createComponentRevision,
+		validateComponentRevision,
 		type ComponentApiContract,
 		type ComponentCatalogItem,
 		type ComponentRevisionSummary
@@ -239,6 +242,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			: $graphStore.lastRunStatus === 'never_run'
 			? 'Never run'
 			: `${$graphStore.lastRunStatus === 'cancelled' ? 'Cancelled' : $graphStore.lastRunStatus.charAt(0).toUpperCase() + $graphStore.lastRunStatus.slice(1)}${$graphStore.freshness === 'stale' ? ` + Needs rerun${$graphStore.staleNodeCount > 0 ? ` (${$graphStore.staleNodeCount} stale)` : ''}` : ''}`;
+	$: graphHeaderStatusTone =
+		$graphStore.runStatus === 'running'
+			? 'running'
+			: $graphStore.lastRunStatus === 'succeeded'
+			? 'succeeded'
+			: $graphStore.lastRunStatus === 'failed'
+			? 'failed'
+			: $graphStore.lastRunStatus === 'cancelled'
+			? 'cancelled'
+			: 'never_run';
+	$: graphHeaderStatusClass = `status graphStatus graphStatus-${graphHeaderStatusTone}${$graphStore.freshness === 'stale' ? ' graphStatus-stale' : ''}`;
 	$: currentGraphSnapshotKey = JSON.stringify({
 		graphId: $graphStore.graphId,
 		nodes,
@@ -251,7 +265,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
 	$: commandItems = [
 		{ id: 'cmd_new_graph', label: 'New Graph', run: () => void newGraph() },
-		{ id: 'cmd_save', label: 'Save', run: () => void saveGraphRevision() },
+		{ id: 'cmd_save_graph', label: 'Save Graph', run: () => void saveGraphAction() },
+		{ id: 'cmd_save_version', label: 'Save Version', run: () => void saveGraphVersionAction() },
+		{ id: 'cmd_save_graph_as', label: 'Save Graph As', run: () => void saveGraphAsAction() },
+		{ id: 'cmd_load_graph', label: 'Load Graph', run: () => void loadGraphAction() },
+		{ id: 'cmd_delete_graph', label: 'Delete Graph', run: () => void deleteGraphAction() },
 		{ id: 'cmd_save_component', label: 'Save as Component', run: () => void saveGraphAsComponent() },
 		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
 		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
@@ -764,12 +782,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function onProjectMenuSelect(actionId: string) {
 		dispatchProjectMenuAction(actionId, {
 			newGraph,
-			save: () => void saveGraphRevision(),
-			saveAs: () => void saveAsGraphRevision(),
+			saveGraph: () => void saveGraphAction(),
+			saveVersion: () => void saveGraphVersionAction(),
+			saveGraphAs: () => void saveGraphAsAction(),
+			loadGraph: () => void loadGraphAction(),
 			saveAsComponent: () => void saveGraphAsComponent(),
 			importGraph: triggerImportGraphPackageV2,
 			exportGraph: () => void exportGraphPackageV2(),
-			history: () => void restoreGraphRevision(),
+			deleteGraph: () => void deleteGraphAction(),
 			reset: resetRunUi
 		});
 	}
@@ -973,6 +993,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			if (!proceed) return;
 		}
 		try {
+			const preflight = await validateComponentRevision({
+				schemaVersion: 1,
+				graph: {
+					nodes: structuredClone(currentNodes) as unknown[],
+					edges: structuredClone(currentEdges) as unknown[]
+				},
+				api,
+				configSchema: {}
+			});
+			if (!preflight.ok) {
+				const diagnostics = (Array.isArray(preflight.diagnostics) ? preflight.diagnostics : []) as Array<{
+					code?: string;
+					path?: string;
+					severity?: string;
+				}>;
+				const top = diagnostics
+					.filter((d) => String(d?.severity ?? 'error') === 'error')
+					.slice(0, 3)
+					.map((d) => `${String(d?.code ?? 'ERROR')}: ${String(d?.path ?? '')}`)
+					.join(' | ');
+				showToast(
+					`Save as Component blocked by preflight validation${top ? `: ${top}` : ''}`,
+					'error'
+				);
+				return;
+			}
 			const created = await createComponentRevision({
 				componentId,
 				revisionId: revisionIdInput || undefined,
@@ -991,62 +1037,174 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
-	async function saveGraphRevision() {
+	async function saveGraphAction() {
+		const graphNameInput = window.prompt('Graph name (optional)', '') ?? '';
 		const note = window.prompt('Save note (optional)', '') ?? '';
-		const result = await graphStore.saveGraphRevision(note);
+		const graphName = graphNameInput.trim() || undefined;
+		const result = await graphStore.saveGraph(note, { graphName });
 		if (!(result as any)?.ok) {
-			showToast(`Save failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
+			showToast(`Save Graph failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
-		showToast(`Saved revision ${(result as any).revisionId.slice(0, 10)}`, 'info');
+		showToast(`Saved graph revision ${(result as any).revisionId.slice(0, 10)}`, 'info');
 	}
 
-	async function saveAsGraphRevision() {
-		const suggested = `${$graphStore.graphId}_copy`;
-		const nextGraphId = (window.prompt('New graph id', suggested) ?? '').trim();
-		if (!nextGraphId) return;
-		const note = window.prompt('Save note (optional)', '') ?? '';
-		const result = await graphStore.saveAsGraphRevision(nextGraphId, note);
+	async function saveGraphVersionAction() {
+		const versionName = (window.prompt('Version name', '') ?? '').trim();
+		if (!versionName) return;
+		const note = window.prompt('Version note (optional)', '') ?? '';
+		const result = await graphStore.saveGraphVersion(versionName, note);
 		if (!(result as any)?.ok) {
-			showToast(`Save As failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
+			showToast(`Save Version failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
-		lastSavedGraphSnapshotKey = null;
-		showToast(`Saved graph ${nextGraphId}`, 'info');
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		showToast(`Saved version ${(result as any).versionName ?? versionName}`, 'info');
 	}
 
-	async function restoreGraphRevision() {
-		const history = await graphStore.listGraphRevisionHistory(20, 0);
-		if (!(history as any)?.ok) {
-			showToast(`History load failed: ${(history as any)?.error ?? (history as any)?.reason ?? 'unknown'}`, 'error');
+	async function saveGraphAsAction() {
+		const graphName = (window.prompt('New graph name', '') ?? '').trim();
+		if (!graphName) return;
+		const versionName = (window.prompt('Initial version name (optional)', '') ?? '').trim() || undefined;
+		const note = window.prompt('Save note (optional)', '') ?? '';
+		const result = await graphStore.saveGraphAs(graphName, note, versionName);
+		if (!(result as any)?.ok) {
+			showToast(`Save Graph As failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
-		const revisions = ((history as any).revisions ?? []) as GraphRevisionSummary[];
-		if (!Array.isArray(revisions) || revisions.length === 0) {
-			showToast('No saved history for this graph yet.', 'warn');
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		showToast(`Saved new graph ${graphName}`, 'info');
+	}
+
+	function formatGraphLine(index: number, graph: GraphCatalogItem): string {
+		const name = String(graph.graphName ?? '').trim() || '(unnamed)';
+		const updated = String(graph.updatedAt ?? '').replace('T', ' ').slice(0, 19);
+		return `${index + 1}. ${name}  [${graph.graphId.slice(0, 10)}]${updated ? `  ${updated}` : ''}`;
+	}
+
+	async function loadGraphAction() {
+		const catalog = await graphStore.listGraphs(200, 0);
+		if (!(catalog as any)?.ok) {
+			showToast(`Load Graph failed: ${(catalog as any)?.error ?? (catalog as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
-		const lines = revisions.map((r, i) => formatRevisionLine(i, r)).join('\n');
-		const raw = window.prompt(`Restore revision:\n${lines}\n\nEnter number (1-${revisions.length})`, '1');
-		if (!raw) return;
-		const pick = Number(raw);
-		if (!Number.isInteger(pick) || pick < 1 || pick > revisions.length) {
+		const graphs = (((catalog as any)?.graphs ?? []) as GraphCatalogItem[]).filter((g) =>
+			String(g.graphId ?? '').trim().length > 0
+		);
+		if (graphs.length === 0) {
+			showToast('No saved graphs found.', 'warn');
+			return;
+		}
+		const graphLines = graphs.map((g, i) => formatGraphLine(i, g)).join('\n');
+		const graphRaw = window.prompt(`Load graph:\n${graphLines}\n\nEnter number (1-${graphs.length})`, '1');
+		if (!graphRaw) return;
+		const graphPick = Number(graphRaw);
+		if (!Number.isInteger(graphPick) || graphPick < 1 || graphPick > graphs.length) {
+			showToast('Invalid graph selection.', 'warn');
+			return;
+		}
+		const pickedGraph = graphs[graphPick - 1];
+		const revisionsResult = await graphStore.listGraphRevisionHistoryForGraph(String(pickedGraph.graphId), 50, 0);
+		if (!(revisionsResult as any)?.ok) {
+			showToast(
+				`Load Graph failed: ${(revisionsResult as any)?.error ?? (revisionsResult as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return;
+		}
+		const revisions = (((revisionsResult as any)?.revisions ?? []) as GraphRevisionSummary[]).filter((r) =>
+			String(r.revisionId ?? '').trim().length > 0
+		);
+		if (revisions.length === 0) {
+			showToast('No revisions found for selected graph.', 'warn');
+			return;
+		}
+		const revisionLines = revisions.map((r, i) => formatRevisionLine(i, r)).join('\n');
+		const revisionRaw = window.prompt(
+			`Load revision:\n${revisionLines}\n\nEnter number (1-${revisions.length})`,
+			'1'
+		);
+		if (!revisionRaw) return;
+		const revisionPick = Number(revisionRaw);
+		if (!Number.isInteger(revisionPick) || revisionPick < 1 || revisionPick > revisions.length) {
 			showToast('Invalid revision selection.', 'warn');
 			return;
 		}
-		const selected = revisions[pick - 1];
-		const confirmRestore = window.confirm(
-			`Restore revision ${selected.revisionId.slice(0, 10)}? Current unsaved graph edits will be replaced.`
-		);
-		if (!confirmRestore) return;
-		const restored = await graphStore.restoreGraphRevision(selected.revisionId);
-		if (!(restored as any)?.ok) {
-			showToast(`Restore failed: ${(restored as any)?.error ?? (restored as any)?.reason ?? 'unknown'}`, 'error');
+		const selectedRevision = revisions[revisionPick - 1];
+		const loaded = await graphStore.loadGraphRevision(String(pickedGraph.graphId), String(selectedRevision.revisionId));
+		if (!(loaded as any)?.ok) {
+			showToast(`Load Graph failed: ${(loaded as any)?.error ?? (loaded as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
-		lastSavedGraphSnapshotKey = null;
-		showToast(`Restored revision ${selected.revisionId.slice(0, 10)}`, 'info');
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		showToast('Loaded graph revision.', 'info');
+	}
+
+	async function deleteGraphAction() {
+		const graphId = String($graphStore.graphId ?? '').trim();
+		if (!graphId) {
+			showToast('Delete Graph failed: missing graph id.', 'error');
+			return;
+		}
+		const deleteAll = window.confirm(
+			'Delete entire graph and all revisions?\n\nSelect "OK" to delete all revisions.\nSelect "Cancel" to choose deleting only the latest revision.'
+		);
+		if (deleteAll) {
+			const confirmAll = window.confirm(
+				`Confirm delete graph ${graphId} and all its revisions. This cannot be undone.`
+			);
+			if (!confirmAll) return;
+			const result = await graphStore.deleteGraph(graphId);
+			if (!(result as any)?.ok) {
+				showToast(
+					`Delete Graph failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`,
+					'error'
+				);
+				return;
+			}
+			newGraph();
+			showToast('Graph deleted (all revisions).', 'info');
+			return;
+		}
+
+		const history = await graphStore.listGraphRevisionHistoryForGraph(graphId, 1, 0);
+		if (!(history as any)?.ok) {
+			showToast(
+				`Delete revision failed: ${(history as any)?.error ?? (history as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return;
+		}
+		const latest = (((history as any)?.revisions ?? []) as GraphRevisionSummary[])[0];
+		if (!latest?.revisionId) {
+			showToast('No revisions found to delete.', 'warn');
+			return;
+		}
+		const confirmLatest = window.confirm(
+			`Delete latest revision ${String(latest.revisionId).slice(0, 10)} for this graph?`
+		);
+		if (!confirmLatest) return;
+		const result = await graphStore.deleteGraphRevision(graphId, String(latest.revisionId));
+		if (!(result as any)?.ok) {
+			showToast(
+				`Delete revision failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`,
+				'error'
+			);
+			return;
+		}
+		if ((result as any)?.deleted?.graphDeleted) {
+			newGraph();
+			showToast('Latest revision deleted. Graph had no revisions left and was removed.', 'info');
+			return;
+		}
+		const remaining = await graphStore.hydrateLatestGraphFromBackend();
+		if (!(remaining as any)?.ok) {
+			showToast('Revision deleted, but reload failed; start new graph or load manually.', 'warn');
+			return;
+		}
+		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		showToast('Latest revision deleted and graph reloaded to previous revision.', 'info');
 	}
 
 	async function exportGraphPackageV2() {
@@ -1167,15 +1325,26 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		} catch (error) {
 			console.warn('Failed to load global cache config', error);
 		}
-		try {
-			const hydrated = await graphStore.hydrateLatestGraphFromBackend();
-			if ((hydrated as any)?.ok) {
-				console.log(
-					`[graph-v2-read] hydrated graphId=${(hydrated as any).graphId} revisionId=${(hydrated as any).revisionId}`
-				);
+		const draftInfo = getGraphDraftInfo();
+		const hasDraft = Boolean(String(draftInfo.updatedAt ?? '').trim());
+		const recoverDraft =
+			hasDraft &&
+			window.confirm(
+				`Recover local draft${draftInfo.updatedAt ? ` from ${draftInfo.updatedAt}` : ''}?\n\n` +
+					`Select "Cancel" to load latest saved graph from backend instead.`
+			);
+		if (!recoverDraft) {
+			try {
+				const hydrated = await graphStore.hydrateLatestGraphFromBackend();
+				if ((hydrated as any)?.ok) {
+					graphStore.clearDraft();
+					console.log(
+						`[graph-v2-read] hydrated graphId=${(hydrated as any).graphId} revisionId=${(hydrated as any).revisionId}`
+					);
+				}
+			} catch (error) {
+				console.warn('Failed to hydrate graph from backend revision store', error);
 			}
-		} catch (error) {
-			console.warn('Failed to hydrate graph from backend revision store', error);
 		}
 		await tick();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
@@ -1211,7 +1380,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			</div>
 
 			<div class="toolbarZone statusIndicators">
-				<span class="status graphStatus"
+				<span class={graphHeaderStatusClass}
 					>Graph: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span
 				>
 				<label class="cacheToggle">
@@ -1746,6 +1915,35 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		opacity: 0.68;
 		font-size: 13px;
 		white-space: nowrap;
+	}
+
+	.graphStatus-running {
+		color: var(--color-status-info);
+		opacity: 0.98;
+	}
+
+	.graphStatus-succeeded {
+		color: var(--color-status-success);
+		opacity: 0.98;
+	}
+
+	.graphStatus-failed {
+		color: var(--color-status-danger);
+		opacity: 0.98;
+	}
+
+	.graphStatus-cancelled {
+		color: var(--color-status-warning);
+		opacity: 0.98;
+	}
+
+	.graphStatus-never_run {
+		color: var(--color-status-muted);
+		opacity: 0.85;
+	}
+
+	.graphStatus-stale {
+		color: var(--color-status-warning);
 	}
 
 	.cacheToggle {

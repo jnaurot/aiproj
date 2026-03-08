@@ -32,39 +32,6 @@ def _alpha_input_label(idx: int) -> str:
     return f"Input {out}"
 
 
-def _write_graph_revision_v2(
-    request: Request,
-    *,
-    graph_id: str,
-    graph: Dict[str, Any],
-    message: str,
-) -> Optional[str]:
-    """
-    V2 graph-revision write-through hook.
-    Best effort only; run endpoint behavior must not fail because of revision-store issues.
-    """
-    store = getattr(request.app.state, "graph_revisions", None)
-    if store is None:
-        return None
-    try:
-        revision = store.create_revision(
-            graph_id=graph_id,
-            graph=graph,
-            message=message,
-            schema_version=1,
-        )
-        print(
-            "[graph-v2-write] graphId=%s revisionId=%s message=%s"
-            % (graph_id, revision.revision_id, message)
-        )
-        return str(revision.revision_id)
-    except Exception as ex:
-        # Best effort only; never fail existing endpoint behavior.
-        print(
-            "[graph-v2-write] skipped graphId=%s reason=%s"
-            % (graph_id, repr(ex))
-        )
-        return None
 
 class RunRequest(BaseModel):
     graphId: str
@@ -187,6 +154,15 @@ async def get_cache_config(request: Request):
     return {"schemaVersion": 1, "enabled": enabled, "mode": mode}
 
 
+@router.get("/diagnostics")
+async def get_run_diagnostics(request: Request):
+    rt = request.app.state.runtime
+    get_diag = getattr(rt, "get_diagnostics", None)
+    if not callable(get_diag):
+        raise HTTPException(404, "diagnostics unavailable")
+    return get_diag()
+
+
 @router.put("/cache/config")
 async def set_cache_config(req: CacheConfigRequest, request: Request):
     rt = request.app.state.runtime
@@ -216,12 +192,6 @@ async def create_run(req: RunRequest, request: Request):
         raise HTTPException(400, "runMode='selected_only' requires runFrom")
 
     graph_id = str(req.graphId)
-    _write_graph_revision_v2(
-        request,
-        graph_id=graph_id,
-        graph=req.graph,
-        message="create_run",
-    )
     await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
     
     return RunCreated(schemaVersion=1, runId=run_id, graphId=graph_id)
@@ -259,13 +229,6 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
     if not h:
         raise HTTPException(404, "Unknown runId")
     graph_id = str(getattr(h, "graph_id", "") or "").strip()
-    if graph_id:
-        _write_graph_revision_v2(
-            request,
-            graph_id=graph_id,
-            graph=req.graph,
-            message=f"accept_params:{node_id}",
-        )
     try:
         out = await rt.accept_node_params(
             run_id=run_id,
@@ -332,6 +295,7 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
         input_refs=[],
         determinism_env=determinism_env,
         execution_version="v1",
+        node_impl_version="SOURCE@1",
     )
 
     store = request.app.state.runtime.artifact_store

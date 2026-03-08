@@ -21,6 +21,11 @@
 	--theme-danger-bg: rgba(239, 68, 68, 0.12);
 	--theme-danger-border: rgba(239, 68, 68, 0.55);
 	--theme-danger-text: #7f1d1d;
+	--theme-status-success: #15803d;
+	--theme-status-danger: #b91c1c;
+	--theme-status-warning: #a16207;
+	--theme-status-info: #1d4ed8;
+	--theme-status-muted: #5b6677;
 }
 
 :root[data-theme='dark'] {
@@ -44,6 +49,11 @@
 	--theme-danger-bg: rgba(239, 68, 68, 0.12);
 	--theme-danger-border: rgba(239, 68, 68, 0.55);
 	--theme-danger-text: #fecaca;
+	--theme-status-success: #57d38c;
+	--theme-status-danger: #ff7b7b;
+	--theme-status-warning: #f2cc60;
+	--theme-status-info: #8db4ff;
+	--theme-status-muted: #b7bfcd;
 }
 
 /* Fallback only when explicit data-theme is not set. */
@@ -69,5 +79,10 @@
 		--theme-danger-bg: rgba(239, 68, 68, 0.12);
 		--theme-danger-border: rgba(239, 68, 68, 0.55);
 		--theme-danger-text: #fecaca;
+		--theme-status-success: #57d38c;
+		--theme-status-danger: #ff7b7b;
+		--theme-status-warning: #f2cc60;
+		--theme-status-info: #8db4ff;
+		--theme-status-muted: #b7bfcd;
 	}
 }

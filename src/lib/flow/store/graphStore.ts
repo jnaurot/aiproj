@@ -17,12 +17,15 @@ import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults
 import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
-import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
+import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph, clearGraphDraft } from './persist';
 import {
 	getLatestGraphRevision,
 	getGraphRevision,
 	listGraphRevisions,
-	createGraphRevision
+	createGraphRevision,
+	listGraphs as listGraphsClient,
+	deleteGraph as deleteGraphClient,
+	deleteGraphRevision as deleteGraphRevisionClient
 } from '$lib/flow/client/graphs';
 import {
 	getComponentRevision,
@@ -34,7 +37,14 @@ import {
 	deleteComponentRevision,
 	type ComponentApiContract
 } from '$lib/flow/client/components';
-import { acceptNodeParams, createRun, getRun, resolveSourceNode, streamRunEvents } from '$lib/flow/client/runs';
+import {
+	acceptNodeParams,
+	createEventBatcher,
+	createRun,
+	getRun,
+	resolveSourceNode,
+	streamRunEvents
+} from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
 import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
@@ -44,6 +54,7 @@ import {
 	computePlannedNodeSet,
 	displayStatusFromBinding,
 	getStaleFlipNodeIds,
+	isBindingStale,
 	mergeBindingsSticky,
 	type ActiveRunMode,
 	type GraphFreshness as ScopeFreshness
@@ -2514,13 +2525,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			set(next);
 		},
 
+		clearDraft() {
+			clearGraphDraft();
+		},
+
 		loadGraphDocument(graph: { nodes: unknown[]; edges: unknown[] }, graphIdOverride?: string | null) {
 			const applied = applyGraphDocument(graph, graphIdOverride);
 			if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
 			return { ok: true };
 		},
 
-		async saveGraphRevision(message?: string) {
+		async saveGraph(message?: string, opts?: { graphName?: string }) {
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
@@ -2528,6 +2543,35 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const created = await createGraphRevision({
 					graphId,
+					graphName: String(opts?.graphName ?? '').trim() || undefined,
+					revisionKind: 'save_graph',
+					message: String(message ?? '').trim() || undefined,
+					graph
+				});
+				return {
+					ok: true,
+					graphId: String(created.graphId),
+					graphName: created.graphName ?? null,
+					revisionId: String(created.revisionId),
+					createdAt: String(created.createdAt)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'save_failed' as const, error: String(error) };
+			}
+		},
+
+		async saveGraphVersion(versionName: string, message?: string) {
+			const current = get({ subscribe } as any) as GraphState;
+			const graphId = String(current.graphId ?? '').trim();
+			const nextVersionName = String(versionName ?? '').trim();
+			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			if (!nextVersionName) return { ok: false, reason: 'missing_version_name' as const };
+			const graph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			try {
+				const created = await createGraphRevision({
+					graphId,
+					versionName: nextVersionName,
+					revisionKind: 'save_version',
 					message: String(message ?? '').trim() || undefined,
 					graph
 				});
@@ -2535,11 +2579,47 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					ok: true,
 					graphId: String(created.graphId),
 					revisionId: String(created.revisionId),
+					versionName: created.versionName ?? null,
 					createdAt: String(created.createdAt)
 				};
 			} catch (error) {
 				return { ok: false, reason: 'save_failed' as const, error: String(error) };
 			}
+		},
+
+		async saveGraphAs(graphName: string, message?: string, versionName?: string) {
+			const nextGraphName = String(graphName ?? '').trim();
+			if (!nextGraphName) return { ok: false, reason: 'missing_graph_name' as const };
+			const current = get({ subscribe } as any) as GraphState;
+			const graph = stripToDTO(current.nodes as any, current.edges as any, current.graphId);
+			try {
+				const created = await createGraphRevision({
+					graphName: nextGraphName,
+					versionName: String(versionName ?? '').trim() || undefined,
+					revisionKind: 'save_graph_as',
+					message: String(message ?? '').trim() || undefined,
+					graph
+				});
+				update((s) => {
+					const next = { ...s, graphId: String(created.graphId) };
+					persist(next);
+					return next;
+				});
+				return {
+					ok: true,
+					graphId: String(created.graphId),
+					graphName: created.graphName ?? null,
+					revisionId: String(created.revisionId),
+					createdAt: String(created.createdAt)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'save_failed' as const, error: String(error) };
+			}
+		},
+
+		// Backward-compatible aliases while UI migrates.
+		async saveGraphRevision(message?: string) {
+			return await this.saveGraph(message);
 		},
 
 		async saveAsGraphRevision(nextGraphId: string, message?: string) {
@@ -2550,6 +2630,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const created = await createGraphRevision({
 					graphId: targetGraphId,
+					revisionKind: 'save_graph_as',
 					message: String(message ?? '').trim() || undefined,
 					graph
 				});
@@ -2569,6 +2650,18 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
+		async listGraphs(limit = 50, offset = 0) {
+			try {
+				const listed = await listGraphsClient(limit, offset);
+				return {
+					ok: true,
+					graphs: Array.isArray(listed.graphs) ? listed.graphs : []
+				};
+			} catch (error) {
+				return { ok: false, reason: 'list_failed' as const, error: String(error) };
+			}
+		},
+
 		async listGraphRevisionHistory(limit = 30, offset = 0) {
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
@@ -2578,6 +2671,21 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return {
 					ok: true,
 					graphId,
+					revisions: Array.isArray(listed.revisions) ? listed.revisions : []
+				};
+			} catch (error) {
+				return { ok: false, reason: 'list_failed' as const, error: String(error) };
+			}
+		},
+
+		async listGraphRevisionHistoryForGraph(graphId: string, limit = 30, offset = 0) {
+			const gid = String(graphId ?? '').trim();
+			if (!gid) return { ok: false, reason: 'missing_graph_id' as const };
+			try {
+				const listed = await listGraphRevisions(gid, limit, offset);
+				return {
+					ok: true,
+					graphId: gid,
 					revisions: Array.isArray(listed.revisions) ? listed.revisions : []
 				};
 			} catch (error) {
@@ -2603,6 +2711,50 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				};
 			} catch (error) {
 				return { ok: false, reason: 'restore_failed' as const, error: String(error) };
+			}
+		},
+
+		async loadGraphRevision(graphId: string, revisionId: string) {
+			const gid = String(graphId ?? '').trim();
+			const rid = String(revisionId ?? '').trim();
+			if (!gid) return { ok: false, reason: 'missing_graph_id' as const };
+			if (!rid) return { ok: false, reason: 'missing_revision_id' as const };
+			try {
+				const restored = await getGraphRevision(gid, rid);
+				const graph = (restored?.graph ?? {}) as any;
+				const applied = applyGraphDocument(graph, restored.graphId);
+				if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
+				return {
+					ok: true,
+					graphId: String(restored.graphId),
+					revisionId: String(restored.revisionId)
+				};
+			} catch (error) {
+				return { ok: false, reason: 'restore_failed' as const, error: String(error) };
+			}
+		},
+
+		async deleteGraph(graphId: string) {
+			const gid = String(graphId ?? '').trim();
+			if (!gid) return { ok: false, reason: 'missing_graph_id' as const };
+			try {
+				const deleted = await deleteGraphClient(gid);
+				return { ok: true, deleted };
+			} catch (error) {
+				return { ok: false, reason: 'delete_failed' as const, error: String(error) };
+			}
+		},
+
+		async deleteGraphRevision(graphId: string, revisionId: string) {
+			const gid = String(graphId ?? '').trim();
+			const rid = String(revisionId ?? '').trim();
+			if (!gid) return { ok: false, reason: 'missing_graph_id' as const };
+			if (!rid) return { ok: false, reason: 'missing_revision_id' as const };
+			try {
+				const deleted = await deleteGraphRevisionClient(gid, rid);
+				return { ok: true, deleted };
+			} catch (error) {
+				return { ok: false, reason: 'delete_failed' as const, error: String(error) };
 			}
 		},
 
@@ -2952,11 +3104,18 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			// snapshot graph DTO
 			const s1 = get({ subscribe } as any) as GraphState;
 			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
+			const dirtyNodeIds =
+				effectiveRunMode === 'from_start'
+					? Object.entries(s1.nodeBindings ?? {})
+							.filter(([, binding]) => isBindingStale(binding))
+							.map(([nodeId]) => nodeId)
+					: [];
 			const payload = buildRunCreateRequest(
 				{ version: 1, nodes: s1.nodes, edges: s1.edges },
 				s1.graphId,
 				runFrom,
-				effectiveRunMode
+				effectiveRunMode,
+				dirtyNodeIds
 			);
 			const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 
@@ -2995,17 +3154,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 
 			await new Promise<void>((resolve) => {
-				const sub = streamRunEvents(
-					runId,
-					(evt: KnownRunEvent) => {
+				let subHandle: { close: () => void } | null = null;
+				let settled = false;
+				const settle = () => {
+					if (settled) return;
+					settled = true;
+					resolve();
+				};
+				const applyEventBatch = (events: KnownRunEvent[]) => {
+					for (const evt of events) {
 						const cur = get({ subscribe } as any) as GraphState;
 						const evtGraphId = (evt as any)?.graphId;
-						if (
-							typeof evtGraphId === 'string' &&
-							evtGraphId &&
-							evtGraphId !== cur.graphId
-						) {
-							return;
+						if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== cur.graphId) {
+							continue;
 						}
 						const auditCtx: AuditContext =
 							evt.type === 'run_started'
@@ -3014,7 +3175,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 										evt,
 										expectedDirtyTransition: true,
 										allowedNodeIds: new Set<string>(
-											Array.isArray((evt as any).plannedNodeIds) ? ((evt as any).plannedNodeIds as string[]) : []
+											Array.isArray((evt as any).plannedNodeIds)
+												? ((evt as any).plannedNodeIds as string[])
+												: []
 										)
 									}
 								: { source: 'event', evt };
@@ -3030,16 +3193,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						}, auditCtx);
 
 						if (evt.type === 'run_finished') {
-							const cur = get({ subscribe } as any) as GraphState;
-							persist(cur);
+							const current = get({ subscribe } as any) as GraphState;
+							persist(current);
 							void getRun(runId)
 								.then((snap) => {
-									const current = get({ subscribe } as any) as GraphState;
-									if (
-										typeof snap.graphId === 'string' &&
-										snap.graphId &&
-										snap.graphId !== current.graphId
-									) {
+									const latest = get({ subscribe } as any) as GraphState;
+									if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== latest.graphId) {
 										return;
 									}
 									update((s) => hydrateFromRunSnapshot(s, snap), {
@@ -3047,16 +3206,38 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 										snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
 									});
 								})
-								.catch(() => { });
-							sub.close();
-							resolve();
+								.catch(() => {});
+							subHandle?.close();
+							settle();
 						}
+					}
+				};
+				const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
+					maxBatchSize: 48,
+					maxDelayMs: 16
+				});
+				subHandle = streamRunEvents(
+					runId,
+					(evt: KnownRunEvent) => {
+						batcher.push(evt);
 					},
 					() => {
+						const cur = get({ subscribe } as any) as GraphState;
+						const isTerminalForThisRun =
+							cur.activeRunId !== runId ||
+							cur.runStatus === 'succeeded' ||
+							cur.runStatus === 'failed' ||
+							cur.runStatus === 'canceled' ||
+							cur.runStatus === 'cancelled';
+						if (isTerminalForThisRun) {
+							settle();
+							return;
+						}
+						batcher.flush();
 						update((s) =>
 							withGraphMeta(logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'))
 						);
-						resolve();
+						settle();
 					}
 				);
 			});

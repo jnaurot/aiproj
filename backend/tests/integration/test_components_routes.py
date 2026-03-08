@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -81,6 +83,8 @@ def test_component_routes_create_list_get():
         assert detail["componentId"] == component_id
         assert detail["revisionId"] == revision_id
         assert detail["definition"]["graph"]["nodes"][0]["data"]["label"] == "v1"
+        assert isinstance(detail["definition"].get("contractSnapshot"), dict)
+        assert detail["contractSnapshot"]["outputs"][0]["name"] == "out_data"
 
 
 def test_component_routes_reject_invalid_payload():
@@ -94,4 +98,97 @@ def test_component_routes_reject_invalid_payload():
             },
         )
         assert res.status_code == 422, res.text
+
+
+def test_component_routes_validate_endpoint():
+    with TestClient(app) as client:
+        ok = client.post(
+            "/components/validate",
+            json=_component_payload("validate-ok"),
+        )
+        assert ok.status_code == 200, ok.text
+        body = ok.json()
+        assert body["ok"] is True
+        assert body["componentSchemaVersion"] == 1
+        assert isinstance(body.get("normalizedDefinition"), dict)
+        assert body["normalizedDefinition"]["api"]["outputs"][0]["typedSchema"]["type"] == "json"
+
+        bad = client.post(
+            "/components/validate",
+            json={
+                "graph": {"version": 1, "nodes": [], "edges": []},
+                "api": {
+                    "inputs": [],
+                    "outputs": [
+                        {"name": "x", "portType": "bogus", "typedSchema": {"type": "oops", "fields": []}}
+                    ],
+                },
+            },
+        )
+        assert bad.status_code == 200, bad.text
+        bad_body = bad.json()
+        assert bad_body["ok"] is False
+        codes = {d.get("code") for d in bad_body.get("diagnostics", [])}
+        assert "INVALID_PORT_TYPE" in codes
+        assert "INVALID_TYPED_SCHEMA_TYPE" in codes
+
+
+def test_component_routes_history_multiple_revisions():
+    component_id = f"cmp_history_{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        created_v1 = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "v1",
+                **_component_payload("v1"),
+            },
+        )
+        assert created_v1.status_code == 200, created_v1.text
+        v1_id = created_v1.json()["revisionId"]
+
+        created_v2 = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "v2",
+                **_component_payload("v2"),
+            },
+        )
+        assert created_v2.status_code == 200, created_v2.text
+        v2_id = created_v2.json()["revisionId"]
+
+        created_v3 = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "v3",
+                **_component_payload("v3"),
+            },
+        )
+        assert created_v3.status_code == 200, created_v3.text
+        v3_id = created_v3.json()["revisionId"]
+
+        listed_components = client.get("/components", params={"limit": 200, "offset": 0})
+        assert listed_components.status_code == 200, listed_components.text
+        components = listed_components.json()["components"]
+        row = next((c for c in components if c["componentId"] == component_id), None)
+        assert row is not None
+        assert row["latestRevisionId"] == v3_id
+
+        listed_revisions = client.get(f"/components/{component_id}/revisions", params={"limit": 10, "offset": 0})
+        assert listed_revisions.status_code == 200, listed_revisions.text
+        revisions = listed_revisions.json()["revisions"]
+        assert [r["revisionId"] for r in revisions[:3]] == [v3_id, v2_id, v1_id]
+        assert revisions[0]["parentRevisionId"] == v2_id
+        assert revisions[1]["parentRevisionId"] == v1_id
+
+        paged = client.get(f"/components/{component_id}/revisions", params={"limit": 1, "offset": 1})
+        assert paged.status_code == 200, paged.text
+        assert len(paged.json()["revisions"]) == 1
+        assert paged.json()["revisions"][0]["revisionId"] == v2_id
+
+        detail_v2 = client.get(f"/components/{component_id}/revisions/{v2_id}")
+        assert detail_v2.status_code == 200, detail_v2.text
+        assert detail_v2.json()["definition"]["graph"]["nodes"][0]["data"]["label"] == "v2"
 

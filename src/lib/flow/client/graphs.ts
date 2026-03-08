@@ -10,10 +10,13 @@ export type GraphFeatureFlags = {
 export type LatestGraphRevisionResponse = {
 	schemaVersion: number;
 	graphId: string;
+	graphName?: string | null;
 	revisionId: string;
 	parentRevisionId?: string | null;
 	createdAt: string;
 	message?: string | null;
+	versionName?: string | null;
+	revisionKind?: string | null;
 	revisionSchemaVersion: number;
 	checksum: string;
 	graph: {
@@ -30,8 +33,23 @@ export type GraphRevisionSummary = {
 	parentRevisionId?: string | null;
 	createdAt: string;
 	message?: string | null;
+	versionName?: string | null;
+	revisionKind?: string | null;
 	schemaVersion: number;
 	checksum: string;
+};
+
+export type GraphCatalogItem = {
+	graphId: string;
+	graphName?: string | null;
+	createdAt: string;
+	updatedAt: string;
+	latestRevisionId?: string | null;
+};
+
+export type ListGraphsResponse = {
+	schemaVersion: number;
+	graphs: GraphCatalogItem[];
 };
 
 export type ListGraphRevisionsResponse = {
@@ -42,6 +60,9 @@ export type ListGraphRevisionsResponse = {
 
 export type CreateGraphRevisionRequest = {
 	graphId?: string;
+	graphName?: string;
+	versionName?: string;
+	revisionKind?: 'save_graph' | 'save_version' | 'save_graph_as' | 'import';
 	revisionId?: string;
 	parentRevisionId?: string;
 	message?: string;
@@ -57,10 +78,13 @@ export type CreateGraphRevisionRequest = {
 export type CreateGraphRevisionResponse = {
 	schemaVersion: number;
 	graphId: string;
+	graphName?: string | null;
 	revisionId: string;
 	parentRevisionId?: string | null;
 	createdAt: string;
 	message?: string | null;
+	versionName?: string | null;
+	revisionKind?: string | null;
 	checksum: string;
 };
 
@@ -131,6 +155,22 @@ export type ImportGraphPackageResponse = {
 	};
 };
 
+export type DeleteGraphResponse = {
+	schemaVersion: number;
+	deleted: boolean;
+	graphId: string;
+	deletedRevisionCount?: number;
+};
+
+export type DeleteGraphRevisionResponse = {
+	schemaVersion: number;
+	deleted: boolean;
+	graphDeleted?: boolean;
+	graphId: string;
+	revisionId: string;
+	latestRevisionId?: string | null;
+};
+
 async function _fetchJson<T>(url: string): Promise<T> {
 	const res = await fetch(url);
 	if (!res.ok) {
@@ -142,6 +182,11 @@ async function _fetchJson<T>(url: string): Promise<T> {
 
 export async function getGraphFeatureFlags(): Promise<GraphFeatureFlags> {
 	return await _fetchJson<GraphFeatureFlags>('/api/graphs/feature-flags');
+}
+
+export async function listGraphs(limit = 50, offset = 0): Promise<ListGraphsResponse> {
+	const query = `limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
+	return await _fetchJson<ListGraphsResponse>(`/api/graphs?${query}`);
 }
 
 export async function getLatestGraphRevision(graphId: string): Promise<LatestGraphRevisionResponse> {
@@ -219,4 +264,38 @@ export async function importGraphPackage(
 		throw new Error(`importGraphPackage failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as ImportGraphPackageResponse;
+}
+
+export async function deleteGraph(graphId: string): Promise<DeleteGraphResponse> {
+	const gid = String(graphId ?? '').trim();
+	if (!gid) throw new Error('graphId is required');
+	const res = await fetch(`/api/graphs/${encodeURIComponent(gid)}`, {
+		method: 'DELETE'
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`deleteGraph failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as DeleteGraphResponse;
+}
+
+export async function deleteGraphRevision(
+	graphId: string,
+	revisionId: string
+): Promise<DeleteGraphRevisionResponse> {
+	const gid = String(graphId ?? '').trim();
+	const rid = String(revisionId ?? '').trim();
+	if (!gid) throw new Error('graphId is required');
+	if (!rid) throw new Error('revisionId is required');
+	const res = await fetch(
+		`/api/graphs/${encodeURIComponent(gid)}/revisions/${encodeURIComponent(rid)}`,
+		{
+			method: 'DELETE'
+		}
+	);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`deleteGraphRevision failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as DeleteGraphRevisionResponse;
 }

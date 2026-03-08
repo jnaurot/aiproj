@@ -142,19 +142,31 @@ export function buildRunCreateRequest(
 	graph: { version: number; nodes: unknown[]; edges: unknown[] },
 	graphId: string,
 	runFrom: string | null,
-	runMode?: ActiveRunMode
+	runMode?: ActiveRunMode,
+	dirtyNodeIds?: string[]
 ): {
 	graphId: string;
-	graph: { version: number; nodes: unknown[]; edges: unknown[] };
+	graph: { version: number; nodes: unknown[]; edges: unknown[]; __executionHints?: { dirtyNodeIds: string[] } };
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
 } {
+	const sanitizedDirty = Array.isArray(dirtyNodeIds)
+		? Array.from(new Set(dirtyNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
+		: [];
+	const payloadGraph =
+		sanitizedDirty.length > 0
+			? {
+					...graph,
+					__executionHints: { dirtyNodeIds: sanitizedDirty }
+				}
+			: graph;
+
 	if (runFrom === null || runMode === 'from_start' || !runMode) {
-		return { graphId, graph };
+		return { graphId, graph: payloadGraph };
 	}
 	return {
 		graphId,
-		graph,
+		graph: payloadGraph,
 		runFrom,
 		runMode
 	};

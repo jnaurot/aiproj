@@ -40,6 +40,7 @@ class RunHandle:
     node_bindings: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # node_id -> ui binding state
     active_run_planned: set[str] = field(default_factory=set)
     graph: Optional[Dict[str, Any]] = None
+    run_telemetry: Dict[str, Any] = field(default_factory=dict)
     
 class RuntimeManager:
     def __init__(self):
@@ -411,6 +412,28 @@ class RuntimeManager:
     ) -> Dict[str, Any]:
         return await self.event_store.prune_events(keep_last=keep_last, dry_run=dry_run, run_id=run_id)
 
+    def get_diagnostics(self) -> Dict[str, Any]:
+        memo_stats_fn = getattr(self.artifact_store, "get_memo_stats", None)
+        artifact_memo = memo_stats_fn() if callable(memo_stats_fn) else {}
+        runs: Dict[str, Any] = {}
+        for run_id, handle in self.runs.items():
+            if handle.status == "deleted":
+                continue
+            runs[run_id] = {
+                "status": handle.status,
+                "graphId": handle.graph_id,
+                "runTelemetry": dict(handle.run_telemetry or {}),
+                "plannedNodeCount": int(len(handle.active_run_planned or set())),
+            }
+        return {
+            "schemaVersion": 1,
+            "artifactMemo": artifact_memo,
+            "globalCacheMode": self.get_global_cache_mode()
+            if hasattr(self, "get_global_cache_mode")
+            else ("default_on" if bool(getattr(self, "global_cache_enabled", True)) else "force_off"),
+            "activeRuns": runs,
+        }
+
     async def request_cancel(self, run_id: str) -> Dict[str, Any]:
         handle = self.runs.get(run_id)
         if not handle:
@@ -522,9 +545,16 @@ class RuntimeManager:
 
     async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None, graph_id: Optional[str] = None):
         handle = self.runs[run_id]
-        if not str(graph_id or "").strip():
-            raise ValueError("graph_id is required")
-        handle.graph_id = str(graph_id)
+        resolved_graph_id = str(graph_id or "").strip()
+        if not resolved_graph_id and isinstance(graph, dict):
+            resolved_graph_id = str(graph.get("graphId") or "").strip()
+        if not resolved_graph_id:
+            resolved_graph_id = str(handle.graph_id or "").strip()
+        if not resolved_graph_id:
+            # Keep runtime-compatible behavior for tests/direct callers that
+            # execute without a top-level graph id.
+            resolved_graph_id = f"graph:{run_id}"
+        handle.graph_id = resolved_graph_id
         handle.bus.graph_id = handle.graph_id
         handle.graph = graph
         for n in (graph.get("nodes", []) if isinstance(graph, dict) else []):
@@ -577,6 +607,10 @@ class RuntimeManager:
             handle.status = ev.get("status", "finished")
             handle.active_run_planned = set()
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
+            return
+        
+        if t == "run_telemetry":
+            handle.run_telemetry = dict(ev)
             return
 
         # node lifecycle
