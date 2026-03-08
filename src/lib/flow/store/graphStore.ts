@@ -1475,6 +1475,18 @@ function stripToDTO(
 	return dto;
 }
 
+function buildPersistableGraphStrict(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[],
+	graphId?: string
+): { ok: true; graph: PipelineGraphDTO } | { ok: false; error: string } {
+	const canonicalized = canonicalizeComponentEdgeSourceHandles(nodes, edges, 'strict');
+	if (!canonicalized.ok) return { ok: false, error: canonicalized.error };
+	const rechecked = pruneAndRecontractEdgesStrict(nodes, canonicalized.edges);
+	if (!rechecked.ok) return { ok: false, error: rechecked.error };
+	return { ok: true, graph: stripToDTO(nodes, rechecked.edges, graphId) };
+}
+
 function getPortType(
 	nodes: Node<PipelineNodeData>[],
 	sourceId: string,
@@ -2964,7 +2976,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
-			const graph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
+			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
+			const graph = strictGraph.graph;
 			try {
 				const created = await createGraphRevision({
 					graphId,
@@ -2991,7 +3005,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextVersionName = String(versionName ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
 			if (!nextVersionName) return { ok: false, reason: 'missing_version_name' as const };
-			const graph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
+			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
+			const graph = strictGraph.graph;
 			try {
 				const created = await createGraphRevision({
 					graphId,
@@ -3016,7 +3032,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextGraphName = String(graphName ?? '').trim();
 			if (!nextGraphName) return { ok: false, reason: 'missing_graph_name' as const };
 			const current = get({ subscribe } as any) as GraphState;
-			const graph = stripToDTO(current.nodes as any, current.edges as any, current.graphId);
+			const strictGraph = buildPersistableGraphStrict(
+				current.nodes as any,
+				current.edges as any,
+				current.graphId
+			);
+			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
+			const graph = strictGraph.graph;
 			try {
 				const created = await createGraphRevision({
 					graphName: nextGraphName,
@@ -3051,7 +3073,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const targetGraphId = String(nextGraphId ?? '').trim();
 			if (!targetGraphId) return { ok: false, reason: 'missing_graph_id' as const };
 			const current = get({ subscribe } as any) as GraphState;
-			const graph = stripToDTO(current.nodes as any, current.edges as any, targetGraphId);
+			const strictGraph = buildPersistableGraphStrict(
+				current.nodes as any,
+				current.edges as any,
+				targetGraphId
+			);
+			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
+			const graph = strictGraph.graph;
 			try {
 				const created = await createGraphRevision({
 					graphId: targetGraphId,

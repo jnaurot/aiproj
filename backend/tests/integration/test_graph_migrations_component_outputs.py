@@ -87,6 +87,83 @@ def _legacy_component_graph() -> dict:
 	}
 
 
+def _invalid_multi_output_handle_graph() -> dict:
+	return {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "cmp1",
+				"type": "component",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "component",
+					"label": "Component",
+					"ports": {"in": None, "out": "json"},
+					"params": {
+						"componentRef": {
+							"componentId": "cmp_a",
+							"revisionId": "crev_1",
+							"apiVersion": "v1",
+						},
+						"api": {
+							"inputs": [],
+							"outputs": [
+								{"name": "summary", "portType": "text", "required": True, "typedSchema": {"type": "text", "fields": []}},
+								{"name": "source", "portType": "text", "required": True, "typedSchema": {"type": "text", "fields": []}},
+							],
+						},
+						"bindings": {
+							"inputs": {},
+							"config": {},
+							"outputs": {
+								"summary": {"nodeId": "n_sum", "artifact": "current"},
+								"source": {"nodeId": "n_src", "artifact": "current"},
+							},
+						},
+						"config": {},
+					},
+				},
+			},
+			{
+				"id": "llm1",
+				"type": "llm",
+				"position": {"x": 400, "y": 0},
+				"data": {
+					"kind": "llm",
+					"label": "LLM",
+					"ports": {"in": "text", "out": "text"},
+					"params": {
+						"baseUrl": "http://localhost:11434",
+						"model": "x",
+						"user_prompt": "hi",
+						"system_prompt": "",
+						"output": {"mode": "text", "strict": True},
+					},
+				},
+			},
+		],
+		"edges": [
+			{
+				"id": "e1",
+				"source": "cmp1",
+				"sourceHandle": "out",
+				"target": "llm1",
+				"targetHandle": "in",
+				"data": {
+					"contract": {
+						"out": "text",
+						"in": "text",
+						"payload": {
+							"source": {"type": "string"},
+							"target": {"type": "string"},
+						},
+					}
+				},
+			}
+		],
+	}
+
+
 def test_canonicalize_graph_payload_fixes_legacy_component_handles_bindings_and_contracts():
 	graph, notes = canonicalize_graph_payload(_legacy_component_graph())
 	assert isinstance(notes, list)
@@ -99,6 +176,7 @@ def test_canonicalize_graph_payload_fixes_legacy_component_handles_bindings_and_
 	contract = ((edge.get("data") or {}).get("contract") or {})
 	assert str(contract.get("out")) == "text"
 	assert str((((contract.get("payload") or {}).get("source") or {}).get("type") or "")) == "string"
+	assert not isinstance(((edge.get("data") or {}).get("componentOutputBinding")), dict)
 
 
 def test_graph_create_revision_applies_component_migration_normalization():
@@ -127,4 +205,20 @@ def test_graph_create_revision_applies_component_migration_normalization():
 		contract = ((edge.get("data") or {}).get("contract") or {})
 		assert str(contract.get("out")) == "text"
 		assert str((((contract.get("payload") or {}).get("source") or {}).get("type") or "")) == "string"
+		assert not isinstance(((edge.get("data") or {}).get("componentOutputBinding")), dict)
 
+
+def test_graph_create_revision_rejects_ambiguous_multi_output_component_source_handle():
+	graph_id = f"graph_invalid_cmp_{uuid4().hex[:8]}"
+	with TestClient(app) as client:
+		created = client.post(
+			"/graphs",
+			json={
+				"graphId": graph_id,
+				"message": "invalid-component-handle",
+				"graph": _invalid_multi_output_handle_graph(),
+			},
+		)
+		assert created.status_code == 422, created.text
+		detail = created.json().get("detail", {})
+		assert str(detail.get("code") or "") == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"

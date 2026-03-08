@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
 from ..feature_flags import get_feature_flags
-from ..graph_migrations import canonicalize_graph_payload
+from ..graph_migrations import canonicalize_graph_payload, find_component_edge_handle_errors
 
 router = APIRouter()
 
@@ -163,6 +163,12 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
     if "nodes" not in graph or "edges" not in graph:
         raise ValueError("package.graph must include nodes and edges")
     normalized_graph, migration_notes = canonicalize_graph_payload(graph)
+    handle_errors = find_component_edge_handle_errors(normalized_graph)
+    if handle_errors:
+        raise ValueError(
+            "graph contains unresolved component output handles: "
+            + "; ".join(str(err.get("edgeId") or "") for err in handle_errors if isinstance(err, dict))
+        )
     return {
         "manifest": manifest,
         "graph": normalized_graph,
@@ -269,6 +275,16 @@ async def create_graph_revision(req: GraphRevisionWriteRequest, request: Request
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
 
     normalized_graph, migration_notes = canonicalize_graph_payload(req.graph)
+    handle_errors = find_component_edge_handle_errors(normalized_graph)
+    if handle_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                "message": "graph contains unresolved component output handles",
+                "errors": handle_errors,
+            },
+        )
     try:
         revision = store.create_revision(
             graph_id=req.graphId,

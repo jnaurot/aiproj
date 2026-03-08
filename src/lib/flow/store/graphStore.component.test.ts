@@ -742,4 +742,108 @@ describe('graphStore component integration', () => {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
+
+	it('rejects loading graph with ambiguous sourceHandle for multi-output component edge', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_text: { nodeId: 'n1', artifact: 'current' },
+						out_json: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+		const state = get(graphStore);
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: state.nodes as any,
+				edges: [
+					{
+						id: 'e_ambiguous_on_load',
+						source: componentId,
+						sourceHandle: 'out',
+						target: llmId,
+						targetHandle: 'in',
+						data: { exec: 'idle' }
+					}
+				] as any
+			},
+			null
+		);
+		expect((loaded as any)?.ok).toBe(false);
+	});
+
+	it('blocks save when graph contains ambiguous sourceHandle for multi-output component edge', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_text: { nodeId: 'n1', artifact: 'current' },
+						out_json: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
+			{
+				id: 'e_invalid_save',
+				source: componentId,
+				sourceHandle: 'out',
+				target: llmId,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			}
+		] as any);
+
+		const originalFetch = globalThis.fetch;
+		let postCalled = false;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/graphs')) postCalled = true;
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const result = await graphStore.saveGraph('save');
+			expect((result as any)?.ok).toBe(false);
+			expect(String((result as any)?.reason ?? '')).toBe('invalid_graph');
+			expect(postCalled).toBe(false);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
 });

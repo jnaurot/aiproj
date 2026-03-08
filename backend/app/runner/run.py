@@ -63,12 +63,6 @@ def _infer_component_output_handle_for_edge(
     source_handle = str(edge.get("sourceHandle") or "out").strip() or "out"
     if source_handle != "out":
         return source_handle
-    edge_data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
-    cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
-    if isinstance(cob, dict):
-        out_name = str(cob.get("output") or "").strip()
-        if out_name:
-            return out_name
     params = (src_node.get("data") or {}).get("params")
     if not isinstance(params, dict):
         return None
@@ -78,7 +72,7 @@ def _infer_component_output_handle_for_edge(
         only_name = str((outputs[0] or {}).get("name") or "").strip()
         return only_name or None
     # Strict routing: do not infer from contract/port type when multiple outputs exist.
-    # Caller must provide explicit sourceHandle/componentOutputBinding.
+    # Caller must provide explicit sourceHandle.
     return None
 
 
@@ -133,11 +127,8 @@ async def resolve_input_refs(
         src_node = get_node_by_id(src) or {}
         src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
         if src_kind == "component":
-            edge_data = e.get("data") if isinstance(e.get("data"), dict) else {}
-            cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
-            bound_output_name = str(cob.get("output") or "").strip() if isinstance(cob, dict) else ""
             explicit_source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
-            has_explicit_named_output = explicit_source_handle != "out" or bool(bound_output_name)
+            has_explicit_named_output = explicit_source_handle != "out"
             source_handle = _infer_component_output_handle_for_edge(e, src_node)
             if source_handle:
                 direct = _resolve_component_output_artifact_from_bindings(
@@ -1583,10 +1574,7 @@ async def run_graph(
                         continue
                     if src not in internal_set:
                         continue
-                    edge_data = e.get("data") if isinstance(e.get("data"), dict) else {}
-                    cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
-                    if isinstance(cob, dict):
-                        output_binding_edges.append(e)
+                    output_binding_edges.append(e)
                 component_runtime_state[parent_node_id] = {
                     "remaining": len(planned_internal),
                     "started": False,

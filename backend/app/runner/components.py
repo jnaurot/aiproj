@@ -353,13 +353,6 @@ def expand_graph_components(
                     "source": source_prefixed,
                     "target": instance_node_id,
                     "targetHandle": out_name,
-                    "data": {
-                        "componentOutputBinding": {
-                            "output": out_name,
-                            "artifact": bound_artifact,
-                            "nodeId": bound_internal_id,
-                        }
-                    },
                 }
             )
 

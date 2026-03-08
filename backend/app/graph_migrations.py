@@ -168,23 +168,16 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		tgt_node = node_map.get(tgt_id)
 		src_kind = str((_node_data(src_node).get("kind") if src_node else "") or "").strip().lower()
 		edge_data = next_edge.get("data") if isinstance(next_edge.get("data"), dict) else {}
-		cob = edge_data.get("componentOutputBinding") if isinstance(edge_data.get("componentOutputBinding"), dict) else {}
 
 		source_handle = str(next_edge.get("sourceHandle") or "out").strip() or "out"
 		if src_kind == "component" and src_node is not None:
 			output_names = _component_output_names(src_node)
 			canonical_handle = source_handle
 			if canonical_handle == "out":
-				cob_out = str(cob.get("output") or "").strip()
-				if cob_out and cob_out in set(output_names):
-					canonical_handle = cob_out
-				elif len(output_names) == 1:
+				if len(output_names) == 1:
 					canonical_handle = output_names[0]
 			elif canonical_handle not in set(output_names):
-				cob_out = str(cob.get("output") or "").strip()
-				if cob_out and cob_out in set(output_names):
-					canonical_handle = cob_out
-				elif len(output_names) == 1:
+				if len(output_names) == 1:
 					canonical_handle = output_names[0]
 			if canonical_handle != source_handle:
 				next_edge["sourceHandle"] = canonical_handle
@@ -196,9 +189,6 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 					}
 				)
 				source_handle = canonical_handle
-			if source_handle != "out" and source_handle in set(output_names):
-				edge_data["componentOutputBinding"] = {"output": source_handle}
-				next_edge["data"] = edge_data
 
 		source_port_type = (
 			_component_output_port_type(src_node, str(next_edge.get("sourceHandle") or "out"))
@@ -224,3 +214,44 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 	graph["edges"] = canonical_edges
 	return graph, notes
 
+
+def find_component_edge_handle_errors(graph: Dict[str, Any]) -> List[Dict[str, str]]:
+	errors: List[Dict[str, str]] = []
+	nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+	edges = graph.get("edges", []) if isinstance(graph, dict) else []
+	if not isinstance(nodes, list) or not isinstance(edges, list):
+		return errors
+	node_map: Dict[str, Dict[str, Any]] = {}
+	for node in nodes:
+		if not isinstance(node, dict):
+			continue
+		node_id = str(node.get("id") or "").strip()
+		if node_id:
+			node_map[node_id] = node
+	for edge in edges:
+		if not isinstance(edge, dict):
+			continue
+		source_id = str(edge.get("source") or "").strip()
+		if not source_id:
+			continue
+		source_node = node_map.get(source_id)
+		if source_node is None:
+			continue
+		source_kind = str((_node_data(source_node).get("kind") or "")).strip().lower()
+		if source_kind != "component":
+			continue
+		output_names = _component_output_names(source_node)
+		if len(output_names) <= 1:
+			continue
+		handle = str(edge.get("sourceHandle") or "out").strip() or "out"
+		if handle == "out" or handle not in set(output_names):
+			errors.append(
+				{
+					"code": "COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+					"edgeId": str(edge.get("id") or ""),
+					"sourceNodeId": source_id,
+					"sourceHandle": handle,
+					"message": "Multi-output component edges must use an explicit declared sourceHandle.",
+				}
+			)
+	return errors
