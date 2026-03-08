@@ -503,3 +503,59 @@ async def test_component_named_output_unresolved_handle_fails_without_wrapper_fa
         for e in events
     )
     assert any(e.get("type") == "run_finished" and e.get("status") == "failed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_component_named_output_undeclared_handle_fails_without_wrapper_fallback(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+    store = MemoryArtifactStore()
+    cache = ExecutionCache()
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="seed")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "text", "payload": f"payload:{node['id']}", "meta": {"status": "ok"}},
+        )
+
+    async def _fake_exec_llm(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "exec_llm", _fake_exec_llm)
+    runtime_ref = SimpleNamespace(
+        component_revisions=_ComponentStoreStub(
+            {("cmp_multi_named", "crev_named"): SimpleNamespace(definition=_multi_output_component_definition())}
+        )
+    )
+
+    graph = _graph_with_named_component_edges("crev_named", source_edge_handle="out_data")
+    cmp_node = next(n for n in graph["nodes"] if n["id"] == "cmp_node")
+    cmp_bindings = (((cmp_node.get("data") or {}).get("params") or {}).get("bindings") or {}).get("outputs") or {}
+    # Simulate legacy dangling binding key that should not be routable when undeclared in API outputs.
+    cmp_bindings["out_data"] = {"nodeId": "inner_source", "artifact": "current"}
+
+    events = []
+    await run_mod.run_graph(
+        run_id="run-component-named-undeclared",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-component-named-undeclared", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-named-undeclared",
+    )
+
+    assert any(
+        e.get("type") == "log"
+        and str(e.get("level") or "").lower() == "error"
+        and "COMPONENT_OUTPUT_HANDLE_UNRESOLVED" in str(e.get("message") or "")
+        for e in events
+    )
+    assert any(e.get("type") == "run_finished" and e.get("status") == "failed" for e in events)

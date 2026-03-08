@@ -127,10 +127,38 @@ async def resolve_input_refs(
         src_node = get_node_by_id(src) or {}
         src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
         if src_kind == "component":
+            params = (src_node.get("data") or {}).get("params")
+            api = params.get("api") if isinstance(params, dict) else None
+            outputs = (
+                api.get("outputs")
+                if isinstance(api, dict) and isinstance(api.get("outputs"), list)
+                else []
+            )
+            declared_output_names = {
+                str((o or {}).get("name") or "").strip()
+                for o in outputs
+                if isinstance(o, dict) and str((o or {}).get("name") or "").strip()
+            }
             explicit_source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
             has_explicit_named_output = explicit_source_handle != "out"
             source_handle = _infer_component_output_handle_for_edge(e, src_node)
             if source_handle:
+                if declared_output_names and source_handle not in declared_output_names:
+                    raise ContractMismatchError(
+                        "Component edge references undeclared output handle",
+                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                        details=_contract_details(
+                            expected={
+                                "sourceHandle": "declared output",
+                                "outputNames": sorted(declared_output_names),
+                            },
+                            actual={
+                                "edgeId": str(e.get("id") or ""),
+                                "sourceHandle": source_handle,
+                                "resolvedArtifact": False,
+                            },
+                        ),
+                    )
                 direct = _resolve_component_output_artifact_from_bindings(
                     src_node=src_node,
                     component_instance_node_id=str(src),
@@ -180,13 +208,6 @@ async def resolve_input_refs(
                     ),
                 )
             else:
-                params = (src_node.get("data") or {}).get("params")
-                api = params.get("api") if isinstance(params, dict) else None
-                outputs = (
-                    api.get("outputs")
-                    if isinstance(api, dict) and isinstance(api.get("outputs"), list)
-                    else []
-                )
                 if len(outputs) > 1:
                     raise ContractMismatchError(
                         "Component edge sourceHandle must name an output when component has multiple outputs",

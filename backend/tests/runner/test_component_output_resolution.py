@@ -130,6 +130,45 @@ async def test_resolve_input_refs_component_explicit_named_handle_requires_bindi
 
 
 @pytest.mark.asyncio
+async def test_resolve_input_refs_component_rejects_undeclared_named_handle_even_if_binding_exists():
+    edges = {
+        "e1": {
+            "id": "e1",
+            "source": "cmp1",
+            "target": "llm1",
+            "sourceHandle": "out_data",
+            "targetHandle": "in",
+            "data": {"contract": {"out": "text", "in": "text"}},
+        }
+    }
+    component_node = {
+        "id": "cmp1",
+        "data": {
+            "kind": "component",
+            "params": {
+                "api": {"outputs": [{"name": "summary", "portType": "text"}]},
+                "bindings": {"outputs": {"out_data": {"nodeId": "n_source", "artifact": "current"}}},
+            },
+        },
+    }
+
+    with pytest.raises(ContractMismatchError) as exc:
+        await resolve_input_refs(
+            edges=edges,
+            node_id="llm1",
+            get_current_artifact=lambda node_id: (
+                "wrapper_a1"
+                if node_id == "cmp1"
+                else ("direct_art_source" if node_id == "cmp:cmp1:n_source" else None)
+            ),
+            get_node_by_id=lambda node_id: component_node if node_id == "cmp1" else None,
+            artifact_store=_NoopArtifactStore(),
+        )
+
+    assert exc.value.code == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"
+
+
+@pytest.mark.asyncio
 async def test_resolve_input_refs_component_uses_direct_binding_artifact_before_wrapper():
     edges = {
         "e1": {
