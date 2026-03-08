@@ -41,17 +41,19 @@ def _canonical_field(raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _canonical_typed_schema(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _canonical_typed_schema(raw: Optional[Dict[str, Any]], port_type: str) -> Dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
-    typed = str(value.get("type") or "unknown").strip().lower() or "unknown"
-    if typed not in ALLOWED_TYPED_TYPES:
-        typed = "unknown"
+    typed = str(port_type or "json").strip().lower() or "json"
+    if typed not in ALLOWED_PORT_TYPES:
+        typed = "json"
     fields_raw = value.get("fields")
     fields: List[Dict[str, Any]] = []
     if isinstance(fields_raw, list):
         for item in fields_raw:
             if isinstance(item, dict):
                 fields.append(_canonical_field(item))
+    if typed in {"text", "binary", "embeddings"}:
+        fields = []
     return {"type": typed, "fields": fields}
 
 
@@ -63,7 +65,9 @@ def _canonical_api_port(raw: Dict[str, Any]) -> Dict[str, Any]:
         "name": str(raw.get("name") or "").strip(),
         "portType": port_type,
         "required": bool(raw.get("required", True)),
-        "typedSchema": _canonical_typed_schema(raw.get("typedSchema") if isinstance(raw, dict) else None),
+        "typedSchema": _canonical_typed_schema(
+            raw.get("typedSchema") if isinstance(raw, dict) else None, port_type
+        ),
     }
 
 
@@ -198,4 +202,3 @@ def canonicalize_component_definition(
     schema_version: int = COMPONENT_SCHEMA_VERSION,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     return migrate_component_definition(definition, int(schema_version), COMPONENT_SCHEMA_VERSION)
-

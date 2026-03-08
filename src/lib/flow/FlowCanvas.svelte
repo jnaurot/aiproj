@@ -39,11 +39,15 @@
 		type ComponentCatalogItem,
 		type ComponentRevisionSummary
 	} from '$lib/flow/client/components';
-	import { summarizeComponentPreflight } from '$lib/flow/components/componentPublishPreflight';
+import {
+	summarizeComponentPreflight,
+	summarizeComponentPublishFailure
+} from '$lib/flow/components/componentPublishPreflight';
 	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
+	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
 
 	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
 
@@ -167,7 +171,34 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
 	let lastSavedGraphSnapshotKey: string | null = null;
+	let currentGraphName = 'unnamed';
+	const DRAFT_RECOVERY_PROMPT_SESSION_KEY = 'graph_draft_recovery_prompted_at';
 	let importFileInput: HTMLInputElement | null = null;
+	type CanonicalGraphSnapshot = {
+		graphId: string;
+		nodes: Array<{
+			id: string;
+			type: string;
+			position: { x: number; y: number };
+			data: {
+				kind?: string;
+				label?: string;
+				sourceKind?: string;
+				transformKind?: string;
+				llmKind?: string;
+				componentKind?: string;
+				ports?: { in?: unknown; out?: unknown };
+				params?: unknown;
+			};
+		}>;
+		edges: Array<{
+			id: string;
+			source: string;
+			target: string;
+			sourceHandle: string | null;
+			targetHandle: string | null;
+		}>;
+	};
 	const GlobalCacheModeLabels: Record<GlobalCacheMode, string> = {
 		default_on: 'Default on',
 		force_off: 'Forced off',
@@ -254,11 +285,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			? 'cancelled'
 			: 'never_run';
 	$: graphHeaderStatusClass = `status graphStatus graphStatus-${graphHeaderStatusTone}${$graphStore.freshness === 'stale' ? ' graphStatus-stale' : ''}`;
-	$: currentGraphSnapshotKey = JSON.stringify({
-		graphId: $graphStore.graphId,
-		nodes,
-		edges
-	});
+	$: currentGraphSnapshotKey = JSON.stringify(canonicalGraphSnapshot($graphStore.graphId, nodes, edges));
+	$: if ((nodes?.length ?? 0) === 0 && currentGraphName !== 'unnamed') {
+		currentGraphName = 'unnamed';
+	}
 	$: hasUnsavedGraphChanges =
 		typeof lastSavedGraphSnapshotKey === 'string' &&
 		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
@@ -304,6 +334,69 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	let inputMetaByArtifactId: Record<string, InputArtifactMeta> = {};
 	let inputPreviewArtifactId: string | null = null;
+
+	function stableCanonicalValue(value: unknown): unknown {
+		if (Array.isArray(value)) return value.map((v) => stableCanonicalValue(v));
+		if (value && typeof value === 'object') {
+			const obj = value as Record<string, unknown>;
+			const out: Record<string, unknown> = {};
+			for (const key of Object.keys(obj).sort()) {
+				out[key] = stableCanonicalValue(obj[key]);
+			}
+			return out;
+		}
+		return value;
+	}
+
+	function canonicalGraphSnapshot(
+		graphId: string | null | undefined,
+		nodeList: Node<PipelineNodeData>[],
+		edgeList: Edge<PipelineEdgeData>[]
+	): CanonicalGraphSnapshot {
+		const nodesCanonical = [...(nodeList ?? [])]
+			.map((node) => {
+				const data = (node?.data ?? {}) as Record<string, unknown>;
+				const ports = (data.ports ?? {}) as Record<string, unknown>;
+				return {
+					id: String(node?.id ?? ''),
+					type: String(node?.type ?? ''),
+					position: {
+						x: Number(node?.position?.x ?? 0),
+						y: Number(node?.position?.y ?? 0)
+					},
+					data: {
+						kind: typeof data.kind === 'string' ? data.kind : undefined,
+						label: typeof data.label === 'string' ? data.label : undefined,
+						sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
+						transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
+						llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
+						componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
+						ports: {
+							in: ports.in ?? null,
+							out: ports.out ?? null
+						},
+						params: stableCanonicalValue(data.params ?? {})
+					}
+				};
+			})
+			.sort((a, b) => a.id.localeCompare(b.id));
+
+		const edgesCanonical = [...(edgeList ?? [])]
+			.map((edge) => ({
+				id: String(edge?.id ?? ''),
+				source: String(edge?.source ?? ''),
+				target: String(edge?.target ?? ''),
+				sourceHandle: edge?.sourceHandle ? String(edge.sourceHandle) : null,
+				targetHandle: edge?.targetHandle ? String(edge.targetHandle) : null
+			}))
+			.sort((a, b) => a.id.localeCompare(b.id));
+
+		return {
+			graphId: String(graphId ?? ''),
+			nodes: nodesCanonical,
+			edges: edgesCanonical
+		};
+	}
 
 	function inputReasonCopy(
 		reason: InputResolution['reason'] | undefined
@@ -688,6 +781,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return coercePortType(pt);
 	}
 
+	function componentOutputCount(nodeId: string): number {
+		const n = nodes.find((x) => x.id === nodeId);
+		if (!n || n.data.kind !== 'component') return 0;
+		const outputs = Array.isArray((n.data as any)?.params?.api?.outputs)
+			? ((n.data as any).params.api.outputs as any[])
+			: [];
+		return outputs
+			.map((o) => String((o as any)?.name ?? '').trim())
+			.filter((name) => name.length > 0).length;
+	}
+
 	function getType(nodeId: string, whichPort: string, handleId?: string | null): PortType | null {
 		const n = nodes.find((x) => x.id === nodeId);
 		if (!n) return null;
@@ -703,6 +807,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function isValidConnection(conn: Connection) {
 		if (!conn.source || !conn.target) return false;
 		if (conn.source === conn.target) return false;
+		if (
+			componentOutputCount(conn.source) > 1 &&
+			String(conn.sourceHandle ?? 'out').trim() === 'out'
+		) {
+			return false;
+		}
 
 		// Basic cycle prevention (reuse your old DFS idea, but based on local edges)
 		const seen = new Set<string>();
@@ -931,6 +1041,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function newGraph() {
 		graphStore.hardResetGraph();
 		lastSavedGraphSnapshotKey = null;
+		currentGraphName = 'unnamed';
 	}
 
 	function formatRevisionLine(index: number, revision: GraphRevisionSummary): string {
@@ -1059,7 +1170,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			});
 			showToast(`Saved component ${created.componentId}@${created.revisionId}`, 'info');
 		} catch (error) {
-			showToast(`Save as Component failed: ${String(error)}`, 'error');
+			const failure = summarizeComponentPublishFailure(
+				error,
+				componentId,
+				revisionIdInput || '(new)'
+			);
+			window.alert(`${failure.headline}\n\n${failure.detail}`);
+			showToast('Save as Component failed.', 'error');
 		}
 	}
 
@@ -1073,6 +1190,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		const resolvedName = String((result as any)?.graphName ?? graphName ?? '').trim();
+		if (resolvedName) currentGraphName = resolvedName;
 		showToast(`Saved graph revision ${(result as any).revisionId.slice(0, 10)}`, 'info');
 	}
 
@@ -1100,6 +1219,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		currentGraphName = graphName;
 		showToast(`Saved new graph ${graphName}`, 'info');
 	}
 
@@ -1115,9 +1235,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			showToast(`Load Graph failed: ${(catalog as any)?.error ?? (catalog as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
-		const graphs = (((catalog as any)?.graphs ?? []) as GraphCatalogItem[]).filter((g) =>
+		const allGraphs = (((catalog as any)?.graphs ?? []) as GraphCatalogItem[]).filter((g) =>
 			String(g.graphId ?? '').trim().length > 0
 		);
+		const seenGraphIds = new Set<string>();
+		const uniqueGraphs = allGraphs.filter((g) => {
+			const gid = String(g.graphId ?? '').trim();
+			if (!gid || seenGraphIds.has(gid)) return false;
+			seenGraphIds.add(gid);
+			return true;
+		});
+		const namedGraphs = uniqueGraphs.filter((g) => String(g.graphName ?? '').trim().length > 0);
+		const graphs = namedGraphs.length > 0 ? namedGraphs : uniqueGraphs;
 		if (graphs.length === 0) {
 			showToast('No saved graphs found.', 'warn');
 			return;
@@ -1164,6 +1293,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		currentGraphName = String((loaded as any)?.graphName ?? pickedGraph.graphName ?? '').trim() || 'unnamed';
 		showToast('Loaded graph revision.', 'info');
 	}
 
@@ -1344,6 +1474,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	});
 
 	onMount(async () => {
+		await refreshPortCapabilitiesFromBackend();
 		try {
 			const config = await getGlobalCacheConfig();
 			globalCacheMode = (config.mode ??
@@ -1353,17 +1484,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 		const draftInfo = getGraphDraftInfo();
 		const hasDraft = Boolean(String(draftInfo.updatedAt ?? '').trim());
+		const draftStamp = String(draftInfo.updatedAt ?? '').trim();
+		const previouslyPromptedFor = sessionStorage.getItem(DRAFT_RECOVERY_PROMPT_SESSION_KEY) ?? '';
+		const shouldPromptForDraft = hasDraft && draftStamp.length > 0 && previouslyPromptedFor !== draftStamp;
 		const recoverDraft =
-			hasDraft &&
+			shouldPromptForDraft &&
 			window.confirm(
 				`Recover local draft${draftInfo.updatedAt ? ` from ${draftInfo.updatedAt}` : ''}?\n\n` +
 					`Select "Cancel" to load latest saved graph from backend instead.`
 			);
+		if (shouldPromptForDraft) {
+			sessionStorage.setItem(DRAFT_RECOVERY_PROMPT_SESSION_KEY, draftStamp);
+		}
 		if (!recoverDraft) {
 			try {
 				const hydrated = await graphStore.hydrateLatestGraphFromBackend();
 				if ((hydrated as any)?.ok) {
 					graphStore.clearDraft();
+					currentGraphName = String((hydrated as any)?.graphName ?? '').trim() || 'unnamed';
 					console.log(
 						`[graph-v2-read] hydrated graphId=${(hydrated as any).graphId} revisionId=${(hydrated as any).revisionId}`
 					);
@@ -1407,7 +1545,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 			<div class="toolbarZone statusIndicators">
 				<span class={graphHeaderStatusClass}
-					>Graph: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span
+					>Graph {currentGraphName}: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span
 				>
 				<label class="cacheToggle">
 					<span>Cache:</span>

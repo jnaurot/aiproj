@@ -24,10 +24,10 @@
 	$: outputHandles =
 		Array.isArray(api.outputs) && api.outputs.length > 0
 			? api.outputs
-					.map((out) => {
+					.map((out, index) => {
 						const name = String((out as any)?.name ?? '').trim();
-						if (!name) return null;
-						return { id: name, label: name };
+						const effectiveName = name || (index === 0 ? 'default' : `out_${index + 1}`);
+						return { id: effectiveName, label: effectiveName };
 					})
 					.filter((v): v is { id: string; label: string } => Boolean(v))
 			: null;

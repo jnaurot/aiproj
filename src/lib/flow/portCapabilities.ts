@@ -1,6 +1,7 @@
 import type { Node } from '@xyflow/svelte';
 import type { PipelineNodeData, PortType } from '$lib/flow/types';
 import capsRaw from '../../../shared/port_capabilities.v1.json';
+import { getBackendCapabilities } from '$lib/flow/client/capabilities';
 
 type Direction = 'in' | 'out';
 
@@ -11,9 +12,19 @@ type NodeCapabilities = {
 	toolOutByProvider?: Record<string, PortType[]>;
 };
 
-const caps = capsRaw as any;
-const nodes = (caps?.nodes ?? {}) as Record<string, any>;
-const toolByProvider = (nodes.tool?.byProvider ?? {}) as Record<string, any>;
+let activeCaps = capsRaw as any;
+let activeFlags: { STRICT_SCHEMA_EDGE_CHECKS: boolean; STRICT_COERCION_POLICY: boolean } = {
+	STRICT_SCHEMA_EDGE_CHECKS: true,
+	STRICT_COERCION_POLICY: true
+};
+
+function getNodesMap(): Record<string, any> {
+	return ((activeCaps as any)?.nodes ?? {}) as Record<string, any>;
+}
+
+function getToolByProviderMap(): Record<string, any> {
+	return (getNodesMap().tool?.byProvider ?? {}) as Record<string, any>;
+}
 
 function asPortTypes(values: unknown): PortType[] {
 	if (!Array.isArray(values)) return [];
@@ -22,25 +33,63 @@ function asPortTypes(values: unknown): PortType[] {
 		.filter((v): v is PortType => ['table', 'json', 'text', 'binary', 'embeddings'].includes(v));
 }
 
-export const NODE_CAPABILITIES: Record<'llm' | 'transform' | 'source' | 'tool' | 'component', NodeCapabilities> = {
-	llm: { in: asPortTypes(nodes.llm?.in), out: asPortTypes(nodes.llm?.out) },
-	transform: { in: asPortTypes(nodes.transform?.in), out: asPortTypes(nodes.transform?.out) },
-	source: { in: asPortTypes(nodes.source?.in), out: asPortTypes(nodes.source?.out) },
-	tool: {
-		in: asPortTypes(nodes.tool?.in),
-		out: asPortTypes(nodes.tool?.out),
-		toolInByProvider: Object.fromEntries(
-			Object.entries(toolByProvider).map(([provider, value]) => [provider, asPortTypes((value as any)?.in)])
-		),
-		toolOutByProvider: Object.fromEntries(
-			Object.entries(toolByProvider).map(([provider, value]) => [
-				provider,
-				asPortTypes((value as any)?.out)
-			])
-		)
-	},
-	component: { in: asPortTypes(nodes.component?.in), out: asPortTypes(nodes.component?.out) }
-};
+function buildNodeCapabilities(): Record<
+	'llm' | 'transform' | 'source' | 'tool' | 'component',
+	NodeCapabilities
+> {
+	const nodes = getNodesMap();
+	const toolByProvider = getToolByProviderMap();
+	return {
+		llm: { in: asPortTypes(nodes.llm?.in), out: asPortTypes(nodes.llm?.out) },
+		transform: { in: asPortTypes(nodes.transform?.in), out: asPortTypes(nodes.transform?.out) },
+		source: { in: asPortTypes(nodes.source?.in), out: asPortTypes(nodes.source?.out) },
+		tool: {
+			in: asPortTypes(nodes.tool?.in),
+			out: asPortTypes(nodes.tool?.out),
+			toolInByProvider: Object.fromEntries(
+				Object.entries(toolByProvider).map(([provider, value]) => [
+					provider,
+					asPortTypes((value as any)?.in)
+				])
+			),
+			toolOutByProvider: Object.fromEntries(
+				Object.entries(toolByProvider).map(([provider, value]) => [
+					provider,
+					asPortTypes((value as any)?.out)
+				])
+			)
+		},
+		component: { in: asPortTypes(nodes.component?.in), out: asPortTypes(nodes.component?.out) }
+	};
+}
+
+export let NODE_CAPABILITIES: Record<
+	'llm' | 'transform' | 'source' | 'tool' | 'component',
+	NodeCapabilities
+> = buildNodeCapabilities();
+
+export function getStrictSchemaFeatureFlags(): {
+	STRICT_SCHEMA_EDGE_CHECKS: boolean;
+	STRICT_COERCION_POLICY: boolean;
+} {
+	return { ...activeFlags };
+}
+
+export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
+	try {
+		const response = await getBackendCapabilities();
+		const caps = (response?.capabilities ?? null) as any;
+		if (!caps || typeof caps !== 'object' || !caps.nodes || typeof caps.nodes !== 'object') return;
+		activeCaps = caps;
+		activeFlags = {
+			STRICT_SCHEMA_EDGE_CHECKS: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS ?? true),
+			STRICT_COERCION_POLICY: Boolean(response?.featureFlags?.STRICT_COERCION_POLICY ?? true)
+		};
+		NODE_CAPABILITIES = buildNodeCapabilities();
+	} catch {
+		// Fall back to bundled shared capabilities in offline/dev edge-cases.
+	}
+}
 
 export function getAllowedPortsForNode(
 	node: Node<PipelineNodeData> | null | undefined,

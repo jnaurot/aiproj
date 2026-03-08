@@ -11,6 +11,7 @@ from .runner.events import EventStore, MemoryEventStore, RunEventBus, SqliteEven
 from .runner.artifacts import ArtifactStore, DiskArtifactStore, MemoryArtifactStore
 from .runner.cache import ExecutionCache, SqliteExecutionCache
 from .runner.run import run_graph
+from .feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,17 @@ class RuntimeManager:
         self._artifact_owner: dict[str, str] = {}
         self.global_cache_mode: str = "default_on"
         self.artifact_store, self.cache, self.event_store = self._build_storage()
+        self.rollout_metrics: Dict[str, Any] = {
+            "schemaFailures": 0,
+            "coercionApplied": 0,
+            "componentBindingFailures": 0,
+            "lastUpdatedAt": None,
+        }
+
+    def _bump_rollout_metric(self, key: str, inc: int = 1) -> None:
+        cur = int(self.rollout_metrics.get(key, 0) or 0)
+        self.rollout_metrics[key] = max(0, cur + int(inc))
+        self.rollout_metrics["lastUpdatedAt"] = datetime_from_ts(time.time())
 
     def set_global_cache_enabled(self, enabled: bool) -> None:
         self.set_global_cache_mode("default_on" if bool(enabled) else "force_off")
@@ -432,6 +444,11 @@ class RuntimeManager:
             if hasattr(self, "get_global_cache_mode")
             else ("default_on" if bool(getattr(self, "global_cache_enabled", True)) else "force_off"),
             "activeRuns": runs,
+            "featureFlags": {
+                "STRICT_SCHEMA_EDGE_CHECKS": bool(get_feature_flags().get("STRICT_SCHEMA_EDGE_CHECKS", True)),
+                "STRICT_COERCION_POLICY": bool(get_feature_flags().get("STRICT_COERCION_POLICY", True)),
+            },
+            "rolloutMetrics": dict(self.rollout_metrics),
         }
 
     async def request_cancel(self, run_id: str) -> Dict[str, Any]:
@@ -584,6 +601,13 @@ class RuntimeManager:
         if handle.status == "deleted":
             return
 
+        if t == "log":
+            msg = str(ev.get("message") or "")
+            upper = msg.upper()
+            if "[COERCION_APPLIED]" in upper:
+                self._bump_rollout_metric("coercionApplied")
+            return
+
         # run lifecycle
         if t == "run_started":
             handle.status = "running"
@@ -629,6 +653,21 @@ class RuntimeManager:
             nid = ev.get("nodeId")
             if nid:
                 status = str(ev.get("status", "succeeded"))
+                error_code = str(ev.get("errorCode") or "").strip().upper()
+                if status != "succeeded":
+                    if error_code in {
+                        "PAYLOAD_SCHEMA_MISMATCH",
+                        "CONTRACT_EDGE_TYPED_SCHEMA_MISMATCH",
+                        "CONTRACT_EDGE_PORT_TYPE_MISMATCH",
+                        "CONTRACT_MISMATCH",
+                        "MISSING_COLUMN",
+                        "DUPLICATE_COLUMN",
+                        "COLUMN_SELECTION_REQUIRED",
+                        "EXPR_INVALID",
+                    }:
+                        self._bump_rollout_metric("schemaFailures")
+                    if error_code.startswith("COMPONENT_OUTPUT_"):
+                        self._bump_rollout_metric("componentBindingFailures")
                 b = self._binding_for(handle, nid)
                 prev = dict(b)
                 if status == "succeeded":

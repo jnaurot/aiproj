@@ -19,3 +19,4 @@ jsonschema==4.23.0
 
 # Mock/patching
 faker==20.1.0
+hypothesis==6.131.20

@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from ..runner.metadata import GraphContext, NodeOutput
+from ..runner.metadata import FileMetadata, GraphContext, NodeOutput
 
 
 def iso_now() -> str:
@@ -269,6 +269,7 @@ async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
     context: GraphContext,
+    input_metadata: Optional[FileMetadata] = None,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     node_id = node.get("id", "<missing-node-id>")

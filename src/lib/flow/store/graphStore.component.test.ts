@@ -342,4 +342,196 @@ describe('graphStore component integration', () => {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
+
+	it('applies multi-output component API and keeps bindings synchronized', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/components/cmp_multi/revisions/crev_1')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_multi',
+						revisionId: 'crev_1',
+						parentRevisionId: null,
+						createdAt: '2026-03-08T00:00:00Z',
+						message: 'multi',
+						revisionSchemaVersion: 1,
+						checksum: 'abc',
+						definition: {
+							graph: {
+								nodes: [{ id: 'inner_text' }, { id: 'inner_json' }],
+								edges: [],
+							},
+							api: {
+								inputs: [],
+								outputs: [
+									{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+									{
+										name: 'out_json',
+										portType: 'json',
+										required: true,
+										typedSchema: { type: 'json', fields: [{ name: 'ok', type: 'text', nullable: false }] },
+									},
+								],
+							},
+							configSchema: {},
+						},
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components/cmp_multi/revisions?')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_multi',
+						revisions: [{ revisionId: 'crev_1', componentId: 'cmp_multi', createdAt: '2026-03-08T00:00:00Z', schemaVersion: 1, checksum: 'abc' }],
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const res = await graphStore.applyComponentRevisionToNode(nodeId, 'cmp_multi', 'crev_1');
+			expect((res as any)?.ok).toBe(true);
+			const state = get(graphStore);
+			const node = state.nodes.find((n) => n.id === nodeId);
+			const outputs = ((node?.data?.params as any)?.api?.outputs ?? []) as Array<{ name: string }>;
+			const bindings = ((node?.data?.params as any)?.bindings?.outputs ?? {}) as Record<
+				string,
+				{ nodeId?: string; artifact?: 'current' | 'last' }
+			>;
+			expect(outputs.map((o) => o.name)).toEqual(['out_text', 'out_json']);
+			expect(String(bindings.out_text?.nodeId ?? '')).toBe('inner_text');
+			expect(String(bindings.out_json?.nodeId ?? '')).toBe('inner_text');
+			expect(String(bindings.out_text?.artifact ?? '')).toBe('current');
+			expect(String(bindings.out_json?.artifact ?? '')).toBe('current');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('rejects ambiguous multi-output component edges without a source handle', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_a', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_b', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_a: { nodeId: 'n1', artifact: 'current' },
+						out_b: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		const addRes = graphStore.addEdge({
+			id: 'e_ambiguous',
+			source: componentId,
+			target: llmId,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+
+		expect(addRes.ok).toBe(false);
+		expect(String(addRes.error ?? '')).toContain('Component output handle');
+	});
+
+	it('uses named component sourceHandle to compute edge payload contract', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [{ name: 'value', type: 'text', nullable: false }] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_text: { nodeId: 'n1', artifact: 'current' },
+						out_json: { nodeId: 'n2', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+
+		const addRes = graphStore.addEdge({
+			id: 'e_named',
+			source: componentId,
+			sourceHandle: 'out_text',
+			target: llmId,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		expect(addRes.ok).toBe(true);
+
+		const state = get(graphStore);
+		const edge = state.edges.find((e) => e.id === 'e_named');
+		expect(edge).toBeTruthy();
+		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
+	});
+
+	it('prunes dangling component output bindings on Accept', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(componentId);
+		graphStore.patchInspectorDraft({
+			api: {
+				inputs: [],
+				outputs: [
+					{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+					{ name: 'source', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+				]
+			},
+			bindings: {
+				inputs: {},
+				config: {},
+				outputs: {
+					out_data: { nodeId: 'n_old', artifact: 'current' },
+					summary: { nodeId: 'n_sum', artifact: 'current' },
+					source: { nodeId: 'n_src', artifact: 'current' }
+				}
+			}
+		});
+
+		const result = await graphStore.applyInspectorDraft();
+		expect((result as any)?.ok).toBe(true);
+
+		const state = get(graphStore);
+		const node = state.nodes.find((n) => n.id === componentId);
+		const outputBindings = (((node?.data?.params as any)?.bindings ?? {}).outputs ?? {}) as Record<string, unknown>;
+		expect(Object.keys(outputBindings).sort()).toEqual(['source', 'summary']);
+		expect(outputBindings.out_data).toBeUndefined();
+	});
 });

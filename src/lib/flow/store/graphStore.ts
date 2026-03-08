@@ -186,6 +186,136 @@ function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?
 	return { in: inPort, out: "json" };
 }
 
+function sanitizeComponentDraftParams(params: Record<string, any>): Record<string, any> {
+	const api = params?.api;
+	const bindings = params?.bindings;
+	if (!api || typeof api !== 'object' || !bindings || typeof bindings !== 'object') {
+		return params;
+	}
+	const outputs = Array.isArray((api as any).outputs) ? ((api as any).outputs as any[]) : [];
+	const validOutputNames = new Set(
+		outputs
+			.map((out) => String((out as any)?.name ?? '').trim())
+			.filter((name) => name.length > 0)
+	);
+	const currentOutputs =
+		bindings && typeof (bindings as any).outputs === 'object' && (bindings as any).outputs
+			? ((bindings as any).outputs as Record<string, any>)
+			: {};
+	const nextOutputs: Record<string, any> = {};
+	for (const name of validOutputNames) {
+		if (Object.prototype.hasOwnProperty.call(currentOutputs, name)) {
+			nextOutputs[name] = currentOutputs[name];
+		}
+	}
+	return {
+		...params,
+		bindings: {
+			...(bindings as Record<string, any>),
+			outputs: nextOutputs
+		}
+	};
+}
+
+function listComponentOutputNames(node: Node<PipelineNodeData>): string[] {
+	if (node.data.kind !== 'component') return [];
+	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
+		? ((node.data as any).params.api.outputs as any[])
+		: [];
+	return outputs
+		.map((o) => String((o as any)?.name ?? '').trim())
+		.filter((name): name is string => name.length > 0);
+}
+
+function canonicalComponentSourceHandleForEdge(
+	nodes: Node<PipelineNodeData>[],
+	edge: Edge<PipelineEdgeData>
+): string | null {
+	const sourceNode = nodes.find((n) => n.id === edge.source);
+	if (!sourceNode || sourceNode.data.kind !== 'component') {
+		return normalizeHandleId((edge as any).sourceHandle, 'out');
+	}
+	const outputNames = listComponentOutputNames(sourceNode);
+	if (outputNames.length === 0) return null;
+	const raw = String((edge as any).sourceHandle ?? '').trim();
+	if (!raw || raw === 'out') {
+		return outputNames.length === 1 ? outputNames[0] : null;
+	}
+	return outputNames.includes(raw) ? raw : null;
+}
+
+function dedupeEdgesBySignature(
+	edges: Edge<PipelineEdgeData>[]
+): { edges: Edge<PipelineEdgeData>[]; removedIds: string[] } {
+	const seen = new Set<string>();
+	const next: Edge<PipelineEdgeData>[] = [];
+	const removedIds: string[] = [];
+	for (const edge of edges) {
+		const key = [
+			String(edge.source ?? ''),
+			String((edge as any).sourceHandle ?? 'out'),
+			String(edge.target ?? ''),
+			String((edge as any).targetHandle ?? 'in')
+		].join('|');
+		if (seen.has(key)) {
+			removedIds.push(String(edge.id ?? ''));
+			continue;
+		}
+		seen.add(key);
+		next.push(edge);
+	}
+	return { edges: next, removedIds };
+}
+
+function reconcileComponentOutgoingEdges(
+	nodeId: string,
+	nextNode: Node<PipelineNodeData>,
+	edges: Edge<PipelineEdgeData>[],
+	previousOutputNames: string[]
+): { edges: Edge<PipelineEdgeData>[]; removedIds: string[] } {
+	if (nextNode.data.kind !== 'component') return { edges, removedIds: [] };
+	const nextOutputNames = listComponentOutputNames(nextNode);
+	const nextSet = new Set(nextOutputNames);
+	const renameMap = new Map<string, string>();
+	for (let i = 0; i < Math.min(previousOutputNames.length, nextOutputNames.length); i += 1) {
+		const prevName = String(previousOutputNames[i] ?? '').trim();
+		const nextName = String(nextOutputNames[i] ?? '').trim();
+		if (!prevName || !nextName || prevName === nextName) continue;
+		if (nextSet.has(prevName)) continue;
+		renameMap.set(prevName, nextName);
+	}
+
+	const rewritten = edges
+		.map((edge) => {
+			if (edge.source !== nodeId) return edge;
+			const rawHandle = String((edge as any).sourceHandle ?? '').trim();
+			if (!rawHandle || rawHandle === 'out') {
+				if (nextOutputNames.length === 1) {
+					return { ...edge, sourceHandle: nextOutputNames[0] };
+				}
+				return edge;
+			}
+			if (nextSet.has(rawHandle)) return edge;
+			const mapped = renameMap.get(rawHandle);
+			if (mapped && nextSet.has(mapped)) {
+				return { ...edge, sourceHandle: mapped };
+			}
+			if (nextOutputNames.length === 1) {
+				return { ...edge, sourceHandle: nextOutputNames[0] };
+			}
+			return null;
+		})
+		.filter((edge): edge is Edge<PipelineEdgeData> => Boolean(edge));
+
+	const removedIds = edges
+		.filter((edge) => edge.source === nodeId)
+		.filter((edge) => !rewritten.some((candidate) => candidate.id === edge.id))
+		.map((edge) => String(edge.id ?? ''));
+
+	const deduped = dedupeEdgesBySignature(rewritten);
+	return { edges: deduped.edges, removedIds: [...removedIds, ...deduped.removedIds] };
+}
+
 let logSeq = 0;
 const statusRegressionLogThrottle = new Map<string, number>();
 const debugLastStatusChange = new Map<
@@ -1612,6 +1742,7 @@ export const graphStore = (() => {
 		update((s) => {
 			let nodes = s.nodes;
 			let edges = s.edges;
+			let removedEdgeIds: string[] = [];
 
 			// 0) Ensure node exists
 			const node = nodes.find((n) => n.id === nodeId);
@@ -1619,6 +1750,8 @@ export const graphStore = (() => {
 				out = { ok: false, error: 'Node not found' };
 				return logPush(s, 'warn', out.error!, nodeId);
 			}
+			const previousComponentOutputNames =
+				node.data.kind === 'component' ? listComponentOutputNames(node as Node<PipelineNodeData>) : [];
 
 			// ---- 1) params (must be valid to commit) ----
 			if (config.params !== undefined) {
@@ -1695,6 +1828,19 @@ export const graphStore = (() => {
 				const pout = updatedNode.data.ports?.out ?? null;
 				const outPortChanged = previousOutPort !== (pout as PortType | null);
 
+				if (updatedNode.data.kind === 'component') {
+					const reconciled = reconcileComponentOutgoingEdges(
+						nodeId,
+						updatedNode as Node<PipelineNodeData>,
+						edges,
+						previousComponentOutputNames
+					);
+					edges = reconciled.edges;
+					if (reconciled.removedIds.length) {
+						removedEdgeIds = [...removedEdgeIds, ...reconciled.removedIds];
+					}
+				}
+
 				// Source output port controls execution output mode and must stay in sync with params.
 				if (outPortChanged && updatedNode.data.kind === 'source') {
 					const nextMode = sourceOutputModeForPort(pout as PortType | null);
@@ -1735,7 +1881,13 @@ export const graphStore = (() => {
 					return logPush(s, 'warn', pr.error, nodeId);
 				}
 				edges = pr.edges;
-				if (pr.prunedIds?.length) out.removedEdgeIds = pr.prunedIds;
+				if (pr.prunedIds?.length) {
+					removedEdgeIds = [...removedEdgeIds, ...pr.prunedIds];
+				}
+			}
+			if (removedEdgeIds.length) {
+				const uniq = Array.from(new Set(removedEdgeIds.filter((id) => id.length > 0)));
+				out.removedEdgeIds = uniq;
 			}
 
 			const next = logPush({ ...s, nodes, edges }, 'info', 'Node config updated', nodeId);
@@ -1787,18 +1939,23 @@ export const graphStore = (() => {
 		const s = get({ subscribe } as any) as GraphState;
 		const nodeId = s.inspector.nodeId;
 		if (!nodeId) return { ok: false, error: 'No node selected' };
+		const targetNode = s.nodes.find((x) => x.id === nodeId);
+		const commitPatch =
+			targetNode?.data?.kind === 'component'
+				? sanitizeComponentDraftParams(patch)
+				: patch;
 		if (patch?.op === 'dedupe' || patch?.dedupe || s.inspector.draftParams?.op === 'dedupe') {
 			console.log('[dedupe-store] commitInspectorImmediate:patch', {
 				nodeId,
-				patch,
+				patch: commitPatch,
 				draftParams: s.inspector.draftParams
 			});
 		}
-		const beforeNode = s.nodes.find((x) => x.id === nodeId);
+		const beforeNode = targetNode;
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
 
 		// 2) commit patch (validated/stripped)
-		const result = updateNodeConfigImpl(nodeId, { params: patch });
+		const result = updateNodeConfigImpl(nodeId, { params: commitPatch });
 		if (!result.ok) return result;
 
 		const afterState = get({ subscribe } as any) as GraphState;
@@ -2036,8 +2193,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		if (!nodeId) return { ok: false, error: 'No node selected' };
 		const beforeNode = s.nodes.find((x) => x.id === nodeId);
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
+		const paramsForCommit =
+			beforeNode?.data?.kind === 'component'
+				? sanitizeComponentDraftParams(s.inspector.draftParams as Record<string, any>)
+				: (s.inspector.draftParams as Record<string, any>);
 
-		const r = updateNodeConfigImpl(nodeId, { params: s.inspector.draftParams });
+		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit });
 
 		// only clear dirty if commit succeeded (fail-closed keeps draft)
 		if (r.ok) {
@@ -2054,7 +2215,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				};
 			});
 
-			await syncAcceptParamsForNode(nodeId, s.inspector.draftParams, beforeExecParams);
+			await syncAcceptParamsForNode(nodeId, paramsForCommit, beforeExecParams);
 		}
 		return r;
 	}
@@ -2521,23 +2682,40 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					return s;
 				}
 
+				const canonicalSourceHandle = canonicalComponentSourceHandleForEdge(
+					s.nodes,
+					{ ...edge, id } as Edge<PipelineEdgeData>
+				);
+				if (canonicalSourceHandle == null) {
+					out = {
+						ok: false,
+						error: 'Component output handle is required and must match a declared output.'
+					};
+					return s;
+				}
+				const edgeForValidation: Edge<PipelineEdgeData> = {
+					...edge,
+					id,
+					sourceHandle: canonicalSourceHandle
+				};
+
 				// validate port types + refresh contract
-				const chk = isEdgeStillValid(s.nodes, { ...edge, id } as Edge<PipelineEdgeData>);
+				const chk = isEdgeStillValid(s.nodes, edgeForValidation);
 				if (chk.ok === false) {
 					out = {
 						ok: false,
 						error:
 							chk.reason === 'type_mismatch'
 								? 'Incompatible port types'
-								: 'Cannot resolve port ttypes for this connection'
+								: 'Cannot resolve port types for this connection'
 					};
 					return s;
 				}
-				const sourceNode = s.nodes.find((n) => n.id === edge.source)!;
-				const targetNode = s.nodes.find((n) => n.id === edge.target)!;
+				const sourceNode = s.nodes.find((n) => n.id === edgeForValidation.source)!;
+				const targetNode = s.nodes.find((n) => n.id === edgeForValidation.target)!;
 
 				const nextEdge: Edge<PipelineEdgeData> = {
-					...edge,
+					...edgeForValidation,
 					id,
 					data: {
 						...(edge.data ?? {}),
@@ -2546,7 +2724,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							out: chk.out,
 							in: chk.in,
 							payload: {
-								source: sourcePayloadHint(sourceNode as any, 'out'),
+								source: sourcePayloadHint(
+									sourceNode as any,
+									'out',
+									String((edgeForValidation as any).sourceHandle ?? 'out')
+								),
 								target: targetPayloadHint(targetNode as any)
 							}
 						}
@@ -2819,6 +3001,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return {
 					ok: true,
 					graphId: String(restored.graphId),
+					graphName: restored.graphName ?? null,
 					revisionId: String(restored.revisionId)
 				};
 			} catch (error) {
@@ -2860,7 +3043,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const graph = (latest?.graph ?? {}) as any;
 				const applied = applyGraphDocument(graph, latest.graphId);
 				if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
-				return { ok: true, graphId: String(latest.graphId), revisionId: String(latest.revisionId) };
+				return {
+					ok: true,
+					graphId: String(latest.graphId),
+					graphName: latest.graphName ?? null,
+					revisionId: String(latest.revisionId)
+				};
 			} catch (error) {
 				return { ok: false, reason: 'read_failed' as const, error: String(error) };
 			}

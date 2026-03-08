@@ -36,6 +36,7 @@ from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
 from ..executors.tool import exec_tool
+from ..feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,72 @@ async def _resolve_component_output_artifact_from_wrapper(
     return aid or None
 
 
+def _infer_component_output_handle_for_edge(
+    edge: Dict[str, Any],
+    src_node: Dict[str, Any],
+) -> Optional[str]:
+    source_handle = str(edge.get("sourceHandle") or "out").strip() or "out"
+    if source_handle != "out":
+        return source_handle
+    edge_data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
+    if isinstance(cob, dict):
+        out_name = str(cob.get("output") or "").strip()
+        if out_name:
+            return out_name
+    params = (src_node.get("data") or {}).get("params")
+    if not isinstance(params, dict):
+        return None
+    api = params.get("api")
+    outputs = api.get("outputs") if isinstance(api, dict) and isinstance(api.get("outputs"), list) else []
+    if len(outputs) == 1:
+        only_name = str((outputs[0] or {}).get("name") or "").strip()
+        return only_name or None
+    contract = edge_data.get("contract") if isinstance(edge_data, dict) else None
+    desired_out = str((contract.get("out") if isinstance(contract, dict) else "") or "").strip().lower()
+    if not desired_out:
+        return None
+    candidates: list[str] = []
+    for out in outputs:
+        if not isinstance(out, dict):
+            continue
+        out_name = str(out.get("name") or "").strip()
+        out_port = str(out.get("portType") or "").strip().lower()
+        if out_name and out_port and out_port == desired_out:
+            candidates.append(out_name)
+    if len(candidates) >= 1:
+        # Legacy fallback for edges that still point to generic "out":
+        # pick first matching declared output deterministically.
+        return candidates[0]
+    return None
+
+
+def _resolve_component_output_artifact_from_bindings(
+    *,
+    src_node: Dict[str, Any],
+    component_instance_node_id: str,
+    output_name: str,
+    get_current_artifact,
+) -> Dict[str, Any]:
+    params = (src_node.get("data") or {}).get("params")
+    if not isinstance(params, dict):
+        return {"artifact_id": None, "has_binding": False, "runtime_node_id": None}
+    bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
+    outputs = bindings.get("outputs") if isinstance(bindings.get("outputs"), dict) else {}
+    binding = outputs.get(output_name) if isinstance(outputs, dict) else None
+    if not isinstance(binding, dict):
+        return {"artifact_id": None, "has_binding": False, "runtime_node_id": None}
+    bound_node_id = str(binding.get("nodeId") or "").strip()
+    if not bound_node_id:
+        return {"artifact_id": None, "has_binding": True, "runtime_node_id": None}
+    runtime_node_id = (
+        bound_node_id if bound_node_id.startswith("cmp:") else f"cmp:{component_instance_node_id}:{bound_node_id}"
+    )
+    aid = get_current_artifact(runtime_node_id)
+    resolved = str(aid or "").strip() or None
+    return {"artifact_id": resolved, "has_binding": True, "runtime_node_id": runtime_node_id}
+
+
 async def resolve_input_refs(
     edges: Dict[str, Dict[str, Any]],
     node_id: str,
@@ -101,22 +168,76 @@ async def resolve_input_refs(
         aid = get_current_artifact(src)
         if not aid:
             continue
-        source_handle = str(e.get("sourceHandle") or "out")
-        if source_handle and source_handle != "out":
-            src_node = get_node_by_id(src) or {}
-            src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
-            if src_kind == "component":
-                cache_key = (str(aid), source_handle)
-                if cache_key not in wrapper_cache:
-                    wrapper_cache[cache_key] = await _resolve_component_output_artifact_from_wrapper(
-                        artifact_store=artifact_store,
-                        wrapper_artifact_id=str(aid),
-                        output_name=source_handle,
+        src_node = get_node_by_id(src) or {}
+        src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
+        if src_kind == "component":
+            edge_data = e.get("data") if isinstance(e.get("data"), dict) else {}
+            cob = edge_data.get("componentOutputBinding") if isinstance(edge_data, dict) else None
+            bound_output_name = str(cob.get("output") or "").strip() if isinstance(cob, dict) else ""
+            explicit_source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+            has_explicit_named_output = explicit_source_handle != "out" or bool(bound_output_name)
+            source_handle = _infer_component_output_handle_for_edge(e, src_node)
+            if source_handle:
+                direct = _resolve_component_output_artifact_from_bindings(
+                    src_node=src_node,
+                    component_instance_node_id=str(src),
+                    output_name=source_handle,
+                    get_current_artifact=get_current_artifact,
+                )
+                if direct.get("artifact_id"):
+                    aid = str(direct["artifact_id"])
+                elif bool(direct.get("has_binding")):
+                    raise ContractMismatchError(
+                        f"Component output '{source_handle}' could not be resolved from bindings",
+                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                        details=_contract_details(
+                            expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                            actual={
+                                "edgeId": str(e.get("id") or ""),
+                                "wrapperArtifactId": str(aid),
+                                "boundRuntimeNodeId": str(direct.get("runtime_node_id") or ""),
+                                "resolvedArtifact": False,
+                            },
+                        ),
                     )
-                resolved = wrapper_cache.get(cache_key)
-                if not resolved:
-                    continue
-                aid = resolved
+                else:
+                    # Legacy fallback: read named output from wrapper envelope for older graphs.
+                    cache_key = (str(aid), source_handle)
+                    if cache_key not in wrapper_cache:
+                        wrapper_cache[cache_key] = await _resolve_component_output_artifact_from_wrapper(
+                            artifact_store=artifact_store,
+                            wrapper_artifact_id=str(aid),
+                            output_name=source_handle,
+                        )
+                    resolved = wrapper_cache.get(cache_key)
+                    if resolved:
+                        aid = resolved
+                    elif has_explicit_named_output:
+                        raise ContractMismatchError(
+                            f"Component output '{source_handle}' could not be resolved from wrapper artifact",
+                            code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                            details=_contract_details(
+                                expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                                actual={
+                                    "edgeId": str(e.get("id") or ""),
+                                    "wrapperArtifactId": str(aid),
+                                    "resolvedArtifact": False,
+                                },
+                            ),
+                        )
+            elif has_explicit_named_output:
+                raise ContractMismatchError(
+                    "Component edge references unresolved named output handle",
+                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                    details=_contract_details(
+                        expected={"sourceHandle": explicit_source_handle, "resolvedArtifact": True},
+                        actual={
+                            "edgeId": str(e.get("id") or ""),
+                            "sourceHandle": explicit_source_handle,
+                            "resolvedArtifact": False,
+                        },
+                    ),
+                )
         port = e.get("targetHandle") or "in"
         refs.append((port, aid))
     # stable order
@@ -1072,8 +1193,9 @@ def _cached_artifact_contract_mismatch(
     kind: str,
     node: Dict[str, Any],
     artifact: Artifact,
-    expected_schema: Dict[str, Any],
+    expected_schema: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
+    expected_schema = expected_schema or {}
     declared = _declared_out_port(kind, node) or "unknown"
     expected_schema_fingerprint = str(expected_schema.get("schemaFingerprint") or "")
     expected_schema_source = str(expected_schema.get("schemaSource") or "unknown")
@@ -1245,6 +1367,9 @@ async def run_graph(
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
     cache_summary_emitted = False
     run_telemetry_emitted = False
+    feature_flags = get_feature_flags()
+    strict_schema_edge_checks = bool(feature_flags.get("STRICT_SCHEMA_EDGE_CHECKS", True))
+    strict_coercion_policy = bool(feature_flags.get("STRICT_COERCION_POLICY", True))
     schema_stats_start = get_schema_infer_stats()
     run_started_t = asyncio.get_running_loop().time()
     peak_concurrency = 0
@@ -1278,6 +1403,8 @@ async def run_graph(
             "cache_miss": int(cache_stats["miss"]),
             "cache_hit_contract_mismatch": int(cache_stats["hit_contract_mismatch"]),
             "schema_infer": schema_delta,
+            "strict_schema_edge_checks": strict_schema_edge_checks,
+            "strict_coercion_policy": strict_coercion_policy,
         })
 
     async def _emit_cache_decision(
@@ -1616,19 +1743,41 @@ async def run_graph(
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
             upstream_ids = [aid for aid in (get_current_artifact(nid) for nid in up_nodes) if aid]
-            input_refs = await resolve_input_refs(
-                edges,
-                node_id,
-                get_current_artifact,
-                lambda nid: nodes.get(nid),
-                context.artifact_store,
-            )
+            resolve_input_refs_error: Optional[ContractMismatchError] = None
+            try:
+                input_refs = await resolve_input_refs(
+                    edges,
+                    node_id,
+                    get_current_artifact,
+                    lambda nid: nodes.get(nid),
+                    context.artifact_store,
+                )
+            except ContractMismatchError as ex:
+                resolve_input_refs_error = ex
+                input_refs = []
 
-            normalized_params_for_hash = _normalized_params_for_exec_key(
-                kind=kind,
-                node=n,
-                params=params,
-            )
+            try:
+                normalized_params_for_hash = _normalized_params_for_exec_key(
+                    kind=kind,
+                    node=n,
+                    params=params,
+                )
+            except Exception as ex:
+                # Do not fail node execution on hash-normalization errors; fall back to sanitized raw params.
+                normalized_params_for_hash = _sanitize_for_fingerprint(dict(params or {}))
+                if kind == "source":
+                    normalized_params_for_hash.setdefault(
+                        "source_type",
+                        str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "file"),
+                    )
+                await context.bus.emit({
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "warn",
+                    "message": f"PARAM_NORMALIZE_FALLBACK: {str(ex)}",
+                    "nodeId": node_id,
+                })
             if kind == "source":
                 debug_payload = {
                     "nodeId": node_id,
@@ -1686,6 +1835,7 @@ async def run_graph(
                 "expected_schema": expected_schema,
                 "cache_resolution": cache_resolution,
                 "cached_artifact_id": cached_artifact_id,
+                "resolve_input_refs_error": resolve_input_refs_error,
             }
 
         async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
@@ -1726,6 +1876,7 @@ async def run_graph(
             expected_schema = resolved["expected_schema"]
             cache_resolution = resolved["cache_resolution"]
             cached_artifact_id = resolved["cached_artifact_id"]
+            resolve_input_refs_error = resolved.get("resolve_input_refs_error")
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
 
             if expected_schema_source.startswith("default:"):
@@ -1747,17 +1898,8 @@ async def run_graph(
             allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
             declared_in = ports.get("in")
             declared_out = ports.get("out")
-            preflight_error: Optional[ContractMismatchError] = None
-            if kind == "source":
-                if declared_in not in (None, "", "null"):
-                    preflight_error = ContractMismatchError(
-                        "Source output contract mismatch: source nodes do not support input ports",
-                        details=_contract_details(
-                            expected={"inPortType": None},
-                            actual={"inPortType": str(declared_in)},
-                        ),
-                    )
-            elif declared_in is not None and str(declared_in) not in allowed_in:
+            preflight_error: Optional[ContractMismatchError] = resolve_input_refs_error
+            if kind != "source" and declared_in is not None and str(declared_in) not in allowed_in:
                 preflight_error = ContractMismatchError(
                     f"{kind.capitalize()} output contract mismatch: unsupported input port '{declared_in}'",
                     details=_contract_details(
@@ -1775,8 +1917,15 @@ async def run_graph(
                     ),
                 )
             # TKT-006/TKT-007: enforce edge-level input compatibility with explicit coercion policy.
-            if preflight_error is None and kind not in {"source", "component"} and input_refs:
-                coercion_policy = _coercion_policy_for_node(n)
+            if (
+                preflight_error is None
+                and strict_schema_edge_checks
+                and kind not in {"source", "component"}
+                and input_refs
+            ):
+                coercion_policy = (
+                    _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
+                )
                 for input_port, upstream_id in input_refs:
                     upstream_art = await context.artifact_store.get(upstream_id)
                     upstream_pt = _infer_artifact_port_type(upstream_art)
@@ -2960,14 +3109,27 @@ async def run_graph(
                             )
 
                         if upstream_pt != llm_in_contract:
-                            raise ContractMismatchError(
-                                "LLM input contract mismatch: upstream artifact port_type does not match node in port",
-                                code="LLM_INPUT_PORT_MISMATCH",
-                                details=_contract_details(
-                                    expected={"inPortType": llm_in_contract},
-                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                            if strict_schema_edge_checks:
+                                raise ContractMismatchError(
+                                    "LLM input contract mismatch: upstream artifact port_type does not match node in port",
+                                    code="LLM_INPUT_PORT_MISMATCH",
+                                    details=_contract_details(
+                                        expected={"inPortType": llm_in_contract},
+                                        actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                    ),
+                                )
+                            await context.bus.emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
+                                    f"port type {upstream_pt} coerced to {llm_in_contract} "
+                                    "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                 ),
-                            )
+                                "nodeId": node_id,
+                            })
 
                     output = await exec_llm(
                         run_id,
@@ -3003,14 +3165,27 @@ async def run_graph(
                                 ),
                             )
                         if upstream_pt != tool_in_contract:
-                            raise ContractMismatchError(
-                                "Tool output contract mismatch: upstream artifact port_type does not match node in port",
-                                code="TOOL_INPUT_PORT_MISMATCH",
-                                details=_contract_details(
-                                    expected={"inPortType": tool_in_contract},
-                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
+                            if strict_schema_edge_checks:
+                                raise ContractMismatchError(
+                                    "Tool output contract mismatch: upstream artifact port_type does not match node in port",
+                                    code="TOOL_INPUT_PORT_MISMATCH",
+                                    details=_contract_details(
+                                        expected={"inPortType": tool_in_contract},
+                                        actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                    ),
+                                )
+                            await context.bus.emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
+                                    f"port type {upstream_pt} coerced to {tool_in_contract} "
+                                    "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                 ),
-                            )
+                                "nodeId": node_id,
+                            })
 
                     tool_params_runtime = dict(params)
                     tool_params_runtime["_request_fingerprint"] = exec_key
@@ -3142,13 +3317,15 @@ async def run_graph(
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
                         declared_port_type = str(out_decl.get("portType") or "json").strip().lower() or "json"
                         actual_port_type = str(_infer_artifact_port_type(bound_artifact) or "json").strip().lower() or "json"
-                        coercion_policy = _coercion_policy_for_node(n)
+                        coercion_policy = (
+                            _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
+                        )
                         port_compatible = _component_output_port_compatible(
                             declared_port_type=declared_port_type,
                             actual_port_type=actual_port_type,
                             artifact=bound_artifact,
                         )
-                        if (not port_compatible) and coercion_policy != "allow_lossy":
+                        if strict_schema_edge_checks and (not port_compatible) and coercion_policy != "allow_lossy":
                             raise ContractMismatchError(
                                 f"Component output '{out_name}' port type mismatch",
                                 code="COMPONENT_OUTPUT_CONTRACT_MISMATCH",
@@ -3164,7 +3341,7 @@ async def run_graph(
                             actual=actual_typed,
                             policy=coercion_policy,
                         )
-                        if not ts_ok:
+                        if strict_schema_edge_checks and (not ts_ok):
                             raise ContractMismatchError(
                                 f"Component output '{out_name}' typed schema mismatch",
                                 code="COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH",
@@ -3654,6 +3831,16 @@ async def run_graph(
                     })
                     print(f"[schema-mismatch] runId={run_id} nodeId={node_id} {mismatch_msg}")
 
+                if error_code:
+                    await context.bus.emit({
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": f"{error_code}: {error_message}",
+                        "nodeId": node_id,
+                    })
+
                 await context.bus.emit({
                     "type": "log",
                     "runId": run_id,
@@ -3762,6 +3949,14 @@ async def run_graph(
                         return {"ok": False, "cached": False, "cancelled": True}
                     except Exception as ex:
                         await context.bus.emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "error",
+                            "message": f"NODE_EXECUTOR_ERROR: {str(ex)}",
+                            "nodeId": node_id,
+                        })
+                        await context.bus.emit({
                             "type": "node_finished",
                             "runId": run_id,
                             "at": iso_now(),
@@ -3799,6 +3994,14 @@ async def run_graph(
                             await _component_mark_node_finish(node_id, ok=False, error="cancelled")
                             return {"ok": False, "cached": False, "cancelled": True}
                         except Exception as ex:
+                            await context.bus.emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "error",
+                                "message": f"NODE_EXECUTOR_ERROR: {str(ex)}",
+                                "nodeId": node_id,
+                            })
                             await context.bus.emit({
                                 "type": "node_finished",
                                 "runId": run_id,

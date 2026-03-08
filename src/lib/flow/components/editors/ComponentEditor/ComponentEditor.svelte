@@ -11,7 +11,11 @@
 		ComponentTypedField
 	} from '$lib/flow/client/components';
 	import type { PortType } from '$lib/flow/types';
-	import { syncOutputBindings, validateComponentOutputs } from './validation';
+	import {
+		applyDerivedOutputPortTypes,
+		syncOutputBindings,
+		validateComponentOutputs
+	} from './validation';
 
 export let selectedNode: any;
 export let params: Record<string, any> = {};
@@ -30,6 +34,7 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	let lastSelectedNodeId = '';
 	let lastRevisionDetailKey = '';
 	let internalNodeOptions: Array<{ id: string; label: string }> = [];
+	let internalNodeMetaById: Record<string, { outPortType?: PortType }> = {};
 
 	$: componentRef = (params?.componentRef ?? {}) as {
 		componentId?: string;
@@ -47,12 +52,14 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	$: outputs = Array.isArray(api.outputs) ? api.outputs : [];
 	const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 	const TYPED_TYPE_OPTIONS = ['table', 'json', 'text', 'binary', 'embeddings', 'unknown'] as const;
+	const STRUCTURED_OUTPUT_TYPES = new Set<PortType>(['table', 'json']);
 	type TypedFieldType = ComponentTypedField['type'];
 	let outputFieldsJsonErrors: Record<number, string> = {};
 	let outputAdvancedOpen: Record<number, boolean> = {};
 	let outputFieldsEditorMode: Record<number, 'structured' | 'json'> = {};
 	let outputNameDraftByIndex: Record<number, string> = {};
 	let outputSyncSignature = '';
+	let outputCanonicalSignature = '';
 	$: latestRevisionId = String(revisions[0]?.revisionId ?? '').trim();
 	$: hasUpdate = Boolean(latestRevisionId && revisionId && latestRevisionId !== revisionId);
 	$: configObj = (params?.config ?? {}) as Record<string, unknown>;
@@ -92,6 +99,21 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		}
 	}
 
+	$: {
+		const derivedOutputs = applyDerivedOutputPortTypes(
+			outputs as ComponentApiPort[],
+			outputBindings,
+			internalNodeMetaById
+		);
+		const canonicalOutputs = derivedOutputs.map((out) => canonicalizeOutputPort(out as ComponentApiPort));
+		const nextSignature = JSON.stringify(canonicalOutputs);
+		const currentSignature = JSON.stringify(outputs ?? []);
+		if (nextSignature !== currentSignature && nextSignature !== outputCanonicalSignature) {
+			outputCanonicalSignature = nextSignature;
+			draftApiOutputs(canonicalOutputs);
+		}
+	}
+
 	$: if (selectedNode?.id) {
 		void ensureCatalogLoaded();
 	}
@@ -105,6 +127,7 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		void ensureRevisionDetailLoaded(componentId, revisionId);
 	} else {
 		internalNodeOptions = [];
+		internalNodeMetaById = {};
 		lastRevisionDetailKey = '';
 	}
 
@@ -178,6 +201,7 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		const key = `${cid}@${rid}`;
 		if (!cid || !rid) {
 			internalNodeOptions = [];
+			internalNodeMetaById = {};
 			lastRevisionDetailKey = '';
 			return;
 		}
@@ -188,18 +212,24 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		loadingRevisionDetail = false;
 		if (!(res as any)?.ok) {
 			internalNodeOptions = [];
+			internalNodeMetaById = {};
 			lastRevisionDetailKey = '';
 			return;
 		}
 		const detail = (res as any).detail ?? {};
 		const graph = (detail?.definition?.graph ?? {}) as { nodes?: any[] };
 		const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+		const nextMeta: Record<string, { outPortType?: PortType }> = {};
 		internalNodeOptions = nodes
 			.map((n) => {
 				const id = String(n?.id ?? '').trim();
 				if (!id) return null;
 				const kind = String(n?.data?.kind ?? 'node').trim();
 				const name = String(n?.data?.label ?? id).trim() || id;
+				const outPortRaw = String(n?.data?.ports?.out ?? '').trim().toLowerCase();
+				if (PORT_TYPE_OPTIONS.includes(outPortRaw as PortType)) {
+					nextMeta[id] = { outPortType: outPortRaw as PortType };
+				}
 				return {
 					id,
 					label: `${kind}: ${name}`
@@ -207,6 +237,7 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 			})
 			.filter((x): x is { id: string; label: string } => Boolean(x))
 			.sort((a, b) => a.label.localeCompare(b.label));
+		internalNodeMetaById = nextMeta;
 		lastRevisionDetailKey = key;
 	}
 
@@ -269,10 +300,11 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	}
 
 	function draftApiOutputs(nextOutputs: ComponentApiPort[]): void {
+		const canonical = nextOutputs.map((out) => canonicalizeOutputPort(out as ComponentApiPort));
 		onDraft({
 			api: {
 				inputs: [...inputs],
-				outputs: nextOutputs
+				outputs: canonical
 			}
 		});
 	}
@@ -282,7 +314,11 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		patch: Partial<ComponentApiPort>
 	): void {
 		const previousName = String(outputs[index]?.name ?? '').trim();
-		const next = outputs.map((out, i) => (i === index ? { ...out, ...patch } : out));
+		const next = outputs.map((out, i) =>
+			i === index
+				? canonicalizeOutputPort({ ...(out as ComponentApiPort), ...(patch as ComponentApiPort) })
+				: canonicalizeOutputPort(out as ComponentApiPort)
+		);
 		draftApiOutputs(next as ComponentApiPort[]);
 		const nextName = String(next[index]?.name ?? '').trim();
 		if (previousName && nextName && previousName !== nextName) {
@@ -336,19 +372,23 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 	}
 
 	function addApiOutput(): void {
+		errorMessage = '';
 		outputNameDraftByIndex = {};
-		const nextName = `out_${outputs.length + 1}`;
+		const nextName = outputs.length === 0 ? 'default' : `out_${outputs.length + 1}`;
+		const fallbackNodeId = String(internalNodeOptions[0]?.id ?? '').trim() || undefined;
+		const initialPortType = normalizePortType(
+			(fallbackNodeId ? internalNodeMetaById[fallbackNodeId]?.outPortType : undefined) ?? 'json'
+		);
 		const next = [
 			...outputs,
 			{
 				name: nextName,
-				portType: 'json',
+				portType: initialPortType,
 				required: true,
-				typedSchema: { type: 'json', fields: [] }
+				typedSchema: { type: initialPortType, fields: [] }
 			}
 		];
 		draftApiOutputs(next as ComponentApiPort[]);
-		const fallbackNodeId = String(internalNodeOptions[0]?.id ?? '').trim() || undefined;
 		onDraft({
 			bindings: {
 				inputs: { ...(bindings?.inputs ?? {}) },
@@ -370,6 +410,18 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 	function toggleOutputBindingArtifact(name: string): void {
 		onOutputBindingArtifactChange(name, isOutputBindingCurrent(name) ? 'last' : 'current');
+	}
+
+	function resetOutputSchema(index: number): void {
+		const output = outputs[index];
+		if (!output) return;
+		const portType = normalizePortType(output.portType);
+		updateApiOutput(index, {
+			typedSchema: {
+				type: portType as TypedFieldType,
+				fields: []
+			}
+		});
 	}
 
 	function removeApiOutput(index: number): void {
@@ -426,15 +478,49 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		return (TYPED_TYPE_OPTIONS as readonly string[]).includes(t) ? (t as TypedFieldType) : 'unknown';
 	}
 
+	function normalizePortType(value: unknown): PortType {
+		const v = String(value ?? '').trim().toLowerCase();
+		return PORT_TYPE_OPTIONS.includes(v as PortType) ? (v as PortType) : 'json';
+	}
+
+	function shouldShowStructuredFieldsEditor(portType: unknown): boolean {
+		return STRUCTURED_OUTPUT_TYPES.has(normalizePortType(portType));
+	}
+
+	function canonicalizeFieldsForPortType(
+		portType: PortType,
+		fieldsRaw: unknown
+	): ComponentTypedField[] {
+		if (!shouldShowStructuredFieldsEditor(portType)) return [];
+		if (!Array.isArray(fieldsRaw)) return [];
+		return fieldsRaw
+			.filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === 'object')
+			.map((f) => ({
+				name: String(f.name ?? '').trim(),
+				type: normalizeTypedFieldType(f.type),
+				nativeType: f.nativeType == null ? undefined : String(f.nativeType),
+				nullable: Boolean(f.nullable ?? false)
+			}));
+	}
+
+	function canonicalizeOutputPort(port: ComponentApiPort): ComponentApiPort {
+		const normalizedPortType = normalizePortType((port as any)?.portType);
+		const typedSchema = (port as any)?.typedSchema ?? {};
+		return {
+			...port,
+			portType: normalizedPortType,
+			required: Boolean((port as any)?.required ?? true),
+			typedSchema: {
+				type: normalizedPortType as TypedFieldType,
+				fields: canonicalizeFieldsForPortType(normalizedPortType, (typedSchema as any)?.fields)
+			}
+		};
+	}
+
 	function getOutputFields(index: number): ComponentTypedField[] {
+		const portType = normalizePortType(outputs[index]?.portType ?? 'json');
 		const fields = outputs[index]?.typedSchema?.fields;
-		if (!Array.isArray(fields)) return [];
-		return fields.map((f: any) => ({
-			name: String(f?.name ?? '').trim(),
-			type: normalizeTypedFieldType(f?.type),
-			nativeType: f?.nativeType == null ? undefined : String(f.nativeType),
-			nullable: Boolean(f?.nullable ?? false)
-		}));
+		return canonicalizeFieldsForPortType(portType, fields);
 	}
 
 	function updateOutputField(
@@ -442,17 +528,20 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		fieldIndex: number,
 		patch: Partial<ComponentTypedField>
 	): void {
+		const portType = normalizePortType(outputs[outputIndex]?.portType);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.map((field, i) => (i === fieldIndex ? { ...field, ...patch } : field));
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				type: portType as TypedFieldType,
 				fields: nextFields
 			}
 		});
 	}
 
 	function addOutputField(outputIndex: number): void {
+		const portType = normalizePortType(outputs[outputIndex]?.portType);
+		if (!shouldShowStructuredFieldsEditor(portType)) return;
 		const fields = getOutputFields(outputIndex);
 		const newField: ComponentTypedField = {
 			name: `field_${fields.length + 1}`,
@@ -462,18 +551,19 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		const nextFields = [...fields, newField];
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				type: portType as TypedFieldType,
 				fields: nextFields
 			}
 		});
 	}
 
 	function removeOutputField(outputIndex: number, fieldIndex: number): void {
+		const portType = normalizePortType(outputs[outputIndex]?.portType);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.filter((_, i) => i !== fieldIndex);
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				...(outputs[outputIndex]?.typedSchema ?? { type: 'unknown', fields: [] }),
+				type: portType as TypedFieldType,
 				fields: nextFields
 			}
 		});
@@ -515,9 +605,10 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 					(f as any)?.nativeType == null ? undefined : String((f as any).nativeType),
 				nullable: Boolean((f as any)?.nullable ?? false)
 			}));
+			const portType = normalizePortType(outputs[index]?.portType);
 			updateApiOutput(index, {
 				typedSchema: {
-					...(outputs[index]?.typedSchema ?? { type: 'unknown', fields: [] }),
+					type: portType as TypedFieldType,
 					fields: normalized
 				}
 			});
@@ -793,7 +884,15 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		<div class="contractGroup">
 			<div class="groupTitle">Outputs</div>
 			<div class="outputControls">
-				<button class="tabBtn small" on:click={addApiOutput}>+ Add output</button>
+				<button
+					class="tabBtn small"
+					type="button"
+					on:click={addApiOutput}
+					disabled={loadingRevisionDetail}
+					title={loadingRevisionDetail ? 'Loading revision detail...' : undefined}
+				>
+					+ Add output
+				</button>
 			</div>
 			{#if outputValidation.hasErrors}
 				<div class="validationSummary">Resolve output/binding issues before Accept: {outputValidationSummary}</div>
@@ -823,16 +922,11 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 									}
 								}}
 							/>
-							<select
-								value={String(port.portType ?? 'json')}
-								on:change={(e) => updateApiOutput(index, { portType: (e.currentTarget as HTMLSelectElement).value as PortType })}
-							>
-								{#each PORT_TYPE_OPTIONS as p}
-									<option value={p}>{p}</option>
-								{/each}
-							</select>
+							<div class="readonlyField outputTypeReadonly" title="Derived from bound internal node">
+								{String(port.portType ?? 'json')}
+							</div>
 							<div class="outputActions">
-								<button class="tabBtn small danger" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
+								<button class="tabBtn small danger" type="button" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
 							</div>
 						</div>
 						<div class="outputEditorRow outputEditorRowSecondary">
@@ -864,96 +958,101 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 									checked={Boolean(port.required ?? true)}
 									on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
 								/>
-								required
+								req
 							</label>
 							<div class="outputActions">
-								<button class="tabBtn small" on:click={() => toggleOutputAdvanced(index)}>
-									{isOutputAdvancedOpen(index) ? 'Hide Adv' : 'Adv'}
+								<button class="tabBtn small" type="button" on:click|stopPropagation={() => toggleOutputAdvanced(index)}>
+									Adv {isOutputAdvancedOpen(index) ? '▴' : '▾'}
 								</button>
 							</div>
 						</div>
+						{#if !isOutputAdvancedOpen(index) && outputValidation.outputErrors[index]?.length}
+							<div class="schemaIssueBadge">Schema issue</div>
+						{/if}
 						{#if isOutputAdvancedOpen(index)}
 							<div class="outputSchemaRow">
 								<div class="schemaType">
 									<span class="k">typedSchema.type</span>
-									<select
-										value={String(port.typedSchema?.type ?? 'unknown')}
-										on:change={(e) =>
-											updateApiOutput(index, {
-												typedSchema: {
-													...(port.typedSchema ?? { fields: [] }),
-													type: (e.currentTarget as HTMLSelectElement).value as (typeof TYPED_TYPE_OPTIONS)[number]
-												}
-											})}
-									>
-										{#each TYPED_TYPE_OPTIONS as t}
-											<option value={t}>{t}</option>
-										{/each}
-									</select>
+									<div class="readonlyField">{String(port.portType ?? 'json')}</div>
 								</div>
 								<div class="schemaFields">
 									<div class="schemaFieldsHeader">
 										<span class="k">typedSchema.fields</span>
 										<div class="schemaFieldActions">
-											<button
-												class="tabBtn small"
-												on:click={() => setFieldsEditorMode(index, getFieldsEditorMode(index) === 'structured' ? 'json' : 'structured')}
-											>
-												{getFieldsEditorMode(index) === 'structured' ? 'JSON' : 'List'}
-											</button>
-											{#if getFieldsEditorMode(index) === 'structured'}
-												<button class="tabBtn small" on:click={() => addOutputField(index)}>+ field</button>
+											{#if shouldShowStructuredFieldsEditor(port.portType)}
+												<button
+													class="tabBtn small"
+													type="button"
+													on:click={() => setFieldsEditorMode(index, getFieldsEditorMode(index) === 'structured' ? 'json' : 'structured')}
+												>
+													{getFieldsEditorMode(index) === 'structured' ? 'JSON' : 'List'}
+												</button>
+												{#if getFieldsEditorMode(index) === 'structured'}
+													<button class="tabBtn small" type="button" on:click={() => addOutputField(index)}>+ field</button>
+												{/if}
 											{/if}
+											<button class="tabBtn small" type="button" on:click={() => resetOutputSchema(index)}>Reset</button>
 										</div>
 									</div>
-									{#if getFieldsEditorMode(index) === 'structured'}
-										{#if getOutputFields(index).length === 0}
-											<div class="muted">No fields</div>
-										{:else}
-											{#each getOutputFields(index) as field, fieldIndex (`${index}:${fieldIndex}:${field.name}`)}
-												<div class="fieldRow">
-													<input
-														placeholder="field name"
-														value={String(field.name ?? '')}
-														on:input={(e) => updateOutputField(index, fieldIndex, { name: (e.currentTarget as HTMLInputElement).value })}
-													/>
-													<select
-														value={String(field.type ?? 'unknown')}
-														on:change={(e) =>
-															updateOutputField(index, fieldIndex, {
-																type: normalizeTypedFieldType(
-																	(e.currentTarget as HTMLSelectElement).value
-																)
-															})}
-													>
-														{#each TYPED_TYPE_OPTIONS as t}
-															<option value={t}>{t}</option>
-														{/each}
-													</select>
-													<label class="requiredToggle">
+									{#if shouldShowStructuredFieldsEditor(port.portType)}
+										{#if getFieldsEditorMode(index) === 'structured'}
+											{#if getOutputFields(index).length === 0}
+												<div class="muted">No fields</div>
+											{:else}
+												{#each getOutputFields(index) as field, fieldIndex (`${index}:${fieldIndex}:${field.name}`)}
+													<div class="fieldRow">
 														<input
-															type="checkbox"
-															checked={Boolean(field.nullable ?? false)}
-															on:change={(e) => updateOutputField(index, fieldIndex, { nullable: (e.currentTarget as HTMLInputElement).checked })}
+															placeholder="field name"
+															value={String(field.name ?? '')}
+															on:input={(e) => updateOutputField(index, fieldIndex, { name: (e.currentTarget as HTMLInputElement).value })}
 														/>
-														nullable
-													</label>
-													<button class="tabBtn small danger" title="Remove field" on:click={() => removeOutputField(index, fieldIndex)}>-</button>
-												</div>
-											{/each}
+														<select
+															value={String(field.type ?? 'unknown')}
+															on:change={(e) =>
+																updateOutputField(index, fieldIndex, {
+																	type: normalizeTypedFieldType(
+																		(e.currentTarget as HTMLSelectElement).value
+																	)
+																})}
+														>
+															{#each TYPED_TYPE_OPTIONS as t}
+																<option value={t}>{t}</option>
+															{/each}
+														</select>
+														<label class="requiredToggle">
+															<input
+																type="checkbox"
+																checked={Boolean(field.nullable ?? false)}
+																on:change={(e) => updateOutputField(index, fieldIndex, { nullable: (e.currentTarget as HTMLInputElement).checked })}
+															/>
+															nullable
+														</label>
+														<button class="tabBtn small danger" type="button" title="Remove field" on:click={() => removeOutputField(index, fieldIndex)}>-</button>
+													</div>
+												{/each}
+											{/if}
+										{:else}
+											<textarea
+												rows="3"
+												value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
+												on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
+											></textarea>
+											{#if outputFieldsJsonErrors[index]}
+												<div class="bindingErr">Invalid fields JSON: {outputFieldsJsonErrors[index]}</div>
+											{/if}
 										{/if}
 									{:else}
-										<textarea
-											rows="3"
-											value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
-											on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
-										></textarea>
-										{#if outputFieldsJsonErrors[index]}
-											<div class="bindingErr">Invalid fields JSON: {outputFieldsJsonErrors[index]}</div>
-										{/if}
+										<div class="muted">No schema fields for {String(port.portType ?? 'json')} outputs.</div>
 									{/if}
 								</div>
 							</div>
+							{#if outputValidation.outputErrors[index]?.length}
+								<div class="bindingErr">
+									{#each outputValidation.outputErrors[index] as issue}
+										<div>{issue}</div>
+									{/each}
+								</div>
+							{/if}
 						{/if}
 						{#if !String(outputBindings?.[port.name]?.nodeId ?? '').trim()}
 							<div class="bindingErr">bindings.outputs.{port.name}.nodeId is required</div>
@@ -961,13 +1060,6 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 						{#if outputValidation.bindingErrors[port.name]?.length}
 							<div class="bindingErr">
 								{#each outputValidation.bindingErrors[port.name] as issue}
-									<div>{issue}</div>
-								{/each}
-							</div>
-						{/if}
-						{#if outputValidation.outputErrors[index]?.length}
-							<div class="bindingErr">
-								{#each outputValidation.outputErrors[index] as issue}
 									<div>{issue}</div>
 								{/each}
 							</div>
@@ -1172,6 +1264,17 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		gap: 4px;
 	}
 
+	.readonlyField {
+		height: 32px;
+		display: flex;
+		align-items: center;
+		padding: 0 10px;
+		border: 1px solid #283044;
+		border-radius: 8px;
+		background: rgba(9, 14, 26, 0.35);
+		font-size: 12px;
+	}
+
 	.schemaFieldsHeader {
 		display: flex;
 		align-items: center;
@@ -1190,6 +1293,19 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto auto;
 		gap: 8px;
 		align-items: center;
+	}
+
+	.schemaIssueBadge {
+		display: inline-flex;
+		align-items: center;
+		margin-top: 8px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid rgba(251, 146, 60, 0.55);
+		background: rgba(251, 146, 60, 0.16);
+		color: #ffb86b;
+		font-size: 11px;
+		font-weight: 600;
 	}
 
 	.requiredToggle {

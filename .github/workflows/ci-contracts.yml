@@ -1,0 +1,70 @@
+name: CI Contracts And Regressions
+
+on:
+	push:
+		branches: [main, master]
+	pull_request:
+		branches: [main, master]
+
+jobs:
+	frontend-schema-contract:
+		name: Frontend Schema + Contract Tests
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-node@v4
+				with:
+					node-version: '20'
+					cache: 'npm'
+			- run: npm ci
+			- name: Run schema and contract focused frontend tests
+				run: |
+					npm run test -- \
+						src/lib/flow/schema/nodeSubtypeContracts.test.ts \
+						src/lib/flow/components/editors/ComponentEditor/validation.test.ts \
+						src/lib/flow/components/artifactWrapper.test.ts \
+						src/lib/flow/store/graphStore.component.test.ts
+
+	backend-contract-property-e2e:
+		name: Backend Contract + Property + E2E
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-python@v5
+				with:
+					python-version: '3.11'
+					cache: 'pip'
+					cache-dependency-path: backend/requirements.txt
+			- name: Install backend deps
+				run: python -m pip install -r backend/requirements.txt
+			- name: Run backend contract/property/e2e tests
+				run: |
+					cd backend
+					python -m pytest tests/contracts tests/property tests/e2e
+
+	perf-regression-smoke:
+		name: Regression And Perf Smoke
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-node@v4
+				with:
+					node-version: '20'
+					cache: 'npm'
+			- uses: actions/setup-python@v5
+				with:
+					python-version: '3.11'
+					cache: 'pip'
+					cache-dependency-path: backend/requirements.txt
+			- run: npm ci
+			- run: python -m pip install -r backend/requirements.txt
+			- name: Frontend race/scope smoke
+				run: |
+					npm run test -- \
+						src/lib/flow/store/graphStore.race.test.ts \
+						src/lib/flow/store/graphStore.runScope.test.ts
+			- name: Backend diagnostics/perf telemetry smoke
+				run: |
+					cd backend
+					python -m pytest tests/integration/test_runs_diagnostics.py
+

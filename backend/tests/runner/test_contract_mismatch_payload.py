@@ -31,10 +31,13 @@ def test_cached_contract_mismatch_includes_fingerprints():
         exec_key="a" * 64,
     )
 
-    mismatch = _cached_artifact_contract_mismatch("tool", node, art)
+    mismatch = _cached_artifact_contract_mismatch(
+        "tool",
+        node,
+        art,
+        {"schemaFingerprint": "expected-fingerprint", "schemaSource": "declared"},
+    )
     assert mismatch is not None
-    assert mismatch["expectedPortType"] == "json"
-    assert mismatch["actualPortType"] == "text"
-    assert mismatch["mismatchKind"] == "port_type"
+    assert mismatch["mismatchKind"] == "schema_fingerprint"
     assert isinstance(mismatch.get("expectedContractFingerprint"), str)
     assert isinstance(mismatch.get("actualContractFingerprint"), str)

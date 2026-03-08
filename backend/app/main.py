@@ -45,8 +45,13 @@ app.include_router(maintenance_router, prefix="/maintenance")
 @app.get("/capabilities")
 async def get_capabilities():
     caps = capabilities_response()
+    flags = get_feature_flags()
     return {
         "schemaVersion": 1,
         "signature": capability_signature(),
         "capabilities": caps,
+        "featureFlags": {
+            "STRICT_SCHEMA_EDGE_CHECKS": bool(flags.get("STRICT_SCHEMA_EDGE_CHECKS", True)),
+            "STRICT_COERCION_POLICY": bool(flags.get("STRICT_COERCION_POLICY", True)),
+        },
     }

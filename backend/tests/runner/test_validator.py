@@ -3,7 +3,7 @@ Unit tests for validator
 """
 import pytest
 from typing import Dict, Any
-from app.runner.validator import  validate_node_connections, validate_parameters
+from app.runner.validator import validate_node_connections, validate_parameters, validate_pipeline
 
 
 class TestValidator:

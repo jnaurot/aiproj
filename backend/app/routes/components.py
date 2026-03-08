@@ -14,6 +14,34 @@ from app.component_contracts import (
 router = APIRouter()
 
 
+def _post_canonical_port_schema_diagnostics(definition: Dict[str, Any]) -> list[dict[str, str]]:
+    diagnostics: list[dict[str, str]] = []
+    api = definition.get("api")
+    outputs = api.get("outputs") if isinstance(api, dict) else None
+    if not isinstance(outputs, list):
+        return diagnostics
+    for idx, output in enumerate(outputs):
+        if not isinstance(output, dict):
+            continue
+        port_type = str(output.get("portType") or "").strip().lower()
+        typed_schema = output.get("typedSchema")
+        typed_type = (
+            str(typed_schema.get("type") or "").strip().lower()
+            if isinstance(typed_schema, dict)
+            else ""
+        )
+        if port_type and typed_type and port_type != typed_type:
+            diagnostics.append(
+                {
+                    "code": "TYPED_SCHEMA_PORT_MISMATCH",
+                    "path": f"api.outputs[{idx}].typedSchema.type",
+                    "message": "typedSchema.type must match portType after canonicalization",
+                    "severity": "error",
+                }
+            )
+    return diagnostics
+
+
 class ComponentRevisionWriteRequest(BaseModel):
     componentId: Optional[str] = None
     revisionId: Optional[str] = None
@@ -64,6 +92,7 @@ async def validate_component_revision(req: ComponentValidateRequest):
         raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
     )
     normalized_diagnostics = [d.as_dict() for d in validate_component_definition(normalized_definition)]
+    normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(normalized_definition))
     diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
     ok = len([d for d in diagnostics if d.get("severity") == "error"]) == 0
     return {
@@ -102,6 +131,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
         raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
     )
     diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
+    diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
     errors = [d for d in diagnostics if d.get("severity") == "error"]
     if errors:
         raise HTTPException(

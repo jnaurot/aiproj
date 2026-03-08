@@ -8,6 +8,18 @@ export type ComponentPreflightSummary = {
 	detail: string;
 };
 
+function diagnosticLine(
+	index: number,
+	diagnostic: { severity?: string; code?: string; path?: string; message?: string }
+): string {
+	const level = String(diagnostic?.severity ?? 'error').toUpperCase();
+	const code = String(diagnostic?.code ?? 'VALIDATION');
+	const path = String(diagnostic?.path ?? '').trim();
+	const msg = String(diagnostic?.message ?? '').trim();
+	const where = path ? ` (${path})` : '';
+	return `${index + 1}. [${level}] ${code}${where}${msg ? `: ${msg}` : ''}`;
+}
+
 export function summarizeComponentPreflight(
 	ok: boolean,
 	diagnostics: ComponentValidationDiagnostic[] | undefined,
@@ -18,14 +30,7 @@ export function summarizeComponentPreflight(
 	const errors = items.filter((d) => String(d?.severity ?? 'error').toLowerCase() === 'error');
 	const warnings = items.filter((d) => String(d?.severity ?? '').toLowerCase() === 'warning');
 	const title = `${componentId || '(component)'}${revisionId ? `@${revisionId}` : ''}`;
-	const lines = items.map((d, i) => {
-		const level = String(d?.severity ?? 'error').toUpperCase();
-		const code = String(d?.code ?? 'VALIDATION');
-		const path = String(d?.path ?? '').trim();
-		const msg = String(d?.message ?? '').trim();
-		const where = path ? ` (${path})` : '';
-		return `${i + 1}. [${level}] ${code}${where}${msg ? `: ${msg}` : ''}`;
-	});
+	const lines = items.map((d, i) => diagnosticLine(i, d));
 	if (!ok || errors.length > 0) {
 		return {
 			ok: false,
@@ -50,5 +55,43 @@ export function summarizeComponentPreflight(
 		warningCount: 0,
 		headline: `Component preflight passed for ${title}`,
 		detail: 'No diagnostics.'
+	};
+}
+
+export function summarizeComponentPublishFailure(
+	error: unknown,
+	componentId: string,
+	revisionId: string
+): ComponentPreflightSummary {
+	const title = `${componentId || '(component)'}${revisionId ? `@${revisionId}` : ''}`;
+	const raw = String(error ?? '');
+	const jsonStart = raw.indexOf('{');
+	let diagnostics: Array<{ severity?: string; code?: string; path?: string; message?: string }> = [];
+	let message = raw;
+	if (jsonStart >= 0) {
+		try {
+			const parsed = JSON.parse(raw.slice(jsonStart));
+			const detail = (parsed as any)?.detail ?? {};
+			if (Array.isArray(detail?.diagnostics)) diagnostics = detail.diagnostics;
+			if (typeof detail?.message === 'string' && detail.message.trim()) message = detail.message;
+		} catch {
+			// Keep raw message fallback.
+		}
+	}
+	if (diagnostics.length > 0) {
+		return {
+			ok: false,
+			errorCount: diagnostics.length,
+			warningCount: 0,
+			headline: `Component publish blocked for ${title}`,
+			detail: diagnostics.map((d, i) => diagnosticLine(i, d)).join('\n')
+		};
+	}
+	return {
+		ok: false,
+		errorCount: 1,
+		warningCount: 0,
+		headline: `Component publish failed for ${title}`,
+		detail: message || 'Unknown publish error.'
 	};
 }

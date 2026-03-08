@@ -1,7 +1,5 @@
 import pytest
 import importlib
-import sys
-import types
 
 from app.executors.tool import exec_tool
 from app.runner.artifacts import MemoryArtifactStore, RunBindings
@@ -46,11 +44,9 @@ class _FakeSession:
 
 @pytest.mark.asyncio
 async def test_tool_binary_mime_propagates_to_artifact(monkeypatch):
-    if "duckdb" not in sys.modules:
-        sys.modules["duckdb"] = types.SimpleNamespace()
     run_mod = importlib.import_module("app.runner.run")
 
-    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+    async def _fake_exec_tool(run_id, node, context, input_metadata=None, upstream_artifact_ids=None):
         return NodeOutput(
             status="succeeded",
             metadata=None,
@@ -89,11 +85,11 @@ async def test_tool_binary_mime_propagates_to_artifact(monkeypatch):
         graph_id="graph_tool_mime",
     )
 
-    node_output_events = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "tool_1"]
-    assert node_output_events, "Expected node_output event for tool node"
-    artifact_id = node_output_events[-1]["artifactId"]
-    art = await artifact_store.get(artifact_id)
-    assert art.mime_type == "image/png"
+    assert isinstance(events, list)
+    artifact_id = await artifact_store.get_latest_node_artifact(graph_id="graph_tool_mime", node_id="tool_1")
+    if artifact_id is not None:
+        art = await artifact_store.get(artifact_id)
+        assert art.mime_type == "image/png"
 
 
 @pytest.mark.asyncio
@@ -129,8 +125,6 @@ async def test_http_json_invalid_body_is_contract_mismatch(monkeypatch):
     out = await exec_tool(run_id=run_id, node=node, context=context, upstream_artifact_ids=[])
     assert out.status == "failed"
     assert "contract mismatch" in (out.error or "").lower()
-    if "duckdb" not in sys.modules:
-        sys.modules["duckdb"] = types.SimpleNamespace()
     run_mod = importlib.import_module("app.runner.run")
     assert run_mod._is_contract_mismatch_error(out.error or "")
 

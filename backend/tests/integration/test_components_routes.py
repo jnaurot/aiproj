@@ -112,6 +112,34 @@ def test_component_routes_validate_endpoint():
         assert body["componentSchemaVersion"] == 1
         assert isinstance(body.get("normalizedDefinition"), dict)
         assert body["normalizedDefinition"]["api"]["outputs"][0]["typedSchema"]["type"] == "json"
+        assert body["normalizedDefinition"]["api"]["outputs"][0]["typedSchema"]["fields"] == []
+
+        canonicalized = client.post(
+            "/components/validate",
+            json={
+                "graph": {"version": 1, "nodes": [], "edges": []},
+                "api": {
+                    "inputs": [],
+                    "outputs": [
+                        {
+                            "name": "out_text",
+                            "portType": "text",
+                            "required": True,
+                            "typedSchema": {
+                                "type": "json",
+                                "fields": [{"name": "x", "type": "text"}],
+                            },
+                        }
+                    ],
+                },
+            },
+        )
+        assert canonicalized.status_code == 200, canonicalized.text
+        canonicalized_body = canonicalized.json()
+        assert canonicalized_body["ok"] is True
+        normalized_output = canonicalized_body["normalizedDefinition"]["api"]["outputs"][0]
+        assert normalized_output["typedSchema"]["type"] == "text"
+        assert normalized_output["typedSchema"]["fields"] == []
 
         bad = client.post(
             "/components/validate",

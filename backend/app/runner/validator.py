@@ -5,6 +5,7 @@ from .schemas import validate_node_params  # Import schema validation
 from .capabilities import allowed_port_types, allowed_ports
 
 from pprint import pformat
+from typing import Set
 
 @dataclass
 class ValidationError:
@@ -457,3 +458,70 @@ class GraphValidator:
                     ))
         
         return warnings
+
+
+# Legacy compatibility helpers used by older unit tests
+_LEGACY_NODE_KINDS: Set[str] = {"source", "transform", "llm", "tool", "component"}
+
+
+def validate_node_connections(edge: Dict[str, Any]) -> Dict[str, Any]:
+    source = edge.get("from") or edge.get("source")
+    target = edge.get("to") or edge.get("target")
+    if not source or not target:
+        return {"valid": False, "error": "edge must include both source and target"}
+    if source == target:
+        return {"valid": False, "error": "self connection is not allowed"}
+    return {"valid": True}
+
+
+def validate_parameters(node: Dict[str, Any], _nodes_map: Dict[str, Any]) -> Dict[str, Any]:
+    data = node.get("data")
+    if not isinstance(data, dict):
+        return {"valid": False, "error": "node.data is required"}
+    kind = data.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        return {"valid": False, "error": "node.data.kind is required"}
+    if kind not in _LEGACY_NODE_KINDS:
+        return {"valid": False, "error": f"invalid node kind: {kind}"}
+    return {"valid": True}
+
+
+def validate_pipeline(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> Dict[str, Any]:
+    errors: List[str] = []
+    node_ids: Set[str] = set()
+
+    for node in nodes:
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id:
+            errors.append("node.id is required")
+            continue
+        if node_id in node_ids:
+            errors.append(f"duplicate node id: {node_id}")
+            continue
+        node_ids.add(node_id)
+
+        result = validate_parameters(node, {})
+        if not result.get("valid"):
+            errors.append(str(result.get("error") or "invalid node parameters"))
+
+    for edge in edges:
+        edge_result = validate_node_connections(edge)
+        if not edge_result.get("valid"):
+            errors.append(str(edge_result.get("error") or "invalid edge"))
+            continue
+
+        source = edge.get("from") or edge.get("source")
+        target = edge.get("to") or edge.get("target")
+        if source not in node_ids:
+            errors.append(f"edge source does not exist: {source}")
+        if target not in node_ids:
+            errors.append(f"edge target does not exist: {target}")
+
+        source_node = next((n for n in nodes if n.get("id") == source), None)
+        target_node = next((n for n in nodes if n.get("id") == target), None)
+        if isinstance(source_node, dict) and source_node.get("ports") == []:
+            errors.append(f"node '{source}' missing output ports")
+        if isinstance(target_node, dict) and target_node.get("ports") == []:
+            errors.append(f"node '{target}' missing input ports")
+
+    return {"valid": len(errors) == 0, "errors": errors}

@@ -342,6 +342,7 @@ async def exec_source(
     run_id: str,
     node: Dict[str, Any],
     context: GraphContext,
+    input_metadata: Optional[FileMetadata] = None,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     upstream_artifact_ids = upstream_artifact_ids or []

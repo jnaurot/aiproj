@@ -15,7 +15,7 @@ class FileMetadata(BaseModel):
     file_path: str
     file_type: Literal["csv", "tsv", "parquet", "json", "txt", "excel", "pdf", "binary", "image"]
     mime_type: str
-    size_bytes: int
+    size_bytes: int = 0
     
     # Data schema
     data_schema: Optional[Dict[str, Any]] = None
@@ -31,8 +31,8 @@ class FileMetadata(BaseModel):
 
     
     # Lineage
-    node_id: str
-    params_hash: str
+    node_id: str = ""
+    params_hash: str = ""
     input_metadata_hash: Optional[str] = None  # Hash of upstream metadata
     
     # Performance
