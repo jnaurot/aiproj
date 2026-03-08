@@ -179,6 +179,97 @@ def test_canonicalize_graph_payload_fixes_legacy_component_handles_bindings_and_
 	assert not isinstance(((edge.get("data") or {}).get("componentOutputBinding")), dict)
 
 
+def test_canonicalize_graph_payload_aligns_component_output_typed_schema_in_graph_node_params():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "cmp1",
+				"type": "component",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "component",
+					"params": {
+						"api": {
+							"inputs": [],
+							"outputs": [
+								{
+									"name": "summary",
+									"portType": "text",
+									"required": True,
+									"typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+								}
+							],
+						},
+						"bindings": {"inputs": {}, "config": {}, "outputs": {"summary": {"nodeId": "n1", "artifact": "current"}}},
+						"config": {},
+					},
+				},
+			}
+		],
+		"edges": [],
+	}
+	next_graph, notes = canonicalize_graph_payload(graph)
+	assert isinstance(notes, list)
+	params = ((next_graph["nodes"][0].get("data") or {}).get("params") or {})
+	out = (((params.get("api") or {}).get("outputs") or [{}])[0]) if isinstance((params.get("api") or {}).get("outputs"), list) else {}
+	assert str((out.get("typedSchema") or {}).get("type") or "") == "text"
+	assert ((out.get("typedSchema") or {}).get("fields") or []) == []
+
+
+def test_canonicalize_graph_payload_infers_named_handle_from_unique_contract_port_type():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "cmp1",
+				"type": "component",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "component",
+					"params": {
+						"api": {
+							"inputs": [],
+							"outputs": [
+								{"name": "summary", "portType": "text", "required": True, "typedSchema": {"type": "text", "fields": []}},
+								{"name": "payload", "portType": "json", "required": True, "typedSchema": {"type": "json", "fields": []}},
+							],
+						},
+						"bindings": {
+							"inputs": {},
+							"config": {},
+							"outputs": {
+								"summary": {"nodeId": "n_sum", "artifact": "current"},
+								"payload": {"nodeId": "n_payload", "artifact": "current"},
+							},
+						},
+						"config": {},
+					},
+				},
+			},
+			{
+				"id": "llm1",
+				"type": "llm",
+				"position": {"x": 400, "y": 0},
+				"data": {"kind": "llm", "ports": {"in": "text", "out": "text"}},
+			},
+		],
+		"edges": [
+			{
+				"id": "e1",
+				"source": "cmp1",
+				"sourceHandle": "out",
+				"target": "llm1",
+				"targetHandle": "in",
+				"data": {"contract": {"out": "text", "in": "text", "payload": {"source": {"type": "json"}, "target": {"type": "string"}}}},
+			}
+		],
+	}
+	next_graph, _ = canonicalize_graph_payload(graph)
+	edge = next_graph["edges"][0]
+	assert str(edge.get("sourceHandle") or "") == "summary"
+
+
 def test_graph_create_revision_applies_component_migration_normalization():
 	graph_id = f"graph_migrate_cmp_{uuid4().hex[:8]}"
 	with TestClient(app) as client:

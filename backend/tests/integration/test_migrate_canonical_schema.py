@@ -96,6 +96,10 @@ def test_graph_migration_dry_run_and_apply(tmp_path: Path):
 		assert graph["nodes"][0]["data"]["ports"]["out"] == "table"
 		assert str(row[1]) != "stale-checksum"
 
+	second_live = migrate_graph_revisions(str(db_path), dry_run=False)
+	assert second_live["changed"] == 0
+	assert second_live["changedRevisionIds"] == []
+
 
 def test_component_migration_dry_run_and_apply(tmp_path: Path):
 	db_path = tmp_path / "components.sqlite"
@@ -130,3 +134,7 @@ def test_component_migration_dry_run_and_apply(tmp_path: Path):
 		assert isinstance(definition.get("api", {}).get("outputs"), list)
 		assert int(row[2]) == 1
 		assert str(row[1]) != "stale-checksum"
+
+	second_live = migrate_component_revisions(str(db_path), dry_run=False)
+	assert second_live["changed"] == 0
+	assert second_live["changedRevisionIds"] == []

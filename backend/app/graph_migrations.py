@@ -46,6 +46,50 @@ def _component_output_decls(node: Dict[str, Any]) -> List[Dict[str, Any]]:
 	return [o for o in outputs if isinstance(o, dict)]
 
 
+def _canonicalize_component_api_outputs_in_graph(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	if str(data.get("kind") or "").strip().lower() != "component":
+		return
+	params = data.get("params") if isinstance(data.get("params"), dict) else {}
+	if not isinstance(params, dict):
+		return
+	api = params.get("api") if isinstance(params.get("api"), dict) else {}
+	if not isinstance(api, dict):
+		return
+	outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
+	changed = False
+	next_outputs: List[Dict[str, Any]] = []
+	for raw in outputs:
+		if not isinstance(raw, dict):
+			next_outputs.append(raw)  # keep unknown shape untouched
+			continue
+		port_type = _normalize_port_type(raw.get("portType")) or "json"
+		typed_schema = raw.get("typedSchema") if isinstance(raw.get("typedSchema"), dict) else {}
+		typed_type = _normalize_port_type(typed_schema.get("type")) or port_type
+		fields = typed_schema.get("fields") if isinstance(typed_schema.get("fields"), list) else []
+		if typed_type != port_type:
+			typed_type = port_type
+		if typed_type in {"text", "binary", "embeddings"}:
+			fields = []
+		next_out = copy.deepcopy(raw)
+		next_out["portType"] = port_type
+		next_out["typedSchema"] = {"type": typed_type, "fields": fields}
+		if next_out != raw:
+			changed = True
+		next_outputs.append(next_out)
+	if changed:
+		api["outputs"] = next_outputs
+		params["api"] = api
+		data["params"] = params
+		notes.append(
+			{
+				"code": "COMPONENT_API_OUTPUTS_CANONICALIZED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Aligned component api.outputs typedSchema.type with portType and normalized fields.",
+			}
+		)
+
+
 def _component_output_names(node: Dict[str, Any]) -> List[str]:
 	out: List[str] = []
 	for decl in _component_output_decls(node):
@@ -115,6 +159,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 
 	# Normalize component bindings against declared API outputs.
 	for node in canonical_nodes:
+		_canonicalize_component_api_outputs_in_graph(node, notes)
 		data = _node_data(node)
 		if str(data.get("kind") or "").strip().lower() != "component":
 			continue
@@ -172,13 +217,44 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		source_handle = str(next_edge.get("sourceHandle") or "out").strip() or "out"
 		if src_kind == "component" and src_node is not None:
 			output_names = _component_output_names(src_node)
+			output_decls = _component_output_decls(src_node)
+			output_by_name = {
+				str(decl.get("name") or "").strip(): _normalize_port_type(decl.get("portType"))
+				for decl in output_decls
+				if isinstance(decl, dict)
+			}
+			bindings = (
+				((_node_data(src_node).get("params") or {}).get("bindings") or {})
+				if isinstance((_node_data(src_node).get("params") or {}), dict)
+				else {}
+			)
+			binding_outputs = bindings.get("outputs") if isinstance(bindings, dict) and isinstance(bindings.get("outputs"), dict) else {}
+			declared_binding_names = [n for n in output_names if n in set(binding_outputs.keys())]
 			canonical_handle = source_handle
 			if canonical_handle == "out":
 				if len(output_names) == 1:
 					canonical_handle = output_names[0]
+				elif len(declared_binding_names) == 1:
+					canonical_handle = declared_binding_names[0]
+				else:
+					contract = edge_data.get("contract") if isinstance(edge_data.get("contract"), dict) else {}
+					contract_out = _normalize_port_type(contract.get("out"))
+					if contract_out:
+						candidates = [name for name in output_names if output_by_name.get(name) == contract_out]
+						if len(candidates) == 1:
+							canonical_handle = candidates[0]
 			elif canonical_handle not in set(output_names):
 				if len(output_names) == 1:
 					canonical_handle = output_names[0]
+				elif len(declared_binding_names) == 1:
+					canonical_handle = declared_binding_names[0]
+				else:
+					contract = edge_data.get("contract") if isinstance(edge_data.get("contract"), dict) else {}
+					contract_out = _normalize_port_type(contract.get("out"))
+					if contract_out:
+						candidates = [name for name in output_names if output_by_name.get(name) == contract_out]
+						if len(candidates) == 1:
+							canonical_handle = candidates[0]
 			if canonical_handle != source_handle:
 				next_edge["sourceHandle"] = canonical_handle
 				notes.append(
