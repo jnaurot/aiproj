@@ -922,10 +922,125 @@ describe('graphStore component integration', () => {
 		try {
 			const result = await graphStore.saveGraph('save');
 			expect((result as any)?.ok).toBe(false);
-			expect(String((result as any)?.reason ?? '')).toBe('invalid_graph');
+			expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
 			expect(postCalled).toBe(false);
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
+	});
+
+	it('blocks save preflight when declared component output binding is missing', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const validRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						summary: { nodeId: 'n_internal', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(validRes.ok).toBe(true);
+		const withMissingBinding = get(graphStore).nodes.map((n) =>
+			n.id !== componentId
+				? n
+				: {
+						...n,
+						data: {
+							...n.data,
+							params: {
+								...((n.data as any).params ?? {}),
+								bindings: {
+									...(((n.data as any).params?.bindings ?? {}) as Record<string, any>),
+									outputs: {
+										summary: { nodeId: '', artifact: 'current' }
+									}
+								}
+							}
+						}
+					}
+		);
+		graphStore.syncFromCanvas(withMissingBinding as any, get(graphStore).edges as any);
+
+		const originalFetch = globalThis.fetch;
+		let postCalled = false;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/graphs')) postCalled = true;
+			return new Response('{}', { status: 200 });
+		};
+		try {
+			const result = await graphStore.saveGraph('save');
+			expect((result as any)?.ok).toBe(false);
+			expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+			expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_BINDING_MISSING');
+			expect(postCalled).toBe(false);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('blocks save preflight when typedSchema.type mismatches portType', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'json', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						summary: { nodeId: 'n1', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+		const result = await graphStore.saveGraph('save');
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+		expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH');
+	});
+
+	it('blocks save preflight when downstream edge has port type mismatch', async () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		graphStore.updateNodeConfig(sourceId, { ports: { in: null, out: 'json' } });
+		graphStore.updateNodeConfig(llmId, { ports: { in: 'text', out: 'text' } });
+		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
+			{
+				id: 'e_mismatch_save',
+				source: sourceId,
+				sourceHandle: 'out',
+				target: llmId,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			}
+		] as any);
+		const result = await graphStore.saveGraph('save');
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_PORT_TYPE_MISMATCH');
 	});
 });

@@ -142,6 +142,18 @@ export type ApiEditorUiState = {
 	bodyOpen: boolean;
 };
 
+type SavePreflightSeverity = 'error' | 'warning';
+export type SavePreflightDiagnostic = {
+	code: string;
+	path: string;
+	message: string;
+	severity: SavePreflightSeverity;
+};
+export type SavePreflightResult = {
+	ok: boolean;
+	diagnostics: SavePreflightDiagnostic[];
+};
+
 const IDLE: NodeStatus = 'idle';
 const SUCCEEDED: NodeStatus = 'succeeded';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
@@ -1518,6 +1530,106 @@ function buildPersistableGraphStrict(
 	return { ok: true, graph: stripToDTO(nodes, rechecked.edges, graphId) };
 }
 
+function buildSavePreflightDiagnostics(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[]
+): SavePreflightResult {
+	const diagnostics: SavePreflightDiagnostic[] = [];
+	for (const edge of edges) {
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		const sourceNode = nodes.find((n) => n.id === edge.source);
+		if (sourceNode?.data?.kind === 'component') {
+			const canonicalHandle = canonicalComponentSourceHandleForEdge(nodes, edge);
+			if (canonicalHandle == null) {
+				diagnostics.push({
+					code: 'COMPONENT_OUTPUT_HANDLE_UNRESOLVED',
+					path: `edges.${String(edge.id ?? '')}.sourceHandle`,
+					message: `Component edge sourceHandle "${sourceHandle}" is not declared in API outputs.`,
+					severity: 'error'
+				});
+			}
+		}
+		const edgeCheck = isEdgeStillValid(nodes, edge);
+		if (!edgeCheck.ok) {
+			if (edgeCheck.reason === 'type_mismatch') {
+				diagnostics.push({
+					code: 'CONTRACT_EDGE_PORT_TYPE_MISMATCH',
+					path: `edges.${String(edge.id ?? '')}.data.contract`,
+					message: `Edge has incompatible port types (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
+					severity: 'error'
+				});
+			} else {
+				diagnostics.push({
+					code: 'CONTRACT_EDGE_PORT_TYPE_UNRESOLVED',
+					path: `edges.${String(edge.id ?? '')}.data.contract`,
+					message: `Edge has unresolved port types (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
+					severity: 'error'
+				});
+			}
+		}
+	}
+
+	for (const node of nodes) {
+		if (node.data.kind !== 'component') continue;
+		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
+		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
+			? (componentParams.api.outputs as any[])
+			: [];
+		const outputBindings =
+			componentParams?.bindings && typeof componentParams.bindings.outputs === 'object' && componentParams.bindings.outputs
+				? (componentParams.bindings.outputs as Record<string, any>)
+				: {};
+		for (let i = 0; i < apiOutputs.length; i += 1) {
+			const out = apiOutputs[i] ?? {};
+			const outputName = String(out?.name ?? '').trim();
+			const pathBase = `nodes.${String(node.id)}.params.api.outputs[${i}]`;
+			if (!outputName) {
+				diagnostics.push({
+					code: 'COMPONENT_OUTPUT_NAME_REQUIRED',
+					path: `${pathBase}.name`,
+					message: 'Component output name is required.',
+					severity: 'error'
+				});
+				continue;
+			}
+			const binding = outputBindings[outputName] ?? {};
+			const boundNodeId = String(binding?.nodeId ?? '').trim();
+			if (!boundNodeId) {
+				diagnostics.push({
+					code: 'COMPONENT_OUTPUT_BINDING_MISSING',
+					path: `nodes.${String(node.id)}.params.bindings.outputs.${outputName}.nodeId`,
+					message: `Component output "${outputName}" requires a bound internal node.`,
+					severity: 'error'
+				});
+			}
+			const portType = normalizeComponentPortType(out?.portType);
+			const typedSchemaType = normalizeComponentPortType(out?.typedSchema?.type);
+			if (portType == null || typedSchemaType == null || portType !== typedSchemaType) {
+				diagnostics.push({
+					code: 'COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH',
+					path: `${pathBase}.typedSchema.type`,
+					message: `Component output "${outputName}" must keep typedSchema.type aligned with portType.`,
+					severity: 'error'
+				});
+			}
+		}
+	}
+
+	return {
+		ok: !diagnostics.some((d) => d.severity === 'error'),
+		diagnostics
+	};
+}
+
+function summarizeSavePreflightError(diagnostics: SavePreflightDiagnostic[]): string {
+	const errors = diagnostics.filter((d) => d.severity === 'error');
+	if (errors.length === 0) return 'Graph preflight failed.';
+	return errors
+		.slice(0, 5)
+		.map((d, i) => `${i + 1}. [${d.code}] (${d.path}) ${d.message}`)
+		.join('\n');
+}
+
 function getPortType(
 	nodes: Node<PipelineNodeData>[],
 	sourceId: string,
@@ -2546,6 +2658,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const state = stateOverride ?? (get({ subscribe } as any) as GraphState);
 			return validateInspectorDraftForAccept(state);
 		},
+		getSavePreflight(stateOverride?: GraphState): SavePreflightResult {
+			const state = stateOverride ?? (get({ subscribe } as any) as GraphState);
+			return buildSavePreflightDiagnostics(state.nodes as any, state.edges as any);
+		},
 		getInspectorUi,
 		setInspectorUi,
 		resolveNodeInputs(nodeId: string): InputResolution[] {
@@ -3018,6 +3134,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
+			if (!preflight.ok) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError(preflight.diagnostics),
+					diagnostics: preflight.diagnostics
+				};
+			}
 			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
 			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 			const graph = strictGraph.graph;
@@ -3047,6 +3172,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextVersionName = String(versionName ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
 			if (!nextVersionName) return { ok: false, reason: 'missing_version_name' as const };
+			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
+			if (!preflight.ok) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError(preflight.diagnostics),
+					diagnostics: preflight.diagnostics
+				};
+			}
 			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
 			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 			const graph = strictGraph.graph;
@@ -3074,6 +3208,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextGraphName = String(graphName ?? '').trim();
 			if (!nextGraphName) return { ok: false, reason: 'missing_graph_name' as const };
 			const current = get({ subscribe } as any) as GraphState;
+			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
+			if (!preflight.ok) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError(preflight.diagnostics),
+					diagnostics: preflight.diagnostics
+				};
+			}
 			const strictGraph = buildPersistableGraphStrict(
 				current.nodes as any,
 				current.edges as any,
@@ -3115,6 +3258,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const targetGraphId = String(nextGraphId ?? '').trim();
 			if (!targetGraphId) return { ok: false, reason: 'missing_graph_id' as const };
 			const current = get({ subscribe } as any) as GraphState;
+			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
+			if (!preflight.ok) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError(preflight.diagnostics),
+					diagnostics: preflight.diagnostics
+				};
+			}
 			const strictGraph = buildPersistableGraphStrict(
 				current.nodes as any,
 				current.edges as any,

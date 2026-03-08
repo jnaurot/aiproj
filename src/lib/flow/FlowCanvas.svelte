@@ -1116,6 +1116,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const current = get(graphStore) as GraphState;
 		const currentNodes = (current?.nodes ?? []) as Node<PipelineNodeData>[];
 		const currentEdges = (current?.edges ?? []) as Edge<PipelineEdgeData>[];
+		const graphPreflight = graphStore.getSavePreflight(current);
+		if (!graphPreflight.ok) {
+			const detail = (graphPreflight.diagnostics ?? [])
+				.filter((d: any) => String(d?.severity ?? 'error').toLowerCase() === 'error')
+				.map(
+					(d: any, i: number) =>
+						`${i + 1}. [${String(d?.code ?? 'VALIDATION')}] (${String(d?.path ?? 'graph')}) ${String(d?.message ?? '')}`
+				)
+				.slice(0, 8)
+				.join('\n');
+			window.alert(`Save as Component blocked by graph preflight.\n\n${detail || 'Preflight failed.'}`);
+			showToast('Save as Component blocked by graph preflight.', 'error');
+			return;
+		}
 		if (currentNodes.length === 0) {
 			showToast('Save as Component failed: graph is empty.', 'warn');
 			return;
@@ -1207,6 +1221,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const graphName = graphNameInput.trim() || undefined;
 		const result = await graphStore.saveGraph(note, { graphName });
 		if (!(result as any)?.ok) {
+			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
+				window.alert(`Save Graph blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			}
 			showToast(`Save Graph failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
@@ -1222,6 +1239,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const note = window.prompt('Version note (optional)', '') ?? '';
 		const result = await graphStore.saveGraphVersion(versionName, note);
 		if (!(result as any)?.ok) {
+			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
+				window.alert(`Save Version blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			}
 			showToast(`Save Version failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
@@ -1236,6 +1256,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const note = window.prompt('Save note (optional)', '') ?? '';
 		const result = await graphStore.saveGraphAs(graphName, note, versionName);
 		if (!(result as any)?.ok) {
+			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
+				window.alert(`Save Graph As blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			}
 			showToast(`Save Graph As failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
