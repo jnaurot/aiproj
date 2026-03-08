@@ -615,6 +615,39 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.error ?? '')).toContain('requires a bound internal node');
 	});
 
+	it('blocks Accept when a non-required declared component output is missing binding nodeId', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(componentId);
+		graphStore.patchInspectorDraft({
+			api: {
+				inputs: [],
+				outputs: [
+					{
+						name: 'summary',
+						portType: 'text',
+						required: false,
+						typedSchema: { type: 'text', fields: [] }
+					}
+				]
+			},
+			bindings: {
+				inputs: {},
+				config: {},
+				outputs: {
+					summary: { nodeId: '', artifact: 'current' }
+				}
+			}
+		});
+
+		const validation = graphStore.getInspectorDraftAcceptValidation();
+		expect(validation.ok).toBe(false);
+		expect(String(validation.errors?.[0] ?? '')).toContain('requires a bound internal node');
+		const result = await graphStore.applyInspectorDraft();
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
+	});
+
 	it('blocks Accept when typedSchema.type is not aligned with component output portType', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });

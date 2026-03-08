@@ -226,16 +226,29 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 			? (bindings.outputs as Record<string, any>)
 			: {};
 	const errors: string[] = [];
+	const seenOutputNames = new Set<string>();
 	for (const output of outputs) {
 		const outputName = String(output?.name ?? '').trim();
 		if (!outputName) {
 			errors.push('Component output name is required before Accept.');
 			continue;
 		}
+		const outputNameKey = outputName.toLowerCase();
+		if (seenOutputNames.has(outputNameKey)) {
+			errors.push(`Component output "${outputName}" duplicates another declared output.`);
+			continue;
+		}
+		seenOutputNames.add(outputNameKey);
 		const binding = outputBindings[outputName];
 		const boundNodeId = String(binding?.nodeId ?? '').trim();
 		if (!boundNodeId) {
 			errors.push(`Component output "${outputName}" requires a bound internal node before Accept.`);
+		}
+		const artifactMode = String(binding?.artifact ?? 'current').trim();
+		if (artifactMode !== 'current' && artifactMode !== 'last') {
+			errors.push(
+				`Component output "${outputName}" must set artifact mode to "current" or "last" before Accept.`
+			);
 		}
 		const portType = normalizeComponentPortType(output?.portType);
 		if (portType == null) {
@@ -248,6 +261,24 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 	}
 	if (errors.length > 0) return { ok: false, errors };
 	return { ok: true };
+}
+
+type InspectorDraftAcceptValidation =
+	| { ok: true; errors: [] }
+	| { ok: false; errors: string[] };
+
+function validateInspectorDraftForAccept(state: GraphState): InspectorDraftAcceptValidation {
+	const nodeId = state.inspector.nodeId;
+	if (!nodeId) return { ok: false, errors: ['No node selected.'] };
+	const node = state.nodes.find((n) => n.id === nodeId);
+	if (!node) return { ok: false, errors: ['Selected node no longer exists.'] };
+	if (node.data.kind !== 'component') return { ok: true, errors: [] };
+	const paramsForCommit = sanitizeComponentDraftParams(
+		(state.inspector.draftParams ?? {}) as Record<string, any>
+	);
+	const validation = validateComponentDraftForAccept(paramsForCommit);
+	if (!validation.ok) return { ok: false, errors: validation.errors };
+	return { ok: true, errors: [] };
 }
 
 function listComponentOutputNames(node: Node<PipelineNodeData>): string[] {
@@ -2511,6 +2542,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		commitSnapshotSelection,
 		applyInspectorDraft,
 		revertInspectorDraft,
+		getInspectorDraftAcceptValidation(stateOverride?: GraphState): InspectorDraftAcceptValidation {
+			const state = stateOverride ?? (get({ subscribe } as any) as GraphState);
+			return validateInspectorDraftForAccept(state);
+		},
 		getInspectorUi,
 		setInspectorUi,
 		resolveNodeInputs(nodeId: string): InputResolution[] {

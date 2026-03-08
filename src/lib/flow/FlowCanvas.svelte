@@ -228,6 +228,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 	$: inspectorParams = ($graphStore.inspector?.draftParams ?? {}) as Record<string, unknown>;
+	$: inspectorAcceptValidation = graphStore.getInspectorDraftAcceptValidation($graphStore as GraphState);
+	$: inspectorAcceptDisabled = !$graphStore.inspector.dirty || !inspectorAcceptValidation.ok;
+	$: inspectorAcceptTooltip =
+		$graphStore.inspector.dirty && !inspectorAcceptValidation.ok
+			? String(inspectorAcceptValidation.errors?.[0] ?? 'Resolve draft validation errors before Accept.')
+			: undefined;
 	$: selectedLlmKind = (((inspectorParams as any)?.llmKind ?? ($selectedNode?.data as any)?.llmKind ?? 'ollama') as LlmKind);
 	// $: selectedSourceKind = (($selectedNode?.data as any)?.sourceKind ?? 'file') as SourceKind;
 	// $: selectedTransformKind = ((($selectedNode?.data as any)?.transformKind ?? 'select') as TransformKind);
@@ -1181,6 +1187,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	async function acceptInspectorDraftAction(): Promise<void> {
+		const validation = graphStore.getInspectorDraftAcceptValidation();
+		if (!validation.ok) {
+			showToast(`Accept blocked: ${String(validation.errors?.[0] ?? 'validation failed')}`, 'warn');
+			return;
+		}
 		const result = await graphStore.applyInspectorDraft();
 		if (!(result as any)?.ok) {
 			showToast(
@@ -1937,7 +1948,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							</button>
 							<button
 								class="primary"
-								disabled={!$graphStore.inspector.dirty}
+								disabled={inspectorAcceptDisabled}
+								title={inspectorAcceptTooltip}
 								on:click={() => void acceptInspectorDraftAction()}
 							>
 								Accept

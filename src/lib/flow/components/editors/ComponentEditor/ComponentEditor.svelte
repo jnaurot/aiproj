@@ -73,7 +73,15 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		outputs?: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
 	};
 	$: outputBindings = (bindings?.outputs ?? {}) as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
-	$: outputValidation = validateComponentOutputs(outputs, outputBindings);
+	$: outputValidation = validateComponentOutputs(
+		outputs,
+		outputBindings,
+		{
+			internalNodeIds: internalNodeOptions
+				.map((n) => String(n.id ?? '').trim())
+				.filter((id) => id.length > 0)
+		}
+	);
 	$: outputValidationSummary = outputValidation.hasErrors
 		? `${Object.keys(outputValidation.outputErrors).length} output issue(s), ${Object.keys(outputValidation.bindingErrors).length} binding issue(s)`
 		: '';

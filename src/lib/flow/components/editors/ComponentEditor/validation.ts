@@ -19,6 +19,10 @@ export type ComponentOutputValidation = {
 	hasErrors: boolean;
 };
 
+export type ValidateComponentOutputsOptions = {
+	internalNodeIds?: string[];
+};
+
 const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 
 const OUTPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -60,11 +64,17 @@ export function applyDerivedOutputPortTypes(
 
 export function validateComponentOutputs(
 	outputs: ComponentApiPort[],
-	bindingsOutputs: Record<string, ComponentOutputBinding>
+	bindingsOutputs: Record<string, ComponentOutputBinding>,
+	options: ValidateComponentOutputsOptions = {}
 ): ComponentOutputValidation {
 	const outputErrors: Record<number, string[]> = {};
 	const bindingErrors: Record<string, string[]> = {};
 	const seenByName = new Map<string, number>();
+	const internalNodeIds = new Set(
+		(options.internalNodeIds ?? [])
+			.map((id) => String(id ?? '').trim())
+			.filter((id) => id.length > 0)
+	);
 	for (let i = 0; i < outputs.length; i += 1) {
 		const out = outputs[i] as ComponentApiPort;
 		const issues: string[] = [];
@@ -108,10 +118,22 @@ export function validateComponentOutputs(
 		}
 		if (issues.length > 0) outputErrors[i] = issues;
 
-		if (name && Boolean(out?.required ?? true)) {
+		if (name) {
 			const binding = bindingsOutputs[name] ?? {};
-			if (!String(binding?.nodeId ?? '').trim()) {
-				bindingErrors[name] = ['bindings.outputs.<name>.nodeId is required for required outputs.'];
+			const boundNodeId = String(binding?.nodeId ?? '').trim();
+			const bindingIssues: string[] = [];
+			if (!boundNodeId) {
+				bindingIssues.push('bindings.outputs.<name>.nodeId is required.');
+			}
+			if (boundNodeId && internalNodeIds.size > 0 && !internalNodeIds.has(boundNodeId)) {
+				bindingIssues.push('bindings.outputs.<name>.nodeId must reference an internal node in the selected revision.');
+			}
+			const artifactMode = String(binding?.artifact ?? 'current').trim();
+			if (artifactMode !== 'current' && artifactMode !== 'last') {
+				bindingIssues.push('bindings.outputs.<name>.artifact must be "current" or "last".');
+			}
+			if (bindingIssues.length > 0) {
+				bindingErrors[name] = bindingIssues;
 			}
 		}
 	}

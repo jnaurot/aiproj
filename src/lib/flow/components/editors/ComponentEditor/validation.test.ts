@@ -63,6 +63,40 @@ describe('ComponentEditor validation', () => {
 		expect(result.outputErrors[0]?.join(' ')).toContain('typedSchema.type must match portType');
 	});
 
+	it('requires bindings for declared outputs even when not required', () => {
+		const outputs = [
+			{
+				name: 'optional_out',
+				portType: 'text',
+				required: false,
+				typedSchema: { type: 'text', fields: [] }
+			}
+		];
+		const result = validateComponentOutputs(outputs as any, {});
+		expect(result.hasErrors).toBe(true);
+		expect(result.bindingErrors.optional_out?.[0]).toContain('nodeId is required');
+	});
+
+	it('flags output bindings that target a missing internal node id', () => {
+		const outputs = [
+			{
+				name: 'summary',
+				portType: 'text',
+				required: true,
+				typedSchema: { type: 'text', fields: [] }
+			}
+		];
+		const result = validateComponentOutputs(
+			outputs as any,
+			{
+				summary: { nodeId: 'n_missing', artifact: 'current' }
+			},
+			{ internalNodeIds: ['n_present'] }
+		);
+		expect(result.hasErrors).toBe(true);
+		expect(result.bindingErrors.summary?.join(' ')).toContain('must reference an internal node');
+	});
+
 	it('syncs outputs and auto-fills defaults', () => {
 		const outputs = [
 			{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
