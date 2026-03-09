@@ -152,29 +152,102 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("package must be an object")
     manifest = payload.get("manifest")
     graph = payload.get("graph")
-    if not isinstance(manifest, dict) or not isinstance(graph, dict):
-        raise ValueError("package must include manifest and graph")
-    ptype = str(manifest.get("packageType") or "").strip()
-    pver = int(manifest.get("packageVersion") or 0)
-    if ptype != "aipgraph":
-        raise ValueError("manifest.packageType must be 'aipgraph'")
-    if pver != 2:
-        raise ValueError("manifest.packageVersion must be 2")
-    if "nodes" not in graph or "edges" not in graph:
+    if isinstance(manifest, dict):
+        ptype = str(manifest.get("packageType") or "").strip()
+        pver = int(manifest.get("packageVersion") or 0)
+        if ptype != "aipgraph":
+            raise ValueError("manifest.packageType must be 'aipgraph'")
+        if pver == 2:
+            if not isinstance(graph, dict):
+                raise ValueError("package must include manifest and graph")
+            if "nodes" not in graph or "edges" not in graph:
+                raise ValueError("package.graph must include nodes and edges")
+            normalized_graph, migration_notes = canonicalize_graph_payload(graph)
+            handle_errors = find_component_edge_handle_errors(normalized_graph)
+            if handle_errors:
+                raise ValueError(
+                    "graph contains unresolved component output handles: "
+                    + "; ".join(str(err.get("edgeId") or "") for err in handle_errors if isinstance(err, dict))
+                )
+            return {
+                "manifest": manifest,
+                "graph": normalized_graph,
+                "migrationReport": {
+                    "format": "aipgraph_v2",
+                    "migrated": bool(len(migration_notes) > 0),
+                    "warnings": [],
+                    "notes": migration_notes,
+                },
+            }
+        if pver == 1:
+            if not isinstance(graph, dict):
+                raise ValueError("legacy package must include graph")
+            graph_candidate = graph
+            report_format = "aipgraph_v1_legacy"
+        else:
+            raise ValueError("manifest.packageVersion must be 2 or legacy 1")
+    else:
+        # Legacy import compatibility: accept raw graph objects (no manifest).
+        if isinstance(graph, dict) and "nodes" in graph and "edges" in graph:
+            graph_candidate = graph
+        elif "nodes" in payload and "edges" in payload:
+            graph_candidate = payload
+        else:
+            raise ValueError("package must include manifest+graph or legacy graph nodes/edges")
+        report_format = "raw_graph_legacy"
+        manifest = {
+            "packageType": "aipgraph",
+            "packageVersion": 2,
+            "schemaVersion": 1,
+            "engineVersion": "aiproj-flow",
+            "exportedAt": _iso_now(),
+            "source": {
+                "graphId": str(((graph_candidate.get("meta") or {}).get("graphId") or "")).strip(),
+                "revisionId": "",
+            },
+            "includes": {"artifacts": False, "schemas": True},
+            "dependencies": {"components": _extract_component_dependencies(graph_candidate)},
+            "warnings": ["Legacy graph import shim applied (no manifest)."],
+        }
+
+    if "nodes" not in graph_candidate or "edges" not in graph_candidate:
         raise ValueError("package.graph must include nodes and edges")
-    normalized_graph, migration_notes = canonicalize_graph_payload(graph)
+    normalized_graph, migration_notes = canonicalize_graph_payload(graph_candidate)
     handle_errors = find_component_edge_handle_errors(normalized_graph)
     if handle_errors:
         raise ValueError(
             "graph contains unresolved component output handles: "
             + "; ".join(str(err.get("edgeId") or "") for err in handle_errors if isinstance(err, dict))
         )
+    migration_notes = [
+        {
+            "code": "LEGACY_IMPORT_SHIM_APPLIED",
+            "message": "Legacy import shim translated package to canonical v2 graph payload.",
+        },
+        *migration_notes,
+    ]
+    legacy_manifest = {
+        "packageType": "aipgraph",
+        "packageVersion": 2,
+        "schemaVersion": 1,
+        "engineVersion": "aiproj-flow",
+        "exportedAt": _iso_now(),
+        "source": {
+            "graphId": str(((normalized_graph.get("meta") or {}).get("graphId") or "")).strip(),
+            "revisionId": "",
+        },
+        "includes": {"artifacts": False, "schemas": True},
+        "dependencies": {"components": _extract_component_dependencies(normalized_graph)},
+        "warnings": [f"Legacy packageVersion={int(manifest.get('packageVersion') or 1)} translated on import."]
+        if isinstance(manifest, dict)
+        else ["Legacy graph translated on import."],
+    }
     return {
-        "manifest": manifest,
+        "manifest": legacy_manifest,
         "graph": normalized_graph,
         "migrationReport": {
-            "format": "aipgraph_v2",
-            "migrated": bool(len(migration_notes) > 0),
+            "format": report_format,
+            "migrated": True,
             "warnings": [],
             "notes": migration_notes,
         },

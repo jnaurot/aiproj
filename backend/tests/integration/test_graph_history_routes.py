@@ -196,3 +196,112 @@ def test_delete_latest_revision_and_delete_graph():
 
 		missing = client.get(f"/graphs/{graph_id}/latest")
 		assert missing.status_code == 404
+
+
+def _legacy_component_graph_for_import() -> dict:
+	return {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "cmp1",
+				"type": "component",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "component",
+					"ports": {"in": None, "out": "json"},
+					"params": {
+						"componentRef": {
+							"componentId": "cmp_a",
+							"revisionId": "crev_1",
+							"apiVersion": "v1",
+						},
+						"api": {
+							"inputs": [],
+							"outputs": [
+								{"name": "summary", "portType": "text", "required": True, "typedSchema": {"type": "text", "fields": []}}
+							],
+						},
+						"bindings": {
+							"inputs": {},
+							"config": {},
+							"outputs": {"out_data": {"nodeId": "n_inner", "artifact": "current"}},
+						},
+						"config": {},
+					},
+				},
+			},
+			{
+				"id": "llm1",
+				"type": "llm",
+				"position": {"x": 300, "y": 0},
+				"data": {"kind": "llm", "ports": {"in": "text", "out": "text"}, "params": {"model": "x"}},
+			},
+		],
+		"edges": [
+			{
+				"id": "e1",
+				"source": "cmp1",
+				"sourceHandle": "out",
+				"target": "llm1",
+				"targetHandle": "in",
+				"data": {
+					"contract": {
+						"out": "json",
+						"in": "text",
+						"payload": {"source": {"type": "json"}, "target": {"type": "string"}},
+					}
+				},
+			}
+		],
+	}
+
+
+def test_import_accepts_legacy_v1_package_and_canonicalizes_graph():
+	with TestClient(app) as client:
+		legacy_graph = _legacy_component_graph_for_import()
+		resp = client.post(
+			"/graphs/import",
+			json={
+				"package": {
+					"manifest": {
+						"packageType": "aipgraph",
+						"packageVersion": 1,
+						"schemaVersion": 1,
+					},
+					"graph": legacy_graph,
+				},
+				"message": "legacy-v1-import",
+			},
+		)
+		assert resp.status_code == 200, resp.text
+		body = resp.json()
+		report = body.get("migrationReport") or {}
+		assert report.get("format") == "aipgraph_v1_legacy"
+		assert bool(report.get("migrated")) is True
+		stored = body.get("graph") or {}
+		cmp_node = next(n for n in stored.get("nodes", []) if n.get("id") == "cmp1")
+		bindings_outputs = (((cmp_node.get("data") or {}).get("params") or {}).get("bindings") or {}).get("outputs") or {}
+		assert "summary" in bindings_outputs
+		assert "out_data" not in bindings_outputs
+		edge = next(e for e in stored.get("edges", []) if e.get("id") == "e1")
+		assert str(edge.get("sourceHandle") or "") == "summary"
+
+
+def test_import_accepts_raw_legacy_graph_without_manifest():
+	with TestClient(app) as client:
+		legacy_graph = _legacy_component_graph_for_import()
+		resp = client.post(
+			"/graphs/import",
+			json={
+				"package": legacy_graph,
+				"message": "raw-legacy-import",
+			},
+		)
+		assert resp.status_code == 200, resp.text
+		body = resp.json()
+		report = body.get("migrationReport") or {}
+		assert report.get("format") == "raw_graph_legacy"
+		assert bool(report.get("migrated")) is True
+		stored = body.get("graph") or {}
+		edge = next(e for e in stored.get("edges", []) if e.get("id") == "e1")
+		assert str(edge.get("sourceHandle") or "") == "summary"
