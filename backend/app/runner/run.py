@@ -1295,6 +1295,55 @@ async def run_graph(
     
     print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
     context.bus.graph_id = graph_id
+    component_parent_for_internal: Dict[str, str] = {}
+    component_meta_by_parent: Dict[str, Dict[str, Any]] = {}
+    execution_nodes_by_id: Dict[str, Dict[str, Any]] = {}
+
+    def _component_path_for_log_node(node_id: Optional[str]) -> Optional[list[str]]:
+        raw = str(node_id or "").strip()
+        if not raw:
+            return None
+        component_instance_ids: list[str] = []
+        if raw.startswith("cmp:"):
+            cursor = raw
+            guard = 0
+            while cursor.startswith("cmp:") and guard < 32:
+                guard += 1
+                rest = cursor[4:]
+                sep = rest.find(":")
+                if sep <= 0:
+                    break
+                instance_id = rest[:sep].strip()
+                if not instance_id:
+                    break
+                component_instance_ids.append(instance_id)
+                cursor = rest[sep + 1:]
+        else:
+            parent_id = component_parent_for_internal.get(raw)
+            if parent_id:
+                component_instance_ids.append(parent_id)
+        if not component_instance_ids:
+            return None
+        names: list[str] = []
+        for instance_id in component_instance_ids:
+            meta = component_meta_by_parent.get(instance_id, {})
+            component_id = str(meta.get("componentId") or "").strip()
+            if not component_id:
+                node = execution_nodes_by_id.get(instance_id, {})
+                data = node.get("data") if isinstance(node, dict) else {}
+                params = data.get("params") if isinstance(data, dict) else {}
+                component_ref = params.get("componentRef") if isinstance(params, dict) else {}
+                component_id = str(component_ref.get("componentId") or "").strip() if isinstance(component_ref, dict) else ""
+            names.append(component_id or instance_id)
+        return names or None
+
+    async def _emit(evt: Dict[str, Any]) -> None:
+        payload = evt
+        if isinstance(payload, dict) and str(payload.get("type") or "") == "log":
+            component_path = _component_path_for_log_node(payload.get("nodeId"))
+            if component_path and "componentPath" not in payload:
+                payload = {**payload, "componentPath": component_path}
+        await context.bus.emit(payload)
 
     cache = cache or ExecutionCache()
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
@@ -1321,7 +1370,7 @@ async def run_graph(
             "miss": int(schema_stats_end.get("miss", 0) - schema_stats_start.get("miss", 0)),
             "bypass": int(schema_stats_end.get("bypass", 0) - schema_stats_start.get("bypass", 0)),
         }
-        await context.bus.emit({
+        await _emit({
             "type": "run_telemetry",
             "schema_version": 1,
             "runId": run_id,
@@ -1390,7 +1439,7 @@ async def run_graph(
             evt["actualContractFingerprint"] = actual_contract_fingerprint
         if mismatch_kind:
             evt["mismatchKind"] = mismatch_kind
-        await context.bus.emit(evt)
+        await _emit(evt)
 
     async def _emit_cache_summary_once() -> None:
         nonlocal cache_summary_emitted
@@ -1398,7 +1447,7 @@ async def run_graph(
             return
         cache_summary_emitted = True
         await _emit_run_telemetry_once()
-        await context.bus.emit({
+        await _emit({
             "type": "cache_summary",
             "schema_version": 1,
             "runId": run_id,
@@ -1414,7 +1463,7 @@ async def run_graph(
 
     if not validation.valid:
         for error in validation.errors:
-            await context.bus.emit({
+            await _emit({
                 "type": "log",
                 "runId": run_id,
                 "at": iso_now(),
@@ -1422,7 +1471,7 @@ async def run_graph(
                 "message": f"[{error.code}] {error.message}",
                 "nodeId": error.node_id
             })
-        await context.bus.emit({
+        await _emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
@@ -1432,7 +1481,7 @@ async def run_graph(
         return
 
     for warning in validation.warnings:
-        await context.bus.emit({
+        await _emit({
             "type": "log",
             "runId": run_id,
             "at": iso_now(),
@@ -1453,7 +1502,7 @@ async def run_graph(
         )
         execution_graph = component_expansion.graph
     except ComponentExpansionError as ex:
-        await context.bus.emit({
+        await _emit({
             "type": "log",
             "runId": run_id,
             "at": iso_now(),
@@ -1462,7 +1511,7 @@ async def run_graph(
             "code": ex.code,
             "details": ex.details,
         })
-        await context.bus.emit({
+        await _emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
@@ -1498,7 +1547,7 @@ async def run_graph(
                 if nid in component_expansion.internal_to_parent
             }
             planned_node_ids = sorted({*planned_node_ids, *{p for p in parent_ids if p}})
-        await context.bus.emit({
+        await _emit({
             "type": "run_started",
             "runId": run_id,
             "at": iso_now(),
@@ -1507,11 +1556,12 @@ async def run_graph(
             "plannedNodeIds": planned_node_ids,
         })
         nodes = node_map(execution_graph)
+        execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
         get_current_artifact = context.bindings.get_current_artifact
         component_runtime_state: Dict[str, Dict[str, Any]] = {}
-        component_parent_for_internal: Dict[str, str] = {}
-        component_meta_by_parent: Dict[str, Dict[str, Any]] = {}
+        component_parent_for_internal = {}
+        component_meta_by_parent = {}
 
         if component_expansion:
             component_parent_for_internal = dict(component_expansion.internal_to_parent)
@@ -1558,7 +1608,7 @@ async def run_graph(
             state["started"] = True
             state["started_at"] = asyncio.get_running_loop().time()
             meta = component_meta_by_parent.get(parent_node_id, {})
-            await context.bus.emit({
+            await _emit({
                 "type": "component_started",
                 "runId": run_id,
                 "at": iso_now(),
@@ -1583,7 +1633,7 @@ async def run_graph(
                     0.0,
                     (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
                 )
-                await context.bus.emit({
+                await _emit({
                     "type": "component_failed",
                     "runId": run_id,
                     "at": iso_now(),
@@ -1596,7 +1646,7 @@ async def run_graph(
 
             if state["remaining"] == 0 and not state.get("failed"):
                 meta = component_meta_by_parent.get(parent_node_id, {})
-                await context.bus.emit({
+                await _emit({
                     "type": "component_finished",
                     "runId": run_id,
                     "at": iso_now(),
@@ -1700,7 +1750,7 @@ async def run_graph(
                         "source_type",
                         str(n.get("data", {}).get("sourceKind") or params.get("source_type") or "file"),
                     )
-                await context.bus.emit({
+                await _emit({
                     "type": "log",
                     "runId": run_id,
                     "at": iso_now(),
@@ -1771,7 +1821,7 @@ async def run_graph(
         async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
             node_started_t = asyncio.get_running_loop().time()
             binding_snapshot = _binding_snapshot(node_id)
-            await context.bus.emit({
+            await _emit({
                 "type": "node_started",
                 "runId": run_id,
                 "at": iso_now(),
@@ -1780,7 +1830,7 @@ async def run_graph(
 
             # Activate incoming edges
             for edge_id in plan.incoming_edges.get(node_id, []):
-                await context.bus.emit({
+                await _emit({
                     "type": "edge_exec",
                     "runId": run_id,
                     "at": iso_now(),
@@ -1810,7 +1860,7 @@ async def run_graph(
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
 
             if expected_schema_source.startswith("default:"):
-                await context.bus.emit({
+                await _emit({
                     "type": "log",
                     "runId": run_id,
                     "at": iso_now(),
@@ -1862,7 +1912,7 @@ async def run_graph(
                     expected_in = str(declared_in or "").strip()
                     if expected_in and upstream_pt != expected_in:
                         if coercion_policy == "allow_lossy":
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "log",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -1909,7 +1959,7 @@ async def run_graph(
                         )
                         break
                     if bool(ts_info.get("coercionApplied")):
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -1944,7 +1994,7 @@ async def run_graph(
                         "Selected-only run requires cache for ancestor nodes, "
                         f"but node '{node_id}' cannot use cache in this run."
                     )
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
@@ -1993,7 +2043,7 @@ async def run_graph(
                         mismatch_kind=mismatch_error.get("mismatchKind"),
                         reason="CONTRACT_MISMATCH",
                     )
-                    await context.bus.emit({
+                    await _emit({
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),
@@ -2026,7 +2076,7 @@ async def run_graph(
                             "Selected-only run requires cached ancestors, "
                             f"but cached entry was rejected for node '{node_id}' due to contract mismatch."
                         )
-                        await context.bus.emit({
+                        await _emit({
                             "type": "node_finished",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2055,7 +2105,7 @@ async def run_graph(
                         consumer_exec_key=exec_key,
                         output_artifact_id=cached_artifact_id,
                     )
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_output",
                         "runId": run_id,
                         "nodeId": node_id,
@@ -2066,7 +2116,7 @@ async def run_graph(
                         "cached": True,
                     })
 
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
@@ -2078,7 +2128,7 @@ async def run_graph(
 
                     # Mark incoming edges as done
                     for edge_id in plan.incoming_edges.get(node_id, []):
-                        await context.bus.emit({
+                        await _emit({
                             "type": "edge_exec",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2100,7 +2150,7 @@ async def run_graph(
                         "Selected-only run requires cached ancestors, "
                         f"but cache entry was missing for node '{node_id}'."
                     )
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
@@ -2145,7 +2195,7 @@ async def run_graph(
                             ),
                         )
 
-                    await context.bus.emit({
+                    await _emit({
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),
@@ -2160,7 +2210,7 @@ async def run_graph(
                         join_edges = [e for e in edges.values() if e.get("target") == node_id]
                         if not join_edges:
                             msg = "join: ack input node=<none> sourceNode=<none> inPort=<none> artifact=<none> cols=[]"
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "log",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -2209,7 +2259,7 @@ async def run_graph(
                                     f"join: ack input node={short_node} sourceNode={source_node} "
                                     f"inPort={in_port} artifact={artifact_label} cols={cols_label}"
                                 )
-                                await context.bus.emit({
+                                await _emit({
                                     "type": "log",
                                     "runId": run_id,
                                     "at": iso_now(),
@@ -2224,7 +2274,7 @@ async def run_graph(
                                 )
 
                     if not params.get("enabled", True):
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2347,7 +2397,7 @@ async def run_graph(
                             f"transform: input-schema op={op_preview or '<none>'} "
                             f"inputs={json.dumps(input_schema_summary, ensure_ascii=False, separators=(',', ':'))}"
                         )
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2734,7 +2784,7 @@ async def run_graph(
                                 ) from transform_ex
                             raise
 
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2897,7 +2947,7 @@ async def run_graph(
                             f"transform: output-schema op={op} rowCount={output_row_count if output_row_count is not None else 'unknown'} "
                             f"columns={output_schema_cols}"
                         )
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -2981,7 +3031,7 @@ async def run_graph(
                         print(f"[artifact] transform node={node_id} bytes={len(res.payload_bytes)} id={artifact_id[:10]}...")
 
                         # emit node_output (UI fetches by artifactId)
-                        await context.bus.emit({
+                        await _emit({
                             "type": "node_output",
                             "runId": run_id,
                             "nodeId": node_id,
@@ -3048,7 +3098,7 @@ async def run_graph(
                                         actual={"artifactId": upstream_id, "portType": upstream_pt},
                                     ),
                                 )
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "log",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -3104,7 +3154,7 @@ async def run_graph(
                                         actual={"artifactId": upstream_id, "portType": upstream_pt},
                                     ),
                                 )
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "log",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -3337,7 +3387,7 @@ async def run_graph(
                 context.outputs[node_id] = output
 
                 if kind == "transform":
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
@@ -3686,7 +3736,7 @@ async def run_graph(
                         phase="post_write_bind",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_output",
                         "runId": run_id,
                         "nodeId": node_id,
@@ -3703,7 +3753,7 @@ async def run_graph(
                     # Verification print
                     print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
 
-                    await context.bus.emit({
+                    await _emit({
                         "type": "node_finished",
                         "runId": run_id,
                         "at": iso_now(),
@@ -3713,14 +3763,14 @@ async def run_graph(
                     })
 
             except asyncio.CancelledError:
-                await context.bus.emit({
+                await _emit({
                     "type": "node_cancelled",
                     "runId": run_id,
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "cancelled",
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "node_finished",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3751,7 +3801,7 @@ async def run_graph(
                         f"paramPath={str(error_details.get('paramPath') or '')} "
                         f"expected={expected_s} actual={actual_s}"
                     )
-                    await context.bus.emit({
+                    await _emit({
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),
@@ -3762,7 +3812,7 @@ async def run_graph(
                     print(f"[schema-mismatch] runId={run_id} nodeId={node_id} {mismatch_msg}")
 
                 if error_code:
-                    await context.bus.emit({
+                    await _emit({
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),
@@ -3771,7 +3821,7 @@ async def run_graph(
                         "nodeId": node_id,
                     })
 
-                await context.bus.emit({
+                await _emit({
                     "type": "log",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3779,7 +3829,7 @@ async def run_graph(
                     "message": error_message,
                     "nodeId": node_id
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "node_finished",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3791,7 +3841,7 @@ async def run_graph(
                     "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
                 if error_details:
-                    await context.bus.emit({
+                    await _emit({
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),
@@ -3814,7 +3864,7 @@ async def run_graph(
 
             # Mark incoming edges as done
             for edge_id in plan.incoming_edges.get(node_id, []):
-                await context.bus.emit({
+                await _emit({
                     "type": "edge_exec",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3867,7 +3917,7 @@ async def run_graph(
                         )
                         return result
                     except asyncio.CancelledError:
-                        await context.bus.emit({
+                        await _emit({
                             "type": "node_finished",
                             "runId": run_id,
                             "at": iso_now(),
@@ -3878,7 +3928,7 @@ async def run_graph(
                         await _component_mark_node_finish(node_id, ok=False, error="cancelled")
                         return {"ok": False, "cached": False, "cancelled": True}
                     except Exception as ex:
-                        await context.bus.emit({
+                        await _emit({
                             "type": "log",
                             "runId": run_id,
                             "at": iso_now(),
@@ -3886,7 +3936,7 @@ async def run_graph(
                             "message": f"NODE_EXECUTOR_ERROR: {str(ex)}",
                             "nodeId": node_id,
                         })
-                        await context.bus.emit({
+                        await _emit({
                             "type": "node_finished",
                             "runId": run_id,
                             "at": iso_now(),
@@ -3913,7 +3963,7 @@ async def run_graph(
                             )
                             return result
                         except asyncio.CancelledError:
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "node_finished",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -3924,7 +3974,7 @@ async def run_graph(
                             await _component_mark_node_finish(node_id, ok=False, error="cancelled")
                             return {"ok": False, "cached": False, "cancelled": True}
                         except Exception as ex:
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "log",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -3932,7 +3982,7 @@ async def run_graph(
                                 "message": f"NODE_EXECUTOR_ERROR: {str(ex)}",
                                 "nodeId": node_id,
                             })
-                            await context.bus.emit({
+                            await _emit({
                                 "type": "node_finished",
                                 "runId": run_id,
                                 "at": iso_now(),
@@ -3949,7 +3999,7 @@ async def run_graph(
         run_failed = False
         for level_idx, level_nodes in enumerate(levels, start=1):
             if cancel_event and cancel_event.is_set():
-                await context.bus.emit({
+                await _emit({
                     "type": "scheduler_cancelled",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3958,12 +4008,12 @@ async def run_graph(
                     "inflightCancelled": 0,
                     "completedBeforeCancel": 0,
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "run_cancelled",
                     "runId": run_id,
                     "at": iso_now(),
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "run_finished",
                     "runId": run_id,
                     "at": iso_now(),
@@ -3978,7 +4028,7 @@ async def run_graph(
                 if k in kind_counts:
                     kind_counts[k] += 1
 
-            await context.bus.emit({
+            await _emit({
                 "type": "level_started",
                 "runId": run_id,
                 "at": iso_now(),
@@ -3993,7 +4043,7 @@ async def run_graph(
                 },
                 "kindCounts": kind_counts,
             })
-            await context.bus.emit({
+            await _emit({
                 "type": "log",
                 "runId": run_id,
                 "at": iso_now(),
@@ -4057,7 +4107,7 @@ async def run_graph(
             total_succeeded += level_succeeded
             level_elapsed_ms = int((asyncio.get_running_loop().time() - level_t0) * 1000)
 
-            await context.bus.emit({
+            await _emit({
                 "type": "level_finished",
                 "runId": run_id,
                 "at": iso_now(),
@@ -4067,7 +4117,7 @@ async def run_graph(
                 "skipped": level_cached,
                 "elapsedMs": level_elapsed_ms,
             })
-            await context.bus.emit({
+            await _emit({
                 "type": "log",
                 "runId": run_id,
                 "at": iso_now(),
@@ -4079,7 +4129,7 @@ async def run_graph(
             })
 
             if cancel_event and cancel_event.is_set():
-                await context.bus.emit({
+                await _emit({
                     "type": "scheduler_cancelled",
                     "runId": run_id,
                     "at": iso_now(),
@@ -4088,12 +4138,12 @@ async def run_graph(
                     "inflightCancelled": max(cancelled_tasks, level_cancelled),
                     "completedBeforeCancel": max(0, len(results) - level_cancelled),
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "run_cancelled",
                     "runId": run_id,
                     "at": iso_now(),
                 })
-                await context.bus.emit({
+                await _emit({
                     "type": "run_finished",
                     "runId": run_id,
                     "at": iso_now(),
@@ -4107,7 +4157,7 @@ async def run_graph(
                 break
 
         total_runtime_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
-        await context.bus.emit({
+        await _emit({
             "type": "log",
             "runId": run_id,
             "at": iso_now(),
@@ -4121,7 +4171,7 @@ async def run_graph(
         await _emit_cache_summary_once()
 
         if run_failed:
-            await context.bus.emit({
+            await _emit({
                 "type": "run_finished",
                 "runId": run_id,
                 "at": iso_now(),
@@ -4130,7 +4180,7 @@ async def run_graph(
             await _emit_cache_summary_once()
             return
 
-        await context.bus.emit({
+        await _emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
@@ -4138,12 +4188,12 @@ async def run_graph(
         })
         await _emit_cache_summary_once()
     except asyncio.CancelledError:
-        await context.bus.emit({
+        await _emit({
             "type": "run_cancelled",
             "runId": run_id,
             "at": iso_now(),
         })
-        await context.bus.emit({
+        await _emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
@@ -4153,14 +4203,14 @@ async def run_graph(
         return
     except Exception as ex:
         traceback.print_exc()
-        await context.bus.emit({
+        await _emit({
             "type": "log",
             "runId": run_id,
             "at": iso_now(),
             "level": "error",
             "message": str(ex)
         })
-        await context.bus.emit({
+        await _emit({
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
