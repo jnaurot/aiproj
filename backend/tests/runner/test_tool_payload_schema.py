@@ -50,3 +50,24 @@ def test_tool_payload_schema_empty_array_items_are_typed_unknown():
     assert out is not None
     assert out["schema"]["type"] == "array"
     assert out["schema"]["items"]["type"] == "unknown"
+
+
+def test_tool_payload_schema_includes_builtin_environment_when_available():
+    run_mod = _run_module()
+    out = run_mod._tool_payload_schema(
+        "json",
+        {"ok": True},
+        {
+            "builtin_environment": {
+                "profileId": "data",
+                "source": "profile",
+                "packages": ["polars", "pandas"],
+            }
+        },
+    )
+    assert out is not None
+    assert out.get("builtin_environment") == {
+        "profileId": "data",
+        "source": "profile",
+        "packages": ["polars", "pandas"],
+    }

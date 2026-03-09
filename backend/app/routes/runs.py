@@ -32,6 +32,33 @@ def _alpha_input_label(idx: int) -> str:
     return f"Input {out}"
 
 
+def _extract_builtin_environment(payload_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(payload_schema, dict):
+        return None
+    env = payload_schema.get("builtin_environment")
+    if not isinstance(env, dict):
+        return None
+    profile_id = str(env.get("profileId") or "").strip()
+    source = str(env.get("source") or "").strip()
+    locked = str(env.get("locked") or "").strip()
+    packages_raw = env.get("packages")
+    packages: list[str] = []
+    if isinstance(packages_raw, list):
+        for pkg in packages_raw:
+            if isinstance(pkg, str) and pkg.strip():
+                packages.append(pkg.strip())
+    if not profile_id and not source and not packages and not locked:
+        return None
+    out = {
+        "profileId": profile_id,
+        "source": source,
+        "packages": packages,
+    }
+    if locked:
+        out["locked"] = locked
+    return out
+
+
 
 class RunRequest(BaseModel):
     graphId: str
@@ -559,6 +586,7 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
         else {}
     )
     component_meta = artifact_meta.get("component") if isinstance(artifact_meta.get("component"), dict) else None
+    builtin_env = _extract_builtin_environment(payload_schema)
     producer = {
         "nodeId": art.node_id,
         "runId": art.run_id,
@@ -591,6 +619,7 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
         "producerExecKey": art.exec_key,
         "producer": producer,
         "payloadSchema": payload_schema,
+        "builtinEnvironment": builtin_env,
     }
 
 
@@ -655,6 +684,7 @@ async def get_artifact_lineage(
             else {}
         )
         component_meta = artifact_meta.get("component") if isinstance(artifact_meta.get("component"), dict) else None
+        builtin_env = _extract_builtin_environment(payload_schema)
         producer = {
             "nodeId": art.node_id,
             "runId": art.run_id,
@@ -678,6 +708,7 @@ async def get_artifact_lineage(
                 {"artifactId": up_id, "label": _alpha_input_label(i)}
                 for i, up_id in enumerate(art.upstream_ids or [])
             ],
+            "builtinEnvironment": builtin_env,
         }
         if d <= 0:
             return node

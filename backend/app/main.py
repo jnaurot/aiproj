@@ -6,6 +6,7 @@ from .feature_flags import get_feature_flags
 from .graph_revisions import GraphRevisionStore
 from .runner.capabilities import capabilities_response, capability_signature
 from .routes.components import router as components_router
+from .routes.env_profiles import router as env_profiles_router
 from .routes.graphs import router as graphs_router
 from .routes.maintenance import router as maintenance_router
 from .routes.runs import router as runs_router
@@ -38,6 +39,7 @@ app.add_middleware(
 app.include_router(runs_router, prefix="/runs")
 app.include_router(graphs_router, prefix="/graphs")
 app.include_router(components_router, prefix="/components")
+app.include_router(env_profiles_router, prefix="/env")
 app.include_router(snapshots_router, prefix="/snapshots")
 app.include_router(maintenance_router, prefix="/maintenance")
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from ..runner.metadata import FileMetadata, GraphContext, NodeOutput
+from .builtin_profiles import resolve_builtin_environment
 
 
 def iso_now() -> str:
@@ -1070,6 +1071,7 @@ async def exec_tool(
     if provider == "builtin":
         try:
             bi_cfg = params.get("builtin", {}) if isinstance(params.get("builtin"), dict) else {}
+            resolved_env = resolve_builtin_environment(bi_cfg)
             tool_id = str(bi_cfg.get("toolId") or "").strip()
             args = bi_cfg.get("args") if isinstance(bi_cfg.get("args"), dict) else {}
             input_value = input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text")
@@ -1097,7 +1099,14 @@ async def exec_tool(
                 data=_format_output(
                     _redact_value(result),
                     output_mode,
-                    _status_meta("ok", common_meta, {"timings": {"elapsed_ms": elapsed_ms}}),
+                    _status_meta(
+                        "ok",
+                        common_meta,
+                        {
+                            "timings": {"elapsed_ms": elapsed_ms},
+                            "builtin_environment": resolved_env,
+                        },
+                    ),
                 ),
             )
         except Exception as e:

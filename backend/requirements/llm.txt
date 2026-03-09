@@ -1,0 +1,4 @@
+# LLM/NLP helper utilities (optional)
+tiktoken==0.8.0
+rapidfuzz==3.10.1
+sentence-transformers==3.2.1

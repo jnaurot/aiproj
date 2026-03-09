@@ -126,6 +126,61 @@ def _node_out_port_type(node: Dict[str, Any]) -> Optional[str]:
 	return _normalize_port_type(ports.get("out"))
 
 
+def _canonicalize_builtin_tool_params(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	if str(data.get("kind") or "").strip().lower() != "tool":
+		return
+	params = data.get("params") if isinstance(data.get("params"), dict) else {}
+	if not isinstance(params, dict):
+		return
+	if str(params.get("provider") or "").strip().lower() != "builtin":
+		return
+	builtin = params.get("builtin") if isinstance(params.get("builtin"), dict) else {}
+	if not isinstance(builtin, dict):
+		builtin = {}
+
+	changed = False
+	profile_id = str(builtin.get("profileId") or "").strip()
+	if not profile_id:
+		builtin["profileId"] = "core"
+		changed = True
+
+	custom_packages = builtin.get("customPackages")
+	if custom_packages is None:
+		builtin["customPackages"] = []
+		changed = True
+	elif not isinstance(custom_packages, list):
+		builtin["customPackages"] = []
+		changed = True
+	else:
+		normalized_packages = [str(pkg).strip() for pkg in custom_packages if isinstance(pkg, str) and str(pkg).strip()]
+		if normalized_packages != custom_packages:
+			builtin["customPackages"] = normalized_packages
+			changed = True
+
+	locked = builtin.get("locked")
+	if locked is not None:
+		locked_norm = str(locked).strip() if isinstance(locked, str) else ""
+		if locked_norm:
+			if locked_norm != locked:
+				builtin["locked"] = locked_norm
+				changed = True
+		else:
+			builtin.pop("locked", None)
+			changed = True
+
+	if changed:
+		params["builtin"] = builtin
+		data["params"] = params
+		notes.append(
+			{
+				"code": "TOOL_BUILTIN_PARAMS_CANONICALIZED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Normalized builtin profile defaults (profileId/customPackages/locked).",
+			}
+		)
+
+
 def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
 	notes: List[Dict[str, Any]] = []
 	graph = copy.deepcopy(raw if isinstance(raw, dict) else {})
@@ -161,6 +216,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node
+		_canonicalize_builtin_tool_params(next_node, notes)
 		canonical_nodes.append(next_node)
 	graph["nodes"] = canonical_nodes
 

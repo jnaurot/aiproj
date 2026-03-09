@@ -270,6 +270,35 @@ def test_canonicalize_graph_payload_infers_named_handle_from_unique_contract_por
 	assert str(edge.get("sourceHandle") or "") == "summary"
 
 
+def test_canonicalize_graph_payload_defaults_builtin_profile_storage():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "tool1",
+				"type": "tool",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "tool",
+					"ports": {"in": "json", "out": "json"},
+					"params": {
+						"provider": "builtin",
+						"name": "Builtin tool",
+						"builtin": {"toolId": "noop"},
+					},
+				},
+			}
+		],
+		"edges": [],
+	}
+	next_graph, notes = canonicalize_graph_payload(graph)
+	assert isinstance(notes, list)
+	tool_params = ((next_graph["nodes"][0].get("data") or {}).get("params") or {})
+	builtin = tool_params.get("builtin") or {}
+	assert str(builtin.get("profileId") or "") == "core"
+	assert builtin.get("customPackages") == []
+
+
 def test_graph_create_revision_applies_component_migration_normalization():
 	graph_id = f"graph_migrate_cmp_{uuid4().hex[:8]}"
 	with TestClient(app) as client:

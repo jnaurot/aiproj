@@ -36,6 +36,7 @@ from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
 from ..executors.tool import exec_tool
+from ..executors.builtin_profiles import BUILTIN_PROFILE_PACKAGES, missing_packages_for_packages, resolve_builtin_environment
 from ..feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
@@ -324,6 +325,210 @@ def _node_impl_version(kind: str) -> str:
         "component": "COMPONENT@1",
     }
     return mapping.get(str(kind or ""), "GENERIC@1")
+
+
+def _tool_builtin_env_preflight_error(
+    *,
+    kind: str,
+    params: Dict[str, Any],
+) -> Optional["ContractMismatchError"]:
+    if str(kind or "") != "tool":
+        return None
+    provider = str((params or {}).get("provider") or "").strip().lower()
+    builtin_cfg = (params or {}).get("builtin")
+    if not isinstance(builtin_cfg, dict):
+        if provider != "builtin":
+            return None
+        builtin_cfg = {}
+    try:
+        resolved_env = resolve_builtin_environment(builtin_cfg)
+    except ValueError as ex:
+        return ContractMismatchError(
+            "Tool builtin environment profile is invalid",
+            code="ENV_PROFILE_INVALID",
+            details=_contract_details(
+                expected={
+                    "profileId": "one of declared builtin profiles",
+                    "profiles": sorted(BUILTIN_PROFILE_PACKAGES.keys()),
+                },
+                actual={
+                    "provider": provider,
+                    "profileId": str((builtin_cfg or {}).get("profileId") or "core").strip() or "core",
+                    "message": str(ex),
+                },
+            ),
+        )
+    packages = [
+        str(pkg).strip()
+        for pkg in (resolved_env.get("packages") if isinstance(resolved_env.get("packages"), list) else [])
+        if str(pkg).strip()
+    ]
+    missing = missing_packages_for_packages(packages)
+    if missing:
+        return ContractMismatchError(
+            "Tool builtin environment profile is not installed",
+            code="ENV_PROFILE_MISSING",
+            details=_contract_details(
+                expected={
+                    "installed": True,
+                    "profileId": str(resolved_env.get("profileId") or "core"),
+                    "packages": packages,
+                },
+                actual={
+                    "installed": False,
+                    "profileId": str(resolved_env.get("profileId") or "core"),
+                    "source": str(resolved_env.get("source") or ""),
+                    "missingPackages": missing,
+                    "installHint": "POST /env/profiles/install",
+                },
+            ),
+        )
+    return None
+
+
+def _tool_builtin_env_requirement(params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    provider = str((params or {}).get("provider") or "").strip().lower()
+    builtin_cfg = (params or {}).get("builtin")
+    if not isinstance(builtin_cfg, dict):
+        if provider != "builtin":
+            return None
+        builtin_cfg = {}
+    try:
+        resolved = resolve_builtin_environment(builtin_cfg)
+    except ValueError as ex:
+        return {
+            "invalid": True,
+            "profileId": str((builtin_cfg or {}).get("profileId") or "core").strip() or "core",
+            "provider": provider,
+            "message": str(ex),
+        }
+    packages = [
+        str(pkg).strip()
+        for pkg in (resolved.get("packages") if isinstance(resolved.get("packages"), list) else [])
+        if str(pkg).strip()
+    ]
+    return {
+        "invalid": False,
+        "profileId": str(resolved.get("profileId") or "core").strip() or "core",
+        "source": str(resolved.get("source") or "builtin_profile").strip() or "builtin_profile",
+        "packages": packages,
+    }
+
+
+def _collect_component_builtin_profile_requirements(
+    *,
+    nodes_by_id: Dict[str, Dict[str, Any]],
+    internal_node_ids: list[str],
+) -> Dict[str, Any]:
+    profile_map: Dict[str, Dict[str, Any]] = {}
+    invalid_nodes: list[Dict[str, Any]] = []
+    for nid in sorted(set(str(v) for v in internal_node_ids if str(v).strip())):
+        node = nodes_by_id.get(nid)
+        if not isinstance(node, dict):
+            continue
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        if str((data or {}).get("kind") or "").strip().lower() != "tool":
+            continue
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        requirement = _tool_builtin_env_requirement(params if isinstance(params, dict) else {})
+        if not isinstance(requirement, dict):
+            continue
+        if bool(requirement.get("invalid")):
+            invalid_nodes.append(
+                {
+                    "nodeId": nid,
+                    "profileId": str(requirement.get("profileId") or "core"),
+                    "message": str(requirement.get("message") or ""),
+                }
+            )
+            continue
+        profile_id = str(requirement.get("profileId") or "").strip()
+        if not profile_id:
+            continue
+        entry = profile_map.setdefault(
+            profile_id,
+            {
+                "profileId": profile_id,
+                "source": str(requirement.get("source") or "builtin_profile"),
+                "packages": [],
+                "_pkg_set": set(),
+                "_node_set": set(),
+            },
+        )
+        for pkg in requirement.get("packages") if isinstance(requirement.get("packages"), list) else []:
+            pkg_name = str(pkg).strip()
+            if not pkg_name or pkg_name in entry["_pkg_set"]:
+                continue
+            entry["_pkg_set"].add(pkg_name)
+            entry["packages"].append(pkg_name)
+        entry["_node_set"].add(nid)
+
+    required_profiles: list[Dict[str, Any]] = []
+    missing_profiles: list[Dict[str, Any]] = []
+    for profile_id in sorted(profile_map.keys()):
+        entry = profile_map[profile_id]
+        packages = [
+            str(pkg).strip()
+            for pkg in (entry.get("packages") if isinstance(entry.get("packages"), list) else [])
+            if str(pkg).strip()
+        ]
+        missing = missing_packages_for_packages(packages)
+        item = {
+            "profileId": profile_id,
+            "source": str(entry.get("source") or "builtin_profile"),
+            "packages": packages,
+            "missingPackages": missing,
+            "internalNodeIds": sorted(str(v) for v in (entry.get("_node_set") or set())),
+        }
+        required_profiles.append(item)
+        if missing:
+            missing_profiles.append(item)
+    return {
+        "requiredProfiles": required_profiles,
+        "missingProfiles": missing_profiles,
+        "invalidProfiles": invalid_nodes,
+    }
+
+
+def _env_profile_log_guidance(
+    *,
+    error_code: Optional[str],
+    error_details: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    code = str(error_code or "").strip().upper()
+    if not code.startswith("ENV_PROFILE_"):
+        return None
+    details = error_details if isinstance(error_details, dict) else {}
+    actual = details.get("actual") if isinstance(details.get("actual"), dict) else {}
+    expected = details.get("expected") if isinstance(details.get("expected"), dict) else {}
+    profile_id = str(actual.get("profileId") or expected.get("profileId") or "core").strip() or "core"
+    install_hint = str(actual.get("installHint") or "POST /env/profiles/install").strip()
+    missing = actual.get("missingPackages") if isinstance(actual.get("missingPackages"), list) else []
+    missing_text = ", ".join([str(pkg).strip() for pkg in missing if str(pkg).strip()])
+    if code == "ENV_PROFILE_MISSING":
+        if missing_text:
+            return (
+                f"Environment profile '{profile_id}' missing packages: {missing_text}. "
+                f"Install profile: {install_hint} (profileId='{profile_id}')."
+            )
+        return (
+            f"Environment profile '{profile_id}' is not installed. "
+            f"Install profile: {install_hint} (profileId='{profile_id}')."
+        )
+    if code == "ENV_PROFILE_PACKAGE_BLOCKED":
+        blocked = actual.get("blockedPackages") if isinstance(actual.get("blockedPackages"), list) else []
+        blocked_text = ", ".join([str(pkg).strip() for pkg in blocked if str(pkg).strip()])
+        if blocked_text:
+            return f"Environment profile '{profile_id}' includes blocked packages: {blocked_text}."
+        return f"Environment profile '{profile_id}' includes blocked packages."
+    if code == "ENV_PROFILE_INVALID":
+        return f"Environment profile '{profile_id}' is invalid; update profile selection in the tool editor."
+    if code == "ENV_PROFILE_INSTALL_FAILED":
+        return (
+            f"Environment profile '{profile_id}' install failed. "
+            f"Retry install via {install_hint} (profileId='{profile_id}')."
+        )
+    return f"Environment profile error for '{profile_id}'."
 
 
 def _tool_is_armed(params: Dict[str, Any]) -> bool:
@@ -733,7 +938,25 @@ def _emit_external_schema_debug(*, kind: str, node_id: str, schema: Dict[str, An
     print(f"[external-schema] kind={kind} nodeId={node_id} schema={schema_json} sample={sample_json}")
 
 
-def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str, Any]]:
+def _tool_payload_schema(envelope_kind: str, payload: Any, envelope_meta: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    builtin_environment = None
+    if isinstance(envelope_meta, dict) and isinstance(envelope_meta.get("builtin_environment"), dict):
+        raw_env = envelope_meta.get("builtin_environment") or {}
+        profile_id = str(raw_env.get("profileId") or "").strip()
+        source = str(raw_env.get("source") or "").strip()
+        packages_raw = raw_env.get("packages")
+        packages: list[str] = []
+        if isinstance(packages_raw, list):
+            for pkg in packages_raw:
+                if isinstance(pkg, str) and pkg.strip():
+                    packages.append(pkg.strip())
+        if profile_id or source or packages:
+            builtin_environment = {
+                "profileId": profile_id,
+                "source": source,
+                "packages": packages,
+            }
+
     if envelope_kind == "json":
         schema = _json_payload_value_schema(payload)
         root_type = str(schema.get("type") or "unknown")
@@ -754,11 +977,19 @@ def _tool_payload_schema(envelope_kind: str, payload: Any) -> Optional[Dict[str,
         }
         if isinstance(payload, dict):
             out["keys_sample"] = sorted(list(payload.keys()))
+        if isinstance(builtin_environment, dict):
+            out["builtin_environment"] = builtin_environment
         return out
     if envelope_kind == "text":
-        return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
+        out = {"schema_version": 1, "type": "text", "encoding": "utf-8"}
+        if isinstance(builtin_environment, dict):
+            out["builtin_environment"] = builtin_environment
+        return out
     if envelope_kind == "binary":
-        return {"schema_version": 1, "type": "binary"}
+        out = {"schema_version": 1, "type": "binary"}
+        if isinstance(builtin_environment, dict):
+            out["builtin_environment"] = builtin_environment
+        return out
     return None
 
 
@@ -1596,6 +1827,10 @@ async def run_graph(
                     "failed": False,
                     "started_at": None,
                     "output_binding_edges": output_binding_edges,
+                    "builtin_profile_requirements": _collect_component_builtin_profile_requirements(
+                        nodes_by_id=nodes,
+                        internal_node_ids=planned_internal,
+                    ),
                 }
 
         async def _component_mark_node_start(node_id: str) -> None:
@@ -1615,7 +1850,72 @@ async def run_graph(
                 "nodeId": parent_node_id,
                 "componentId": str(meta.get("componentId") or ""),
                 "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+                "builtinEnvironment": state.get("builtin_profile_requirements"),
             })
+            builtin_req = (
+                state.get("builtin_profile_requirements")
+                if isinstance(state.get("builtin_profile_requirements"), dict)
+                else {}
+            )
+            required_profiles = (
+                builtin_req.get("requiredProfiles")
+                if isinstance(builtin_req.get("requiredProfiles"), list)
+                else []
+            )
+            missing_profiles = (
+                builtin_req.get("missingProfiles")
+                if isinstance(builtin_req.get("missingProfiles"), list)
+                else []
+            )
+            invalid_profiles = (
+                builtin_req.get("invalidProfiles")
+                if isinstance(builtin_req.get("invalidProfiles"), list)
+                else []
+            )
+            if required_profiles:
+                profile_ids = [
+                    str(p.get("profileId") or "").strip()
+                    for p in required_profiles
+                    if isinstance(p, dict) and str(p.get("profileId") or "").strip()
+                ]
+                missing_parts: list[str] = []
+                for item in missing_profiles:
+                    if not isinstance(item, dict):
+                        continue
+                    mid = str(item.get("profileId") or "").strip()
+                    missing_pkgs = item.get("missingPackages") if isinstance(item.get("missingPackages"), list) else []
+                    missing_text = ", ".join(str(pkg).strip() for pkg in missing_pkgs if str(pkg).strip())
+                    if mid and missing_text:
+                        missing_parts.append(f"{mid}({missing_text})")
+                    elif mid:
+                        missing_parts.append(mid)
+                invalid_parts = [
+                    f"{str(item.get('nodeId') or '')}:{str(item.get('profileId') or 'core')}"
+                    for item in invalid_profiles
+                    if isinstance(item, dict)
+                ]
+                details: list[str] = []
+                if missing_parts:
+                    details.append(
+                        f"missing: {'; '.join(missing_parts)}. Install profile: POST /env/profiles/install."
+                    )
+                if invalid_parts:
+                    details.append(f"invalid tool profile config at {', '.join(invalid_parts)}.")
+                suffix = f" {' '.join(details)}" if details else ""
+                await _emit({
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "warn" if (missing_parts or invalid_parts) else "info",
+                    "message": (
+                        f"COMPONENT_ENV_PROFILE_REQUIREMENTS: Component requires builtin profiles: "
+                        f"{', '.join(profile_ids)}.{suffix}"
+                    ),
+                    "nodeId": parent_node_id,
+                    "requiredProfiles": required_profiles,
+                    "missingProfiles": missing_profiles,
+                    "invalidProfiles": invalid_profiles,
+                })
 
         async def _component_mark_node_finish(node_id: str, *, ok: bool, error: Optional[str] = None) -> None:
             parent_node_id = component_parent_for_internal.get(node_id)
@@ -1895,6 +2195,11 @@ async def run_graph(
                         expected={"allowedOutPortTypes": sorted(allowed_out)},
                         actual={"outPortType": str(declared_out)},
                     ),
+                )
+            if preflight_error is None:
+                preflight_error = _tool_builtin_env_preflight_error(
+                    kind=kind,
+                    params=params,
                 )
             # TKT-006/TKT-007: enforce edge-level input compatibility with explicit coercion policy.
             if (
@@ -3643,6 +3948,7 @@ async def run_graph(
                         else _tool_payload_schema(
                             str(data_value.get("kind") or "json") if isinstance(data_value, dict) else "json",
                             data_value.get("payload") if isinstance(data_value, dict) else data_value,
+                            data_value.get("meta") if isinstance(data_value, dict) and isinstance(data_value.get("meta"), dict) else None,
                         )
                         if kind == "tool"
                         else None
@@ -3812,6 +4118,10 @@ async def run_graph(
                     print(f"[schema-mismatch] runId={run_id} nodeId={node_id} {mismatch_msg}")
 
                 if error_code:
+                    env_guidance = _env_profile_log_guidance(
+                        error_code=error_code,
+                        error_details=error_details,
+                    )
                     await _emit({
                         "type": "log",
                         "runId": run_id,
@@ -3820,6 +4130,15 @@ async def run_graph(
                         "message": f"{error_code}: {error_message}",
                         "nodeId": node_id,
                     })
+                    if env_guidance:
+                        await _emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "error",
+                            "message": f"{error_code}: {env_guidance}",
+                            "nodeId": node_id,
+                        })
 
                 await _emit({
                     "type": "log",
@@ -3841,6 +4160,9 @@ async def run_graph(
                     "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
                 if error_details:
+                    expected_payload = error_details.get("expected") if isinstance(error_details.get("expected"), dict) else {}
+                    actual_payload = error_details.get("actual") if isinstance(error_details.get("actual"), dict) else {}
+                    code_value = ex.code if isinstance(ex, ContractMismatchError) else "CONTRACT_MISMATCH"
                     await _emit({
                         "type": "log",
                         "runId": run_id,
@@ -3848,13 +4170,33 @@ async def run_graph(
                         "level": "error",
                         "message": json.dumps(
                             {
-                                "code": (ex.code if isinstance(ex, ContractMismatchError) else "CONTRACT_MISMATCH"),
+                                "code": code_value,
                                 "errorCode": error_code,
                                 "missingColumns": error_details.get("missingColumns", []),
                                 "availableColumns": error_details.get("availableColumns", []),
                                 "paramPath": error_details.get("paramPath"),
-                                "expected": error_details.get("expected"),
-                                "actual": error_details.get("actual"),
+                                "expected": expected_payload,
+                                "actual": actual_payload,
+                                "profileId": (
+                                    actual_payload.get("profileId")
+                                    if isinstance(actual_payload, dict)
+                                    else None
+                                )
+                                or (
+                                    expected_payload.get("profileId")
+                                    if isinstance(expected_payload, dict)
+                                    else None
+                                ),
+                                "missingPackages": (
+                                    actual_payload.get("missingPackages")
+                                    if isinstance(actual_payload, dict)
+                                    else None
+                                ),
+                                "installHint": (
+                                    actual_payload.get("installHint")
+                                    if isinstance(actual_payload, dict)
+                                    else None
+                                ),
                             },
                             ensure_ascii=False,
                         ),

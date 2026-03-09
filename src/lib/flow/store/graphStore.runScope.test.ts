@@ -80,6 +80,35 @@ function makeArtistBranchState(): GraphState {
 }
 
 describe('graphStore partial run scope events', () => {
+	it('normalizes env profile missing run log payload into actionable guidance', () => {
+		const runId = 'run-1';
+		const state = makeState();
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'log',
+				runId,
+				at: '2026-03-09T00:00:00Z',
+				level: 'error',
+				nodeId: 'tool_python',
+				message: JSON.stringify({
+					code: 'ENV_PROFILE_MISSING',
+					errorCode: 'ENV_PROFILE_MISSING',
+					profileId: 'full',
+					missingPackages: ['torch', 'transformers'],
+					installHint: 'POST /env/profiles/install'
+				})
+			},
+			runId
+		);
+		const last = next.logs[next.logs.length - 1];
+		expect(last.level).toBe('error');
+		expect(String(last.message)).toContain('ENV_PROFILE_MISSING');
+		expect(String(last.message)).toContain("profile 'full'");
+		expect(String(last.message)).toContain('Install profile');
+		expect(String(last.message)).toContain('POST /env/profiles/install');
+	});
+
 	it('run_started + scoped cache hits do not stale sibling branch', () => {
 		const runId = 'run-1';
 		let state = makeState();

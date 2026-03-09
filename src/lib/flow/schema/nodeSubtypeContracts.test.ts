@@ -88,6 +88,52 @@ describe('node subtype contract schemas', () => {
 		).toBe(true);
 
 		expect(
+			ToolParamsSchema.safeParse({
+				provider: 'python',
+				name: 'Python Tool',
+				python: { code: 'print(1)' },
+				builtin: { profileId: 'data' }
+			}).success
+		).toBe(true);
+
+		expect(
+			ToolParamsSchema.safeParse({
+				provider: 'builtin',
+				name: 'Builtin Tool',
+				builtin: {
+					toolId: 'noop',
+					profileId: 'llm_finetune',
+					customPackages: ['transformers', 'peft'],
+					locked: 'sha256:abc123'
+				}
+			}).success
+		).toBe(true);
+
+		const builtinDefaulted = ToolParamsSchema.safeParse({
+			provider: 'builtin',
+			name: 'Builtin Tool',
+			builtin: {
+				toolId: 'noop'
+			}
+		});
+		expect(builtinDefaulted.success).toBe(true);
+		if (builtinDefaulted.success) {
+			expect((builtinDefaulted.data as any).builtin.profileId).toBe('core');
+			expect((builtinDefaulted.data as any).builtin.customPackages).toEqual([]);
+		}
+
+		expect(
+			ToolParamsSchema.safeParse({
+				provider: 'builtin',
+				name: 'Builtin Tool',
+				builtin: {
+					toolId: 'noop',
+					profileId: 'not_a_profile'
+				}
+			}).success
+		).toBe(false);
+
+		expect(
 			ComponentParamsSchema.safeParse({
 				componentRef: { componentId: 'cmp_reader', revisionId: 'crev_1', apiVersion: 'v1' },
 				bindings: {
@@ -114,4 +160,3 @@ describe('node subtype contract schemas', () => {
 		).toBe(true);
 	});
 });
-

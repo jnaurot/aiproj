@@ -161,6 +161,56 @@ def test_component_routes_validate_endpoint():
         assert "INVALID_TYPED_SCHEMA_TYPE" in codes
 
 
+def test_component_validate_reports_builtin_environment_profiles(monkeypatch):
+    from app.routes import components as mod
+
+    monkeypatch.setattr(mod, "missing_packages_for_packages", lambda pkgs: ["numpy"] if "numpy" in pkgs else [])
+
+    payload = {
+        "graph": {
+            "version": 1,
+            "nodes": [
+                {
+                    "id": "tool_builtin",
+                    "type": "tool",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "kind": "tool",
+                        "label": "Tool Builtin",
+                        "params": {
+                            "provider": "builtin",
+                            "builtin": {"toolId": "noop", "profileId": "core", "args": {}},
+                        },
+                        "ports": {"in": None, "out": "text"},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "out_data",
+                    "portType": "text",
+                    "required": True,
+                    "typedSchema": {"type": "text", "fields": []},
+                }
+            ],
+        },
+        "configSchema": {},
+    }
+
+    with TestClient(app) as client:
+        res = client.post("/components/validate", json=payload)
+        assert res.status_code == 200, res.text
+        body = res.json()
+        diagnostics = body.get("diagnostics") or []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_ENV_PROFILES_REQUIRED" in codes
+        assert "COMPONENT_ENV_PROFILES_MISSING" in codes
+
+
 def test_component_routes_history_multiple_revisions():
     component_id = f"cmp_history_{uuid4().hex[:8]}"
     with TestClient(app) as client:

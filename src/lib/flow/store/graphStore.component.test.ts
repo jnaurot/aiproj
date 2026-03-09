@@ -1448,6 +1448,55 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_PORT_TYPE_MISMATCH');
 	});
 
+	it('blocks save preflight when tool builtin profile is invalid in loaded graph data', async () => {
+		graphStore.hardResetGraph();
+		const toolId = graphStore.addNode('tool', { x: 10, y: 10 });
+		const current = get(graphStore);
+		const toolNode = current.nodes.find((n) => n.id === toolId)!;
+		graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						...toolNode,
+						data: {
+							...(toolNode.data as any),
+							params: {
+								...((toolNode.data as any)?.params ?? {}),
+								provider: 'python',
+								python: { code: 'print(1)', args: {}, capture_output: true },
+								builtin: { profileId: 'unknown_profile', customPackages: [] }
+							},
+							ports: { in: null, out: 'text' }
+						}
+					} as any
+				],
+				edges: [] as any
+			},
+			null
+		);
+		const result = await graphStore.saveGraph('save');
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+		expect(String((result as any)?.error ?? '')).toContain('ENV_PROFILE_INVALID');
+	});
+
+	it('blocks save preflight when custom builtin profile package is blocked', async () => {
+		graphStore.hardResetGraph();
+		const toolId = graphStore.addNode('tool', { x: 10, y: 10 });
+		graphStore.updateNodeConfig(toolId, {
+			params: {
+				provider: 'python',
+				python: { code: 'print(1)', args: {}, capture_output: true },
+				builtin: { profileId: 'custom', customPackages: ['not-allowlisted-package'] }
+			},
+			ports: { in: null, out: 'text' }
+		});
+		const result = await graphStore.saveGraph('save');
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+		expect(String((result as any)?.error ?? '')).toContain('ENV_PROFILE_PACKAGE_BLOCKED');
+	});
+
 	it('normalizes legacy single-output component bindings/handles on load', () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 10, y: 10 });

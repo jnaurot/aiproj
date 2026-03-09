@@ -23,7 +23,8 @@ class _ComponentStoreStub:
         return self._revisions.get((component_id, revision_id))
 
 
-def _component_definition():
+def _component_definition(*, builtin_cfg: dict | None = None):
+    builtin_params = builtin_cfg if isinstance(builtin_cfg, dict) else {"toolId": "echo", "args": {}}
     return {
         "graph": {
             "nodes": [
@@ -32,7 +33,7 @@ def _component_definition():
                     "data": {
                         "kind": "tool",
                         "label": "Inner Tool",
-                        "params": {"provider": "builtin", "builtin": {"toolId": "echo", "args": {}}},
+                        "params": {"provider": "builtin", "builtin": builtin_params},
                         "ports": {"in": "text", "out": "json"},
                     },
                 }
@@ -220,6 +221,7 @@ async def test_component_run_emits_parent_lifecycle_and_artifact_component_meta(
 
     monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
     runtime_ref = SimpleNamespace(component_revisions=_ComponentStoreStub({("cmp_echo", "rev_1"): SimpleNamespace(definition=_component_definition())}))
 
     await run_mod.run_graph(
@@ -269,6 +271,66 @@ async def test_component_run_emits_parent_lifecycle_and_artifact_component_meta(
 
 
 @pytest.mark.asyncio
+async def test_component_run_reports_aggregated_builtin_profile_requirements(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+    store = MemoryArtifactStore()
+    cache = ExecutionCache()
+    events = []
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda packages: list(packages))
+    runtime_ref = SimpleNamespace(
+        component_revisions=_ComponentStoreStub(
+            {
+                ("cmp_echo", "rev_profile"): SimpleNamespace(
+                    definition=_component_definition(
+                        builtin_cfg={"toolId": "echo", "profileId": "full", "args": {}}
+                    )
+                )
+            }
+        )
+    )
+
+    await run_mod.run_graph(
+        run_id="run-component-profile-agg",
+        graph=_graph("rev_profile"),
+        run_from=None,
+        bus=RunEventBus("run-component-profile-agg", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-profile-agg",
+    )
+
+    component_started = next(
+        e for e in events if e.get("type") == "component_started" and e.get("nodeId") == "cmp_node"
+    )
+    builtin_env = component_started.get("builtinEnvironment") or {}
+    required = builtin_env.get("requiredProfiles") if isinstance(builtin_env, dict) else []
+    assert isinstance(required, list)
+    assert any(str(item.get("profileId") or "") == "full" for item in required if isinstance(item, dict))
+    assert any(
+        e.get("type") == "log"
+        and str(e.get("nodeId") or "") == "cmp_node"
+        and "COMPONENT_ENV_PROFILE_REQUIREMENTS" in str(e.get("message") or "")
+        and "full" in str(e.get("message") or "")
+        for e in events
+    )
+
+
+@pytest.mark.asyncio
 async def test_component_revision_change_busts_internal_exec_key(monkeypatch):
     run_mod = importlib.import_module("app.runner.run")
     store = MemoryArtifactStore()
@@ -288,6 +350,7 @@ async def test_component_revision_change_busts_internal_exec_key(monkeypatch):
 
     monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
     runtime_ref = SimpleNamespace(
         component_revisions=_ComponentStoreStub(
             {
@@ -336,6 +399,7 @@ async def test_component_output_binding_last_resolves_previous_internal_artifact
 
     monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
     runtime_ref = SimpleNamespace(
         component_revisions=_ComponentStoreStub(
             {
@@ -423,6 +487,7 @@ async def test_component_named_output_edges_route_to_bound_internal_artifacts(mo
     monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
     monkeypatch.setattr(run_mod, "exec_llm", _fake_exec_llm)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
     runtime_ref = SimpleNamespace(
         component_revisions=_ComponentStoreStub(
             {("cmp_multi_named", "crev_named"): SimpleNamespace(definition=_multi_output_component_definition())}

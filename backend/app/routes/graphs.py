@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
+from ..executors.builtin_profiles import missing_packages_for_packages, resolve_builtin_environment
 from ..feature_flags import get_feature_flags
 from ..graph_migrations import canonicalize_graph_payload, find_component_edge_handle_errors
 
@@ -52,10 +53,16 @@ def _build_graph_export_package(
     graph_id: str,
     revision_id: str,
     graph: Dict[str, Any],
+    component_store: Any = None,
     include_artifacts: bool = False,
     include_schemas: bool = True,
 ) -> Dict[str, Any]:
     component_dependencies = _extract_component_dependencies(graph)
+    env_profile_dependencies = _extract_environment_profile_dependencies(
+        graph=graph,
+        component_dependencies=component_dependencies,
+        component_store=component_store,
+    )
     warnings: list[str] = []
     if include_artifacts:
         warnings.append("Artifacts export is not implemented yet; package contains graph only.")
@@ -73,6 +80,7 @@ def _build_graph_export_package(
             },
             "dependencies": {
                 "components": component_dependencies,
+                "environmentProfiles": env_profile_dependencies,
             },
             "warnings": warnings,
         },
@@ -145,6 +153,187 @@ def _validate_component_dependencies(
         "declared": declared,
         "unresolved": unresolved,
     }
+
+
+def _extract_tool_builtin_profile_refs(
+    graph: Dict[str, Any],
+    *,
+    source: str,
+) -> list[Dict[str, Any]]:
+    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+    profile_map: dict[str, Dict[str, Any]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "").strip()
+        data = node.get("data", {}) if isinstance(node.get("data"), dict) else {}
+        if str(data.get("kind") or "").strip().lower() != "tool":
+            continue
+        params = data.get("params", {}) if isinstance(data.get("params"), dict) else {}
+        provider = str((params or {}).get("provider") or "").strip().lower()
+        builtin_cfg = params.get("builtin")
+        if not isinstance(builtin_cfg, dict):
+            if provider != "builtin":
+                continue
+            builtin_cfg = {}
+        try:
+            resolved = resolve_builtin_environment(builtin_cfg)
+        except ValueError:
+            continue
+        profile_id = str(resolved.get("profileId") or "core").strip() or "core"
+        packages = [
+            str(pkg).strip()
+            for pkg in (resolved.get("packages") if isinstance(resolved.get("packages"), list) else [])
+            if str(pkg).strip()
+        ]
+        entry = profile_map.setdefault(
+            profile_id,
+            {
+                "profileId": profile_id,
+                "source": source,
+                "packages": [],
+                "_pkg_set": set(),
+                "_nodes": set(),
+            },
+        )
+        for pkg in packages:
+            if pkg in entry["_pkg_set"]:
+                continue
+            entry["_pkg_set"].add(pkg)
+            entry["packages"].append(pkg)
+        if node_id:
+            entry["_nodes"].add(node_id)
+
+    out: list[Dict[str, Any]] = []
+    for profile_id in sorted(profile_map.keys()):
+        entry = profile_map[profile_id]
+        out.append(
+            {
+                "profileId": profile_id,
+                "source": str(entry.get("source") or source),
+                "packages": list(entry.get("packages") or []),
+                "nodeIds": sorted(str(n) for n in (entry.get("_nodes") or set())),
+            }
+        )
+    return out
+
+
+def _extract_environment_profile_dependencies(
+    *,
+    graph: Dict[str, Any],
+    component_dependencies: list[Dict[str, str]],
+    component_store: Any,
+) -> list[Dict[str, Any]]:
+    merged: dict[tuple[str, str], Dict[str, Any]] = {}
+
+    def _merge(items: list[Dict[str, Any]]) -> None:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            profile_id = str(item.get("profileId") or "").strip()
+            source = str(item.get("source") or "").strip() or "graph"
+            if not profile_id:
+                continue
+            key = (profile_id, source)
+            entry = merged.setdefault(
+                key,
+                {
+                    "profileId": profile_id,
+                    "source": source,
+                    "packages": [],
+                    "_pkg_set": set(),
+                    "nodeIds": [],
+                    "_node_set": set(),
+                },
+            )
+            for pkg in item.get("packages") if isinstance(item.get("packages"), list) else []:
+                pkg_name = str(pkg).strip()
+                if not pkg_name or pkg_name in entry["_pkg_set"]:
+                    continue
+                entry["_pkg_set"].add(pkg_name)
+                entry["packages"].append(pkg_name)
+            for node_id in item.get("nodeIds") if isinstance(item.get("nodeIds"), list) else []:
+                nid = str(node_id).strip()
+                if not nid or nid in entry["_node_set"]:
+                    continue
+                entry["_node_set"].add(nid)
+                entry["nodeIds"].append(nid)
+
+    _merge(_extract_tool_builtin_profile_refs(graph, source="graph"))
+
+    if component_store is not None:
+        for dep in component_dependencies:
+            if not isinstance(dep, dict):
+                continue
+            component_id = str(dep.get("componentId") or "").strip()
+            revision_id = str(dep.get("revisionId") or "").strip()
+            if not component_id or not revision_id:
+                continue
+            revision = component_store.get_revision(component_id, revision_id)
+            if revision is None:
+                continue
+            definition = revision.definition if isinstance(revision.definition, dict) else {}
+            internal_graph = definition.get("graph") if isinstance(definition.get("graph"), dict) else {}
+            _merge(
+                _extract_tool_builtin_profile_refs(
+                    internal_graph,
+                    source=f"component:{component_id}@{revision_id}",
+                )
+            )
+
+    out: list[Dict[str, Any]] = []
+    for key in sorted(merged.keys()):
+        entry = merged[key]
+        out.append(
+            {
+                "profileId": str(entry.get("profileId") or ""),
+                "source": str(entry.get("source") or "graph"),
+                "packages": list(entry.get("packages") or []),
+                "nodeIds": sorted(str(v) for v in (entry.get("nodeIds") or [])),
+            }
+        )
+    return out
+
+
+def _validate_environment_profile_dependencies(
+    *,
+    manifest: Dict[str, Any],
+    graph: Dict[str, Any],
+    component_dependencies: list[Dict[str, str]],
+    component_store: Any,
+) -> Dict[str, Any]:
+    dependencies_obj = manifest.get("dependencies") if isinstance(manifest, dict) else {}
+    env_profiles = dependencies_obj.get("environmentProfiles") if isinstance(dependencies_obj, dict) else None
+    declared = (
+        env_profiles
+        if isinstance(env_profiles, list)
+        else _extract_environment_profile_dependencies(
+            graph=graph,
+            component_dependencies=component_dependencies,
+            component_store=component_store,
+        )
+    )
+    missing: list[Dict[str, Any]] = []
+    for dep in declared:
+        if not isinstance(dep, dict):
+            continue
+        profile_id = str(dep.get("profileId") or "").strip()
+        source = str(dep.get("source") or "graph").strip() or "graph"
+        packages = [
+            str(pkg).strip()
+            for pkg in (dep.get("packages") if isinstance(dep.get("packages"), list) else [])
+            if str(pkg).strip()
+        ]
+        missing_packages = missing_packages_for_packages(packages)
+        if missing_packages:
+            missing.append(
+                {
+                    "profileId": profile_id,
+                    "source": source,
+                    "missingPackages": missing_packages,
+                }
+            )
+    return {"declared": declared, "missing": missing}
 
 
 def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -273,6 +462,7 @@ async def export_graph_package_v2(
     include_schemas: bool = Query(default=True),
 ):
     store = getattr(request.app.state, "graph_revisions", None)
+    component_store = getattr(request.app.state, "component_revisions", None)
     if store is None:
         raise HTTPException(status_code=500, detail="graph revision store unavailable")
 
@@ -287,6 +477,7 @@ async def export_graph_package_v2(
         graph_id=str(row.graph_id),
         revision_id=str(row.revision_id),
         graph=row.graph,
+        component_store=component_store,
         include_artifacts=include_artifacts,
         include_schemas=include_schemas,
     )
@@ -317,6 +508,29 @@ async def import_graph_package_v2(req: GraphImportRequest, request: Request):
         report["warnings"].append("Some component dependencies are unresolved in this environment.")
         report["unresolvedComponentDependencies"] = unresolved
     report["componentDependencies"] = dependency_check.get("declared") if isinstance(dependency_check, dict) else []
+    env_dependency_check = _validate_environment_profile_dependencies(
+        manifest=manifest,
+        graph=graph,
+        component_dependencies=report["componentDependencies"]
+        if isinstance(report.get("componentDependencies"), list)
+        else [],
+        component_store=component_store,
+    )
+    report["environmentProfiles"] = (
+        env_dependency_check.get("declared")
+        if isinstance(env_dependency_check, dict)
+        else []
+    )
+    missing_env_profiles = (
+        env_dependency_check.get("missing")
+        if isinstance(env_dependency_check, dict)
+        else []
+    )
+    if isinstance(missing_env_profiles, list) and missing_env_profiles:
+        report["missingEnvironmentProfiles"] = missing_env_profiles
+        report["warnings"].append(
+            "Some builtin environment profiles are not installed in this environment."
+        )
 
     target_graph_id = str(req.targetGraphId or "").strip() or None
     message = str(req.message).strip() if isinstance(req.message, str) and str(req.message).strip() else "import:v2"

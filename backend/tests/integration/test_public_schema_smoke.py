@@ -21,7 +21,18 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
             status="succeeded",
             metadata=None,
             execution_time_ms=1.0,
-            data={"kind": "json", "payload": {"ok": True}, "meta": {"status": "ok"}},
+            data={
+                "kind": "json",
+                "payload": {"ok": True},
+                "meta": {
+                    "status": "ok",
+                    "builtin_environment": {
+                        "profileId": "data",
+                        "source": "profile",
+                        "packages": ["polars", "pandas"],
+                    },
+                },
+            },
         )
 
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
@@ -95,6 +106,17 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
             "producerRunId",
         ):
             assert key in meta_json
+        payload_schema = meta_json.get("payloadSchema") or {}
+        assert payload_schema.get("builtin_environment") == {
+            "profileId": "data",
+            "source": "profile",
+            "packages": ["polars", "pandas"],
+        }
+        assert meta_json.get("builtinEnvironment") == {
+            "profileId": "data",
+            "source": "profile",
+            "packages": ["polars", "pandas"],
+        }
 
         lineage = client.get(f"/runs/artifacts/{artifact_id}/lineage?graphId={graph_id}&depth=1")
         assert lineage.status_code == 200, lineage.text
@@ -102,6 +124,11 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         assert lineage_json.get("schemaVersion") == 1
         for key in ("artifactId", "depth", "lineage"):
             assert key in lineage_json
+        assert (lineage_json.get("lineage") or {}).get("builtinEnvironment") == {
+            "profileId": "data",
+            "source": "profile",
+            "packages": ["polars", "pandas"],
+        }
 
 
 @pytest.mark.asyncio

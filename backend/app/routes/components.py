@@ -10,6 +10,7 @@ from app.component_contracts import (
     canonicalize_component_definition,
     validate_component_definition,
 )
+from app.executors.builtin_profiles import missing_packages_for_packages, resolve_builtin_environment
 
 router = APIRouter()
 
@@ -39,6 +40,102 @@ def _post_canonical_port_schema_diagnostics(definition: Dict[str, Any]) -> list[
                     "severity": "error",
                 }
             )
+    return diagnostics
+
+
+def _component_builtin_environment_diagnostics(definition: Dict[str, Any]) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    graph = definition.get("graph") if isinstance(definition.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    profile_map: Dict[str, Dict[str, Any]] = {}
+    invalid_entries: list[dict[str, Any]] = []
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "").strip() or f"nodes[{idx}]"
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        if str((data or {}).get("kind") or "").strip().lower() != "tool":
+            continue
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        provider = str((params or {}).get("provider") or "").strip().lower()
+        builtin_cfg = params.get("builtin")
+        if not isinstance(builtin_cfg, dict):
+            if provider != "builtin":
+                continue
+            builtin_cfg = {}
+        try:
+            resolved = resolve_builtin_environment(builtin_cfg)
+        except ValueError as ex:
+            invalid_entries.append(
+                {
+                    "nodeId": node_id,
+                    "profileId": str((builtin_cfg or {}).get("profileId") or "core").strip() or "core",
+                    "message": str(ex),
+                }
+            )
+            continue
+        profile_id = str(resolved.get("profileId") or "core").strip() or "core"
+        packages = [
+            str(pkg).strip()
+            for pkg in (resolved.get("packages") if isinstance(resolved.get("packages"), list) else [])
+            if str(pkg).strip()
+        ]
+        entry = profile_map.setdefault(
+            profile_id,
+            {"profileId": profile_id, "packages": [], "_pkg_set": set(), "_node_ids": set()},
+        )
+        for pkg in packages:
+            if pkg in entry["_pkg_set"]:
+                continue
+            entry["_pkg_set"].add(pkg)
+            entry["packages"].append(pkg)
+        entry["_node_ids"].add(node_id)
+
+    if profile_map:
+        profile_ids = sorted(profile_map.keys())
+        diagnostics.append(
+            {
+                "code": "COMPONENT_ENV_PROFILES_REQUIRED",
+                "path": "graph.nodes",
+                "message": f"Component requires builtin environment profiles: {', '.join(profile_ids)}",
+                "severity": "warning",
+            }
+        )
+
+    for profile_id in sorted(profile_map.keys()):
+        entry = profile_map[profile_id]
+        packages = [
+            str(pkg).strip()
+            for pkg in (entry.get("packages") if isinstance(entry.get("packages"), list) else [])
+            if str(pkg).strip()
+        ]
+        missing = missing_packages_for_packages(packages)
+        if not missing:
+            continue
+        diagnostics.append(
+            {
+                "code": "COMPONENT_ENV_PROFILES_MISSING",
+                "path": "graph.nodes",
+                "message": (
+                    f"Profile '{profile_id}' missing packages: {', '.join(missing)}. "
+                    "Install profile: POST /env/profiles/install."
+                ),
+                "severity": "warning",
+            }
+        )
+
+    for invalid in invalid_entries:
+        diagnostics.append(
+            {
+                "code": "COMPONENT_ENV_PROFILE_INVALID",
+                "path": "graph.nodes",
+                "message": (
+                    f"Tool node '{invalid.get('nodeId')}' has invalid builtin profile "
+                    f"'{invalid.get('profileId')}': {invalid.get('message')}"
+                ),
+                "severity": "error",
+            }
+        )
     return diagnostics
 
 
@@ -93,6 +190,7 @@ async def validate_component_revision(req: ComponentValidateRequest):
     )
     normalized_diagnostics = [d.as_dict() for d in validate_component_definition(normalized_definition)]
     normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(normalized_definition))
+    normalized_diagnostics.extend(_component_builtin_environment_diagnostics(normalized_definition))
     diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
     ok = len([d for d in diagnostics if d.get("severity") == "error"]) == 0
     return {
@@ -132,6 +230,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
     )
     diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
     diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
+    diagnostics.extend(_component_builtin_environment_diagnostics(definition))
     errors = [d for d in diagnostics if d.get("severity") == "error"]
     if errors:
         raise HTTPException(

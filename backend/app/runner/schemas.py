@@ -644,6 +644,28 @@ class ToolProviderParams(NodeParamSchema):
 
     def validate_required(self) -> List[str]:
         errors: List[str] = []
+        builtin_cfg = self.builtin if isinstance(self.builtin, dict) else None
+        if builtin_cfg is not None:
+            profile_id = str(builtin_cfg.get("profileId") or "core").strip()
+            allowed_profile_ids = {"core", "data", "ml", "llm_finetune", "full", "custom"}
+            if profile_id not in allowed_profile_ids:
+                errors.append("builtin.profileId must be one of: core, data, ml, llm_finetune, full, custom")
+            custom_packages = builtin_cfg.get("customPackages")
+            if custom_packages is not None:
+                if not isinstance(custom_packages, list):
+                    errors.append("builtin.customPackages must be an array")
+                else:
+                    for idx, pkg in enumerate(custom_packages):
+                        if not isinstance(pkg, str) or not pkg.strip():
+                            errors.append(f"builtin.customPackages[{idx}] must be a non-empty string")
+                if profile_id != "custom" and isinstance(custom_packages, list) and len(custom_packages) > 0:
+                    errors.append("builtin.customPackages is only allowed when builtin.profileId='custom'")
+            if profile_id == "custom":
+                if not isinstance(custom_packages, list) or len(custom_packages) == 0:
+                    errors.append("builtin.customPackages must include at least one package when builtin.profileId='custom'")
+            locked_value = builtin_cfg.get("locked")
+            if locked_value is not None and (not isinstance(locked_value, str) or not locked_value.strip()):
+                errors.append("builtin.locked must be a non-empty string when provided")
         provider = self.provider
         if provider == "mcp":
             if not isinstance(self.mcp, dict):

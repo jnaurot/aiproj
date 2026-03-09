@@ -1,0 +1,2 @@
+# Compatibility layer for pandas-centric codepaths and legacy utilities.
+pandas==2.1.3

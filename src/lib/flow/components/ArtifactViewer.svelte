@@ -40,6 +40,11 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		producerExecKey?: string | null;
 		inputRefs?: { artifactId: string; label?: string }[];
 		payloadSchema?: Record<string, any> | null;
+		builtinEnvironment?: {
+			profileId?: string;
+			source?: string;
+			packages?: string[];
+		} | null;
 	};
 
 	type InputArtifactSummary = {
@@ -106,6 +111,30 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	$: isAudio = effectiveMime.toLowerCase().startsWith('audio/');
 	$: isVideo = effectiveMime.toLowerCase().startsWith('video/');
 	$: colCount = tableCols.length || ((meta?.payloadSchema as any)?.columns?.length ?? 0);
+	$: builtinEnvironment = normalizeBuiltinEnvironment(meta);
+	$: hasBuiltinEnvironment = Boolean(builtinEnvironment);
+	$: builtinPackageCount = builtinEnvironment?.packages?.length ?? 0;
+
+	function normalizeBuiltinEnvironment(
+		artifactMeta: ArtifactMeta | null
+	): { profileId: string; source: string; packages: string[] } | null {
+		if (!artifactMeta) return null;
+		const top = artifactMeta.builtinEnvironment;
+		const fromSchema = (artifactMeta.payloadSchema as any)?.builtin_environment;
+		const raw = (top && typeof top === 'object' ? top : fromSchema) as Record<string, unknown> | undefined;
+		if (!raw || typeof raw !== 'object') return null;
+		const profileId = String(raw.profileId ?? '').trim();
+		const source = String(raw.source ?? '').trim();
+		const packagesRaw = raw.packages;
+		const packages: string[] = Array.isArray(packagesRaw)
+			? packagesRaw
+					.filter((p) => typeof p === 'string')
+					.map((p) => String(p).trim())
+					.filter((p) => p.length > 0)
+			: [];
+		if (!profileId && !source && packages.length === 0) return null;
+		return { profileId, source, packages };
+	}
 
 	function clearImageUrl(): void {
 		if (imageUrl) {
@@ -635,6 +664,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	<span class="chip"><b>payload</b> {payloadType}</span>
 	<span class="chip"><b>rows</b> {isTable ? totalRows || '-' : '-'}</span>
 	<span class="chip"><b>cols</b> {isTable ? colCount || '-' : '-'}</span>
+	{#if hasBuiltinEnvironment}
+		<span class="chip chipBuiltin"><b>builtin</b> {builtinEnvironment?.profileId || 'custom'}</span>
+	{/if}
 	{#if cacheDecision}
 		<span class="chip"><b>cache</b> {cacheDecision}</span>
 	{:else if cached}
@@ -670,6 +702,28 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 				<span>node -</span>
 			{/if}
 			<span>run {meta?.producerRunId || '-'}</span>
+		</div>
+	{/if}
+	{#if hasBuiltinEnvironment}
+		<div class="inputsRow">
+			<b>Builtin Environment:</b>
+			<div class="builtinSummary">
+				<span class="inputMeta">profile {builtinEnvironment?.profileId || '-'}</span>
+				<span class="inputMeta">source {builtinEnvironment?.source || '-'}</span>
+				<span class="inputMeta">{builtinPackageCount} package(s)</span>
+			</div>
+			<details class="builtinDetails">
+				<summary>Packages</summary>
+				<div class="builtinPackages">
+					{#if builtinPackageCount > 0}
+						{#each builtinEnvironment?.packages ?? [] as pkg}
+							<span class="inputMeta">{pkg}</span>
+						{/each}
+					{:else}
+						<span class="muted">No packages declared.</span>
+					{/if}
+				</div>
+			</details>
 		</div>
 	{/if}
 	{#if inputArtifacts.length > 0}
@@ -941,6 +995,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		background: var(--av-chip-bg);
 		color: var(--av-chip-text);
 	}
+	.chipBuiltin {
+		border-color: #0ea5e9;
+	}
 	.download {
 		margin-left: auto;
 	}
@@ -979,6 +1036,23 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	.inputsList {
 		display: grid;
 		gap: 6px;
+	}
+	.builtinSummary {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	.builtinDetails {
+		border: 1px solid var(--av-border);
+		border-radius: 8px;
+		padding: 6px 8px;
+		background: var(--av-surface-alt);
+	}
+	.builtinPackages {
+		margin-top: 6px;
+		display: flex;
+		gap: 6px;
+		flex-wrap: wrap;
 	}
 	.inputItem {
 		display: flex;

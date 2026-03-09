@@ -1,5 +1,12 @@
 import { z } from "zod";
 import { BaseNodeDataSchema } from "./base";
+import { TOOL_BUILTIN_PROFILE_IDS } from "./toolBuiltinProfiles";
+
+const BuiltinEnvironmentSchema = z.object({
+  profileId: z.enum(TOOL_BUILTIN_PROFILE_IDS).optional().default("core"),
+  customPackages: z.array(z.string().min(1)).optional().default([]),
+  locked: z.string().min(1).optional()
+}).strip();
 
 const ToolCommonSchema = z.object({
   name: z.string().min(1),
@@ -30,7 +37,8 @@ const ToolCommonSchema = z.object({
     schema: z.unknown().optional(),
     mapping: z.record(z.string(), z.string()).optional()
   }).strip().optional(),
-  output: z.object({ schema: z.unknown().optional() }).strip().optional()
+  output: z.object({ schema: z.unknown().optional() }).strip().optional(),
+  builtin: BuiltinEnvironmentSchema.optional()
 }).strip();
 
 const McpSchema = ToolCommonSchema.extend({
@@ -106,10 +114,9 @@ const DbSchema = ToolCommonSchema.extend({
 
 const BuiltinSchema = ToolCommonSchema.extend({
   provider: z.literal("builtin"),
-  builtin: z.object({
+  builtin: BuiltinEnvironmentSchema.extend({
     toolId: z.string().min(1),
     args: z.record(z.string(), z.unknown()).optional()
-
   }).strip()
 }).strip();
 

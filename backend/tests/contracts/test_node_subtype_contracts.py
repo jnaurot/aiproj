@@ -161,6 +161,23 @@ def _node(node_id: str, data: dict) -> dict:
             ),
         ),
         (
+            "tool_python_with_builtin_profile",
+            _node(
+                "n_tool_python_profile",
+                {
+                    "kind": "tool",
+                    "label": "Tool Python",
+                    "params": {
+                        "provider": "python",
+                        "name": "Python tool",
+                        "python": {"code": "print('ok')"},
+                        "builtin": {"profileId": "data"},
+                    },
+                    "ports": {"in": "json", "out": "json"},
+                },
+            ),
+        ),
+        (
             "tool_db",
             _node(
                 "n_tool_db",
@@ -173,6 +190,22 @@ def _node(node_id: str, data: dict) -> dict:
                         "db": {"connectionRef": "warehouse", "sql": "select 1 as ok"},
                     },
                     "ports": {"in": "json", "out": "table"},
+                },
+            ),
+        ),
+        (
+            "tool_builtin",
+            _node(
+                "n_tool_builtin",
+                {
+                    "kind": "tool",
+                    "label": "Tool Builtin",
+                    "params": {
+                        "provider": "builtin",
+                        "name": "Builtin tool",
+                        "builtin": {"toolId": "noop", "profileId": "data", "locked": "sha256:abc"},
+                    },
+                    "ports": {"in": "json", "out": "json"},
                 },
             ),
         ),
@@ -221,6 +254,42 @@ def test_validate_node_params_accepts_supported_subtypes(name: str, node: dict) 
     assert errors == [], f"{name} should be valid, got: {errors}"
 
 
+def test_validate_node_params_rejects_invalid_builtin_profile() -> None:
+    node = _node(
+        "n_tool_builtin_invalid",
+        {
+            "kind": "tool",
+            "label": "Tool Builtin Invalid",
+            "params": {
+                "provider": "builtin",
+                "name": "Builtin tool",
+                "builtin": {"toolId": "noop", "profileId": "invalid_profile"},
+            },
+            "ports": {"in": "json", "out": "json"},
+        },
+    )
+    errors = validate_node_params(node)
+    assert any("builtin.profileId" in err for err in errors)
+
+
+def test_validate_node_params_rejects_invalid_builtin_locked() -> None:
+    node = _node(
+        "n_tool_builtin_locked_invalid",
+        {
+            "kind": "tool",
+            "label": "Tool Builtin Invalid",
+            "params": {
+                "provider": "builtin",
+                "name": "Builtin tool",
+                "builtin": {"toolId": "noop", "profileId": "core", "locked": 123},
+            },
+            "ports": {"in": "json", "out": "json"},
+        },
+    )
+    errors = validate_node_params(node)
+    assert any("builtin.locked" in err for err in errors)
+
+
 def test_validator_rejects_port_type_mismatch_between_subtypes() -> None:
     graph = {
         "nodes": [
@@ -255,4 +324,3 @@ def test_validator_rejects_port_type_mismatch_between_subtypes() -> None:
     result = GraphValidator().validate_pre_execution(graph)
     codes = {e.code for e in result.errors}
     assert "TYPE_MISMATCH" in codes
-

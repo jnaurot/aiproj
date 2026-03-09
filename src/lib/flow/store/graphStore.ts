@@ -15,6 +15,8 @@ import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
 import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
 import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
+import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
+import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph, clearGraphDraft } from './persist';
@@ -189,6 +191,7 @@ export type ComponentEditSession = {
 const IDLE: NodeStatus = 'idle';
 const SUCCEEDED: NodeStatus = 'succeeded';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
+const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
 const initialInspector: InspectorState = {
 	nodeId: null,
 	draftParams: {},
@@ -773,6 +776,50 @@ function _componentPathFromNodeId(state: GraphState, nodeId?: string): string[] 
 	return names.length ? names : undefined;
 }
 
+function formatEnvProfileRunLogMessage(message: string): string {
+	const raw = String(message ?? '').trim();
+	if (!raw) return raw;
+	const envCodePrefix = raw.match(/^(ENV_PROFILE_[A-Z_]+)\s*:\s*(.*)$/);
+	if (envCodePrefix) {
+		const code = String(envCodePrefix[1] ?? '').trim();
+		const rest = String(envCodePrefix[2] ?? '').trim();
+		if (code === 'ENV_PROFILE_MISSING' && !/Install profile:/i.test(rest)) {
+			return `${code}: ${rest} Install profile: POST /env/profiles/install.`;
+		}
+		return raw;
+	}
+	if (!raw.startsWith('{') || !raw.endsWith('}')) return raw;
+	try {
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		const code = String(parsed?.errorCode ?? parsed?.code ?? '').trim().toUpperCase();
+		if (!code.startsWith('ENV_PROFILE_')) return raw;
+		const profileId = String(parsed?.profileId ?? '').trim() || 'core';
+		const missingPackages = Array.isArray(parsed?.missingPackages)
+			? (parsed.missingPackages as unknown[]).map((v) => String(v)).filter((v) => v.trim().length > 0)
+			: [];
+		const installHint = String(parsed?.installHint ?? '').trim() || 'POST /env/profiles/install';
+		if (code === 'ENV_PROFILE_MISSING') {
+			const suffix =
+				missingPackages.length > 0
+					? `missing packages: ${missingPackages.join(', ')}.`
+					: 'is not installed.';
+			return `${code}: profile '${profileId}' ${suffix} Install profile: ${installHint} (profileId='${profileId}').`;
+		}
+		if (code === 'ENV_PROFILE_INVALID') {
+			return `${code}: profile '${profileId}' is invalid. Update profile selection in the tool editor.`;
+		}
+		if (code === 'ENV_PROFILE_PACKAGE_BLOCKED') {
+			return `${code}: profile '${profileId}' has blocked package entries.`;
+		}
+		if (code === 'ENV_PROFILE_INSTALL_FAILED') {
+			return `${code}: profile '${profileId}' install failed. Retry install via ${installHint} (profileId='${profileId}').`;
+		}
+		return raw;
+	} catch {
+		return raw;
+	}
+}
+
 function logPush(
 	state: GraphState,
 	level: LogLevel,
@@ -782,9 +829,13 @@ function logPush(
 ) {
 	logSeq += 1;
 	const resolvedComponentPath = componentPath?.length ? componentPath : _componentPathFromNodeId(state, nodeId);
+	const normalizedMessage = formatEnvProfileRunLogMessage(message);
 	return {
 		...state,
-		logs: [...state.logs, { id: logSeq, ts: nowTs(), level, message, nodeId, componentPath: resolvedComponentPath }]
+		logs: [
+			...state.logs,
+			{ id: logSeq, ts: nowTs(), level, message: normalizedMessage, nodeId, componentPath: resolvedComponentPath }
+		]
 	};
 }
 
@@ -1754,6 +1805,39 @@ function normalizeGraphForComponentMigration(
 		{ outputNames: string[]; outputByName: Map<string, PortType>; bindingNames: string[] }
 	>();
 	const normalizedNodes = nodes.map((node) => {
+		if (node.data.kind === 'tool') {
+			const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
+			if (String(params?.provider ?? '').trim().toLowerCase() === 'builtin') {
+				const builtin = (params?.builtin && typeof params.builtin === 'object'
+					? params.builtin
+					: {}) as Record<string, any>;
+				const profileId = String(builtin.profileId ?? '').trim() || 'core';
+				const customPackages = Array.isArray(builtin.customPackages)
+					? builtin.customPackages
+							.filter((pkg: unknown) => typeof pkg === 'string')
+							.map((pkg: string) => pkg.trim())
+							.filter((pkg: string) => pkg.length > 0)
+					: [];
+				const locked = typeof builtin.locked === 'string' ? builtin.locked.trim() : '';
+				const nextBuiltin: Record<string, any> = {
+					...builtin,
+					profileId,
+					customPackages
+				};
+				if (locked) nextBuiltin.locked = locked;
+				else delete nextBuiltin.locked;
+				node = {
+					...node,
+					data: {
+						...node.data,
+						params: {
+							...params,
+							builtin: nextBuiltin
+						}
+					}
+				};
+			}
+		}
 		const normalized = normalizeComponentNodeForMigration(node);
 		if (node.data.kind === 'component') {
 			nodeInfo.set(String(node.id), {
@@ -1828,6 +1912,57 @@ function buildPersistableGraphStrict(
 	return { ok: true, graph: stripToDTO(normalized.nodes, rechecked.edges, graphId) };
 }
 
+function toolBuiltinPreflightDiagnostics(node: Node<PipelineNodeData>): SavePreflightDiagnostic[] {
+	if (node.data.kind !== 'tool') return [];
+	const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
+	const provider = String(params?.provider ?? '').trim().toLowerCase();
+	const builtin =
+		params?.builtin && typeof params.builtin === 'object' ? (params.builtin as Record<string, any>) : null;
+	if (!builtin && provider !== 'builtin') return [];
+	const profileId = String((builtin?.profileId ?? 'core') ?? 'core').trim() || 'core';
+	if (!allowedBuiltinProfileIds.has(profileId)) {
+		return [
+			{
+				code: 'ENV_PROFILE_INVALID',
+				path: `nodes.${String(node.id)}.params.builtin.profileId`,
+				message: `Tool builtin profile "${profileId}" is invalid.`,
+				severity: 'error'
+			}
+		];
+	}
+	if (profileId !== 'custom') return [];
+	const customPackagesRaw = Array.isArray(builtin?.customPackages) ? (builtin?.customPackages as string[]) : [];
+	if (customPackagesRaw.length === 0) {
+		return [
+			{
+				code: 'ENV_PROFILE_MISSING',
+				path: `nodes.${String(node.id)}.params.builtin.customPackages`,
+				message: "Custom builtin profile requires at least one package before save.",
+				severity: 'error'
+			}
+		];
+	}
+	const parsed = validateCustomPackageDraft(customPackagesRaw.join('\n'));
+	const diagnostics: SavePreflightDiagnostic[] = [];
+	if (parsed.blocked.length > 0) {
+		diagnostics.push({
+			code: 'ENV_PROFILE_PACKAGE_BLOCKED',
+			path: `nodes.${String(node.id)}.params.builtin.customPackages`,
+			message: `Custom builtin profile includes blocked package(s): ${parsed.blocked.join(', ')}`,
+			severity: 'error'
+		});
+	}
+	if (parsed.errors.length > 0) {
+		diagnostics.push({
+			code: 'ENV_PROFILE_INVALID',
+			path: `nodes.${String(node.id)}.params.builtin.customPackages`,
+			message: `Custom builtin profile has invalid package entries: ${parsed.errors.join('; ')}`,
+			severity: 'error'
+		});
+	}
+	return diagnostics;
+}
+
 function buildSavePreflightDiagnostics(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[]
@@ -1871,6 +2006,7 @@ function buildSavePreflightDiagnostics(
 	}
 
 	for (const node of workingNodes) {
+		diagnostics.push(...toolBuiltinPreflightDiagnostics(node));
 		if (node.data.kind !== 'component') continue;
 		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)

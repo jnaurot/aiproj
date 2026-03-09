@@ -29,6 +29,7 @@
 	import { parseComponentExitDecision } from './components/componentExitGuard';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
+	import { listEnvProfiles, installEnvProfile, type EnvProfileStatus } from '$lib/flow/client/envProfiles';
 	import {
 		exportGraphPackage,
 		importGraphPackage,
@@ -200,6 +201,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let commandFilter = '';
 	let commandFilterInput: HTMLInputElement | null = null;
 	let runLogFilter = '';
+	let envProfiles: EnvProfileStatus[] = [];
+	let envProfilesLoading = false;
+	let envProfilesError: string | null = null;
+	let envInstallPendingByProfile: Record<string, boolean> = {};
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	type GraphUiReturnSnapshot = {
@@ -282,6 +287,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: selectedPresetRefExists = Boolean(
 		selectedPresetRefId && presets.some((preset) => preset.id === selectedPresetRefId)
 	);
+	$: envProfilesInstalledCount = envProfiles.filter((profile) => Boolean(profile.installed)).length;
+	$: envProfilesMissingCount = envProfiles.filter((profile) => !Boolean(profile.installed)).length;
 
 	$: selectedId = $selectedNode?.id;
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -1867,6 +1874,40 @@ async function scrollToBottom() {
 		resizingInspector = false;
 	}
 
+	async function refreshWorkspaceEnvironmentPanel(): Promise<void> {
+		envProfilesLoading = true;
+		envProfilesError = null;
+		try {
+			const payload = await listEnvProfiles();
+			envProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+		} catch (error) {
+			envProfilesError = String((error as Error)?.message ?? error ?? 'Failed to load environment profiles.');
+			envProfiles = [];
+		} finally {
+			envProfilesLoading = false;
+		}
+	}
+
+	async function installWorkspaceProfile(profileId: string): Promise<void> {
+		const pid = String(profileId ?? '').trim();
+		if (!pid) return;
+		envInstallPendingByProfile = { ...envInstallPendingByProfile, [pid]: true };
+		envProfilesError = null;
+		try {
+			await installEnvProfile(pid);
+			showToast(`Profile '${pid}' install completed.`, 'info');
+			await refreshWorkspaceEnvironmentPanel();
+		} catch (error) {
+			const message = String((error as Error)?.message ?? error ?? 'Profile install failed.');
+			envProfilesError = message;
+			showToast(message, 'error');
+		} finally {
+			const next = { ...envInstallPendingByProfile };
+			delete next[pid];
+			envInstallPendingByProfile = next;
+		}
+	}
+
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 		if (toastTimer) clearTimeout(toastTimer);
@@ -1874,6 +1915,7 @@ async function scrollToBottom() {
 
 	onMount(async () => {
 		await refreshPortCapabilitiesFromBackend();
+		await refreshWorkspaceEnvironmentPanel();
 		try {
 			const config = await getGlobalCacheConfig();
 			globalCacheMode = (config.mode ??
@@ -2389,6 +2431,67 @@ async function scrollToBottom() {
 			on:pointerdown={onInspectorSplitDown}
 		></button>
 		<div class="inspectorBottom">
+			<div class="envPanel">
+				<div class="envPanelHead">
+					<h3>Environment</h3>
+					<button
+						class="tabBtn envRefreshBtn"
+						on:click={() => void refreshWorkspaceEnvironmentPanel()}
+						disabled={envProfilesLoading}
+					>
+						{envProfilesLoading ? 'Refreshing...' : 'Refresh'}
+					</button>
+				</div>
+				<div class="envPanelSummary">
+					{envProfilesInstalledCount}/{envProfiles.length} installed
+					{#if envProfilesMissingCount > 0}
+						<span class="envMissing">({envProfilesMissingCount} missing)</span>
+					{/if}
+				</div>
+				{#if envProfilesError}
+					<div class="envPanelError">{envProfilesError}</div>
+				{/if}
+				<div class="envProfileList">
+					{#if !envProfilesLoading && envProfiles.length === 0}
+						<div class="envProfileEmpty">No profiles available.</div>
+					{/if}
+					{#each envProfiles as profile (profile.profileId)}
+						<div class="envProfileRow">
+							<div class="envProfileMeta">
+								<div class="envProfileTitle">
+									<span class="mono">{profile.profileId}</span>
+									<span class={`pill ${profile.installed ? 'st-succeeded' : 'st-stale'}`}>
+										{profile.installed ? 'installed' : 'missing'}
+									</span>
+								</div>
+								{#if !profile.installed && profile.missingPackages.length > 0}
+									<div class="envProfileMissing">
+										missing: {profile.missingPackages.join(', ')}
+									</div>
+								{/if}
+								{#if profile.platformNotes?.length}
+									<div class="envProfileNotes">
+										{profile.platformNotes.join(' ')}
+									</div>
+								{/if}
+							</div>
+							<button
+								class="tabBtn envInstallBtn"
+								disabled={Boolean(envInstallPendingByProfile[profile.profileId])}
+								on:click={() => void installWorkspaceProfile(profile.profileId)}
+							>
+								{#if envInstallPendingByProfile[profile.profileId]}
+									Installing...
+								{:else if profile.installed}
+									Reinstall
+								{:else}
+									Install
+								{/if}
+							</button>
+						</div>
+					{/each}
+				</div>
+			</div>
 			<h3>Run Logs</h3>
 			<input
 				class="logFilterInput"
@@ -2771,6 +2874,91 @@ async function scrollToBottom() {
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
+	}
+
+	.envPanel {
+		border: 1px solid #1f2430;
+		border-radius: 12px;
+		background: #0f1115;
+		padding: 10px;
+		margin-bottom: 10px;
+	}
+
+	.envPanelHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.envPanelHead h3 {
+		margin: 0;
+	}
+
+	.envRefreshBtn,
+	.envInstallBtn {
+		padding: 4px 8px;
+		font-size: 12px;
+	}
+
+	.envPanelSummary {
+		margin-top: 6px;
+		font-size: 12px;
+		opacity: 0.85;
+	}
+
+	.envMissing {
+		color: #f2cc60;
+	}
+
+	.envPanelError {
+		margin-top: 6px;
+		font-size: 12px;
+		color: #ff7b72;
+	}
+
+	.envProfileList {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		max-height: 180px;
+		overflow: auto;
+		margin-top: 8px;
+		padding-right: 2px;
+	}
+
+	.envProfileRow {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 8px;
+		border: 1px solid #1c2335;
+		border-radius: 8px;
+		padding: 8px;
+		background: #0c1220;
+	}
+
+	.envProfileMeta {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.envProfileTitle {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.envProfileMissing,
+	.envProfileNotes,
+	.envProfileEmpty {
+		margin-top: 4px;
+		font-size: 12px;
+		opacity: 0.8;
+	}
+
+	.envProfileMissing {
+		color: #f2cc60;
 	}
 
 	.card {

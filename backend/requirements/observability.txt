@@ -1,0 +1,2 @@
+# Optional structured logging helpers
+structlog==24.4.0

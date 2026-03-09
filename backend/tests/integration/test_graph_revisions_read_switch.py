@@ -27,6 +27,33 @@ def _graph_payload(label: str):
 	}
 
 
+def _graph_with_builtin_tool(profile_id: str = "core"):
+	return {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "tool_builtin_1",
+				"type": "tool",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "tool",
+					"label": "Tool Builtin",
+					"ports": {"in": None, "out": "text"},
+					"params": {
+						"provider": "builtin",
+						"builtin": {
+							"toolId": "noop",
+							"profileId": profile_id,
+							"args": {},
+						},
+					},
+				},
+			}
+		],
+		"edges": [],
+	}
+
+
 def test_graph_read_path_always_enabled(monkeypatch):
 	graph_id = "graph_phase3_read_switch"
 
@@ -84,6 +111,8 @@ def test_graph_export_import_package_v2():
 		pkg = exported.json()["package"]
 		assert pkg["manifest"]["packageType"] == "aipgraph"
 		assert int(pkg["manifest"]["packageVersion"]) == 2
+		env_deps = (((pkg.get("manifest") or {}).get("dependencies") or {}).get("environmentProfiles") or [])
+		assert isinstance(env_deps, list)
 
 		imported = client.post(
 			"/graphs/import",
@@ -109,7 +138,9 @@ def test_graph_export_import_package_v2():
 				"targetGraphId": f"{graph_id}_legacy",
 			},
 		)
-		assert legacy.status_code == 400
+		assert legacy.status_code == 200, legacy.text
+		legacy_report = (legacy.json() or {}).get("migrationReport") or {}
+		assert legacy_report.get("format") == "raw_graph_legacy"
 
 
 def test_graph_export_import_reports_component_dependencies():
@@ -189,3 +220,40 @@ def test_graph_export_import_reports_component_dependencies():
 		assert any(d.get("componentId") == "cmp_dep_test" for d in report.get("componentDependencies", []))
 		unresolved = report.get("unresolvedComponentDependencies") or []
 		assert any(d.get("componentId") == "cmp_missing" for d in unresolved)
+
+
+def test_graph_export_import_reports_environment_profile_dependencies(monkeypatch):
+	from app.routes import graphs as mod
+
+	graph_id = "graph_phase5_pkg_env_profiles"
+	monkeypatch.setattr(mod, "missing_packages_for_packages", lambda pkgs: ["numpy"] if "numpy" in pkgs else [])
+	with TestClient(app) as client:
+		created_graph = client.post(
+			"/graphs",
+			json={
+				"graphId": graph_id,
+				"message": "seed-env-profiles",
+				"graph": _graph_with_builtin_tool("core"),
+			},
+		)
+		assert created_graph.status_code == 200, created_graph.text
+
+		exported = client.get(f"/graphs/{graph_id}/export")
+		assert exported.status_code == 200, exported.text
+		pkg = exported.json()["package"]
+		env_deps = (((pkg.get("manifest") or {}).get("dependencies") or {}).get("environmentProfiles") or [])
+		assert any(d.get("profileId") == "core" for d in env_deps)
+
+		imported = client.post(
+			"/graphs/import",
+			json={
+				"package": pkg,
+				"targetGraphId": f"{graph_id}_imported",
+				"message": "imported-env-profiles",
+			},
+		)
+		assert imported.status_code == 200, imported.text
+		report = imported.json()["migrationReport"]
+		assert any(d.get("profileId") == "core" for d in (report.get("environmentProfiles") or []))
+		assert any(d.get("profileId") == "core" for d in (report.get("missingEnvironmentProfiles") or []))
+		assert any("environment profiles are not installed" in str(w).lower() for w in (report.get("warnings") or []))

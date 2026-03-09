@@ -52,7 +52,11 @@ export const defaultPythonToolParams = {
         code: "# write python here",
         args: {},
         capture_output: true
-    }
+    },
+	builtin: {
+		profileId: "core" as const,
+		customPackages: []
+	}
 };
 
 export const defaultJsToolParams = {
@@ -125,10 +129,12 @@ export const defaultBuiltinToolParams = {
     cache_enabled: true,
     armed: false,
     permissions: { net: false, fs: false, env: false, subprocess: false },
-    builtin: {
-        toolId: "noop",
-        args: {}
-    }
+	builtin: {
+		toolId: "noop",
+		args: {},
+		profileId: "core" as const,
+		customPackages: []
+	}
 };
 
 /* -----------------------------
