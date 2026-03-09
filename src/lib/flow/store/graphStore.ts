@@ -155,6 +155,34 @@ export type SavePreflightResult = {
 	diagnostics: SavePreflightDiagnostic[];
 };
 
+export type EditorContext = 'graph' | 'component';
+
+export type ComponentEditSessionSnapshot = {
+	graphId: string;
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
+	selectedNodeId: string | null;
+	inspector: InspectorState;
+	logs: RunLog[];
+	runStatus: RunStatus;
+	lastRunStatus: GraphLastRunStatus;
+	freshness: ScopeFreshness;
+	staleNodeCount: number;
+	activeRunMode: ActiveRunMode;
+	activeRunFrom: string | null;
+	activeRunNodeSet: Set<string>;
+	nodeOutputs: Record<string, NodeOutputInfo>;
+	nodeBindings: Record<string, NormalizedNodeBinding>;
+	activeRunId: string | null;
+};
+
+export type ComponentEditSession = {
+	componentId: string;
+	revisionId: string;
+	entryNodeId: string | null;
+	snapshot: ComponentEditSessionSnapshot;
+};
+
 const IDLE: NodeStatus = 'idle';
 const SUCCEEDED: NodeStatus = 'succeeded';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
@@ -539,6 +567,8 @@ export type GraphState = {
 	nodeOutputs: Record<string, NodeOutputInfo>;
 	nodeBindings: Record<string, NormalizedNodeBinding>;
 	activeRunId: string | null;
+	editingContext: EditorContext;
+	componentEditSession: ComponentEditSession | null;
 };
 
 export type InputResolution = {
@@ -1532,7 +1562,30 @@ function buildHardResetState(freshGraphId: string): GraphState {
 		activeRunNodeSet: new Set<string>(),
 		nodeOutputs: {},
 		nodeBindings: {},
-		activeRunId: null
+		activeRunId: null,
+		editingContext: 'graph',
+		componentEditSession: null
+	};
+}
+
+function captureComponentEditSnapshot(state: GraphState): ComponentEditSessionSnapshot {
+	return {
+		graphId: state.graphId,
+		nodes: structuredClone(state.nodes),
+		edges: structuredClone(state.edges),
+		selectedNodeId: state.selectedNodeId,
+		inspector: structuredClone(state.inspector),
+		logs: structuredClone(state.logs),
+		runStatus: state.runStatus,
+		lastRunStatus: state.lastRunStatus,
+		freshness: state.freshness,
+		staleNodeCount: state.staleNodeCount,
+		activeRunMode: state.activeRunMode,
+		activeRunFrom: state.activeRunFrom,
+		activeRunNodeSet: new Set(Array.from(state.activeRunNodeSet ?? [])),
+		nodeOutputs: structuredClone(state.nodeOutputs),
+		nodeBindings: structuredClone(state.nodeBindings),
+		activeRunId: state.activeRunId
 	};
 }
 
@@ -2251,7 +2304,9 @@ const initialState: GraphState = {
 	activeRunNodeSet: new Set<string>(),
 	nodeOutputs: {},
 	nodeBindings: ensureNormalizedBindingsForNodes(loadedNodes, {}),
-	activeRunId: null
+	activeRunId: null,
+	editingContext: 'graph',
+	componentEditSession: null
 };
 
 export const graphStore = (() => {
@@ -2826,7 +2881,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				activeRunNodeSet: new Set<string>(),
 				nodeOutputs: {},
 				nodeBindings: ensureNormalizedBindingsForNodes(normalized.nodes as any, {}),
-				activeRunId: null
+				activeRunId: null,
+				editingContext: 'graph',
+				componentEditSession: null
 			});
 			persist(nextState);
 			return nextState;
@@ -3700,11 +3757,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
-		async openComponentRevisionForEditing(componentId: string, revisionId: string) {
+		async openComponentRevisionForEditing(componentId: string, revisionId: string, entryNodeId?: string | null) {
 			const cid = String(componentId ?? '').trim();
 			const rid = String(revisionId ?? '').trim();
 			if (!cid || !rid) return { ok: false, reason: 'missing_component_ref' as const };
 			try {
+				const before = get({ subscribe } as any) as GraphState;
+				const snapshot = captureComponentEditSnapshot(before);
 				const detail = await getComponentRevision(cid, rid);
 				const graph = (detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] };
 				const applied = applyGraphDocument(
@@ -3720,6 +3779,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				update((s) => {
 					const next = {
 						...s,
+						editingContext: 'component' as const,
+						componentEditSession: {
+							componentId: cid,
+							revisionId: rid,
+							entryNodeId: String(entryNodeId ?? '').trim() || null,
+							snapshot
+						},
 						lastRunStatus: 'never_run' as const,
 						logs: [
 							...(Array.isArray(s.logs) ? s.logs : []),
@@ -3738,6 +3804,187 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			} catch (error) {
 				return { ok: false, reason: 'open_component_failed' as const, error: String(error) };
 			}
+		},
+
+		returnFromComponentEditSession() {
+			const state = get({ subscribe } as any) as GraphState;
+			const session = state.componentEditSession;
+			if (!session) return { ok: false as const, reason: 'no_component_edit_session' as const };
+			const snapshot = session.snapshot;
+			update((s) => {
+				const next: GraphState = {
+					...s,
+					graphId: snapshot.graphId,
+					nodes: structuredClone(snapshot.nodes),
+					edges: structuredClone(snapshot.edges),
+					selectedNodeId: snapshot.selectedNodeId,
+					inspector: structuredClone(snapshot.inspector),
+					logs: [
+						...structuredClone(snapshot.logs),
+						{
+							id: ++logSeq,
+							ts: new Date().toLocaleTimeString(),
+							level: 'info',
+							message: `[component-edit] Returned to graph context from ${session.componentId}@${session.revisionId}`
+						}
+					],
+					runStatus: snapshot.runStatus,
+					lastRunStatus: snapshot.lastRunStatus,
+					freshness: snapshot.freshness,
+					staleNodeCount: snapshot.staleNodeCount,
+					activeRunMode: snapshot.activeRunMode,
+					activeRunFrom: snapshot.activeRunFrom,
+					activeRunNodeSet: new Set(Array.from(snapshot.activeRunNodeSet ?? [])),
+					nodeOutputs: structuredClone(snapshot.nodeOutputs),
+					nodeBindings: ensureNormalizedBindingsForNodes(
+						structuredClone(snapshot.nodes) as any,
+						structuredClone(snapshot.nodeBindings) as any
+					),
+					activeRunId: snapshot.activeRunId,
+					editingContext: 'graph',
+					componentEditSession: null
+				};
+				persist(next);
+				return withGraphMeta(next);
+			}, { source: 'graph_edit' });
+			return { ok: true as const };
+		},
+
+		updateComponentEditSessionRevision(revisionId: string) {
+			const rid = String(revisionId ?? '').trim();
+			if (!rid) return { ok: false as const, reason: 'missing_revision_id' as const };
+			let updated = false;
+			update((s) => {
+				const session = s.componentEditSession;
+				if (!session) return s;
+				if (String(session.revisionId ?? '').trim() === rid) return s;
+				updated = true;
+				const next: GraphState = {
+					...s,
+					componentEditSession: {
+						...session,
+						revisionId: rid
+					},
+					logs: [
+						...(Array.isArray(s.logs) ? s.logs : []),
+						{
+							id: ++logSeq,
+							ts: new Date().toLocaleTimeString(),
+							level: 'info',
+							message: `[component-edit] Active revision updated: ${session.componentId}@${rid}`
+						}
+					]
+				};
+				persist(next);
+				return next;
+			});
+			if (!updated) return { ok: false as const, reason: 'no_component_edit_session' as const };
+			return { ok: true as const, revisionId: rid };
+		},
+
+		applySavedComponentRevisionToReturnGraph(
+			componentId: string,
+			fromRevisionId: string,
+			toRevisionId: string,
+			scope: 'none' | 'one' | 'all'
+		) {
+			const cid = String(componentId ?? '').trim();
+			const fromRid = String(fromRevisionId ?? '').trim();
+			const toRid = String(toRevisionId ?? '').trim();
+			const mode = scope === 'all' || scope === 'none' ? scope : 'one';
+			if (!cid || !fromRid || !toRid) return { ok: false as const, reason: 'missing_revision_context' as const };
+			let applied = false;
+			let matchedCount = 0;
+			let updatedCount = 0;
+			let entryMatched = false;
+			update((s) => {
+				const session = s.componentEditSession;
+				if (!session) return s;
+				const snapshot = session.snapshot;
+				const matchingNodeIds = (snapshot.nodes ?? [])
+					.filter((n) => {
+						if (n.data?.kind !== 'component') return false;
+						const ref = (((n.data as any)?.params ?? {}) as any)?.componentRef ?? {};
+						const nodeComponentId = String(ref?.componentId ?? '').trim();
+						const nodeRevisionId = String(ref?.revisionId ?? '').trim();
+						return nodeComponentId === cid && nodeRevisionId === fromRid;
+					})
+					.map((n) => String(n.id));
+				matchedCount = matchingNodeIds.length;
+				const targetIds = new Set<string>();
+				if (mode === 'all') {
+					for (const id of matchingNodeIds) targetIds.add(id);
+				} else if (mode === 'one') {
+					const entryNodeId = String(session.entryNodeId ?? '').trim();
+					if (entryNodeId && matchingNodeIds.includes(entryNodeId)) {
+						entryMatched = true;
+						targetIds.add(entryNodeId);
+					}
+				}
+				const nextSnapshotNodes = (snapshot.nodes ?? []).map((n) => {
+					if (!targetIds.has(String(n.id))) return n;
+					updatedCount += 1;
+					const params = structuredClone(((n.data as any)?.params ?? {}) as Record<string, unknown>);
+					const existingRef = ((params as any)?.componentRef ?? {}) as Record<string, unknown>;
+					return {
+						...n,
+						data: {
+							...n.data,
+							params: {
+								...params,
+								componentRef: {
+									...existingRef,
+									componentId: cid,
+									revisionId: toRid
+								}
+							},
+							meta: {
+								...(n.data?.meta ?? {}),
+								componentLatestRevisionId: toRid,
+								componentHasUpdate: false,
+								updatedAt: new Date().toISOString()
+							}
+						}
+					};
+				});
+				const modeLabel = mode === 'all' ? 'all' : mode === 'none' ? 'none' : 'one';
+				const nextLogMessage = `[component-edit] Save apply scope=${modeLabel} updated=${updatedCount}/${matchedCount} ${cid}@${fromRid} -> ${cid}@${toRid}`;
+				const nextSnapshotLogs = [
+					...(Array.isArray(snapshot.logs) ? structuredClone(snapshot.logs) : []),
+					{
+						id: ++logSeq,
+						ts: new Date().toLocaleTimeString(),
+						level: 'info' as const,
+						message: nextLogMessage
+					}
+				];
+				const next: GraphState = {
+					...s,
+					componentEditSession: {
+						...session,
+						revisionId: toRid,
+						snapshot: {
+							...snapshot,
+							nodes: nextSnapshotNodes,
+							logs: nextSnapshotLogs
+						}
+					},
+					logs: [
+						...(Array.isArray(s.logs) ? s.logs : []),
+						{
+							id: ++logSeq,
+							ts: new Date().toLocaleTimeString(),
+							level: 'info',
+							message: nextLogMessage
+						}
+					]
+				};
+				applied = true;
+				persist(next);
+				return next;
+			});
+			if (!applied) return { ok: false as const, reason: 'no_component_edit_session' as const };
+			return { ok: true as const, scope: mode, matchedCount, updatedCount, entryMatched };
 		},
 
 		async forkComponentRevisionToNode(

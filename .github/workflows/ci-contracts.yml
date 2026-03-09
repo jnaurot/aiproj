@@ -26,12 +26,15 @@ jobs:
 			- name: Frontend component flow regression tests
 				run: |
 					npm run test -- \
+						src/lib/flow/components/headerContext.test.ts \
+						src/lib/flow/components/statusScope.test.ts \
 						src/lib/flow/store/graphStore.component.test.ts \
 						src/lib/flow/components/editors/ComponentEditor/validation.test.ts
 			- name: Backend component flow regression tests
 				run: |
 					cd backend
 					python -m pytest \
+						tests/e2e/test_component_edit_internals_workflow_gate.py \
 						tests/e2e/test_component_migration_regression_gate.py \
 						tests/integration/test_graph_migrations_component_outputs.py \
 						tests/integration/test_component_run_flow.py \
@@ -52,7 +55,10 @@ jobs:
 			- name: Run component migration e2e regression matrix
 				run: |
 					cd backend
-					python -m pytest tests/e2e/test_component_migration_regression_gate.py --maxfail=1
+					python -m pytest \
+						tests/e2e/test_component_migration_regression_gate.py \
+						tests/e2e/test_component_edit_internals_workflow_gate.py \
+						--maxfail=1
 
 	frontend-schema-contract:
 		name: Frontend Schema + Contract Tests

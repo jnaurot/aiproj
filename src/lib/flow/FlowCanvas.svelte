@@ -20,9 +20,13 @@
 		buildAddMenuItems,
 		buildProjectMenuItems,
 		dispatchAddMenuAction,
-		dispatchProjectMenuAction
+		dispatchProjectMenuAction,
+		routePrimarySaveAction
 	} from './components/flowToolbarModel';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
+	import { buildHeaderContextLabels } from './components/headerContext';
+	import { buildScopedStatus } from './components/statusScope';
+	import { parseComponentExitDecision } from './components/componentExitGuard';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
 	import {
@@ -33,6 +37,7 @@
 	} from '$lib/flow/client/graphs';
 	import { getGraphDraftInfo } from '$lib/flow/store/persist';
 	import {
+		getComponentRevision,
 		createComponentRevision,
 		validateComponentRevision,
 		type ComponentApiContract,
@@ -49,7 +54,7 @@ import {
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
 	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
 
-	const { screenToFlowPosition, setCenter, getViewport } = useSvelteFlow();
+	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
 	let outputOpen = false;
 	let outputNodeId: string | null = null;
@@ -119,7 +124,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		updateSelectedTitle(titleBeforeEdit);
 	}
 	//end editing stuff
-	$: if ($graphStore.logs && scrollElement) {
+	$: if ($graphStore.logs && scrollElement && logAutoScrollEnabled) {
 		scrollToBottom();
 	}
 
@@ -194,6 +199,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let commandPaletteOpen = false;
 	let commandFilter = '';
 	let commandFilterInput: HTMLInputElement | null = null;
+	let runLogFilter = '';
+	let previousEditingContext: 'graph' | 'component' = 'graph';
+	let logAutoScrollEnabled = true;
+	type GraphUiReturnSnapshot = {
+		viewport: { x: number; y: number; zoom: number };
+		inspectorMode: InspectorMode;
+		runLogScrollTop: number;
+		runLogFilter: string;
+	};
+	let graphUiReturnSnapshot: GraphUiReturnSnapshot | null = null;
 	let toastMessage: string | null = null;
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -201,6 +216,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let currentGraphName = 'unnamed';
 	const DRAFT_RECOVERY_PROMPT_SESSION_KEY = 'graph_draft_recovery_prompted_at';
 	let importFileInput: HTMLInputElement | null = null;
+	let componentEditEntrySnapshotKey: string | null = null;
+	let componentEditEntrySessionKey: string | null = null;
+	let currentComponentSessionKey = '';
+	let componentInternalsDirty = false;
+	type ComponentSaveApplyScope = 'none' | 'one' | 'all';
+	type ComponentSaveApplyPromptState = {
+		componentId: string;
+		fromRevisionId: string;
+		toRevisionId: string;
+		matchingCount: number;
+		entryMatchCount: number;
+		allMatchCount: number;
+	};
+	let componentSaveApplyModalOpen = false;
+	let componentSaveApplyPrompt: ComponentSaveApplyPromptState = {
+		componentId: '',
+		fromRevisionId: '',
+		toRevisionId: '',
+		matchingCount: 0,
+		entryMatchCount: 0,
+		allMatchCount: 0
+	};
+	let componentSaveApplyResolver: ((scope: ComponentSaveApplyScope) => void) | null = null;
 	type CanonicalGraphSnapshot = {
 		graphId: string;
 		nodes: Array<{
@@ -301,40 +339,141 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: hasOutput = !!activeArtifactId;
 	$: displayNodeStatus = getHeaderNodeStatus(nodeBinding as any);
 	$: headerCachePill = getHeaderCachePill(nodeOut, nodeBinding as any, displayNodeStatus);
-	$: graphHeaderStatus =
-		$graphStore.runStatus === 'running'
-			? 'Running'
-			: $graphStore.lastRunStatus === 'never_run'
-			? 'Never run'
-			: `${$graphStore.lastRunStatus === 'cancelled' ? 'Cancelled' : $graphStore.lastRunStatus.charAt(0).toUpperCase() + $graphStore.lastRunStatus.slice(1)}${$graphStore.freshness === 'stale' ? ` + Needs rerun${$graphStore.staleNodeCount > 0 ? ` (${$graphStore.staleNodeCount} stale)` : ''}` : ''}`;
-	$: graphHeaderStatusTone =
-		$graphStore.runStatus === 'running'
-			? 'running'
-			: $graphStore.lastRunStatus === 'succeeded'
-			? 'succeeded'
-			: $graphStore.lastRunStatus === 'failed'
-			? 'failed'
-			: $graphStore.lastRunStatus === 'cancelled'
-			? 'cancelled'
-			: 'never_run';
-	$: graphHeaderStatusClass = `status graphStatus graphStatus-${graphHeaderStatusTone}${$graphStore.freshness === 'stale' ? ' graphStatus-stale' : ''}`;
+	$: isComponentEditContext = $graphStore.editingContext === 'component';
+	$: editingComponentName = String($graphStore.componentEditSession?.componentId ?? '').trim() || 'unknown';
+	$: headerContextLabels = buildHeaderContextLabels({
+		editingContext: $graphStore.editingContext,
+		graphName: currentGraphName,
+		componentName: editingComponentName
+	});
+	$: statusScopeLabel = headerContextLabels.scopeLabel;
 	$: currentGraphSnapshotKey = JSON.stringify(canonicalGraphSnapshot($graphStore.graphId, nodes, edges));
+	$: currentComponentSessionKey = isComponentEditContext
+		? `${String($graphStore.componentEditSession?.componentId ?? '').trim()}@${String($graphStore.componentEditSession?.revisionId ?? '').trim()}`
+		: '';
+	$: if (!isComponentEditContext) {
+		componentEditEntrySnapshotKey = null;
+		componentEditEntrySessionKey = null;
+	} else if (
+		componentEditEntrySnapshotKey == null ||
+		componentEditEntrySessionKey !== currentComponentSessionKey
+	) {
+		componentEditEntrySnapshotKey = currentGraphSnapshotKey;
+		componentEditEntrySessionKey = currentComponentSessionKey;
+	}
+	$: componentInternalsDirty =
+		isComponentEditContext &&
+		(Boolean($graphStore.inspector.dirty) ||
+			(componentEditEntrySnapshotKey != null && componentEditEntrySnapshotKey !== currentGraphSnapshotKey));
+	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
+		const q = runLogFilter.trim().toLowerCase();
+		if (!q) return true;
+		const parts = [
+			String(entry.ts ?? ''),
+			String(entry.message ?? ''),
+			String(entry.nodeId ?? ''),
+			Array.isArray(entry.componentPath) ? entry.componentPath.join(' > ') : ''
+		];
+		return parts.join(' ').toLowerCase().includes(q);
+	});
+	$: if (previousEditingContext !== $graphStore.editingContext) {
+		if (previousEditingContext === 'graph' && $graphStore.editingContext === 'component') {
+			const vp = getViewport();
+			graphUiReturnSnapshot = {
+				viewport: { x: Number(vp.x ?? 0), y: Number(vp.y ?? 0), zoom: Number(vp.zoom ?? 1) },
+				inspectorMode,
+				runLogScrollTop: Number(scrollElement?.scrollTop ?? 0),
+				runLogFilter
+			};
+		}
+		if (previousEditingContext === 'component' && $graphStore.editingContext === 'graph') {
+			void restoreGraphUiReturnSnapshot();
+		}
+		previousEditingContext = $graphStore.editingContext;
+	}
 	$: if ((nodes?.length ?? 0) === 0 && currentGraphName !== 'unnamed') {
 		currentGraphName = 'unnamed';
 	}
 	$: hasUnsavedGraphChanges =
 		typeof lastSavedGraphSnapshotKey === 'string' &&
 		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
-	$: projectMenuItems = buildProjectMenuItems() satisfies ToolbarMenuItem[];
+	$: graphScopedSnapshot = {
+		runStatus:
+			isComponentEditContext && $graphStore.componentEditSession
+				? $graphStore.componentEditSession.snapshot.runStatus
+				: $graphStore.runStatus,
+		lastRunStatus:
+			isComponentEditContext && $graphStore.componentEditSession
+				? $graphStore.componentEditSession.snapshot.lastRunStatus
+				: $graphStore.lastRunStatus,
+		freshness:
+			isComponentEditContext && $graphStore.componentEditSession
+				? $graphStore.componentEditSession.snapshot.freshness
+				: $graphStore.freshness,
+		staleNodeCount:
+			isComponentEditContext && $graphStore.componentEditSession
+				? Number($graphStore.componentEditSession.snapshot.staleNodeCount ?? 0)
+				: Number($graphStore.staleNodeCount ?? 0),
+		unsaved: hasUnsavedGraphChanges
+	};
+	$: componentScopedSnapshot = {
+		runStatus: $graphStore.runStatus,
+		lastRunStatus: $graphStore.lastRunStatus,
+		freshness: $graphStore.freshness,
+		staleNodeCount: Number($graphStore.staleNodeCount ?? 0),
+		unsaved: componentInternalsDirty
+	};
+	$: scopedHeaderStatus = buildScopedStatus({
+		editingContext: $graphStore.editingContext,
+		graph: graphScopedSnapshot,
+		component: componentScopedSnapshot
+	});
+	$: graphHeaderStatus = scopedHeaderStatus.statusText;
+	$: graphHeaderStatusTone = scopedHeaderStatus.tone;
+	$: scopedFreshness =
+		$graphStore.editingContext === 'component'
+			? String(componentScopedSnapshot.freshness ?? '')
+			: String(graphScopedSnapshot.freshness ?? '');
+	$: graphHeaderStatusClass = `status graphStatus graphStatus-${graphHeaderStatusTone}${scopedFreshness === 'stale' ? ' graphStatus-stale' : ''}`;
+	$: scopedUnsavedChanges = scopedHeaderStatus.unsaved;
+	$: projectMenuItems = buildProjectMenuItems($graphStore.editingContext) satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
+	$: primarySaveCommandLabel = isComponentEditContext ? 'Save Component Revision' : 'Save Graph';
+	$: saveAsComponentCommandLabel = isComponentEditContext ? 'Save as New Component' : 'Save as Component';
 	$: commandItems = [
 		{ id: 'cmd_new_graph', label: 'New Graph', run: () => void newGraph() },
-		{ id: 'cmd_save_graph', label: 'Save Graph', run: () => void saveGraphAction() },
-		{ id: 'cmd_save_version', label: 'Save Version', run: () => void saveGraphVersionAction() },
-		{ id: 'cmd_save_graph_as', label: 'Save Graph As', run: () => void saveGraphAsAction() },
+		{
+			id: 'cmd_save_graph',
+			label: primarySaveCommandLabel,
+			run: () =>
+				routePrimarySaveAction($graphStore.editingContext, {
+					saveGraph: () => void saveGraphAction(),
+					saveComponentRevision: () => void saveComponentRevisionAction()
+				})
+		},
+		{
+			id: 'cmd_save_version',
+			label: 'Save Version',
+			disabled: isComponentEditContext,
+			run: () => void saveGraphVersionAction()
+		},
+		{
+			id: 'cmd_save_graph_as',
+			label: 'Save Graph As',
+			disabled: isComponentEditContext,
+			run: () => void saveGraphAsAction()
+		},
 		{ id: 'cmd_load_graph', label: 'Load Graph', run: () => void loadGraphAction() },
 		{ id: 'cmd_delete_graph', label: 'Delete Graph', run: () => void deleteGraphAction() },
-		{ id: 'cmd_save_component', label: 'Save as Component', run: () => void saveGraphAsComponent() },
+		{
+			id: 'cmd_save_component',
+			label: saveAsComponentCommandLabel,
+			disabled: !isComponentEditContext,
+			run: () =>
+				void saveGraphAsComponent({
+					suggestedComponentId: isComponentEditContext ? '' : undefined
+				})
+		},
 		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
 		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
 		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
@@ -485,15 +624,31 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		void loadInputArtifactMetadata($graphStore.graphId, inputResolutions);
 	}
 
-	async function scrollToBottom() {
-		// Wait for Svelte to finish updating the DOM
+async function scrollToBottom() {
+	// Wait for Svelte to finish updating the DOM
+	await tick();
+	if (scrollElement) {
+		scrollElement.scrollTo({
+			top: scrollElement.scrollHeight,
+			behavior: 'smooth' // Remove this for instant jumping
+		});
+	}
+}
+
+	async function restoreGraphUiReturnSnapshot(): Promise<void> {
+		const snapshot = graphUiReturnSnapshot;
+		if (!snapshot) return;
+		graphUiReturnSnapshot = null;
+		runLogFilter = snapshot.runLogFilter;
+		inspectorMode = snapshot.inspectorMode;
+		logAutoScrollEnabled = false;
 		await tick();
 		if (scrollElement) {
-			scrollElement.scrollTo({
-				top: scrollElement.scrollHeight,
-				behavior: 'smooth' // Remove this for instant jumping
-			});
+			scrollElement.scrollTop = Math.max(0, Number(snapshot.runLogScrollTop ?? 0));
 		}
+		await setViewport(snapshot.viewport, { duration: 0 });
+		await tick();
+		logAutoScrollEnabled = true;
 	}
 
 	// ---------------------------
@@ -728,6 +883,51 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}, 2600);
 	}
 
+	function computeComponentSaveApplyCounts(
+		state: GraphState,
+		componentId: string,
+		fromRevisionId: string
+	): { matchingCount: number; entryMatchCount: number; allMatchCount: number } {
+		const session = state.componentEditSession;
+		const cid = String(componentId ?? '').trim();
+		const fromRid = String(fromRevisionId ?? '').trim();
+		if (!session || !cid || !fromRid) {
+			return { matchingCount: 0, entryMatchCount: 0, allMatchCount: 0 };
+		}
+		const snapshotNodes = Array.isArray(session.snapshot?.nodes) ? session.snapshot.nodes : [];
+		const matching = snapshotNodes.filter((n) => {
+			if (n.data?.kind !== 'component') return false;
+			const ref = (((n.data as any)?.params ?? {}) as any)?.componentRef ?? {};
+			const nodeComponentId = String(ref?.componentId ?? '').trim();
+			const nodeRevisionId = String(ref?.revisionId ?? '').trim();
+			return nodeComponentId === cid && nodeRevisionId === fromRid;
+		});
+		const entryNodeId = String(session.entryNodeId ?? '').trim();
+		const entryMatchCount = entryNodeId && matching.some((n) => String(n.id) === entryNodeId) ? 1 : 0;
+		return {
+			matchingCount: matching.length,
+			entryMatchCount,
+			allMatchCount: matching.length
+		};
+	}
+
+	function chooseComponentSaveApplyScope(scope: ComponentSaveApplyScope): void {
+		const resolver = componentSaveApplyResolver;
+		componentSaveApplyResolver = null;
+		componentSaveApplyModalOpen = false;
+		if (resolver) resolver(scope);
+	}
+
+	function openComponentSaveApplyModal(
+		prompt: ComponentSaveApplyPromptState
+	): Promise<ComponentSaveApplyScope> {
+		componentSaveApplyPrompt = prompt;
+		componentSaveApplyModalOpen = true;
+		return new Promise<ComponentSaveApplyScope>((resolve) => {
+			componentSaveApplyResolver = resolve;
+		});
+	}
+
 	function syncPresetBaselineFromNode(
 		nodeId: string,
 		fallbackRef?: { id: string; name: string; subtype?: string }
@@ -942,14 +1142,37 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward', globalCacheMode);
 	}
 
+	async function returnFromComponentEditMode() {
+		if (componentInternalsDirty) {
+			const raw = window.prompt(
+				'Unsaved component edits detected.\n\n1. Save component\n2. Discard changes\n3. Cancel\n\nEnter 1, 2, or 3:',
+				'1'
+			);
+			const decision = parseComponentExitDecision(raw);
+			if (decision === 'cancel') return;
+			if (decision === 'save') {
+				const saved = await saveComponentRevisionAction();
+				if (!saved) return;
+			}
+		}
+		const res = graphStore.returnFromComponentEditSession();
+		if (!(res as any)?.ok) {
+			showToast(`Return failed: ${String((res as any)?.reason ?? 'unknown')}`, 'error');
+		}
+	}
+
 	function onProjectMenuSelect(actionId: string) {
-		dispatchProjectMenuAction(actionId, {
+		dispatchProjectMenuAction(actionId, $graphStore.editingContext, {
 			newGraph,
 			saveGraph: () => void saveGraphAction(),
+			saveComponentRevision: () => void saveComponentRevisionAction(),
 			saveVersion: () => void saveGraphVersionAction(),
 			saveGraphAs: () => void saveGraphAsAction(),
 			loadGraph: () => void loadGraphAction(),
-			saveAsComponent: () => void saveGraphAsComponent(),
+			saveAsComponent: () =>
+				void saveGraphAsComponent({
+					suggestedComponentId: isComponentEditContext ? '' : undefined
+				}),
 			importGraph: triggerImportGraphPackageV2,
 			exportGraph: () => void exportGraphPackageV2(),
 			deleteGraph: () => void deleteGraphAction(),
@@ -1139,7 +1362,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return { inputs, outputs };
 	}
 
-	async function saveGraphAsComponent() {
+	async function saveGraphAsComponent(options?: { suggestedComponentId?: string }) {
 		const current = get(graphStore) as GraphState;
 		const currentNodes = (current?.nodes ?? []) as Node<PipelineNodeData>[];
 		const currentEdges = (current?.edges ?? []) as Edge<PipelineEdgeData>[];
@@ -1166,8 +1389,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			return;
 		}
 
-		const suggestedId = `cmp_${String(current.graphId ?? '').replace(/^graph_/, '')}`.slice(0, 64);
-		const componentId = (window.prompt('Component ID', suggestedId) ?? '').trim();
+		const requestedSuggestion = String(options?.suggestedComponentId ?? '').trim();
+		const suggestedId =
+			requestedSuggestion ||
+			`cmp_${String(current.graphId ?? '').replace(/^graph_/, '')}`.slice(0, 64);
+		const componentId = (window.prompt('New Component ID', suggestedId) ?? '').trim();
 		if (!componentId) return;
 		const revisionIdInput = (window.prompt('Revision ID (optional)', '') ?? '').trim();
 		const note = window.prompt('Revision message (optional)', 'save_as_component') ?? '';
@@ -1224,6 +1450,107 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			);
 			window.alert(`${failure.headline}\n\n${failure.detail}`);
 			showToast('Save as Component failed.', 'error');
+		}
+	}
+
+	async function saveComponentRevisionAction(): Promise<boolean> {
+		const state = get(graphStore) as GraphState;
+		const session = state.componentEditSession;
+		if (!session) {
+			await saveGraphAction();
+			return true;
+		}
+		const componentId = String(session.componentId ?? '').trim();
+		const baseRevisionId = String(session.revisionId ?? '').trim();
+		if (!componentId || !baseRevisionId) {
+			showToast('Save Component Revision failed: missing component context.', 'error');
+			return false;
+		}
+		const note = window.prompt('Component revision message (optional)', '') ?? '';
+		const currentNodes = (state?.nodes ?? []) as Node<PipelineNodeData>[];
+		const currentEdges = (state?.edges ?? []) as Edge<PipelineEdgeData>[];
+		try {
+			const detail = await getComponentRevision(componentId, baseRevisionId);
+			const api = ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract);
+			const configSchema = (detail?.definition?.configSchema ?? {}) as Record<string, unknown>;
+			const preflight = await validateComponentRevision({
+				schemaVersion: Number(detail?.schemaVersion ?? 1) || 1,
+				graph: {
+					nodes: structuredClone(currentNodes) as unknown[],
+					edges: structuredClone(currentEdges) as unknown[]
+				},
+				api,
+				configSchema
+			});
+			const summary = summarizeComponentPreflight(
+				Boolean(preflight?.ok),
+				preflight?.diagnostics ?? [],
+				componentId,
+				baseRevisionId
+			);
+			if (!summary.ok) {
+				window.alert(`${summary.headline}\n\n${summary.detail}`);
+				showToast('Save Component Revision blocked by preflight validation.', 'error');
+				return false;
+			}
+			if (summary.warningCount > 0) {
+				const proceed = window.confirm(`${summary.headline}\n\n${summary.detail}\n\nPublish anyway?`);
+				if (!proceed) return false;
+			}
+			const created = await createComponentRevision({
+				componentId,
+				parentRevisionId: baseRevisionId,
+				message: note,
+				schemaVersion: Number(detail?.schemaVersion ?? 1) || 1,
+				graph: {
+					nodes: structuredClone(currentNodes) as unknown[],
+					edges: structuredClone(currentEdges) as unknown[]
+				},
+				api,
+				configSchema
+			});
+			const nextRevisionId = String(created.revisionId ?? '').trim();
+			if (nextRevisionId) {
+				const counts = computeComponentSaveApplyCounts(state, componentId, baseRevisionId);
+				const scope = await openComponentSaveApplyModal({
+					componentId,
+					fromRevisionId: baseRevisionId,
+					toRevisionId: nextRevisionId,
+					matchingCount: counts.matchingCount,
+					entryMatchCount: counts.entryMatchCount,
+					allMatchCount: counts.allMatchCount
+				});
+				const applyResult = graphStore.applySavedComponentRevisionToReturnGraph(
+					componentId,
+					baseRevisionId,
+					nextRevisionId,
+					scope
+				);
+				if (!(applyResult as any)?.ok) {
+					showToast(
+						`Saved component but failed to apply revision scope: ${String((applyResult as any)?.reason ?? 'unknown')}`,
+						'error'
+					);
+					return false;
+				}
+				const updatedCount = Number((applyResult as any)?.updatedCount ?? 0);
+				const matchedCount = Number((applyResult as any)?.matchedCount ?? 0);
+				const scopeLabel =
+					scope === 'all' ? 'all matching instances' : scope === 'none' ? 'no instances' : 'this instance';
+				showToast(
+					`Saved ${componentId}@${nextRevisionId} and applied to ${scopeLabel} (${updatedCount}/${matchedCount}).`,
+					'info'
+				);
+			} else {
+				showToast('Saved component revision but did not receive a revision id.', 'warn');
+			}
+			componentEditEntrySnapshotKey = currentGraphSnapshotKey;
+			return true;
+		} catch (error) {
+			const failure = summarizeComponentPublishFailure(error, componentId, baseRevisionId);
+			window.alert(`${failure.headline}\n\n${failure.detail}`);
+			showToast('Save Component Revision failed.', 'error');
+			return false;
 		}
 	}
 
@@ -1616,8 +1943,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 			<div class="toolbarZone statusIndicators">
 				<span class={graphHeaderStatusClass}
-					>Graph {currentGraphName}: {graphHeaderStatus}{hasUnsavedGraphChanges ? ' + Unsaved changes' : ''}</span
+					>{statusScopeLabel}: {graphHeaderStatus}{scopedUnsavedChanges ? ' + Unsaved changes' : ''}</span
 				>
+				{#if isComponentEditContext}
+					<button class="runSecondary" on:click={returnFromComponentEditMode}>
+						Return to graph
+					</button>
+				{/if}
 				<label class="cacheToggle">
 					<span>Cache:</span>
 					<select
@@ -1689,6 +2021,34 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 								</button>
 							{/each}
 						{/if}
+					</div>
+				</div>
+			</div>
+		{/if}
+		{#if componentSaveApplyModalOpen}
+			<div class="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Apply component revision">
+				<div class="componentSaveApplyModal">
+					<div class="componentSaveApplyHead">
+						<b>Apply saved component revision</b>
+					</div>
+					<div class="componentSaveApplyBody">
+						<div>
+							<span class="mono">{componentSaveApplyPrompt.componentId}@{componentSaveApplyPrompt.fromRevisionId}</span>
+							{' -> '}
+							<span class="mono">{componentSaveApplyPrompt.componentId}@{componentSaveApplyPrompt.toRevisionId}</span>
+						</div>
+						<div class="componentSaveApplyHint">Choose where to apply this new revision in the current graph.</div>
+					</div>
+					<div class="componentSaveApplyActions">
+						<button type="button" class="runSecondary" on:click={() => chooseComponentSaveApplyScope('none')}>
+							None (0)
+						</button>
+						<button type="button" class="primary" on:click={() => chooseComponentSaveApplyScope('one')}>
+							This instance ({componentSaveApplyPrompt.entryMatchCount})
+						</button>
+						<button type="button" class="runSecondary" on:click={() => chooseComponentSaveApplyScope('all')}>
+							All matching ({componentSaveApplyPrompt.allMatchCount})
+						</button>
 					</div>
 				</div>
 			</div>
@@ -2026,8 +2386,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		></button>
 		<div class="inspectorBottom">
 			<h3>Run Logs</h3>
+			<input
+				class="logFilterInput"
+				placeholder="Filter logs..."
+				aria-label="Filter run logs"
+				bind:value={runLogFilter}
+			/>
 			<div class="logs" bind:this={scrollElement}>
-				{#each $graphStore.logs as l (l.id)}
+				{#each filteredLogs as l (l.id)}
 					<div class={`log ${l.level}`}>
 						<span class="ts">{l.ts}</span>
 						<span class="msg">
@@ -2258,6 +2624,41 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		gap: 8px;
 	}
 
+	.componentSaveApplyModal {
+		width: min(560px, calc(100% - 20px));
+		border-radius: 12px;
+		border: 1px solid #2a3550;
+		background: #0f1626;
+		box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+		padding: 12px;
+		display: grid;
+		gap: 10px;
+	}
+
+	.componentSaveApplyHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 13px;
+	}
+
+	.componentSaveApplyBody {
+		display: grid;
+		gap: 8px;
+		font-size: 13px;
+	}
+
+	.componentSaveApplyHint {
+		opacity: 0.8;
+	}
+
+	.componentSaveApplyActions {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
 	.commandPaletteHead {
 		display: flex;
 		align-items: center;
@@ -2432,6 +2833,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.hint {
 		font-size: 12px;
 		opacity: 0.75;
+		margin-top: 8px;
+	}
+
+	.logFilterInput {
+		border: 1px solid #2a3550;
+		background: #0c1220;
+		color: #e6e6e6;
+		padding: 6px 8px;
+		border-radius: 8px;
+		font-size: 12px;
 		margin-top: 8px;
 	}
 

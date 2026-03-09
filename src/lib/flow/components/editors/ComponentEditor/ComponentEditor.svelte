@@ -716,13 +716,13 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 
 	async function editCurrentInternals(): Promise<void> {
 		if (!componentId || !revisionId) return;
-		const confirmed = window.confirm(
-			`Load internals for ${componentId}@${revisionId} into the canvas? Current graph view will be replaced.`
-		);
-		if (!confirmed) return;
 		mutatingComponent = true;
 		errorMessage = '';
-		const res = await graphStore.openComponentRevisionForEditing(componentId, revisionId);
+		const res = await graphStore.openComponentRevisionForEditing(
+			componentId,
+			revisionId,
+			String(selectedNode?.id ?? '').trim() || null
+		);
 		mutatingComponent = false;
 		if (!(res as any)?.ok) {
 			errorMessage = String((res as any)?.error ?? (res as any)?.reason ?? 'Edit internals failed');

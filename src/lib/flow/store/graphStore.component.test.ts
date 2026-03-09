@@ -237,6 +237,355 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('captures and restores graph snapshot across component edit session', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.addNode('llm', { x: 260, y: 60 });
+		graphStore.selectNode(componentNodeId);
+		const before = get(graphStore);
+		const beforeNodeIds = before.nodes.map((n) => n.id).sort();
+		const beforeEdgeIds = before.edges.map((e) => e.id).sort();
+		expect(before.editingContext).toBe('graph');
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_edit/revisions/crev_edit') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_edit',
+						revisionId: 'crev_edit',
+						parentRevisionId: null,
+						createdAt: '2026-03-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {
+												source_type: 'file',
+												rel_path: 'sample.txt',
+												filename: 'sample.txt',
+												file_format: 'txt',
+												encoding: 'utf-8',
+												cache_enabled: true,
+												snapshot_id: '',
+												output: { mode: 'text' }
+											},
+											status: 'idle',
+											ports: { in: null, out: 'text' }
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_edit',
+				'crev_edit',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			const during = get(graphStore);
+			expect(during.editingContext).toBe('component');
+			expect(during.componentEditSession?.componentId).toBe('cmp_edit');
+			expect(during.componentEditSession?.revisionId).toBe('crev_edit');
+			expect(during.componentEditSession?.entryNodeId).toBe(componentNodeId);
+			expect(during.nodes.some((n) => n.id === 'n_internal_source')).toBe(true);
+
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+			const after = get(graphStore);
+			expect(after.editingContext).toBe('graph');
+			expect(after.componentEditSession).toBeNull();
+			expect(after.nodes.map((n) => n.id).sort()).toEqual(beforeNodeIds);
+			expect(after.edges.map((e) => e.id).sort()).toEqual(beforeEdgeIds);
+			expect(after.selectedNodeId).toBe(before.selectedNodeId);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('updates component edit session revision id', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_edit/revisions/crev_edit') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_edit',
+						revisionId: 'crev_edit',
+						parentRevisionId: null,
+						createdAt: '2026-03-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: { nodes: [], edges: [] },
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_edit',
+				'crev_edit',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			const updated = graphStore.updateComponentEditSessionRevision('crev_next');
+			expect((updated as any)?.ok).toBe(true);
+			const after = get(graphStore);
+			expect(after.componentEditSession?.revisionId).toBe('crev_next');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('applies saved component revision scope to return graph snapshot (none/one/all)', async () => {
+		graphStore.hardResetGraph();
+		const firstComponentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		const secondComponentNodeId = graphStore.addNode('component', { x: 90, y: 90 });
+		const thirdComponentNodeId = graphStore.addNode('component', { x: 140, y: 120 });
+		graphStore.selectNode(firstComponentNodeId);
+
+		const setRef = (nodeId: string, revisionId: string) =>
+			graphStore.updateNodeConfig(nodeId, {
+				params: {
+					componentRef: { componentId: 'cmp_edit', revisionId, apiVersion: 'v1' },
+					api: { inputs: [], outputs: [] },
+					bindings: { inputs: {}, outputs: {}, config: {} },
+					config: {}
+				},
+				ports: { in: null, out: null }
+			});
+		expect(setRef(firstComponentNodeId, 'crev_1').ok).toBe(true);
+		expect(setRef(secondComponentNodeId, 'crev_1').ok).toBe(true);
+		expect(setRef(thirdComponentNodeId, 'crev_9').ok).toBe(true);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_edit/revisions/crev_1') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_edit',
+						revisionId: 'crev_1',
+						parentRevisionId: null,
+						createdAt: '2026-03-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: { graph: { nodes: [], edges: [] }, api: { inputs: [], outputs: [] }, configSchema: {} }
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_edit', 'crev_1', firstComponentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+
+			const noneResult = graphStore.applySavedComponentRevisionToReturnGraph('cmp_edit', 'crev_1', 'crev_2', 'none');
+			expect((noneResult as any)?.ok).toBe(true);
+			expect(Number((noneResult as any)?.updatedCount ?? -1)).toBe(0);
+			let session = get(graphStore).componentEditSession;
+			expect(session?.revisionId).toBe('crev_2');
+
+			const oneResult = graphStore.applySavedComponentRevisionToReturnGraph('cmp_edit', 'crev_1', 'crev_3', 'one');
+			expect((oneResult as any)?.ok).toBe(true);
+			expect(Number((oneResult as any)?.updatedCount ?? -1)).toBe(1);
+			session = get(graphStore).componentEditSession;
+			const oneSnapshotNodes = (session?.snapshot.nodes ?? []) as any[];
+			const oneEntry = oneSnapshotNodes.find((n) => String(n.id) === firstComponentNodeId);
+			const oneSibling = oneSnapshotNodes.find((n) => String(n.id) === secondComponentNodeId);
+			expect(String(oneEntry?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_3');
+			expect(String(oneSibling?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_1');
+
+			const allResult = graphStore.applySavedComponentRevisionToReturnGraph('cmp_edit', 'crev_1', 'crev_4', 'all');
+			expect((allResult as any)?.ok).toBe(true);
+			expect(Number((allResult as any)?.updatedCount ?? -1)).toBe(1);
+			session = get(graphStore).componentEditSession;
+			const allSnapshotNodes = (session?.snapshot.nodes ?? []) as any[];
+			const allSibling = allSnapshotNodes.find((n) => String(n.id) === secondComponentNodeId);
+			const untouched = allSnapshotNodes.find((n) => String(n.id) === thirdComponentNodeId);
+			expect(String(allSibling?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_4');
+			expect(String(untouched?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_9');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('covers edit internals workflow round-trip (modify -> save revision -> return graph)', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		const llmNodeId = graphStore.addNode('llm', { x: 280, y: 60 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_edit/revisions/crev_1') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_edit',
+						revisionId: 'crev_1',
+						parentRevisionId: null,
+						createdAt: '2026-03-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed1',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {
+												source_type: 'file',
+												rel_path: 'sample.txt',
+												filename: 'sample.txt',
+												file_format: 'txt',
+												encoding: 'utf-8',
+												cache_enabled: true,
+												snapshot_id: '',
+												output: { mode: 'text' }
+											},
+											status: 'idle',
+											ports: { in: null, out: 'text' }
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components/cmp_edit/revisions?') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_edit',
+						revisions: [
+							{
+								revisionId: 'crev_1',
+								componentId: 'cmp_edit',
+								parentRevisionId: null,
+								createdAt: '2026-03-09T00:00:00Z',
+								message: 'seed',
+								schemaVersion: 1,
+								checksum: 'seed1'
+							}
+						]
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const applied = await graphStore.applyComponentRevisionToNode(componentNodeId, 'cmp_edit', 'crev_1');
+			expect((applied as any)?.ok).toBe(true);
+
+			const connected = graphStore.addEdge({
+				id: 'e_component_to_llm',
+				source: componentNodeId,
+				sourceHandle: 'out_data',
+				target: llmNodeId,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			} as any);
+			expect(connected.ok).toBe(true);
+
+			const before = get(graphStore);
+			const beforeNodeIds = before.nodes.map((n) => n.id).sort();
+			const beforeEdgeIds = before.edges.map((e) => e.id).sort();
+			expect(before.editingContext).toBe('graph');
+
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_edit',
+				'crev_1',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			expect(get(graphStore).editingContext).toBe('component');
+
+			// Simulate internal edits before saving revision.
+			graphStore.addNode('llm', { x: 200, y: 120 });
+			expect(get(graphStore).nodes.length).toBeGreaterThan(1);
+
+			const updatedRevision = graphStore.updateComponentEditSessionRevision('crev_2');
+			expect((updatedRevision as any)?.ok).toBe(true);
+			expect(get(graphStore).componentEditSession?.revisionId).toBe('crev_2');
+
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+
+			const after = get(graphStore);
+			expect(after.editingContext).toBe('graph');
+			expect(after.componentEditSession).toBeNull();
+			expect(after.nodes.map((n) => n.id).sort()).toEqual(beforeNodeIds);
+			expect(after.edges.map((e) => e.id).sort()).toEqual(beforeEdgeIds);
+			expect(after.edges.some((e) => e.id === 'e_component_to_llm')).toBe(true);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
 	it('loads component internals into canvas for editing', async () => {
 		graphStore.hardResetGraph();
 		graphStore.addNode('source', { x: 10, y: 10 });

@@ -1,13 +1,21 @@
 import type { ToolbarMenuItem } from './toolbarMenu';
 
-export function buildProjectMenuItems(): ToolbarMenuItem[] {
+export type ToolbarEditingContext = 'graph' | 'component';
+
+export function buildProjectMenuItems(editingContext: ToolbarEditingContext = 'graph'): ToolbarMenuItem[] {
+	const isComponentContext = editingContext === 'component';
+	const isGraphContext = editingContext === 'graph';
 	return [
 		{ id: 'new_graph', label: 'New Graph' },
-		{ id: 'save_graph', label: 'Save Graph' },
-		{ id: 'save_version', label: 'Save Version' },
-		{ id: 'save_as_graph', label: 'Save Graph As' },
+		{ id: 'save_graph', label: isComponentContext ? 'Save Component Revision' : 'Save Graph' },
+		{ id: 'save_version', label: 'Save Version', disabled: isComponentContext },
+		{ id: 'save_as_graph', label: 'Save Graph As', disabled: isComponentContext },
 		{ id: 'load_graph', label: 'Load Graph' },
-		{ id: 'save_as_component', label: 'Save as Component' },
+		{
+			id: 'save_as_component',
+			label: isComponentContext ? 'Save as New Component' : 'Save as Component',
+			disabled: isGraphContext
+		},
 		{ id: 'import_graph', label: 'Import' },
 		{ id: 'export_graph', label: 'Export' },
 		{ id: 'delete_graph', label: 'Delete Graph', danger: true },
@@ -39,6 +47,7 @@ export function buildRunSelectedMenuItems(hasSelectedNode: boolean): ToolbarMenu
 export type ProjectToolbarHandlers = {
 	newGraph: () => void;
 	saveGraph: () => void;
+	saveComponentRevision: () => void;
 	saveVersion: () => void;
 	saveGraphAs: () => void;
 	loadGraph: () => void;
@@ -49,9 +58,26 @@ export type ProjectToolbarHandlers = {
 	reset: () => void;
 };
 
-export function dispatchProjectMenuAction(actionId: string, handlers: ProjectToolbarHandlers): void {
+export function routePrimarySaveAction(
+	editingContext: ToolbarEditingContext,
+	handlers: Pick<ProjectToolbarHandlers, 'saveGraph' | 'saveComponentRevision'>
+): void {
+	if (editingContext === 'component') {
+		handlers.saveComponentRevision();
+		return;
+	}
+	handlers.saveGraph();
+}
+
+export function dispatchProjectMenuAction(
+	actionId: string,
+	editingContext: ToolbarEditingContext,
+	handlers: ProjectToolbarHandlers
+): void {
+	if (editingContext === 'component' && (actionId === 'save_version' || actionId === 'save_as_graph')) return;
+	if (editingContext === 'graph' && actionId === 'save_as_component') return;
 	if (actionId === 'new_graph') handlers.newGraph();
-	if (actionId === 'save_graph') handlers.saveGraph();
+	if (actionId === 'save_graph') routePrimarySaveAction(editingContext, handlers);
 	if (actionId === 'save_version') handlers.saveVersion();
 	if (actionId === 'save_as_graph') handlers.saveGraphAs();
 	if (actionId === 'load_graph') handlers.loadGraph();
