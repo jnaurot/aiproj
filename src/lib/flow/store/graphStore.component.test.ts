@@ -992,7 +992,7 @@ describe('graphStore component integration', () => {
 		}
 	});
 
-	it('blocks save preflight when typedSchema.type mismatches portType', async () => {
+	it('normalizes typedSchema.type to portType during save migration pass', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
 		const configRes = graphStore.updateNodeConfig(componentId, {
@@ -1016,10 +1016,35 @@ describe('graphStore component integration', () => {
 			ports: { in: null, out: 'json' }
 		});
 		expect(configRes.ok).toBe(true);
-		const result = await graphStore.saveGraph('save');
-		expect((result as any)?.ok).toBe(false);
-		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
-		expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH');
+		const originalFetch = globalThis.fetch;
+		let postedGraph: any = null;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes('/api/graphs') && String(init?.method ?? 'GET').toUpperCase() === 'POST') {
+				postedGraph = JSON.parse(String(init?.body ?? '{}'))?.graph ?? null;
+				return new Response(
+					JSON.stringify({
+						graphId: 'graph_saved',
+						revisionId: 'rev_saved',
+						graphName: 'saved',
+						createdAt: '2026-03-09T00:00:00Z'
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			}
+			return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+		};
+		try {
+			const result = await graphStore.saveGraph('save');
+			expect((result as any)?.ok).toBe(true);
+			const savedComponent = (postedGraph?.nodes ?? []).find((n: any) => String(n?.id ?? '') === componentId);
+			const typedType = String(
+				((((savedComponent?.data ?? {}).params ?? {}).api ?? {}).outputs ?? [])[0]?.typedSchema?.type ?? ''
+			);
+			expect(typedType).toBe('text');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
 	});
 
 	it('blocks save preflight when downstream edge has port type mismatch', async () => {
@@ -1042,5 +1067,141 @@ describe('graphStore component integration', () => {
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
 		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_PORT_TYPE_MISMATCH');
+	});
+
+	it('normalizes legacy single-output component bindings/handles on load', () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const state = get(graphStore);
+		const componentNode = state.nodes.find((n) => n.id === componentId)!;
+		const llmNode = state.nodes.find((n) => n.id === llmId)!;
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						...componentNode,
+						data: {
+							...(componentNode.data as any),
+							kind: 'component',
+							params: {
+								componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+								api: {
+									inputs: [],
+									outputs: [
+										{
+											name: 'summary',
+											portType: 'text',
+											required: true,
+											typedSchema: { type: 'json', fields: [{ name: 'x', type: 'text' }] }
+										}
+									]
+								},
+								bindings: {
+									inputs: {},
+									config: {},
+									outputs: {
+										out_data: { nodeId: 'n_inner', artifact: 'current' }
+									}
+								},
+								config: {}
+							},
+							ports: { in: null, out: 'json' }
+						}
+					} as any,
+					llmNode as any
+				],
+				edges: [
+					{
+						id: 'e_legacy',
+						source: componentId,
+						sourceHandle: 'out',
+						target: llmId,
+						targetHandle: 'in',
+						data: {
+							exec: 'idle',
+							contract: { out: 'text', in: 'text', payload: { source: { type: 'string' }, target: { type: 'string' } } }
+						}
+					}
+				] as any
+			},
+			null
+		);
+		expect((loaded as any)?.ok).toBe(true);
+		const after = get(graphStore);
+		const migratedNode = after.nodes.find((n) => n.id === componentId)!;
+		const bindingsOutputs = ((((migratedNode.data as any)?.params ?? {}).bindings ?? {}).outputs ?? {}) as Record<string, any>;
+		expect(bindingsOutputs.summary).toBeTruthy();
+		expect(bindingsOutputs.out_data).toBeUndefined();
+		const migratedEdge = after.edges.find((e) => e.id === 'e_legacy');
+		expect(String((migratedEdge as any)?.sourceHandle ?? '')).toBe('summary');
+		const typedSchemaType = String(
+			(((((migratedNode.data as any)?.params ?? {}).api ?? {}).outputs ?? [])[0]?.typedSchema?.type ?? '')
+		);
+		expect(typedSchemaType).toBe('text');
+	});
+
+	it('normalizes legacy single-output component sourceHandle on save', async () => {
+		graphStore.hardResetGraph();
+		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
+		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
+		const configRes = graphStore.updateNodeConfig(componentId, {
+			params: {
+				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+					]
+				},
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_data: { nodeId: 'n1', artifact: 'current' }
+					}
+				},
+				config: {}
+			},
+			ports: { in: null, out: 'json' }
+		});
+		expect(configRes.ok).toBe(true);
+		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
+			{
+				id: 'e_legacy_save',
+				source: componentId,
+				sourceHandle: 'summary',
+				target: llmId,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			}
+		] as any);
+		const originalFetch = globalThis.fetch;
+		let postedGraph: any = null;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			if (url.includes('/api/graphs') && String(init?.method ?? 'GET').toUpperCase() === 'POST') {
+				postedGraph = JSON.parse(String(init?.body ?? '{}'))?.graph ?? null;
+				return new Response(
+					JSON.stringify({
+						graphId: 'graph_saved',
+						revisionId: 'rev_saved',
+						graphName: 'saved',
+						createdAt: '2026-03-09T00:00:00Z'
+					}),
+					{ status: 200, headers: { 'content-type': 'application/json' } }
+				);
+			}
+			return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+		};
+		try {
+			const result = await graphStore.saveGraph('save');
+			expect((result as any)?.ok).toBe(true);
+			const savedEdge = (postedGraph?.edges ?? []).find((e: any) => String(e?.id ?? '') === 'e_legacy_save');
+			expect(savedEdge).toBeTruthy();
+			expect(String(savedEdge?.sourceHandle ?? '')).toBe('out_data');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
 	});
 });

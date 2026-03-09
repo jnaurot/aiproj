@@ -1518,28 +1518,189 @@ function stripToDTO(
 	return dto;
 }
 
+function normalizeComponentPortTypeOrDefault(value: unknown, fallback: PortType = 'json'): PortType {
+	const normalized = normalizeComponentPortType(value);
+	return normalized ?? fallback;
+}
+
+function normalizeComponentNodeForMigration(
+	node: Node<PipelineNodeData>
+): { node: Node<PipelineNodeData>; outputNames: string[]; outputByName: Map<string, PortType>; bindingNames: string[] } {
+	if (node.data.kind !== 'component') {
+		return { node, outputNames: [], outputByName: new Map(), bindingNames: [] };
+	}
+	const params = (((node.data as any)?.params ?? {}) as Record<string, any>) || {};
+	const api = (params.api ?? {}) as Record<string, any>;
+	const outputsRaw = Array.isArray(api.outputs) ? (api.outputs as any[]) : [];
+	const normalizedOutputs = outputsRaw
+		.filter((out) => Boolean(out) && typeof out === 'object')
+		.map((out) => {
+			const outName = String((out as any)?.name ?? '').trim();
+			const portType = normalizeComponentPortTypeOrDefault((out as any)?.portType, 'json');
+			const typedSchemaRaw =
+				(out as any)?.typedSchema && typeof (out as any).typedSchema === 'object'
+					? ((out as any).typedSchema as Record<string, any>)
+					: {};
+			const fieldsRaw = Array.isArray(typedSchemaRaw.fields) ? (typedSchemaRaw.fields as any[]) : [];
+			const normalizedFields =
+				portType === 'table' || portType === 'json'
+					? fieldsRaw
+					: [];
+			return {
+				...(out as any),
+				name: outName,
+				portType,
+				typedSchema: {
+					type: portType,
+					fields: normalizedFields
+				}
+			};
+		})
+		.filter((out) => String((out as any)?.name ?? '').trim().length > 0);
+
+	const outputNames = normalizedOutputs.map((out) => String((out as any)?.name ?? '').trim());
+	const outputSet = new Set(outputNames);
+	const outputByName = new Map<string, PortType>();
+	for (const out of normalizedOutputs) {
+		const name = String((out as any)?.name ?? '').trim();
+		const portType = normalizeComponentPortTypeOrDefault((out as any)?.portType, 'json');
+		outputByName.set(name, portType);
+	}
+
+	const bindings = (params.bindings ?? {}) as Record<string, any>;
+	const outputBindingsRaw =
+		bindings.outputs && typeof bindings.outputs === 'object'
+			? ({ ...(bindings.outputs as Record<string, any>) } as Record<string, any>)
+			: {};
+	if (outputNames.length === 1) {
+		const only = outputNames[0];
+		if (!Object.prototype.hasOwnProperty.call(outputBindingsRaw, only) && outputBindingsRaw.out_data) {
+			outputBindingsRaw[only] = structuredClone(outputBindingsRaw.out_data);
+		}
+	}
+	for (const key of Object.keys(outputBindingsRaw)) {
+		if (!outputSet.has(String(key))) delete outputBindingsRaw[key];
+	}
+
+	const nextNode: Node<PipelineNodeData> = {
+		...node,
+		data: {
+			...node.data,
+			params: {
+				...params,
+				api: {
+					...(api as Record<string, any>),
+					outputs: normalizedOutputs
+				},
+				bindings: {
+					...(bindings as Record<string, any>),
+					outputs: outputBindingsRaw
+				}
+			}
+		}
+	};
+	const bindingNames = outputNames.filter((name) =>
+		Object.prototype.hasOwnProperty.call(outputBindingsRaw, name)
+	);
+	return { node: nextNode, outputNames, outputByName, bindingNames };
+}
+
+function normalizeGraphForComponentMigration(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[]
+): { nodes: Node<PipelineNodeData>[]; edges: Edge<PipelineEdgeData>[] } {
+	const nodeInfo = new Map<
+		string,
+		{ outputNames: string[]; outputByName: Map<string, PortType>; bindingNames: string[] }
+	>();
+	const normalizedNodes = nodes.map((node) => {
+		const normalized = normalizeComponentNodeForMigration(node);
+		if (node.data.kind === 'component') {
+			nodeInfo.set(String(node.id), {
+				outputNames: normalized.outputNames,
+				outputByName: normalized.outputByName,
+				bindingNames: normalized.bindingNames
+			});
+		}
+		return normalized.node;
+	});
+
+	const normalizedEdges = edges.map((edge) => {
+		const srcInfo = nodeInfo.get(String(edge.source));
+		if (!srcInfo) return edge;
+		const outputNames = srcInfo.outputNames;
+		if (outputNames.length === 0) return edge;
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		const outputSet = new Set(outputNames);
+		const bindingNames = srcInfo.bindingNames;
+		const edgeDataContract =
+			(edge as any)?.data && typeof (edge as any).data === 'object'
+				? ((edge as any).data?.contract as Record<string, any> | undefined)
+				: undefined;
+		const contractOut = normalizeComponentPortType(edgeDataContract?.out ?? null);
+		let canonicalHandle = sourceHandle;
+		if (canonicalHandle === 'out') {
+			if (outputNames.length === 1) {
+				canonicalHandle = outputNames[0];
+			} else if (bindingNames.length === 1) {
+				canonicalHandle = bindingNames[0];
+			} else if (contractOut) {
+				const candidates = outputNames.filter(
+					(name) => srcInfo.outputByName.get(name) === contractOut
+				);
+				if (candidates.length === 1) canonicalHandle = candidates[0];
+			}
+		} else if (!outputSet.has(canonicalHandle)) {
+			if (outputNames.length === 1) {
+				canonicalHandle = outputNames[0];
+			} else if (bindingNames.length === 1) {
+				canonicalHandle = bindingNames[0];
+			} else if (contractOut) {
+				const candidates = outputNames.filter(
+					(name) => srcInfo.outputByName.get(name) === contractOut
+				);
+				if (candidates.length === 1) canonicalHandle = candidates[0];
+			}
+		}
+		if (canonicalHandle === sourceHandle) return edge;
+		return {
+			...edge,
+			sourceHandle: canonicalHandle
+		};
+	});
+
+	return {
+		nodes: normalizedNodes,
+		edges: recomputeEdgeContractsBestEffort(normalizedNodes, normalizedEdges)
+	};
+}
+
 function buildPersistableGraphStrict(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
 	graphId?: string
 ): { ok: true; graph: PipelineGraphDTO } | { ok: false; error: string } {
-	const canonicalized = canonicalizeComponentEdgeSourceHandles(nodes, edges, 'strict');
+	const normalized = normalizeGraphForComponentMigration(nodes, edges);
+	const canonicalized = canonicalizeComponentEdgeSourceHandles(normalized.nodes, normalized.edges, 'strict');
 	if (!canonicalized.ok) return { ok: false, error: canonicalized.error };
-	const rechecked = pruneAndRecontractEdgesStrict(nodes, canonicalized.edges);
+	const rechecked = pruneAndRecontractEdgesStrict(normalized.nodes, canonicalized.edges);
 	if (!rechecked.ok) return { ok: false, error: rechecked.error };
-	return { ok: true, graph: stripToDTO(nodes, rechecked.edges, graphId) };
+	return { ok: true, graph: stripToDTO(normalized.nodes, rechecked.edges, graphId) };
 }
 
 function buildSavePreflightDiagnostics(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[]
 ): SavePreflightResult {
+	const normalized = normalizeGraphForComponentMigration(nodes, edges);
+	const workingNodes = normalized.nodes;
+	const workingEdges = normalized.edges;
 	const diagnostics: SavePreflightDiagnostic[] = [];
-	for (const edge of edges) {
+	for (const edge of workingEdges) {
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
-		const sourceNode = nodes.find((n) => n.id === edge.source);
+		const sourceNode = workingNodes.find((n) => n.id === edge.source);
 		if (sourceNode?.data?.kind === 'component') {
-			const canonicalHandle = canonicalComponentSourceHandleForEdge(nodes, edge);
+			const canonicalHandle = canonicalComponentSourceHandleForEdge(workingNodes, edge);
 			if (canonicalHandle == null) {
 				diagnostics.push({
 					code: 'COMPONENT_OUTPUT_HANDLE_UNRESOLVED',
@@ -1549,7 +1710,7 @@ function buildSavePreflightDiagnostics(
 				});
 			}
 		}
-		const edgeCheck = isEdgeStillValid(nodes, edge);
+		const edgeCheck = isEdgeStillValid(workingNodes, edge);
 		if (!edgeCheck.ok) {
 			if (edgeCheck.reason === 'type_mismatch') {
 				diagnostics.push({
@@ -1569,7 +1730,7 @@ function buildSavePreflightDiagnostics(
 		}
 	}
 
-	for (const node of nodes) {
+	for (const node of workingNodes) {
 		if (node.data.kind !== 'component') continue;
 		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
@@ -2559,15 +2720,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		const nextNodes = Array.isArray(graph?.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
 		const nextEdges = Array.isArray(graph?.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
 		if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' };
-		const canonicalized = canonicalizeComponentEdgeSourceHandles(nextNodes, nextEdges, 'strict');
+		const normalized = normalizeGraphForComponentMigration(nextNodes, nextEdges);
+		const canonicalized = canonicalizeComponentEdgeSourceHandles(normalized.nodes, normalized.edges, 'strict');
 		if (!canonicalized.ok) return { ok: false, reason: canonicalized.error };
-		const rechecked = pruneAndRecontractEdgesStrict(nextNodes, canonicalized.edges);
+		const rechecked = pruneAndRecontractEdgesStrict(normalized.nodes, canonicalized.edges);
 		if (!rechecked.ok) return { ok: false, reason: rechecked.error };
 		update((s) => {
 			const nextState = withGraphMeta({
 				...s,
 				graphId: String(graphIdOverride || s.graphId),
-				nodes: nextNodes,
+				nodes: normalized.nodes,
 				edges: rechecked.edges,
 				selectedNodeId: null,
 				inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
@@ -2580,7 +2742,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				activeRunFrom: null,
 				activeRunNodeSet: new Set<string>(),
 				nodeOutputs: {},
-				nodeBindings: ensureNormalizedBindingsForNodes(nextNodes as any, {}),
+				nodeBindings: ensureNormalizedBindingsForNodes(normalized.nodes as any, {}),
 				activeRunId: null
 			});
 			persist(nextState);
