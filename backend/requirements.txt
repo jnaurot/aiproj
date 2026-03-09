@@ -1,3 +1,5 @@
+# Legacy pip entrypoint.
+# Source-of-truth for dependency definitions is backend/pyproject.toml (uv).
 # Default backend install profile:
 # - core runtime
 # - pandas compatibility layer

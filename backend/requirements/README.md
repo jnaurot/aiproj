@@ -2,6 +2,58 @@
 
 This repo now uses layered requirement profiles so installs can stay small by default and expand only when needed.
 
+## `uv` baseline (TKT-073)
+
+Dependency source-of-truth is now `backend/pyproject.toml` for `uv` workflows.
+
+- `base`: API/runtime baseline.
+- `cpu_dev`: default development profile for Win11 container and local CI.
+- `rocm_train`: Linux ROCm training/finetuning profile (CUDA excluded).
+
+Expected Python policy:
+- `3.11.x` only (`>=3.11,<3.12`)
+- Target runtime patch: `3.11.14`
+
+Install examples:
+
+```powershell
+# default group (cpu_dev)
+uv sync
+
+# explicit group
+uv sync --group cpu_dev
+uv sync --group rocm_train
+```
+
+Note:
+- ROCm-specific `torch` wheel/source wiring is intentionally deferred to container/runtime tickets.
+- `rocm_train` baseline excludes CUDA packages by design.
+
+## Lock strategy (TKT-074)
+
+Lock artifacts:
+- `backend/uv.lock` (canonical resolver lock)
+- `backend/requirements/locks/cpu-dev.lock.txt` (exported reproducible install set)
+- `backend/requirements/locks/rocm-train.lock.txt` (exported reproducible install set, CUDA-free baseline)
+
+Regenerate lock artifacts:
+
+```powershell
+cd backend
+python scripts/lock_profiles.py generate --python 3.11.14
+```
+
+Check lock artifacts are up to date:
+
+```powershell
+cd backend
+python scripts/lock_profiles.py check --python 3.11.14
+```
+
+Repro guidance:
+- Always use `--locked` installs in CI/container builds.
+- Keep lock generation pinned to Python `3.11.14`.
+
 ## Default install
 
 From `backend/`:
