@@ -48,6 +48,17 @@ async def test_install_packages_rejects_cuda_linked_specs():
 
 
 @pytest.mark.asyncio
+async def test_install_packages_rejects_excluded_cuda_only_extras():
+	runner = FakeRunner(CommandRunResult(returncode=0, stdout="", stderr="", duration_ms=1))
+	svc = EnvInstallerService(runner=runner, python_executable="python")
+	with pytest.raises(EnvInstallError) as exc_info:
+		await svc.install_packages(["bitsandbytes==0.44.1"])
+	assert exc_info.value.code == "ENV_PROFILE_PACKAGE_BLOCKED"
+	assert "bitsandbytes==0.44.1" in exc_info.value.audit.blocked
+	assert runner.commands == []
+
+
+@pytest.mark.asyncio
 async def test_install_packages_maps_runner_failure_to_install_error():
 	runner = FakeRunner(
 		CommandRunResult(returncode=1, stdout="line1", stderr="pip failed", duration_ms=25)

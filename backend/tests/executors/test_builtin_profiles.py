@@ -49,3 +49,9 @@ def test_missing_packages_for_packages_uses_sklearn_alias(monkeypatch):
     missing = missing_packages_for_packages(["numpy>=1.26", "scikit-learn>=1.5"])
     assert missing == []
     assert "sklearn" in calls
+
+
+def test_llm_finetune_profile_includes_layer3_and_excludes_cuda_extras():
+    packages = set(mod.BUILTIN_PROFILE_PACKAGES["llm_finetune"])
+    assert {"accelerate", "peft", "trl"}.issubset(packages)
+    assert "bitsandbytes" not in packages

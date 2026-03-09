@@ -1,0 +1,22 @@
+# ROCm-only finetune stack (NO CUDA)
+# Install this layer inside ROCm containers/hosts only.
+#
+# Notes:
+# - Uses the PyTorch ROCm wheel index explicitly.
+# - Excludes CUDA-only extras (for example bitsandbytes).
+#
+# Usage:
+#   python -m pip install -r requirements/rocm-finetune.txt
+
+--index-url https://download.pytorch.org/whl/rocm7.1
+--extra-index-url https://pypi.org/simple
+
+torch==2.7.1+rocm7.1.1
+transformers==4.45.2
+datasets==3.0.1
+tokenizers==0.20.3
+safetensors==0.4.5
+huggingface_hub==0.25.2
+accelerate==1.0.1
+peft==0.13.2
+trl==0.11.4

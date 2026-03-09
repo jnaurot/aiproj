@@ -162,6 +162,26 @@ Smoke test (run inside CPU or ROCm container):
 RUN_HF_CORE_IMPORT_SMOKE=1 python -m pytest tests/integration/test_hf_core_import_smoke.py
 ```
 
+## ML Layer 3 (TKT-080)
+
+Finetune stack is pinned for ROCm installs in:
+- `requirements/rocm-finetune.txt`
+
+Packages:
+- `accelerate`
+- `peft`
+- `trl`
+
+Policy:
+- CUDA-only extras are excluded from builtin profiles (for example `bitsandbytes`).
+
+Smoke + dry-run config test (ROCm image):
+
+```bash
+python -m pip install -r requirements/rocm-finetune.txt
+RUN_FINETUNE_STACK_SMOKE=1 python -m pytest tests/integration/test_finetune_stack_smoke.py
+```
+
 ## Default install
 
 From `backend/`:
@@ -192,11 +212,12 @@ python -m pip install -r requirements/observability.txt
 - `compat.txt`: `pandas` for existing pandas-centric executors and legacy compatibility.
 - `llm.txt`: tokenization/fuzzy matching/sentence-transformers helpers.
 - `dl.txt`: `torch` runtime.
-- `finetune.txt`: `transformers`, `datasets`, `accelerate`, `peft`, `trl`, optional `bitsandbytes`.
+- `finetune.txt`: `transformers`, `datasets`, `accelerate`, `peft`, `trl`.
+- `rocm-finetune.txt`: ROCm-pinned torch + finetune stack (`NO CUDA`).
 - `observability.txt`: `structlog`.
 - `testing.txt`: pytest and test utilities.
 
 ## Notes
 
-- `bitsandbytes` can be platform-sensitive (especially on Windows). Keep it optional.
+- CUDA-only extras (for example `bitsandbytes`) are intentionally excluded from builtin profiles.
 - The repository currently uses pandas in runtime codepaths, so `compat.txt` remains in default install.
