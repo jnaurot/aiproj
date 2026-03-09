@@ -1,0 +1,99 @@
+name: CI Container Profiles
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend-container-profile-matrix:
+    name: Backend Container Profile Matrix (${{ matrix.profile_id }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile_id: cpu_dev
+            compose_profile: backend-cpu-dev
+            service_name: backend
+            run_env_regression: true
+          - profile_id: rocm_train
+            compose_profile: backend-rocm
+            service_name: backend-rocm
+            run_env_regression: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show docker compose config
+        run: docker compose --profile ${{ matrix.compose_profile }} config
+
+      - name: Build profile container
+        if: matrix.run_env_regression
+        run: docker compose --profile ${{ matrix.compose_profile }} build ${{ matrix.service_name }}
+
+      - name: Enforce no-CUDA dependency policy
+        if: matrix.run_env_regression
+        run: |
+          docker compose --profile ${{ matrix.compose_profile }} run --rm ${{ matrix.service_name }} \
+            python scripts/no_cuda_guard.py --check-pyproject --check-lockfiles --check-installed
+
+      - name: Run backend env profile regression suite in container
+        if: matrix.run_env_regression
+        run: |
+          docker compose --profile ${{ matrix.compose_profile }} run --rm ${{ matrix.service_name }} \
+            uv run python -m pytest \
+              tests/e2e/test_env_profile_regression_gate.py \
+              tests/integration/test_env_profile_preflight.py \
+              tests/integration/test_graph_revisions_read_switch.py::test_graph_export_import_reports_environment_profile_dependencies \
+              tests/integration/test_component_run_flow.py::test_component_run_reports_aggregated_builtin_profile_requirements
+
+      - name: Validate docker compose backend-rocm profile
+        if: ${{ !matrix.run_env_regression }}
+        run: |
+          docker compose --profile backend-rocm config --format json > /tmp/compose-rocm.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          compose = json.loads(Path("/tmp/compose-rocm.json").read_text(encoding="utf-8"))
+          services = compose.get("services") or {}
+          svc = services.get("backend-rocm")
+          if not isinstance(svc, dict):
+              raise SystemExit("backend-rocm service missing from compose config")
+
+          build = svc.get("build") or {}
+          dockerfile = str(build.get("dockerfile") or "")
+          target = str(build.get("target") or "")
+          if dockerfile != "backend/Dockerfile.rocm":
+              raise SystemExit(f"backend-rocm dockerfile mismatch: {dockerfile!r}")
+          if target != "rocm-runtime":
+              raise SystemExit(f"backend-rocm target mismatch: {target!r}")
+
+          devices = svc.get("devices") or []
+          serialized_devices = " ".join(str(x) for x in devices)
+          for required in ("/dev/kfd", "/dev/dri"):
+              if required not in serialized_devices:
+                  raise SystemExit(f"backend-rocm missing required device mapping: {required}")
+          PY
+
+      - name: Validate ROCm Dockerfile policy (ROCm pinned + no CUDA extras)
+        if: ${{ !matrix.run_env_regression }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path("backend/Dockerfile.rocm").read_text(encoding="utf-8")
+          checks = {
+              "rocm base": "rocm/pytorch:rocm7.1.1_ubuntu24.04_py3.11_pytorch_release_2.7.1",
+              "rocm profile sync": "uv sync --locked --no-install-project --group rocm_train",
+          }
+          for label, token in checks.items():
+              if token not in text:
+                  raise SystemExit(f"Dockerfile.rocm missing required token ({label}): {token}")
+
+          blocked_tokens = ("cuda", "cu12", "cudnn")
+          lowered = text.lower()
+          if any(token in lowered for token in blocked_tokens):
+              raise SystemExit("Dockerfile.rocm includes CUDA-linked token(s), which is disallowed.")
+          PY
