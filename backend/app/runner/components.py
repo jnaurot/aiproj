@@ -181,13 +181,16 @@ def expand_graph_components(
             )
 
         id_map: Dict[str, str] = {}
+        # Authoring overrides live on the component instance params.api and must
+        # take precedence over revision snapshots. This keeps runtime handle
+        # resolution aligned with the accepted API Contract in the UI.
         component_api = (
-            definition.get("contractSnapshot")
+            params.get("api")
+            if isinstance(params.get("api"), dict)
+            else definition.get("contractSnapshot")
             if isinstance(definition.get("contractSnapshot"), dict)
             else definition.get("api")
             if isinstance(definition.get("api"), dict)
-            else params.get("api")
-            if isinstance(params.get("api"), dict)
             else {}
         )
         parent_meta = {

@@ -56,26 +56,6 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
-def _infer_component_output_handle_for_edge(
-    edge: Dict[str, Any],
-    src_node: Dict[str, Any],
-) -> Optional[str]:
-    source_handle = str(edge.get("sourceHandle") or "out").strip() or "out"
-    if source_handle != "out":
-        return source_handle
-    params = (src_node.get("data") or {}).get("params")
-    if not isinstance(params, dict):
-        return None
-    api = params.get("api")
-    outputs = api.get("outputs") if isinstance(api, dict) and isinstance(api.get("outputs"), list) else []
-    if len(outputs) == 1:
-        only_name = str((outputs[0] or {}).get("name") or "").strip()
-        return only_name or None
-    # Strict routing: do not infer from contract/port type when multiple outputs exist.
-    # Caller must provide explicit sourceHandle.
-    return None
-
-
 def _resolve_component_output_artifact_from_bindings(
     *,
     src_node: Dict[str, Any],
@@ -139,94 +119,58 @@ async def resolve_input_refs(
                 for o in outputs
                 if isinstance(o, dict) and str((o or {}).get("name") or "").strip()
             }
-            explicit_source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
-            has_explicit_named_output = explicit_source_handle != "out"
-            source_handle = _infer_component_output_handle_for_edge(e, src_node)
-            if source_handle:
-                if declared_output_names and source_handle not in declared_output_names:
-                    raise ContractMismatchError(
-                        "Component edge references undeclared output handle",
-                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                        details=_contract_details(
-                            expected={
-                                "sourceHandle": "declared output",
-                                "outputNames": sorted(declared_output_names),
-                            },
-                            actual={
-                                "edgeId": str(e.get("id") or ""),
-                                "sourceHandle": source_handle,
-                                "resolvedArtifact": False,
-                            },
-                        ),
-                    )
-                direct = _resolve_component_output_artifact_from_bindings(
-                    src_node=src_node,
-                    component_instance_node_id=str(src),
-                    output_name=source_handle,
-                    get_current_artifact=get_current_artifact,
-                )
-                if direct.get("artifact_id"):
-                    aid = str(direct["artifact_id"])
-                elif bool(direct.get("has_binding")):
-                    raise ContractMismatchError(
-                        f"Component output '{source_handle}' could not be resolved from bindings",
-                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                        details=_contract_details(
-                            expected={"sourceHandle": source_handle, "resolvedArtifact": True},
-                            actual={
-                                "edgeId": str(e.get("id") or ""),
-                                "wrapperArtifactId": str(aid),
-                                "boundRuntimeNodeId": str(direct.get("runtime_node_id") or ""),
-                                "resolvedArtifact": False,
-                            },
-                        ),
-                    )
-                else:
-                    raise ContractMismatchError(
-                        f"Component output '{source_handle}' requires explicit bound artifact",
-                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                        details=_contract_details(
-                            expected={"sourceHandle": source_handle, "resolvedArtifact": True},
-                            actual={
-                                "edgeId": str(e.get("id") or ""),
-                                "wrapperArtifactId": str(aid),
-                                "resolvedArtifact": False,
-                            },
-                        ),
-                    )
-            elif has_explicit_named_output:
+            source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+            if declared_output_names and source_handle not in declared_output_names:
                 raise ContractMismatchError(
-                    "Component edge references unresolved named output handle",
+                    "Component edge references undeclared output handle",
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
                     details=_contract_details(
-                        expected={"sourceHandle": explicit_source_handle, "resolvedArtifact": True},
+                        expected={
+                            "sourceHandle": "declared output",
+                            "outputNames": sorted(declared_output_names),
+                        },
                         actual={
                             "edgeId": str(e.get("id") or ""),
-                            "sourceHandle": explicit_source_handle,
+                            "sourceHandle": source_handle,
+                            "resolvedArtifact": False,
+                        },
+                    ),
+                )
+            direct = _resolve_component_output_artifact_from_bindings(
+                src_node=src_node,
+                component_instance_node_id=str(src),
+                output_name=source_handle,
+                get_current_artifact=get_current_artifact,
+            )
+            if direct.get("artifact_id"):
+                aid = str(direct["artifact_id"])
+            elif bool(direct.get("has_binding")):
+                raise ContractMismatchError(
+                    f"Component output '{source_handle}' could not be resolved from bindings",
+                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                    details=_contract_details(
+                        expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                        actual={
+                            "edgeId": str(e.get("id") or ""),
+                            "componentArtifactId": str(aid),
+                            "boundRuntimeNodeId": str(direct.get("runtime_node_id") or ""),
                             "resolvedArtifact": False,
                         },
                     ),
                 )
             else:
-                if len(outputs) > 1:
-                    raise ContractMismatchError(
-                        "Component edge sourceHandle must name an output when component has multiple outputs",
-                        code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                        details=_contract_details(
-                            expected={
-                                "sourceHandle": "named output",
-                                "outputNames": [
-                                    str((o or {}).get("name") or "").strip()
-                                    for o in outputs
-                                    if isinstance(o, dict)
-                                ],
-                            },
-                            actual={
-                                "edgeId": str(e.get("id") or ""),
-                                "sourceHandle": explicit_source_handle,
-                            },
-                        ),
-                    )
+                raise ContractMismatchError(
+                    f"Component output '{source_handle}' requires explicit bound artifact",
+                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                    details=_contract_details(
+                        expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                        actual={
+                            "edgeId": str(e.get("id") or ""),
+                            "componentArtifactId": str(aid),
+                            "resolvedArtifact": False,
+                        },
+                    ),
+                )
         port = e.get("targetHandle") or "in"
         refs.append((port, aid))
     # stable order
