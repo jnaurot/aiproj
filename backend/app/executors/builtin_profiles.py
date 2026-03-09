@@ -7,8 +7,10 @@ from typing import Any, Dict, List
 
 BUILTIN_PROFILE_PACKAGES: Dict[str, List[str]] = {
     "core": ["numpy", "requests", "pydantic", "python-dateutil"],
-    "data": ["polars", "pandas", "pyarrow", "openpyxl", "duckdb"],
-    "ml": ["scikit-learn", "scipy", "xgboost", "lightgbm", "matplotlib", "seaborn"],
+    # Layer 1 data profile: ROCm/CUDA-neutral tabular stack.
+    "data": ["numpy", "pandas", "polars", "pyarrow"],
+    # Layer 1 classical ML profile: data stack + sklearn/scipy.
+    "ml": ["numpy", "pandas", "polars", "scikit-learn", "scipy"],
     "llm_finetune": [
         "torch",
         "transformers",
@@ -50,6 +52,10 @@ BUILTIN_PROFILE_PACKAGES: Dict[str, List[str]] = {
 }
 
 _PACKAGE_SPLIT_RE = re.compile(r"[<>=!~]")
+_PACKAGE_MODULE_ALIASES: Dict[str, str] = {
+    "python-dateutil": "dateutil",
+    "scikit-learn": "sklearn",
+}
 
 
 def _normalize_custom_packages(value: Any) -> List[str]:
@@ -106,7 +112,10 @@ def resolve_builtin_environment(builtin_cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def package_module_name(package_spec: str) -> str:
     base = _PACKAGE_SPLIT_RE.split(str(package_spec or "").strip(), maxsplit=1)[0].strip()
-    return base.replace("-", "_")
+    lowered = base.lower()
+    if lowered in _PACKAGE_MODULE_ALIASES:
+        return _PACKAGE_MODULE_ALIASES[lowered]
+    return lowered.replace("-", "_")
 
 
 def missing_packages_for_packages(packages: List[str]) -> List[str]:

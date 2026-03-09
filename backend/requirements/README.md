@@ -137,6 +137,16 @@ python scripts/no_cuda_guard.py --check-pyproject --check-lockfiles --check-inst
 Temporary bypass (debug only):
 - `NO_CUDA_GUARD_DISABLED=1`
 
+## ML Layer 1 (TKT-078)
+
+Layer 1 profile intent (ROCm/CUDA-neutral):
+- `data`: `numpy`, `pandas`, `polars`, `pyarrow`
+- `ml`: `numpy`, `pandas`, `polars`, `scikit-learn`, `scipy`
+
+Builtin env preflight maps distribution specs to import modules deterministically:
+- `scikit-learn` -> `sklearn`
+- `python-dateutil` -> `dateutil`
+
 ## Default install
 
 From `backend/`:
