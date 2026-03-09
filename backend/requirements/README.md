@@ -221,3 +221,15 @@ python -m pip install -r requirements/observability.txt
 
 - CUDA-only extras (for example `bitsandbytes`) are intentionally excluded from builtin profiles.
 - The repository currently uses pandas in runtime codepaths, so `compat.txt` remains in default install.
+
+## Ops runbook (TKT-083)
+
+Operational bring-up/cutover guidance is documented in:
+- `docs/backend-ops-runbook.md`
+
+It covers:
+- Win11 CPU dev bring-up.
+- Ubuntu 24.04 ROCm bring-up.
+- Cutover and rollback procedure.
+- Lock refresh workflow.
+- Troubleshooting checklist.
