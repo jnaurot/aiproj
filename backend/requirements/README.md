@@ -147,6 +147,21 @@ Builtin env preflight maps distribution specs to import modules deterministicall
 - `scikit-learn` -> `sklearn`
 - `python-dateutil` -> `dateutil`
 
+## ML Layer 2 (TKT-079)
+
+HF Core packages are now explicit in CPU + ROCm target groups:
+- `transformers`
+- `datasets`
+- `tokenizers`
+- `safetensors`
+- `huggingface_hub`
+
+Smoke test (run inside CPU or ROCm container):
+
+```bash
+RUN_HF_CORE_IMPORT_SMOKE=1 python -m pytest tests/integration/test_hf_core_import_smoke.py
+```
+
 ## Default install
 
 From `backend/`:
