@@ -61,6 +61,7 @@ def test_tool_payload_schema_includes_builtin_environment_when_available():
             "builtin_environment": {
                 "profileId": "data",
                 "source": "profile",
+                "installTarget": "cpu_dev",
                 "packages": ["polars", "pandas"],
             }
         },
@@ -69,5 +70,6 @@ def test_tool_payload_schema_includes_builtin_environment_when_available():
     assert out.get("builtin_environment") == {
         "profileId": "data",
         "source": "profile",
+        "installTarget": "cpu_dev",
         "packages": ["polars", "pandas"],
     }

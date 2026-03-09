@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from ..executors.builtin_profiles import (
+	BUILTIN_PROFILE_INSTALL_TARGETS,
 	BUILTIN_PROFILE_PACKAGES,
 	missing_packages_for_packages,
 	resolve_builtin_environment,
@@ -119,6 +120,7 @@ def _profile_status(profile_id: str, packages: List[str]) -> Dict[str, Any]:
 	installed = len(missing) == 0
 	return {
 		"profileId": profile_id,
+		"installTarget": str(BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id) or "cpu_dev"),
 		"packages": packages,
 		"installed": installed,
 		"missingPackages": missing,
@@ -153,6 +155,7 @@ async def validate_env_profile(req: EnvValidateRequest) -> Dict[str, Any]:
 	return {
 		"schemaVersion": 1,
 		"profileId": resolved.get("profileId"),
+		"installTarget": resolved.get("installTarget"),
 		"source": resolved.get("source"),
 		"packages": packages,
 		"installed": status["installed"],
@@ -172,6 +175,7 @@ async def install_env_profile(req: EnvInstallRequest) -> Dict[str, Any]:
 		return {
 			"schemaVersion": 1,
 			"profileId": profile_id,
+			"installTarget": resolved.get("installTarget"),
 			"source": resolved.get("source"),
 			"packages": packages,
 			"status": "already_installed",
@@ -210,6 +214,7 @@ async def install_env_profile(req: EnvInstallRequest) -> Dict[str, Any]:
 	return {
 		"schemaVersion": 1,
 		"profileId": profile_id,
+		"installTarget": resolved.get("installTarget"),
 		"source": resolved.get("source"),
 		"packages": packages,
 		"status": "installed" if len(missing_after) == 0 else "partial",

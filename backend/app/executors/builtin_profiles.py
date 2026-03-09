@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import sys
 from typing import Any, Dict, List
 
 
@@ -55,6 +56,15 @@ BUILTIN_PROFILE_PACKAGES: Dict[str, List[str]] = {
     "custom": [],
 }
 
+BUILTIN_PROFILE_INSTALL_TARGETS: Dict[str, str] = {
+    "core": "cpu_dev",
+    "data": "cpu_dev",
+    "ml": "cpu_dev",
+    "llm_finetune": "rocm_train",
+    "full": "rocm_train",
+    "custom": "cpu_dev",
+}
+
 _PACKAGE_SPLIT_RE = re.compile(r"[<>=!~]")
 _PACKAGE_MODULE_ALIASES: Dict[str, str] = {
     "python-dateutil": "dateutil",
@@ -100,6 +110,7 @@ def resolve_builtin_environment(builtin_cfg: Dict[str, Any]) -> Dict[str, Any]:
     else:
         packages = list(BUILTIN_PROFILE_PACKAGES[profile_id])
         source = "profile"
+    install_target = str(BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id) or "cpu_dev")
 
     locked_raw = (builtin_cfg or {}).get("locked")
     locked = str(locked_raw).strip() if isinstance(locked_raw, str) else ""
@@ -108,6 +119,7 @@ def resolve_builtin_environment(builtin_cfg: Dict[str, Any]) -> Dict[str, Any]:
         "profileId": profile_id,
         "packages": packages,
         "source": source,
+        "installTarget": install_target,
     }
     if locked:
         resolved["locked"] = locked
@@ -129,6 +141,12 @@ def missing_packages_for_packages(packages: List[str]) -> List[str]:
         if not module_name:
             missing.append(str(pkg))
             continue
-        if importlib.util.find_spec(module_name) is None:
+        try:
+            found = importlib.util.find_spec(module_name) is not None
+        except (ValueError, ImportError):
+            # Test doubles can inject modules without __spec__; treat presence in
+            # sys.modules as installed instead of failing resolution.
+            found = module_name in sys.modules
+        if not found:
             missing.append(str(pkg))
     return missing

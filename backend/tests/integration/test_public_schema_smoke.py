@@ -29,6 +29,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
                     "builtin_environment": {
                         "profileId": "data",
                         "source": "profile",
+                        "installTarget": "cpu_dev",
                         "packages": ["polars", "pandas"],
                     },
                 },
@@ -110,11 +111,13 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         assert payload_schema.get("builtin_environment") == {
             "profileId": "data",
             "source": "profile",
+            "installTarget": "cpu_dev",
             "packages": ["polars", "pandas"],
         }
         assert meta_json.get("builtinEnvironment") == {
             "profileId": "data",
             "source": "profile",
+            "installTarget": "cpu_dev",
             "packages": ["polars", "pandas"],
         }
 
@@ -127,6 +130,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         assert (lineage_json.get("lineage") or {}).get("builtinEnvironment") == {
             "profileId": "data",
             "source": "profile",
+            "installTarget": "cpu_dev",
             "packages": ["polars", "pandas"],
         }
 

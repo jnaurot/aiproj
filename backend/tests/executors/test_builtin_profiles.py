@@ -7,6 +7,7 @@ from app.executors.builtin_profiles import missing_packages_for_packages, resolv
 def test_resolve_builtin_environment_defaults_to_core():
     resolved = resolve_builtin_environment({"toolId": "noop"})
     assert resolved["profileId"] == "core"
+    assert resolved["installTarget"] == "cpu_dev"
     assert "numpy" in resolved["packages"]
     assert resolved["source"] == "profile"
 
@@ -30,6 +31,7 @@ def test_resolve_builtin_environment_rejects_custom_packages_for_non_custom_prof
 def test_resolve_builtin_environment_includes_locked_when_present():
     resolved = resolve_builtin_environment({"toolId": "noop", "locked": "sha256:abc123"})
     assert resolved["profileId"] == "core"
+    assert resolved["installTarget"] == "cpu_dev"
     assert resolved["locked"] == "sha256:abc123"
 
 
@@ -55,3 +57,11 @@ def test_llm_finetune_profile_includes_layer3_and_excludes_cuda_extras():
     packages = set(mod.BUILTIN_PROFILE_PACKAGES["llm_finetune"])
     assert {"accelerate", "peft", "trl"}.issubset(packages)
     assert "bitsandbytes" not in packages
+
+
+def test_profile_install_target_mapping_is_deterministic():
+    assert mod.resolve_builtin_environment({"profileId": "core"})["installTarget"] == "cpu_dev"
+    assert mod.resolve_builtin_environment({"profileId": "data"})["installTarget"] == "cpu_dev"
+    assert mod.resolve_builtin_environment({"profileId": "ml"})["installTarget"] == "cpu_dev"
+    assert mod.resolve_builtin_environment({"profileId": "llm_finetune"})["installTarget"] == "rocm_train"
+    assert mod.resolve_builtin_environment({"profileId": "full"})["installTarget"] == "rocm_train"

@@ -36,7 +36,12 @@ from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
 from ..executors.tool import exec_tool
-from ..executors.builtin_profiles import BUILTIN_PROFILE_PACKAGES, missing_packages_for_packages, resolve_builtin_environment
+from ..executors.builtin_profiles import (
+    BUILTIN_PROFILE_INSTALL_TARGETS,
+    BUILTIN_PROFILE_PACKAGES,
+    missing_packages_for_packages,
+    resolve_builtin_environment,
+)
 from ..feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
@@ -372,11 +377,13 @@ def _tool_builtin_env_preflight_error(
                 expected={
                     "installed": True,
                     "profileId": str(resolved_env.get("profileId") or "core"),
+                    "installTarget": str(resolved_env.get("installTarget") or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(resolved_env.get("profileId") or "core"), "cpu_dev")),
                     "packages": packages,
                 },
                 actual={
                     "installed": False,
                     "profileId": str(resolved_env.get("profileId") or "core"),
+                    "installTarget": str(resolved_env.get("installTarget") or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(resolved_env.get("profileId") or "core"), "cpu_dev")),
                     "source": str(resolved_env.get("source") or ""),
                     "missingPackages": missing,
                     "installHint": "POST /env/profiles/install",
@@ -411,6 +418,10 @@ def _tool_builtin_env_requirement(params: Dict[str, Any]) -> Optional[Dict[str, 
         "invalid": False,
         "profileId": str(resolved.get("profileId") or "core").strip() or "core",
         "source": str(resolved.get("source") or "builtin_profile").strip() or "builtin_profile",
+        "installTarget": str(
+            resolved.get("installTarget")
+            or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(resolved.get("profileId") or "core"), "cpu_dev")
+        ),
         "packages": packages,
     }
 
@@ -450,6 +461,10 @@ def _collect_component_builtin_profile_requirements(
             {
                 "profileId": profile_id,
                 "source": str(requirement.get("source") or "builtin_profile"),
+                "installTarget": str(
+                    requirement.get("installTarget")
+                    or BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id, "cpu_dev")
+                ),
                 "packages": [],
                 "_pkg_set": set(),
                 "_node_set": set(),
@@ -476,6 +491,7 @@ def _collect_component_builtin_profile_requirements(
         item = {
             "profileId": profile_id,
             "source": str(entry.get("source") or "builtin_profile"),
+            "installTarget": str(entry.get("installTarget") or BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id, "cpu_dev")),
             "packages": packages,
             "missingPackages": missing,
             "internalNodeIds": sorted(str(v) for v in (entry.get("_node_set") or set())),
@@ -502,6 +518,11 @@ def _env_profile_log_guidance(
     actual = details.get("actual") if isinstance(details.get("actual"), dict) else {}
     expected = details.get("expected") if isinstance(details.get("expected"), dict) else {}
     profile_id = str(actual.get("profileId") or expected.get("profileId") or "core").strip() or "core"
+    install_target = str(
+        actual.get("installTarget")
+        or expected.get("installTarget")
+        or BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id, "cpu_dev")
+    ).strip() or "cpu_dev"
     install_hint = str(actual.get("installHint") or "POST /env/profiles/install").strip()
     missing = actual.get("missingPackages") if isinstance(actual.get("missingPackages"), list) else []
     missing_text = ", ".join([str(pkg).strip() for pkg in missing if str(pkg).strip()])
@@ -509,11 +530,11 @@ def _env_profile_log_guidance(
         if missing_text:
             return (
                 f"Environment profile '{profile_id}' missing packages: {missing_text}. "
-                f"Install profile: {install_hint} (profileId='{profile_id}')."
+                f"Install profile: {install_hint} (profileId='{profile_id}', target='{install_target}')."
             )
         return (
             f"Environment profile '{profile_id}' is not installed. "
-            f"Install profile: {install_hint} (profileId='{profile_id}')."
+            f"Install profile: {install_hint} (profileId='{profile_id}', target='{install_target}')."
         )
     if code == "ENV_PROFILE_PACKAGE_BLOCKED":
         blocked = actual.get("blockedPackages") if isinstance(actual.get("blockedPackages"), list) else []
@@ -526,7 +547,7 @@ def _env_profile_log_guidance(
     if code == "ENV_PROFILE_INSTALL_FAILED":
         return (
             f"Environment profile '{profile_id}' install failed. "
-            f"Retry install via {install_hint} (profileId='{profile_id}')."
+            f"Retry install via {install_hint} (profileId='{profile_id}', target='{install_target}')."
         )
     return f"Environment profile error for '{profile_id}'."
 
@@ -944,18 +965,23 @@ def _tool_payload_schema(envelope_kind: str, payload: Any, envelope_meta: Option
         raw_env = envelope_meta.get("builtin_environment") or {}
         profile_id = str(raw_env.get("profileId") or "").strip()
         source = str(raw_env.get("source") or "").strip()
+        install_target = str(raw_env.get("installTarget") or "").strip()
+        locked = str(raw_env.get("locked") or "").strip()
         packages_raw = raw_env.get("packages")
         packages: list[str] = []
         if isinstance(packages_raw, list):
             for pkg in packages_raw:
                 if isinstance(pkg, str) and pkg.strip():
                     packages.append(pkg.strip())
-        if profile_id or source or packages:
+        if profile_id or source or install_target or packages or locked:
             builtin_environment = {
                 "profileId": profile_id,
                 "source": source,
+                "installTarget": install_target,
                 "packages": packages,
             }
+            if locked:
+                builtin_environment["locked"] = locked
 
     if envelope_kind == "json":
         schema = _json_payload_value_schema(payload)
@@ -1874,7 +1900,10 @@ async def run_graph(
             )
             if required_profiles:
                 profile_ids = [
-                    str(p.get("profileId") or "").strip()
+                    (
+                        f"{str(p.get('profileId') or '').strip()}@"
+                        f"{str(p.get('installTarget') or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(p.get('profileId') or '').strip(), 'cpu_dev')).strip()}"
+                    )
                     for p in required_profiles
                     if isinstance(p, dict) and str(p.get("profileId") or "").strip()
                 ]

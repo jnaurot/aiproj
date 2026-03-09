@@ -40,6 +40,7 @@ def _extract_builtin_environment(payload_schema: Optional[Dict[str, Any]]) -> Op
         return None
     profile_id = str(env.get("profileId") or "").strip()
     source = str(env.get("source") or "").strip()
+    install_target = str(env.get("installTarget") or "").strip()
     locked = str(env.get("locked") or "").strip()
     packages_raw = env.get("packages")
     packages: list[str] = []
@@ -47,11 +48,12 @@ def _extract_builtin_environment(payload_schema: Optional[Dict[str, Any]]) -> Op
         for pkg in packages_raw:
             if isinstance(pkg, str) and pkg.strip():
                 packages.append(pkg.strip())
-    if not profile_id and not source and not packages and not locked:
+    if not profile_id and not source and not install_target and not packages and not locked:
         return None
     out = {
         "profileId": profile_id,
         "source": source,
+        "installTarget": install_target,
         "packages": packages,
     }
     if locked:
