@@ -129,8 +129,11 @@ type InspectorState = {
 	nodeId: string | null;
 	draftParams: Record<string, any>;
 	dirty: boolean;
+	systemNotice?: string | null;
 	uiByNodeId: Record<string, ApiEditorUiState>;
 };
+
+export type InspectorDraftPatchIntent = 'user_edit' | 'system_canonicalize';
 
 export type ApiEditorUiState = {
 	requestOpen: boolean;
@@ -190,6 +193,7 @@ const initialInspector: InspectorState = {
 	nodeId: null,
 	draftParams: {},
 	dirty: false,
+	systemNotice: null,
 	uiByNodeId: {}
 };
 
@@ -2510,15 +2514,47 @@ export const graphStore = (() => {
 		| { ok: false; error: string };
 
 	//BEGIN
-	function patchInspectorDraft(patch: Record<string, any>) {
+	function canonicalInspectorDraftForNode(
+		node: Node<PipelineNodeData & Record<string, unknown>> | undefined,
+		params: Record<string, any>
+	): Record<string, any> {
+		if (!node) return params;
+		if (node.data?.kind === 'component') {
+			return sanitizeComponentDraftParams(params);
+		}
+		return params;
+	}
+
+	function patchInspectorDraft(
+		patch: Record<string, any>,
+		opts?: { intent?: InspectorDraftPatchIntent; notice?: string | null }
+	) {
 		update((s) => {
 			if (!s.inspector.nodeId) return s;
+			const node = s.nodes.find((n) => n.id === s.inspector.nodeId);
+			const nextDraftParams = { ...s.inspector.draftParams, ...patch };
+			const intent: InspectorDraftPatchIntent = opts?.intent ?? 'user_edit';
+			const baselineCanonical = canonicalInspectorDraftForNode(
+				node as any,
+				structuredClone((node?.data?.params ?? {}) as Record<string, any>)
+			);
+			const nextCanonical = canonicalInspectorDraftForNode(node as any, structuredClone(nextDraftParams));
+			const changedVsBaseline = JSON.stringify(nextCanonical) !== JSON.stringify(baselineCanonical);
+			const changedVsCurrent = JSON.stringify(nextDraftParams) !== JSON.stringify(s.inspector.draftParams ?? {});
+			const nextDirty = intent === 'system_canonicalize' ? Boolean(s.inspector.dirty) : changedVsBaseline;
+			const nextSystemNotice =
+				intent === 'system_canonicalize' && changedVsCurrent
+					? String(opts?.notice ?? 'Bindings normalized automatically.')
+					: intent === 'user_edit'
+						? null
+						: s.inspector.systemNotice ?? null;
 			return {
 				...s,
 				inspector: {
 					...s.inspector,
-					draftParams: { ...s.inspector.draftParams, ...patch },
-					dirty: true
+					draftParams: nextDraftParams,
+					dirty: nextDirty,
+					systemNotice: nextSystemNotice
 				}
 			};
 		});

@@ -138,8 +138,11 @@
 		}
 	}
 
-	function onDraft(patch: Record<string, any>) {
-		graphStore.patchInspectorDraft(patch);
+	function onDraft(
+		patch: Record<string, any>,
+		opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
+	) {
+		graphStore.patchInspectorDraft(patch, opts);
 	}
 
 	function onCommit(patch: Record<string, any>) {

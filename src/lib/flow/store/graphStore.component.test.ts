@@ -377,6 +377,36 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('keeps inspector clean for system canonicalize patches and dirty for user edits', () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 24, y: 24 });
+		graphStore.selectNode(componentNodeId);
+
+		graphStore.patchInspectorDraft(
+			{
+				bindings: {
+					inputs: {},
+					config: {},
+					outputs: {
+						out_data: { nodeId: 'n_internal', artifact: 'current' }
+					}
+				}
+			},
+			{
+				intent: 'system_canonicalize',
+				notice: 'Component output bindings normalized automatically.'
+			}
+		);
+		let state = get(graphStore);
+		expect(state.inspector.dirty).toBe(false);
+		expect(String((state.inspector as any).systemNotice ?? '')).toContain('normalized');
+
+		graphStore.patchInspectorDraft({ config: { threshold: 1 } });
+		state = get(graphStore);
+		expect(state.inspector.dirty).toBe(true);
+		expect(String((state.inspector as any).systemNotice ?? '')).toBe('');
+	});
+
 	it('applies saved component revision scope to return graph snapshot (none/one/all)', async () => {
 		graphStore.hardResetGraph();
 		const firstComponentNodeId = graphStore.addNode('component', { x: 30, y: 30 });

@@ -19,7 +19,10 @@
 
 export let selectedNode: any;
 export let params: Record<string, any> = {};
-export let onDraft: (patch: Record<string, any>) => void = () => {};
+export let onDraft: (
+	patch: Record<string, any>,
+	opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
+) => void = () => {};
 
 	let components: ComponentCatalogItem[] = [];
 	let revisions: ComponentRevisionSummary[] = [];
@@ -102,6 +105,9 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 						config: { ...(bindings?.config ?? {}) },
 						outputs: synced.next
 					}
+				}, {
+					intent: 'system_canonicalize',
+					notice: 'Component output bindings normalized automatically.'
 				});
 			}
 		}
@@ -118,7 +124,10 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		const currentSignature = JSON.stringify(outputs ?? []);
 		if (nextSignature !== currentSignature && nextSignature !== outputCanonicalSignature) {
 			outputCanonicalSignature = nextSignature;
-			draftApiOutputs(canonicalOutputs);
+			draftApiOutputs(canonicalOutputs, {
+				intent: 'system_canonicalize',
+				notice: 'Component output types normalized from internal bindings.'
+			});
 		}
 	}
 
@@ -307,14 +316,17 @@ export let onDraft: (patch: Record<string, any>) => void = () => {};
 		});
 	}
 
-	function draftApiOutputs(nextOutputs: ComponentApiPort[]): void {
+	function draftApiOutputs(
+		nextOutputs: ComponentApiPort[],
+		opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
+	): void {
 		const canonical = nextOutputs.map((out) => canonicalizeOutputPort(out as ComponentApiPort));
 		onDraft({
 			api: {
 				inputs: [...inputs],
 				outputs: canonical
 			}
-		});
+		}, opts);
 	}
 
 	function updateApiOutput(

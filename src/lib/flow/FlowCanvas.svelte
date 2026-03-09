@@ -295,6 +295,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: inspectorParams = ($graphStore.inspector?.draftParams ?? {}) as Record<string, unknown>;
 	$: inspectorAcceptValidation = graphStore.getInspectorDraftAcceptValidation($graphStore as GraphState);
 	$: inspectorAcceptDisabled = !$graphStore.inspector.dirty || !inspectorAcceptValidation.ok;
+	$: inspectorSystemNotice = String(($graphStore.inspector as any)?.systemNotice ?? '').trim();
 	$: inspectorAcceptTooltip =
 		$graphStore.inspector.dirty && !inspectorAcceptValidation.ok
 			? String(inspectorAcceptValidation.errors?.[0] ?? 'Resolve draft validation errors before Accept.')
@@ -2372,6 +2373,9 @@ async function scrollToBottom() {
 								Revert
 							</button>
 						</div>
+						{#if inspectorSystemNotice}
+							<div class="inspectorSystemNote" aria-live="polite">{inspectorSystemNotice}</div>
+						{/if}
 					{/if}
 				</div>
 			{:else}
@@ -2696,6 +2700,13 @@ async function scrollToBottom() {
 		padding: 10px;
 		opacity: 0.7;
 		font-size: 13px;
+	}
+
+	.inspectorSystemNote {
+		margin-top: 6px;
+		font-size: 12px;
+		opacity: 0.82;
+		color: #9db3da;
 	}
 
 	@media (max-width: 1260px) {
