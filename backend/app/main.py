@@ -12,11 +12,13 @@ from .routes.maintenance import router as maintenance_router
 from .routes.runs import router as runs_router
 from .routes.snapshots import router as snapshots_router
 from .runtime import RuntimeManager
+from .services.no_cuda_guard import ensure_no_cuda_or_raise
 
 app = FastAPI(title="Flow Runner")
 
 @app.on_event("startup")
 async def startup():
+    ensure_no_cuda_or_raise(check_installed=True)
     app.state.runtime = RuntimeManager()
     app.state.graph_revisions = GraphRevisionStore("./data/graphs/graphs.sqlite")
     app.state.component_revisions = ComponentRevisionStore("./data/components/components.sqlite")

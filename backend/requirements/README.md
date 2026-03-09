@@ -118,6 +118,25 @@ docker compose --profile backend-rocm exec backend-rocm \
 
 Expected: JSON output with `"ok": true`.
 
+## No-CUDA guardrails (TKT-077)
+
+CUDA-linked dependencies are blocked by policy.
+
+Enforcement points:
+- CI guard job runs `python scripts/no_cuda_guard.py --check-pyproject --check-lockfiles --check-installed`.
+- Backend startup preflight calls `ensure_no_cuda_or_raise()` and fails fast if CUDA-linked packages are detected.
+- Env profile installer rejects CUDA-linked package specs even if otherwise allowlisted.
+
+Local check:
+
+```powershell
+cd backend
+python scripts/no_cuda_guard.py --check-pyproject --check-lockfiles --check-installed
+```
+
+Temporary bypass (debug only):
+- `NO_CUDA_GUARD_DISABLED=1`
+
 ## Default install
 
 From `backend/`:

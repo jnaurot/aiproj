@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Iterable, List, Optional, Protocol
 from uuid import uuid4
 
 from ..executors.builtin_profiles import BUILTIN_PROFILE_PACKAGES
+from .no_cuda_guard import find_cuda_violations_in_specs
 
 PackageEventCallback = Callable[[dict], Optional[Awaitable[None] | None]]
 
@@ -152,6 +153,9 @@ class EnvInstallerService:
 				continue
 			base = _base_package_name(spec)
 			if base not in self.allowlist:
+				blocked.append(spec)
+				continue
+			if find_cuda_violations_in_specs([spec], source="installer"):
 				blocked.append(spec)
 				continue
 			if spec in seen:
