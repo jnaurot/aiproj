@@ -16,7 +16,40 @@ services:
       - ./:/workspace
       - backend-data:/workspace/backend/data
       - uv-cache:/root/.cache/uv
+  backend-rocm:
+    profiles: ["backend-rocm"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.rocm
+      target: rocm-runtime
+    working_dir: /workspace/backend
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      HSA_OVERRIDE_GFX_VERSION: ""
+      HIP_VISIBLE_DEVICES: "0"
+    ports:
+      - "8001:8000"
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - SYS_PTRACE
+    ipc: host
+    shm_size: "8gb"
+    volumes:
+      - ./:/workspace
+      - backend-data-rocm:/workspace/backend/data
+      - uv-cache-rocm:/root/.cache/uv
 
 volumes:
   backend-data:
+  backend-data-rocm:
   uv-cache:
+  uv-cache-rocm:

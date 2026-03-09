@@ -83,6 +83,41 @@ Startup smoke check:
 curl http://localhost:8000/capabilities
 ```
 
+## Docker ROCm runtime profile (TKT-076)
+
+Linux target:
+- Ubuntu 24.04
+- ROCm 7.1.1 host stack
+
+Artifacts:
+- `backend/Dockerfile.rocm` target: `rocm-runtime`
+- `compose.yaml` profile/service: `backend-rocm`
+
+Bring up ROCm backend:
+
+```bash
+docker compose --profile backend-rocm up --build -d backend-rocm
+```
+
+The profile maps AMD device nodes:
+- `/dev/kfd`
+- `/dev/dri`
+
+Container startup smoke:
+
+```bash
+curl http://localhost:8001/capabilities
+```
+
+ROCm device detection check:
+
+```bash
+docker compose --profile backend-rocm exec backend-rocm \
+	python scripts/rocm_device_check.py
+```
+
+Expected: JSON output with `"ok": true`.
+
 ## Default install
 
 From `backend/`:
