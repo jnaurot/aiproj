@@ -2004,6 +2004,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					<div class={`log ${l.level}`}>
 						<span class="ts">{l.ts}</span>
 						<span class="msg">
+							{#if l.componentPath?.length}
+								<span class="nid">[Component: {l.componentPath.join(' > ')}]</span>
+							{/if}
 							{#if l.nodeId}
 								<span class="nid">[{l.nodeId}]</span>
 							{/if}

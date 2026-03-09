@@ -113,6 +113,7 @@ type RunLog = {
 	level: LogLevel;
 	message: string;
 	nodeId?: string;
+	componentPath?: string[];
 };
 const RUN_IDLE = "idle"
 type RunStatus = typeof RUN_IDLE | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
@@ -708,11 +709,47 @@ function nowTs() {
 	return new Date().toLocaleTimeString();
 }
 
-function logPush(state: GraphState, level: LogLevel, message: string, nodeId?: string) {
+function _componentPathFromNodeId(state: GraphState, nodeId?: string): string[] | undefined {
+	const raw = String(nodeId ?? '').trim();
+	if (!raw.startsWith('cmp:')) return undefined;
+	const componentInstanceIds: string[] = [];
+	let cursor = raw;
+	let guard = 0;
+	while (cursor.startsWith('cmp:') && guard < 32) {
+		guard += 1;
+		const rest = cursor.slice(4);
+		const sep = rest.indexOf(':');
+		if (sep <= 0) break;
+		const instanceId = rest.slice(0, sep).trim();
+		if (!instanceId) break;
+		componentInstanceIds.push(instanceId);
+		cursor = rest.slice(sep + 1);
+	}
+	if (!componentInstanceIds.length) return undefined;
+	const names = componentInstanceIds.map((instanceId) => {
+		const node = state.nodes.find((n) => n.id === instanceId);
+		const data = (node?.data ?? {}) as Record<string, any>;
+		const ref = (data.params as Record<string, any> | undefined)?.componentRef as
+			| Record<string, unknown>
+			| undefined;
+		const componentId = String(ref?.componentId ?? '').trim();
+		return componentId || instanceId;
+	});
+	return names.length ? names : undefined;
+}
+
+function logPush(
+	state: GraphState,
+	level: LogLevel,
+	message: string,
+	nodeId?: string,
+	componentPath?: string[]
+) {
 	logSeq += 1;
+	const resolvedComponentPath = componentPath?.length ? componentPath : _componentPathFromNodeId(state, nodeId);
 	return {
 		...state,
-		logs: [...state.logs, { id: logSeq, ts: nowTs(), level, message, nodeId }]
+		logs: [...state.logs, { id: logSeq, ts: nowTs(), level, message, nodeId, componentPath: resolvedComponentPath }]
 	};
 }
 
@@ -1358,7 +1395,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return { ...state, edges };
 		}
 		case 'log':
-			return logPush(state, evt.level, evt.message, evt.nodeId);
+			return logPush(state, evt.level, evt.message, evt.nodeId, (evt as any).componentPath);
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
