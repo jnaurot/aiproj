@@ -7,6 +7,36 @@ on:
 		branches: [main, master]
 
 jobs:
+	component-ux-regression-gate:
+		name: Component UX Regression Gate (Connect/Reconnect/Import/Migrate/Run)
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-node@v4
+				with:
+					node-version: '20'
+					cache: 'npm'
+			- uses: actions/setup-python@v5
+				with:
+					python-version: '3.11'
+					cache: 'pip'
+					cache-dependency-path: backend/requirements.txt
+			- run: npm ci
+			- run: python -m pip install -r backend/requirements.txt
+			- name: Frontend component flow regression tests
+				run: |
+					npm run test -- \
+						src/lib/flow/store/graphStore.component.test.ts \
+						src/lib/flow/components/editors/ComponentEditor/validation.test.ts
+			- name: Backend component flow regression tests
+				run: |
+					cd backend
+					python -m pytest \
+						tests/e2e/test_component_migration_regression_gate.py \
+						tests/integration/test_graph_migrations_component_outputs.py \
+						tests/integration/test_component_run_flow.py \
+						tests/runner/test_component_output_resolution.py
+
 	backend-component-migration-regression-gate:
 		name: Backend Component Migration Regression Gate
 		runs-on: ubuntu-latest

@@ -196,7 +196,8 @@ function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?
 	const contract = (api ?? {}) as ComponentApiContract;
 	const inputs = Array.isArray(contract?.inputs) ? contract.inputs : [];
 	const inPort = normalizeComponentPortType(inputs[0]?.portType ?? null);
-	return { in: inPort, out: "json" };
+	// Component output routing/type comes from API outputs + sourceHandle, not ports.out.
+	return { in: inPort, out: null };
 }
 
 function sanitizeComponentDraftParams(params: Record<string, any>): Record<string, any> {
@@ -1660,6 +1661,14 @@ function normalizeComponentNodeForMigration(
 		...node,
 		data: {
 			...node.data,
+			ports: {
+				...((node.data as any)?.ports ?? {}),
+				in:
+					normalizeComponentPortType(
+						(Array.isArray((api as any)?.inputs) ? (api as any).inputs[0]?.portType : null) ?? null
+					) ?? null,
+				out: null
+			},
 			params: {
 				...params,
 				api: {
@@ -2393,7 +2402,7 @@ export const graphStore = (() => {
 					};
 					return logPush(s, 'warn', out.error!, nodeId);
 				}
-				if (outgoing.length > 0 && pout == null) {
+				if (outgoing.length > 0 && pout == null && updatedNode.data.kind !== 'component') {
 					out = {
 						ok: false,
 						error: 'Cannot set output port to null while node has outgoing edges.'

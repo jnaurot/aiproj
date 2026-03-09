@@ -151,6 +151,13 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		if isinstance(ports, dict):
 			for direction in ("in", "out"):
 				ports[direction] = _normalize_port_type(ports.get(direction))
+		if kind == "component":
+			# Component output routing/type is declared per API output handle.
+			# Keep ports.out non-authoritative in persisted metadata.
+			if not isinstance(ports, dict):
+				ports = {}
+				data["ports"] = ports
+			ports["out"] = None
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node

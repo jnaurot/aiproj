@@ -80,7 +80,7 @@ describe('graphStore component integration', () => {
 			const node = state.nodes.find((n) => n.id === nodeId);
 			expect(node).toBeTruthy();
 			expect(node?.data?.ports?.in).toBe('table');
-			expect(node?.data?.ports?.out).toBe('json');
+			expect(node?.data?.ports?.out).toBeNull();
 			expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_test');
 			expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_1');
 		} finally {
@@ -231,7 +231,7 @@ describe('graphStore component integration', () => {
 			expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_dst');
 			expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_dst');
 			expect(node?.data?.ports?.in).toBe('table');
-			expect(node?.data?.ports?.out).toBe('json');
+			expect(node?.data?.ports?.out).toBeNull();
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
