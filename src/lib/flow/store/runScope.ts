@@ -143,12 +143,14 @@ export function buildRunCreateRequest(
 	graphId: string,
 	runFrom: string | null,
 	runMode?: ActiveRunMode,
-	dirtyNodeIds?: string[]
+	dirtyNodeIds?: string[],
+	cacheMode?: 'default_on' | 'force_off' | 'force_on'
 ): {
 	graphId: string;
 	graph: { version: number; nodes: unknown[]; edges: unknown[]; __executionHints?: { dirtyNodeIds: string[] } };
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
+	cacheMode?: 'default_on' | 'force_off' | 'force_on';
 } {
 	const sanitizedDirty = Array.isArray(dirtyNodeIds)
 		? Array.from(new Set(dirtyNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
@@ -162,14 +164,22 @@ export function buildRunCreateRequest(
 			: graph;
 
 	if (runFrom === null || runMode === 'from_start' || !runMode) {
-		return { graphId, graph: payloadGraph };
+		return cacheMode ? { graphId, graph: payloadGraph, cacheMode } : { graphId, graph: payloadGraph };
 	}
-	return {
+	const out = {
 		graphId,
 		graph: payloadGraph,
 		runFrom,
 		runMode
+	} as {
+		graphId: string;
+		graph: { version: number; nodes: unknown[]; edges: unknown[]; __executionHints?: { dirtyNodeIds: string[] } };
+		runFrom?: string;
+		runMode?: 'from_selected_onward' | 'selected_only';
+		cacheMode?: 'default_on' | 'force_off' | 'force_on';
 	};
+	if (cacheMode) out.cacheMode = cacheMode;
+	return out;
 }
 
 export function mergeBindingsSticky<T extends NodeBindingLike>(

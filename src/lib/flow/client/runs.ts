@@ -102,6 +102,7 @@ export async function createRun(req: {
   graphId: string;
   runFrom?: string | null;
   runMode?: "from_selected_onward" | "selected_only";
+  cacheMode?: "default_on" | "force_off" | "force_on";
   graph: any;
 }) {
   const res = await fetch("/api/runs", {

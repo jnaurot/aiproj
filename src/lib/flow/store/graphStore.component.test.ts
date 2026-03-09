@@ -1204,4 +1204,31 @@ describe('graphStore component integration', () => {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
+
+	it('preserves store edges when canvas sync sends stale edge snapshot during node-only update', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('llm', { x: 20, y: 20 });
+		const llmId = graphStore.addNode('llm', { x: 260, y: 40 });
+		const added = graphStore.addEdge({
+			id: 'e_keep',
+			source: sourceId,
+			sourceHandle: 'out',
+			target: llmId,
+			targetHandle: 'in',
+			data: { exec: 'idle' as const }
+		} as any);
+		expect(added.ok).toBe(true);
+
+		const before = get(graphStore);
+		expect(before.edges.some((e) => e.id === 'e_keep')).toBe(true);
+
+		const movedNodes = before.nodes.map((n) =>
+			n.id === sourceId ? { ...n, position: { x: 44, y: 20 } } : n
+		);
+		// Simulate a stale canvas edge list lagging behind the store.
+		graphStore.syncFromCanvas(movedNodes as any, [] as any);
+
+		const after = get(graphStore);
+		expect(after.edges.some((e) => e.id === 'e_keep')).toBe(true);
+	});
 });

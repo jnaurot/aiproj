@@ -37,6 +37,7 @@ class RunRequest(BaseModel):
     graphId: str
     runFrom: Optional[str] = None
     runMode: Optional[str] = None
+    cacheMode: Optional[str] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
 
     @field_validator("graph")
@@ -61,6 +62,16 @@ class RunRequest(BaseModel):
         mode = str(v).strip().lower()
         if mode not in {"from_selected_onward", "selected_only"}:
             raise ValueError("runMode must be 'from_selected_onward' or 'selected_only'")
+        return mode
+
+    @field_validator("cacheMode")
+    @classmethod
+    def validate_cache_mode(cls, v):
+        if v is None:
+            return v
+        mode = str(v).strip().lower()
+        if mode not in {"default_on", "force_off", "force_on"}:
+            raise ValueError("cacheMode must be 'default_on', 'force_off', or 'force_on'")
         return mode
     
 class RunCreated(BaseModel):
@@ -185,6 +196,8 @@ async def set_cache_config(req: CacheConfigRequest, request: Request):
 async def create_run(req: RunRequest, request: Request):
     print("RUN REQUEST BODY (server received):")
     rt = request.app.state.runtime
+    if req.cacheMode and hasattr(rt, "set_global_cache_mode"):
+        rt.set_global_cache_mode(str(req.cacheMode))
     run_id = str(uuid4())
     rt.create_run(run_id)
     

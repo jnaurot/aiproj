@@ -1555,6 +1555,43 @@ function stripToDTO(
 	return dto;
 }
 
+function edgeStructuralSignature(edge: Edge<PipelineEdgeData>): string {
+	const contract = (edge?.data as any)?.contract ?? {};
+	const payload = (contract as any)?.payload ?? {};
+	return [
+		String(edge?.id ?? ''),
+		String(edge?.source ?? ''),
+		String((edge as any)?.sourceHandle ?? ''),
+		String(edge?.target ?? ''),
+		String((edge as any)?.targetHandle ?? ''),
+		String((edge?.data as any)?.exec ?? ''),
+		String((contract as any)?.out ?? ''),
+		String((contract as any)?.in ?? ''),
+		JSON.stringify((payload as any)?.source ?? null),
+		JSON.stringify((payload as any)?.target ?? null)
+	].join('|');
+}
+
+function shouldPreserveStoreEdgesOnCanvasSync(
+	storeEdges: Edge<PipelineEdgeData>[],
+	canvasEdges: Edge<PipelineEdgeData>[]
+): boolean {
+	if (canvasEdges.length >= storeEdges.length) return false;
+	if (storeEdges.length === 0) return false;
+	const storeById = new Map<string, Edge<PipelineEdgeData>>();
+	for (const edge of storeEdges) {
+		storeById.set(String(edge.id ?? ''), edge);
+	}
+	for (const edge of canvasEdges) {
+		const id = String(edge.id ?? '');
+		const existing = storeById.get(id);
+		if (!existing) return false;
+		// If the edge shape changed, this is not a stale node-drag sync.
+		if (edgeStructuralSignature(edge) !== edgeStructuralSignature(existing)) return false;
+	}
+	return true;
+}
+
 function normalizeComponentPortTypeOrDefault(value: unknown, fallback: PortType = 'json'): PortType {
 	const normalized = normalizeComponentPortType(value);
 	return normalized ?? fallback;
@@ -3055,12 +3092,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		// ----- sync entrypoints (because SvelteFlow uses bind:nodes/bind:edges) -----
 		syncFromCanvas(nodes: Node<PipelineNodeData>[], edges: Edge<PipelineEdgeData>[]) {
 			update((s) => {
+				const nextEdges = shouldPreserveStoreEdgesOnCanvasSync(s.edges, edges) ? s.edges : edges;
 				// avoid needless churn if same references
-				if (s.nodes === nodes && s.edges === edges) return s;
+				if (s.nodes === nodes && s.edges === nextEdges) return s;
 				const next = {
 					...s,
 					nodes,
-					edges,
+					edges: nextEdges,
 					nodeBindings: ensureNormalizedBindingsForNodes(nodes, s.nodeBindings ?? {})
 				};
 				persist(next);
@@ -3945,7 +3983,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
-		async runRemote(runFrom: string | null, runMode?: ActiveRunMode) {
+		async runRemote(
+			runFrom: string | null,
+			runMode?: ActiveRunMode,
+			cacheMode?: 'default_on' | 'force_off' | 'force_on'
+		) {
 			// prevent concurrent runs
 			const s0 = get({ subscribe } as any) as GraphState;
 			if (s0.runStatus === 'running') return;
@@ -3968,7 +4010,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				s1.graphId,
 				runFrom,
 				effectiveRunMode,
-				dirtyNodeIds
+				dirtyNodeIds,
+				cacheMode
 			);
 			const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 

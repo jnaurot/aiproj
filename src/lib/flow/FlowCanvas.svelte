@@ -67,6 +67,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let lastStoreNodes: Node<PipelineNodeData>[] | null = null;
 	let lastStoreEdges: Edge<PipelineEdgeData>[] | null = null;
 	let lastSelectedNodeId: string | null = null;
+	let lastStoreNodeSignature = '';
+	let lastStoreEdgeSignature = '';
+
+	function nodeSignature(list: Node<PipelineNodeData>[]): string {
+		return list
+			.map((n) => `${String(n.id)}:${Number(n.position?.x ?? 0)}:${Number(n.position?.y ?? 0)}:${n.selected ? 1 : 0}`)
+			.join('|');
+	}
+
+	function edgeSignature(list: Edge<PipelineEdgeData>[]): string {
+		return list
+			.map((e) =>
+				[
+					String(e.id ?? ''),
+					String(e.source ?? ''),
+					String(e.sourceHandle ?? ''),
+					String(e.target ?? ''),
+					String(e.targetHandle ?? ''),
+					String((e.data as any)?.exec ?? '')
+				].join(':')
+			)
+			.join('|');
+	}
 
 	//editing stuff
 	let isEditingTitle = false;
@@ -114,11 +137,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	$: {
 		const s = $graphStore;
+		const nextNodeSig = nodeSignature(s.nodes);
+		const nextEdgeSig = edgeSignature(s.edges);
 
 		// Only apply store -> local when the STORE references change,
 		// not when the CANVAS changes (like while dragging).
-		const storeNodesChanged = s.nodes !== lastStoreNodes;
-		const storeEdgesChanged = s.edges !== lastStoreEdges;
+		const storeNodesChanged = s.nodes !== lastStoreNodes || nextNodeSig !== lastStoreNodeSignature;
+		const storeEdgesChanged = s.edges !== lastStoreEdges || nextEdgeSig !== lastStoreEdgeSignature;
 		const storeSelectionChanged = s.selectedNodeId !== lastSelectedNodeId;
 
 		if (storeNodesChanged || storeEdgesChanged || storeSelectionChanged) {
@@ -127,12 +152,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			if (storeNodesChanged || storeSelectionChanged) {
 				nodes = applyCanvasSelection(s.nodes, s.selectedNodeId);
 				lastStoreNodes = s.nodes;
+				lastStoreNodeSignature = nextNodeSig;
 				lastSelectedNodeId = s.selectedNodeId;
 			}
 
 			if (storeEdgesChanged) {
 				edges = s.edges;
 				lastStoreEdges = s.edges;
+				lastStoreEdgeSignature = nextEdgeSig;
 			}
 
 			tick().then(() => (applyingFromStore = false));
@@ -908,11 +935,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function runFromStart() {
-		void graphStore.runRemote(null, 'from_start');
+		void graphStore.runRemote(null, 'from_start', globalCacheMode);
 	}
 
 	function runFromSelected() {
-		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward');
+		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward', globalCacheMode);
 	}
 
 	function onProjectMenuSelect(actionId: string) {
