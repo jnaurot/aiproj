@@ -54,6 +54,35 @@ Repro guidance:
 - Always use `--locked` installs in CI/container builds.
 - Keep lock generation pinned to Python `3.11.14`.
 
+## Docker CPU dev profile (TKT-075)
+
+This repo ships a CPU-only backend dev container profile for Win11 Docker Desktop.
+
+Artifacts:
+- `backend/Dockerfile` target: `cpu-dev`
+- `compose.yaml` profile: `backend-cpu-dev`
+
+Run backend with live reload:
+
+```powershell
+docker compose --profile backend-cpu-dev up --build backend
+```
+
+Run backend test subset inside container:
+
+```powershell
+docker compose --profile backend-cpu-dev run --rm backend `
+	uv run python -m pytest `
+	tests/integration/test_env_profile_preflight.py `
+	tests/e2e/test_env_profile_regression_gate.py
+```
+
+Startup smoke check:
+
+```powershell
+curl http://localhost:8000/capabilities
+```
+
 ## Default install
 
 From `backend/`:

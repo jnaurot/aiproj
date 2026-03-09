@@ -1,0 +1,15 @@
+.git
+.github
+.svelte-kit
+node_modules
+backend/venv
+backend/.pytest_cache
+backend/htmlcov
+backend/data/artifacts
+backend/data/cache
+backend/data/runs
+backend/data/tmp
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.DS_Store

@@ -1,0 +1,22 @@
+services:
+  backend:
+    profiles: ["backend-cpu-dev"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: cpu-dev
+    working_dir: /workspace/backend
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/workspace
+      - backend-data:/workspace/backend/data
+      - uv-cache:/root/.cache/uv
+
+volumes:
+  backend-data:
+  uv-cache:
