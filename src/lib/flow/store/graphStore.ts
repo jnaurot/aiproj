@@ -188,6 +188,7 @@ export type ComponentEditSession = {
 	revisionId: string;
 	entryNodeId: string | null;
 	snapshot: ComponentEditSessionSnapshot;
+	parentSession: ComponentEditSession | null;
 };
 
 const IDLE: NodeStatus = 'idle';
@@ -4599,6 +4600,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const before = get({ subscribe } as any) as GraphState;
 				const snapshot = captureComponentEditSnapshot(before);
+				const parentSession = before.componentEditSession
+					? structuredClone(before.componentEditSession)
+					: null;
 				const detail = await getComponentRevision(cid, rid);
 				const graph = (detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] };
 				const applied = applyGraphDocument(
@@ -4619,7 +4623,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							componentId: cid,
 							revisionId: rid,
 							entryNodeId: String(entryNodeId ?? '').trim() || null,
-							snapshot
+							snapshot,
+							parentSession
 						},
 						lastRunStatus: 'never_run' as const,
 						logs: [
@@ -4646,7 +4651,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const session = state.componentEditSession;
 			if (!session) return { ok: false as const, reason: 'no_component_edit_session' as const };
 			const snapshot = session.snapshot;
+			const parentSession = session.parentSession ? structuredClone(session.parentSession) : null;
 			update((s) => {
+				const nextEditingContext: EditorContext = parentSession ? 'component' : 'graph';
 				const next: GraphState = {
 					...s,
 					graphId: snapshot.graphId,
@@ -4676,13 +4683,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						structuredClone(snapshot.nodeBindings) as any
 					),
 					activeRunId: snapshot.activeRunId,
-					editingContext: 'graph',
-					componentEditSession: null
+					editingContext: nextEditingContext,
+					componentEditSession: parentSession
 				};
 				persist(next);
 				return withGraphMeta(next);
 			}, { source: 'graph_edit' });
-			return { ok: true as const };
+			return { ok: true as const, hasParentSession: Boolean(parentSession) };
 		},
 
 		updateComponentEditSessionRevision(revisionId: string) {
