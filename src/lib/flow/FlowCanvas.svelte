@@ -1226,6 +1226,18 @@ async function scrollToBottom() {
 		return n.data.ports[whichPort];
 	}
 
+	function isSchemaCompatibleConnection(outPort: PortType, inPort: PortType): boolean {
+		if (outPort === inPort) return true;
+		const allowed = new Set([
+			'text->table',
+			'json->table',
+			'table->json',
+			'text->json',
+			'json->text'
+		]);
+		return allowed.has(`${outPort}->${inPort}`);
+	}
+
 	function isValidConnection(conn: Connection) {
 		if (!conn.source || !conn.target) return false;
 		if (conn.source === conn.target) return false;
@@ -1257,8 +1269,7 @@ async function scrollToBottom() {
 		// if you can't resolve types, fail closed (or choose fail open)
 		if (!outPort || !inPort) return false;
 
-		// strict match for Phase 1
-		if (outPort !== inPort) {
+		if (!isSchemaCompatibleConnection(outPort, inPort)) {
 			console.log('out: ' + outPort + ', in: ' + inPort);
 			return false;
 		}
@@ -1289,7 +1300,9 @@ async function scrollToBottom() {
 		// Delegate adding to the store (validates + persists); store update will sync back to canvas
 		const r = graphStore.addEdge(e);
 		if (!r.ok) {
-			console.warn('Failed to add edge:', r.error);
+			const msg = String(r.error ?? 'Failed to add edge');
+			console.warn('Failed to add edge:', msg);
+			showToast(msg, 'warn');
 			return;
 		}
 	}

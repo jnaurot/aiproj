@@ -1991,7 +1991,14 @@ function buildSavePreflightDiagnostics(
 				diagnostics.push({
 					code: 'CONTRACT_EDGE_PORT_TYPE_MISMATCH',
 					path: `edges.${String(edge.id ?? '')}.data.contract`,
-					message: `Edge has incompatible port types (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
+					message: `Edge has incompatible schemas (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')})${edgeCheck.suggestion ? ` ${edgeCheck.suggestion}` : ''}.`,
+					severity: 'error'
+				});
+			} else if (edgeCheck.reason === 'schema_mismatch') {
+				diagnostics.push({
+					code: 'CONTRACT_EDGE_SCHEMA_MISMATCH',
+					path: `edges.${String(edge.id ?? '')}.data.contract`,
+					message: `Edge is missing required columns: ${(edgeCheck.missingColumns ?? []).join(', ') || '(unknown)'}.`,
 					severity: 'error'
 				});
 			} else {
@@ -2177,12 +2184,75 @@ function targetPayloadHint(node: Node<PipelineNodeData>) {
 	return { type: 'table', required_columns: cols };
 }
 
+function normalizeHintType(raw: unknown): string {
+	const value = String(raw ?? '').trim().toLowerCase();
+	if (value === 'string') return 'text';
+	return value;
+}
+
+function canSafelyCoerceSchemaType(providedType: string, requiredType: string): boolean {
+	if (!providedType || !requiredType) return false;
+	if (providedType === requiredType) return true;
+	const allowed = new Set([
+		'text->table',
+		'json->table',
+		'table->json',
+		'text->json',
+		'json->text'
+	]);
+	return allowed.has(`${providedType}->${requiredType}`);
+}
+
+function adapterSuggestionForTypes(providedType: string, requiredType: string): string | null {
+	const key = `${providedType}->${requiredType}`;
+	if (key === 'text->table') return "Insert Transform adapter: op='text_to_table'.";
+	if (key === 'json->table') return "Insert Transform adapter: op='json_to_table'.";
+	if (key === 'table->json') return "Insert Transform adapter: op='table_to_json'.";
+	return null;
+}
+
+type SchemaCompatibility =
+	| { ok: true }
+	| { ok: false; reason: 'type_mismatch' | 'missing_required_columns'; missingColumns?: string[]; suggestion?: string | null };
+
+function isSchemaCompatible(
+	providedSchema: Record<string, any> | undefined,
+	requiredSchema: Record<string, any> | undefined
+): SchemaCompatibility {
+	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
+	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
+	const sameOrCoercible = canSafelyCoerceSchemaType(providedType, requiredType);
+	if (!sameOrCoercible) {
+		return {
+			ok: false,
+			reason: 'type_mismatch',
+			suggestion: adapterSuggestionForTypes(providedType, requiredType)
+		};
+	}
+	const providedColumns = Array.isArray(providedSchema?.columns)
+		? providedSchema.columns.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0)
+		: [];
+	const requiredColumns = Array.isArray(requiredSchema?.required_columns)
+		? requiredSchema.required_columns
+				.map((c: unknown) => String(c ?? '').trim())
+				.filter((c: string) => c.length > 0)
+		: [];
+	if (requiredColumns.length > 0 && providedColumns.length > 0) {
+		const missing = requiredColumns.filter((c) => !providedColumns.includes(c));
+		if (missing.length > 0) {
+			return { ok: false, reason: 'missing_required_columns', missingColumns: missing };
+		}
+	}
+	return { ok: true };
+}
+
 type EdgeInvalidReason =
 	| 'missing_port_type' // couldn't resolve out/in
-	| 'type_mismatch'; // outType !== in
+	| 'type_mismatch'
+	| 'schema_mismatch';
 type EdgeCheck =
 	| { ok: true; out?: PortType; in?: PortType }
-	| { ok: false; reason: EdgeInvalidReason };
+	| { ok: false; reason: EdgeInvalidReason; missingColumns?: string[]; suggestion?: string | null };
 
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const outPort = sourcePortTypeForEdge(nodes, e);
@@ -2192,8 +2262,26 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 		return { ok: false, reason: 'missing_port_type' };
 	}
 
-	if (outPort !== inPort) {
-		return { ok: false, reason: 'type_mismatch' };
+	const sourceNode = nodes.find((n) => n.id === e.source);
+	const targetNode = nodes.find((n) => n.id === e.target);
+	const sourcePayload = sourceNode
+		? sourcePayloadHint(sourceNode as any, 'out', String((e as any).sourceHandle ?? 'out'))
+		: undefined;
+	const targetPayload = targetNode ? targetPayloadHint(targetNode as any) : undefined;
+	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any);
+	if (!schemaCheck.ok) {
+		if (schemaCheck.reason === 'missing_required_columns') {
+			return {
+				ok: false,
+				reason: 'schema_mismatch',
+				missingColumns: schemaCheck.missingColumns
+			};
+		}
+		return {
+			ok: false,
+			reason: 'type_mismatch',
+			suggestion: schemaCheck.suggestion
+		};
 	}
 
 	return { ok: true, out: outPort, in: inPort };
@@ -2242,7 +2330,7 @@ function pruneAndRecontractEdgesStrict(
 		const chk = isEdgeStillValid(nodes, e);
 
 		if (chk.ok === false) {
-			if (chk.reason === 'type_mismatch') {
+			if (chk.reason === 'type_mismatch' || chk.reason === 'schema_mismatch') {
 				// allowed prune
 				prunedIds.push(e.id);
 				continue;
@@ -3511,7 +3599,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						ok: false,
 						error:
 							chk.reason === 'type_mismatch'
-								? 'Incompatible port types'
+								? `Incompatible schemas${chk.suggestion ? `. ${chk.suggestion}` : ''}`
+								: chk.reason === 'schema_mismatch'
+									? `Missing required columns: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
 								: 'Cannot resolve port types for this connection'
 					};
 					return s;
