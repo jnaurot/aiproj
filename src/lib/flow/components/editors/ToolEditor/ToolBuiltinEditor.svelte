@@ -5,6 +5,10 @@
 		getBuiltinProfileById,
 		type ToolBuiltinProfileId
 	} from '$lib/flow/schema/toolBuiltinProfiles';
+	import {
+		getBuiltinOperationById,
+		getBuiltinOperationsForProfile
+	} from '$lib/flow/schema/toolBuiltinCatalog';
 	import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
@@ -22,12 +26,15 @@
 	let customPackagesErrors: string[] = [];
 	let advancedOpen = false;
 	let lastCustomPackagesHydrationSignature = '';
+	let operationArgsByToolId: Record<string, Record<string, unknown>> = {};
 
 	$: builtin = params?.builtin ?? defaultBuiltin;
 	$: profileId = (builtin.profileId ?? 'core') as ToolBuiltinProfileId;
 	$: selectedProfile = getBuiltinProfileById(profileId);
 	$: effectivePackages = profileId === 'custom' ? (builtin.customPackages ?? []) : selectedProfile.packages;
-	$: effectivePackagesText = effectivePackages.join('\n');
+	$: availableOperations = getBuiltinOperationsForProfile(profileId);
+	$: selectedOperation = getBuiltinOperationById(builtin.toolId);
+	$: hasUnknownToolId = Boolean((builtin.toolId ?? '').trim()) && !selectedOperation;
 	$: argsText = stringifyJson(builtin.args ?? {}, '{}');
 	$: customPackagesHydrationSignature = JSON.stringify(builtin.customPackages ?? []);
 	$: if (customPackagesHydrationSignature !== lastCustomPackagesHydrationSignature) {
@@ -36,10 +43,29 @@
 		customPackagesErrors = [];
 	}
 
+	function rememberCurrentArgsForToolId(toolId: string, args: Record<string, unknown> | undefined): void {
+		const key = (toolId ?? '').trim();
+		if (!key) return;
+		operationArgsByToolId = {
+			...operationArgsByToolId,
+			[key]: { ...(args ?? {}) }
+		};
+	}
+
 	function commitArgs(text: string): void {
 		const parsed = tryParseJson(text);
 		if (parsed === undefined) return;
+		rememberCurrentArgsForToolId(builtin.toolId ?? '', parsed as Record<string, unknown>);
 		onCommit({ builtin: { ...builtin, args: parsed as Record<string, unknown> } });
+	}
+
+	function cloneDefaultArgs(value: Record<string, unknown>): Record<string, unknown> {
+		return JSON.parse(JSON.stringify(value ?? {})) as Record<string, unknown>;
+	}
+
+	function isEmptyArgs(argsValue: unknown): boolean {
+		if (!argsValue || typeof argsValue !== 'object' || Array.isArray(argsValue)) return true;
+		return Object.keys(argsValue as Record<string, unknown>).length === 0;
 	}
 
 	function handleProfileChange(event: Event): void {
@@ -52,6 +78,40 @@
 			...builtin,
 			profileId: nextProfileId,
 			customPackages: nextProfileId === 'custom' ? builtin.customPackages ?? [] : []
+		};
+		onDraft({ builtin: nextBuiltin });
+		onCommit({ builtin: nextBuiltin });
+	}
+
+	function applyToolId(nextToolId: string): void {
+		const prevToolId = (builtin.toolId ?? '').trim();
+		if (prevToolId) {
+			rememberCurrentArgsForToolId(prevToolId, builtin.args ?? {});
+		}
+		const operation = getBuiltinOperationById(nextToolId);
+		const cachedArgs = nextToolId ? operationArgsByToolId[nextToolId] : undefined;
+		const shouldSeedArgs = !cachedArgs && operation && isEmptyArgs(builtin.args);
+		const nextBuiltin: BuiltinParams['builtin'] = {
+			...builtin,
+			toolId: nextToolId,
+			args: cachedArgs ?? (shouldSeedArgs ? cloneDefaultArgs(operation.defaultArgs) : (builtin.args ?? {}))
+		};
+		onDraft({ builtin: nextBuiltin });
+		onCommit({ builtin: nextBuiltin });
+	}
+
+	function handleToolChange(event: Event): void {
+		const nextToolId = (event.currentTarget as HTMLSelectElement).value;
+		applyToolId(nextToolId);
+	}
+
+	function seedExampleArgs(): void {
+		const operation = getBuiltinOperationById(builtin.toolId);
+		if (!operation) return;
+		rememberCurrentArgsForToolId(builtin.toolId ?? '', operation.defaultArgs);
+		const nextBuiltin: BuiltinParams['builtin'] = {
+			...builtin,
+			args: cloneDefaultArgs(operation.defaultArgs)
 		};
 		onDraft({ builtin: nextBuiltin });
 		onCommit({ builtin: nextBuiltin });
@@ -93,10 +153,14 @@
 		<div class="hint">{selectedProfile.description}</div>
 	</Field>
 
-	<Field label="included libs">
-		<Input multiline={true} rows={6} value={effectivePackagesText} readonly={true} />
+	<div class="includedLibsBlock" aria-label="included libs">
+		<div class="packagePills" aria-label="included libraries">
+			{#each effectivePackages as packageName}
+				<span class="packagePill">{packageName}</span>
+			{/each}
+		</div>
 		<div class="hint">{effectivePackages.length} package(s)</div>
-	</Field>
+	</div>
 
 	{#if profileId === 'custom'}
 		<details class="advancedBlock" bind:open={advancedOpen}>
@@ -128,13 +192,27 @@
 		</details>
 	{/if}
 
-	<Field label="toolId">
-		<Input
-			value={builtin.toolId ?? ''}
-			onInput={(event) => onDraft({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
-		/>
-	</Field>
+	<div class="operationBlock">
+		<select class="operationSelect" value={builtin.toolId ?? ''} on:change={handleToolChange}>
+			<option value="">Select operation...</option>
+			{#each availableOperations as operation}
+				<option value={operation.id}>{operation.label} ({operation.id})</option>
+			{/each}
+		</select>
+		{#if selectedOperation}
+			<div class="hint">{selectedOperation.description}</div>
+			<div class="opActions">
+				<button type="button" on:click={seedExampleArgs}>Use Example Args</button>
+			</div>
+		{:else if hasUnknownToolId}
+			<div class="hint">Custom operation id: {builtin.toolId}</div>
+			<Input
+				value={builtin.toolId ?? ''}
+				onInput={(event) => onDraft({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
+				onBlur={(event) => onCommit({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
+			/>
+		{/if}
+	</div>
 
 	<Field label="args">
 		<Input multiline={true} rows={6} value={argsText} onBlur={(event) => commitArgs((event.currentTarget as HTMLTextAreaElement).value)} />
@@ -160,6 +238,35 @@
 		opacity: 0.8;
 	}
 
+	.packagePills {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.packagePill {
+		display: inline-flex;
+		align-items: center;
+		border-radius: 999px;
+		border: 1px solid rgba(255, 255, 255, 0.16);
+		background: rgba(255, 255, 255, 0.06);
+		padding: 4px 10px;
+		font-size: 12px;
+		line-height: 1.2;
+	}
+
+	.operationBlock {
+		margin-bottom: 10px;
+	}
+
+	.operationSelect {
+		width: 100%;
+	}
+
+	.includedLibsBlock {
+		margin-bottom: 10px;
+	}
+
 	.quickProfiles {
 		display: flex;
 		flex-wrap: wrap;
@@ -181,6 +288,20 @@
 	.quickProfiles button.active {
 		background: rgba(59, 130, 246, 0.2);
 		border-color: rgba(59, 130, 246, 0.55);
+	}
+
+	.opActions {
+		margin-top: 8px;
+	}
+
+	.opActions button {
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		background: rgba(255, 255, 255, 0.04);
+		color: inherit;
+		border-radius: 8px;
+		padding: 6px 8px;
+		font-size: 12px;
+		cursor: pointer;
 	}
 
 	.fieldError {

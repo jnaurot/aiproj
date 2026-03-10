@@ -98,3 +98,146 @@ async def test_exec_tool_builtin_invalid_profile_fails():
 	result = await exec_tool("run_6", node, _ctx())
 	assert result.status == "failed"
 	assert "profileid" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_core_array_summary_stats():
+	node = {
+		"id": "n_builtin_core_array",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "core.array.summary_stats",
+					"profileId": "core",
+					"args": {"values": [1, 2, 3, 4]},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_core_arr", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	payload = result.data.get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("count") == 4
+	assert payload.get("min") == 1.0
+	assert payload.get("max") == 4.0
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_core_datetime_parse():
+	node = {
+		"id": "n_builtin_core_dt",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "core.datetime.parse",
+					"profileId": "core",
+					"args": {"value": "2026-03-09T18:00:00-05:00"},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_core_dt", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	payload = result.data.get("payload")
+	assert isinstance(payload, dict)
+	assert str(payload.get("iso", "")).startswith("2026-03-09T18:00:00")
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_core_schema_validate():
+	node = {
+		"id": "n_builtin_core_schema",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "core.json.validate_schema",
+					"profileId": "core",
+					"args": {
+						"payload": {"name": "alice", "age": 42},
+						"fields": {
+							"name": {"type": "string", "required": True},
+							"age": {"type": "integer", "required": True},
+						},
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_core_schema", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	payload = result.data.get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("valid") is True
+	assert isinstance(payload.get("value"), dict)
+	assert payload.get("value", {}).get("age") == 42
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_core_http_requires_net_permission():
+	node = {
+		"id": "n_builtin_core_http_perm",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"permissions": {"net": False},
+				"builtin": {
+					"toolId": "core.http.request_json",
+					"profileId": "core",
+					"args": {"url": "https://example.com"},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_core_http_perm", node, _ctx())
+	assert result.status == "failed"
+	assert "permissions.net" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_core_http_json_success(monkeypatch):
+	class _Resp:
+		status_code = 200
+		ok = True
+		url = "https://example.com"
+		reason = "OK"
+		headers = {"content-type": "application/json"}
+
+		@staticmethod
+		def json():
+			return {"ok": True, "n": 1}
+
+		text = '{"ok": true, "n": 1}'
+
+	def _fake_request(*args, **kwargs):
+		return _Resp()
+
+	monkeypatch.setattr("requests.request", _fake_request)
+
+	node = {
+		"id": "n_builtin_core_http_ok",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"permissions": {"net": True},
+				"builtin": {
+					"toolId": "core.http.request_json",
+					"profileId": "core",
+					"args": {"url": "https://example.com", "method": "GET"},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_core_http_ok", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	payload = result.data.get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("status_code") == 200
+	assert payload.get("payload", {}).get("ok") is True

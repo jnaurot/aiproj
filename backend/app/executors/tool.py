@@ -266,6 +266,234 @@ def _exception_text(exc: BaseException) -> str:
     return exc.__class__.__name__
 
 
+def _builtin_field_type_from_name(type_name: str) -> Any:
+    import typing
+
+    normalized = str(type_name or "").strip().lower()
+    optional = False
+    if normalized.endswith("?"):
+        optional = True
+        normalized = normalized[:-1].strip()
+
+    base_map: Dict[str, Any] = {
+        "str": str,
+        "string": str,
+        "int": int,
+        "integer": int,
+        "float": float,
+        "number": float,
+        "bool": bool,
+        "boolean": bool,
+        "dict": dict,
+        "object": dict,
+        "list": list,
+        "array": list,
+        "any": Any,
+    }
+
+    if normalized.startswith("list[") and normalized.endswith("]"):
+        inner_name = normalized[5:-1].strip()
+        inner = _builtin_field_type_from_name(inner_name)
+        annotation = list[inner]
+    else:
+        annotation = base_map.get(normalized)
+        if annotation is None:
+            raise ValueError(f"Unsupported schema field type: {type_name}")
+
+    if optional:
+        annotation = typing.Optional[annotation]
+    return annotation
+
+
+def _builtin_dynamic_model_from_args(schema_args: Dict[str, Any]) -> Any:
+    from pydantic import create_model
+
+    fields_raw = schema_args.get("fields")
+    if not isinstance(fields_raw, dict) or not fields_raw:
+        raise ValueError("core.json.validate_schema requires args.fields object")
+
+    field_defs: Dict[str, tuple[Any, Any]] = {}
+    for raw_name, raw_cfg in fields_raw.items():
+        field_name = str(raw_name or "").strip()
+        if not field_name:
+            continue
+        if isinstance(raw_cfg, str):
+            annotation = _builtin_field_type_from_name(raw_cfg)
+            field_defs[field_name] = (annotation, ...)
+            continue
+        if not isinstance(raw_cfg, dict):
+            raise ValueError(f"Invalid schema definition for field '{field_name}'")
+        annotation = _builtin_field_type_from_name(str(raw_cfg.get("type") or "any"))
+        required = bool(raw_cfg.get("required", True))
+        if required:
+            default_value = ...
+        elif "default" in raw_cfg:
+            default_value = raw_cfg.get("default")
+        else:
+            default_value = None
+        field_defs[field_name] = (annotation, default_value)
+
+    if not field_defs:
+        raise ValueError("core.json.validate_schema requires at least one field")
+    return create_model("BuiltinDynamicSchemaModel", **field_defs)
+
+
+def _coerce_numeric_array(values: Any) -> list[float]:
+    if isinstance(values, (int, float)):
+        return [float(values)]
+    if not isinstance(values, list):
+        raise ValueError("Expected args.values to be an array of numbers")
+    out: list[float] = []
+    for idx, v in enumerate(values):
+        try:
+            out.append(float(v))
+        except Exception as exc:
+            raise ValueError(f"values[{idx}] is not numeric") from exc
+    return out
+
+
+async def _exec_builtin_core_tool(
+    tool_id: str,
+    args: Dict[str, Any],
+    input_value: Any,
+    input_ctx: Dict[str, Any],
+    permissions: Dict[str, bool],
+) -> Dict[str, Any]:
+    if tool_id in {"core.array.summary_stats", "core.array.normalize"}:
+        import numpy as np
+
+        raw_values = args.get("values", input_value)
+        if isinstance(raw_values, dict) and isinstance(raw_values.get("values"), list):
+            raw_values = raw_values.get("values")
+        values = _coerce_numeric_array(raw_values)
+        arr = np.asarray(values, dtype=float).reshape(-1)
+        if arr.size == 0:
+            raise ValueError("values cannot be empty")
+
+        if tool_id == "core.array.summary_stats":
+            return {
+                "count": int(arr.size),
+                "min": float(np.min(arr)),
+                "max": float(np.max(arr)),
+                "mean": float(np.mean(arr)),
+                "std": float(np.std(arr)),
+                "p50": float(np.percentile(arr, 50)),
+                "p95": float(np.percentile(arr, 95)),
+            }
+
+        method = str(args.get("method") or "zscore").strip().lower()
+        if method == "minmax":
+            min_v = float(np.min(arr))
+            max_v = float(np.max(arr))
+            denom = max_v - min_v
+            normalized = np.zeros_like(arr) if denom == 0 else (arr - min_v) / denom
+            return {
+                "method": "minmax",
+                "min": min_v,
+                "max": max_v,
+                "values": [float(x) for x in normalized.tolist()],
+            }
+        if method == "zscore":
+            mean_v = float(np.mean(arr))
+            std_v = float(np.std(arr))
+            normalized = np.zeros_like(arr) if std_v == 0 else (arr - mean_v) / std_v
+            return {
+                "method": "zscore",
+                "mean": mean_v,
+                "std": std_v,
+                "values": [float(x) for x in normalized.tolist()],
+            }
+        raise ValueError("core.array.normalize supports method: zscore|minmax")
+
+    if tool_id == "core.json.validate_schema":
+        payload = args.get("payload", input_value)
+        if payload is None and isinstance(input_ctx, dict):
+            payload = input_ctx.get("input_json")
+        model_cls = _builtin_dynamic_model_from_args(args)
+        try:
+            model = model_cls.model_validate(payload)
+            return {"valid": True, "errors": [], "value": model.model_dump()}
+        except Exception as exc:
+            return {"valid": False, "errors": [str(exc)], "value": None}
+
+    if tool_id in {"core.datetime.parse", "core.datetime.normalize_tz"}:
+        from dateutil import parser, tz
+
+        value = args.get("value", input_value)
+        if value is None:
+            raise ValueError("datetime value is required")
+        dt = parser.parse(str(value))
+        assume_tz = str(args.get("assume_tz") or "").strip()
+        if dt.tzinfo is None and assume_tz:
+            fallback_tz = tz.gettz(assume_tz)
+            if fallback_tz is None:
+                raise ValueError(f"Unknown timezone: {assume_tz}")
+            dt = dt.replace(tzinfo=fallback_tz)
+        if tool_id == "core.datetime.normalize_tz":
+            target_tz_name = str(args.get("target_tz") or "UTC").strip()
+            target_tz = tz.gettz(target_tz_name)
+            if target_tz is None:
+                raise ValueError(f"Unknown timezone: {target_tz_name}")
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz.UTC)
+            dt = dt.astimezone(target_tz)
+        return {
+            "iso": dt.isoformat(),
+            "date": dt.date().isoformat(),
+            "time": dt.time().isoformat(),
+            "tz": str(dt.tzinfo) if dt.tzinfo is not None else None,
+            "unix_seconds": int(dt.timestamp()) if dt.tzinfo is not None else None,
+        }
+
+    if tool_id in {"core.http.request_json", "core.http.request_text"}:
+        if not permissions.get("net", False):
+            raise ValueError(f"{tool_id} requires permissions.net=true")
+
+        import requests
+
+        url = str(args.get("url") or "").strip()
+        if not url:
+            raise ValueError(f"{tool_id} requires args.url")
+        method = str(args.get("method") or "GET").strip().upper()
+        headers = args.get("headers") if isinstance(args.get("headers"), dict) else {}
+        params = args.get("params") if isinstance(args.get("params"), dict) else None
+        json_body = args.get("json") if "json" in args else None
+        data_body = args.get("data") if "data" in args else None
+        timeout_ms = int(args.get("timeout_ms") or 15000)
+        timeout_s = max(0.001, float(timeout_ms) / 1000.0)
+
+        def _request() -> Any:
+            return requests.request(
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json_body,
+                data=data_body,
+                timeout=timeout_s,
+            )
+
+        response = await asyncio.to_thread(_request)
+        base = {
+            "status_code": int(response.status_code),
+            "ok": bool(getattr(response, "ok", False)),
+            "url": str(getattr(response, "url", url)),
+            "reason": str(getattr(response, "reason", "")),
+            "headers": dict(getattr(response, "headers", {}) or {}),
+        }
+        if tool_id == "core.http.request_json":
+            try:
+                payload = response.json()
+            except Exception as exc:
+                raise ValueError("Response is not valid JSON") from exc
+            base["payload"] = payload
+        else:
+            base["payload"] = str(response.text or "")
+        return base
+
+    raise ValueError(f"Unsupported core builtin toolId: {tool_id}")
+
+
 async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
@@ -1075,6 +1303,7 @@ async def exec_tool(
             tool_id = str(bi_cfg.get("toolId") or "").strip()
             args = bi_cfg.get("args") if isinstance(bi_cfg.get("args"), dict) else {}
             input_value = input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text")
+            perms = _permissions(params)
 
             if tool_id == "noop":
                 result = {"ok": True}
@@ -1083,6 +1312,8 @@ async def exec_tool(
             elif tool_id == "validate_json":
                 payload = args.get("payload", input_value)
                 result = {"valid": isinstance(payload, (dict, list))}
+            elif tool_id.startswith("core."):
+                result = await _exec_builtin_core_tool(tool_id, args, input_value, input_ctx, perms)
             else:
                 return NodeOutput(
                     status="failed",
