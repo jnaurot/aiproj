@@ -649,6 +649,27 @@ def _ml_label_vector(rows: list[dict[str, Any]], label_col: str, cast_float: boo
     return labels
 
 
+def _ml_prediction_vector(args: Dict[str, Any], rows: list[dict[str, Any]], pred_col: str, cast_float: bool = False) -> list[Any]:
+    preds_arg = args.get("preds")
+    if isinstance(preds_arg, list) and preds_arg:
+        values = list(preds_arg)
+    else:
+        values = []
+        for r_idx, row in enumerate(rows):
+            if pred_col not in row:
+                raise ValueError(f"Missing prediction '{pred_col}' in row {r_idx}")
+            values.append(row[pred_col])
+    if cast_float:
+        out: list[float] = []
+        for idx, value in enumerate(values):
+            try:
+                out.append(float(value))
+            except Exception as exc:
+                raise ValueError(f"Prediction at index {idx} is non-numeric") from exc
+        return out
+    return values
+
+
 async def _exec_builtin_ml_tool(
     tool_id: str,
     args: Dict[str, Any],
@@ -737,6 +758,184 @@ async def _exec_builtin_ml_tool(
                 "rmse": float(mse**0.5),
             },
         }
+
+    if tool_id == "ml.sklearn.train_classifier":
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.train_classifier requires args.label_col")
+        feature_cols = _ml_feature_columns(args, all_columns, label_col)
+        x = _ml_feature_matrix(rows, feature_cols)
+        y = _ml_label_vector(rows, label_col, cast_float=False)
+        model = LogisticRegression(max_iter=int(args.get("max_iter") or 200))
+        model.fit(x, y)
+        pred = model.predict(x)
+        average = "weighted"
+        coef = getattr(model, "coef_", None)
+        intercept = getattr(model, "intercept_", None)
+        return {
+            "task": "classification",
+            "model": "LogisticRegression",
+            "row_count": len(rows),
+            "feature_cols": feature_cols,
+            "label_col": label_col,
+            "classes": [str(c) for c in list(model.classes_)],
+            "metrics_train": {
+                "accuracy": float(accuracy_score(y, pred)),
+                "precision": float(precision_score(y, pred, average=average, zero_division=0)),
+                "recall": float(recall_score(y, pred, average=average, zero_division=0)),
+                "f1": float(f1_score(y, pred, average=average, zero_division=0)),
+            },
+            "model_spec": {
+                "algorithm": "sklearn.linear_model.LogisticRegression",
+                "params": {"max_iter": int(args.get("max_iter") or 200)},
+                "feature_cols": feature_cols,
+                "label_col": label_col,
+                "classes": [str(c) for c in list(model.classes_)],
+                "coef": coef.tolist() if hasattr(coef, "tolist") else None,
+                "intercept": intercept.tolist() if hasattr(intercept, "tolist") else None,
+            },
+        }
+
+    if tool_id == "ml.sklearn.train_regressor":
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.train_regressor requires args.label_col")
+        feature_cols = _ml_feature_columns(args, all_columns, label_col)
+        x = _ml_feature_matrix(rows, feature_cols)
+        y = _ml_label_vector(rows, label_col, cast_float=True)
+        model = LinearRegression()
+        model.fit(x, y)
+        pred = model.predict(x)
+        mse = float(mean_squared_error(y, pred))
+        coef = getattr(model, "coef_", None)
+        intercept = getattr(model, "intercept_", None)
+        return {
+            "task": "regression",
+            "model": "LinearRegression",
+            "row_count": len(rows),
+            "feature_cols": feature_cols,
+            "label_col": label_col,
+            "metrics_train": {
+                "r2": float(r2_score(y, pred)),
+                "mae": float(mean_absolute_error(y, pred)),
+                "mse": mse,
+                "rmse": float(mse**0.5),
+            },
+            "model_spec": {
+                "algorithm": "sklearn.linear_model.LinearRegression",
+                "params": {},
+                "feature_cols": feature_cols,
+                "label_col": label_col,
+                "coef": coef.tolist() if hasattr(coef, "tolist") else None,
+                "intercept": float(intercept) if intercept is not None else None,
+            },
+        }
+
+    if tool_id == "ml.sklearn.cross_validate":
+        from sklearn.linear_model import LinearRegression, LogisticRegression
+        from sklearn.model_selection import cross_validate
+
+        task = str(args.get("task") or "classification").strip().lower()
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.cross_validate requires args.label_col")
+        feature_cols = _ml_feature_columns(args, all_columns, label_col)
+        x = _ml_feature_matrix(rows, feature_cols)
+        y = _ml_label_vector(rows, label_col, cast_float=(task == "regression"))
+        cv = max(2, int(args.get("cv") or 5))
+        if task == "regression":
+            estimator = LinearRegression()
+            scoring = ["r2", "neg_mean_absolute_error", "neg_mean_squared_error"]
+        elif task == "classification":
+            estimator = LogisticRegression(max_iter=int(args.get("max_iter") or 200))
+            scoring = ["accuracy", "precision_weighted", "recall_weighted", "f1_weighted"]
+        else:
+            raise ValueError("ml.sklearn.cross_validate args.task must be 'classification' or 'regression'")
+        results = cross_validate(estimator, x, y, cv=cv, scoring=scoring, return_train_score=False)
+        metrics: Dict[str, Any] = {}
+        for key, values in results.items():
+            if not str(key).startswith("test_"):
+                continue
+            metric_name = str(key).replace("test_", "")
+            vals = [float(v) for v in list(values)]
+            if metric_name == "neg_mean_absolute_error":
+                vals = [abs(v) for v in vals]
+                metric_name = "mae"
+            elif metric_name == "neg_mean_squared_error":
+                vals = [abs(v) for v in vals]
+                metric_name = "mse"
+            metrics[metric_name] = {
+                "fold_values": vals,
+                "mean": float(sum(vals) / len(vals)) if vals else 0.0,
+            }
+        return {
+            "task": task,
+            "cv": cv,
+            "row_count": len(rows),
+            "feature_cols": feature_cols,
+            "label_col": label_col,
+            "metrics_cv": metrics,
+        }
+
+    if tool_id == "ml.sklearn.evaluate":
+        from sklearn.metrics import (
+            accuracy_score,
+            f1_score,
+            mean_absolute_error,
+            mean_squared_error,
+            precision_score,
+            r2_score,
+            recall_score,
+        )
+
+        task = str(args.get("task") or "classification").strip().lower()
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.evaluate requires args.label_col")
+        pred_col = str(args.get("pred_col") or "prediction").strip()
+        if task == "regression":
+            y_true = _ml_label_vector(rows, label_col, cast_float=True)
+            y_pred = _ml_prediction_vector(args, rows, pred_col, cast_float=True)
+            if len(y_true) != len(y_pred):
+                raise ValueError("ml.sklearn.evaluate regression requires y_true/y_pred with matching lengths")
+            mse = float(mean_squared_error(y_true, y_pred))
+            return {
+                "task": "regression",
+                "row_count": len(y_true),
+                "label_col": label_col,
+                "pred_col": pred_col,
+                "metrics": {
+                    "r2": float(r2_score(y_true, y_pred)),
+                    "mae": float(mean_absolute_error(y_true, y_pred)),
+                    "mse": mse,
+                    "rmse": float(mse**0.5),
+                },
+            }
+        if task == "classification":
+            y_true = _ml_label_vector(rows, label_col, cast_float=False)
+            y_pred = _ml_prediction_vector(args, rows, pred_col, cast_float=False)
+            if len(y_true) != len(y_pred):
+                raise ValueError("ml.sklearn.evaluate classification requires y_true/y_pred with matching lengths")
+            average = "weighted"
+            return {
+                "task": "classification",
+                "row_count": len(y_true),
+                "label_col": label_col,
+                "pred_col": pred_col,
+                "metrics": {
+                    "accuracy": float(accuracy_score(y_true, y_pred)),
+                    "precision": float(precision_score(y_true, y_pred, average=average, zero_division=0)),
+                    "recall": float(recall_score(y_true, y_pred, average=average, zero_division=0)),
+                    "f1": float(f1_score(y_true, y_pred, average=average, zero_division=0)),
+                },
+            }
+        raise ValueError("ml.sklearn.evaluate args.task must be 'classification' or 'regression'")
 
     if tool_id == "ml.scipy.describe":
         from scipy import stats

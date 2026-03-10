@@ -148,6 +148,76 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 		}
 	},
 	{
+		id: 'ml.sklearn.train_classifier',
+		label: 'Train Classifier',
+		description: 'Train LogisticRegression on full dataset and emit metrics + model spec.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 0.1, x2: 1.1, label: 'A' },
+				{ x1: 0.2, x2: 1.0, label: 'A' },
+				{ x1: 1.2, x2: 0.1, label: 'B' },
+				{ x1: 1.1, x2: 0.2, label: 'B' }
+			],
+			label_col: 'label',
+			feature_cols: ['x1', 'x2'],
+			max_iter: 200
+		}
+	},
+	{
+		id: 'ml.sklearn.train_regressor',
+		label: 'Train Regressor',
+		description: 'Train LinearRegression on full dataset and emit metrics + model spec.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 1, x2: 2, y: 5 },
+				{ x1: 2, x2: 1, y: 5 },
+				{ x1: 3, x2: 4, y: 11 },
+				{ x1: 4, x2: 3, y: 11 }
+			],
+			label_col: 'y',
+			feature_cols: ['x1', 'x2']
+		}
+	},
+	{
+		id: 'ml.sklearn.cross_validate',
+		label: 'Cross Validate',
+		description: 'Run sklearn cross-validation for classification or regression tasks.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 0.1, x2: 1.1, label: 'A' },
+				{ x1: 0.2, x2: 1.0, label: 'A' },
+				{ x1: 1.2, x2: 0.1, label: 'B' },
+				{ x1: 1.1, x2: 0.2, label: 'B' },
+				{ x1: 0.15, x2: 1.05, label: 'A' },
+				{ x1: 1.15, x2: 0.15, label: 'B' }
+			],
+			task: 'classification',
+			label_col: 'label',
+			feature_cols: ['x1', 'x2'],
+			cv: 3
+		}
+	},
+	{
+		id: 'ml.sklearn.evaluate',
+		label: 'Evaluate Predictions',
+		description: 'Compute evaluation metrics from ground-truth and prediction columns.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ label: 'A', prediction: 'A' },
+				{ label: 'A', prediction: 'B' },
+				{ label: 'B', prediction: 'B' },
+				{ label: 'B', prediction: 'B' }
+			],
+			task: 'classification',
+			label_col: 'label',
+			pred_col: 'prediction'
+		}
+	},
+	{
 		id: 'ml.sklearn.classification_report',
 		label: 'Sklearn Classification Report',
 		description: 'Train LogisticRegression and return accuracy/precision/recall/f1.',

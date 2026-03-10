@@ -428,6 +428,154 @@ async def test_exec_tool_builtin_ml_sklearn_regression_report():
 
 
 @pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_train_classifier():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_train_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.train_classifier",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 0.1, "x2": 1.1, "label": "A"},
+							{"x1": 0.2, "x2": 1.0, "label": "A"},
+							{"x1": 1.2, "x2": 0.1, "label": "B"},
+							{"x1": 1.1, "x2": 0.2, "label": "B"},
+						],
+						"label_col": "label",
+						"feature_cols": ["x1", "x2"],
+						"max_iter": 200,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_train_cls", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("task") == "classification"
+	assert payload.get("model") == "LogisticRegression"
+	assert isinstance(payload.get("metrics_train"), dict)
+	assert "accuracy" in payload.get("metrics_train", {})
+	assert isinstance(payload.get("model_spec"), dict)
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_train_regressor():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_train_reg",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.train_regressor",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 1, "x2": 2, "y": 5},
+							{"x1": 2, "x2": 1, "y": 5},
+							{"x1": 3, "x2": 4, "y": 11},
+							{"x1": 4, "x2": 3, "y": 11},
+						],
+						"label_col": "y",
+						"feature_cols": ["x1", "x2"],
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_train_reg", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("task") == "regression"
+	assert payload.get("model") == "LinearRegression"
+	assert isinstance(payload.get("metrics_train"), dict)
+	assert "rmse" in payload.get("metrics_train", {})
+	assert isinstance(payload.get("model_spec"), dict)
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_cross_validate():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_cv_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.cross_validate",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 0.1, "x2": 1.1, "label": "A"},
+							{"x1": 0.2, "x2": 1.0, "label": "A"},
+							{"x1": 1.2, "x2": 0.1, "label": "B"},
+							{"x1": 1.1, "x2": 0.2, "label": "B"},
+							{"x1": 0.15, "x2": 1.05, "label": "A"},
+							{"x1": 1.15, "x2": 0.15, "label": "B"},
+						],
+						"task": "classification",
+						"label_col": "label",
+						"feature_cols": ["x1", "x2"],
+						"cv": 3,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_cv_cls", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("task") == "classification"
+	metrics = payload.get("metrics_cv") or {}
+	assert isinstance(metrics, dict)
+	assert "accuracy" in metrics
+	assert isinstance((metrics.get("accuracy") or {}).get("fold_values"), list)
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_evaluate():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_eval_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.evaluate",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"label": "A", "prediction": "A"},
+							{"label": "A", "prediction": "B"},
+							{"label": "B", "prediction": "B"},
+							{"label": "B", "prediction": "B"},
+						],
+						"task": "classification",
+						"label_col": "label",
+						"pred_col": "prediction",
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_eval_cls", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("task") == "classification"
+	assert isinstance(payload.get("metrics"), dict)
+	assert "f1" in payload.get("metrics", {})
+
+
+@pytest.mark.asyncio
 async def test_exec_tool_builtin_ml_scipy_describe():
 	pytest.importorskip("scipy")
 	node = {
