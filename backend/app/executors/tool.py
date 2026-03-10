@@ -670,6 +670,191 @@ def _ml_prediction_vector(args: Dict[str, Any], rows: list[dict[str, Any]], pred
     return values
 
 
+def _analysis_table_artifact(
+    *,
+    name: str,
+    description: str,
+    columns: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> Dict[str, Any]:
+    normalized_cols: list[dict[str, Any]] = []
+    for col in columns:
+        if not isinstance(col, dict):
+            continue
+        col_name = str(col.get("name") or "").strip()
+        if not col_name:
+            continue
+        normalized_cols.append(
+            {
+                "name": col_name,
+                "type": str(col.get("type") or "unknown").strip() or "unknown",
+                "nullable": bool(col.get("nullable", True)),
+            }
+        )
+    return {
+        "name": name,
+        "kind": "table",
+        "description": description,
+        "typed_schema": {"type": "table", "fields": normalized_cols},
+        "rows": rows,
+        "row_count": len(rows),
+    }
+
+
+def _feature_importance_artifact(
+    *,
+    feature_cols: list[str],
+    importances: list[float],
+) -> Dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for idx, feature in enumerate(feature_cols):
+        score = float(importances[idx]) if idx < len(importances) else 0.0
+        rows.append({"feature": str(feature), "importance": score})
+    rows.sort(key=lambda row: float(row.get("importance") or 0.0), reverse=True)
+    return _analysis_table_artifact(
+        name="feature_importance",
+        description="Feature importance scores sorted descending.",
+        columns=[
+            {"name": "feature", "type": "string", "nullable": False},
+            {"name": "importance", "type": "float", "nullable": False},
+        ],
+        rows=rows,
+    )
+
+
+def _classification_confusion_matrix_artifact(
+    *,
+    y_true: list[Any],
+    y_pred: list[Any],
+) -> Dict[str, Any]:
+    labels = sorted({str(v) for v in list(y_true) + list(y_pred)})
+    counts: Dict[tuple[str, str], int] = {}
+    for idx, actual_raw in enumerate(y_true):
+        predicted_raw = y_pred[idx] if idx < len(y_pred) else None
+        actual = str(actual_raw)
+        predicted = str(predicted_raw)
+        key = (actual, predicted)
+        counts[key] = int(counts.get(key, 0)) + 1
+    rows: list[dict[str, Any]] = []
+    for actual in labels:
+        for predicted in labels:
+            rows.append(
+                {
+                    "actual": actual,
+                    "predicted": predicted,
+                    "count": int(counts.get((actual, predicted), 0)),
+                }
+            )
+    return _analysis_table_artifact(
+        name="confusion_matrix",
+        description="Confusion matrix in long-table format.",
+        columns=[
+            {"name": "actual", "type": "string", "nullable": False},
+            {"name": "predicted", "type": "string", "nullable": False},
+            {"name": "count", "type": "int", "nullable": False},
+        ],
+        rows=rows,
+    )
+
+
+def _regression_residuals_artifact(
+    *,
+    y_true: list[float],
+    y_pred: list[float],
+) -> Dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    limit = min(len(y_true), len(y_pred))
+    for idx in range(limit):
+        actual = float(y_true[idx])
+        predicted = float(y_pred[idx])
+        residual = actual - predicted
+        rows.append(
+            {
+                "index": idx,
+                "y_true": actual,
+                "y_pred": predicted,
+                "residual": residual,
+                "abs_error": abs(residual),
+            }
+        )
+    return _analysis_table_artifact(
+        name="residuals",
+        description="Residuals and absolute errors per row.",
+        columns=[
+            {"name": "index", "type": "int", "nullable": False},
+            {"name": "y_true", "type": "float", "nullable": False},
+            {"name": "y_pred", "type": "float", "nullable": False},
+            {"name": "residual", "type": "float", "nullable": False},
+            {"name": "abs_error", "type": "float", "nullable": False},
+        ],
+        rows=rows,
+    )
+
+
+def _calibration_artifact(
+    *,
+    y_true: list[Any],
+    y_prob: list[float],
+    positive_label: str,
+    bins: int = 10,
+) -> Dict[str, Any]:
+    if not y_true or not y_prob or len(y_true) != len(y_prob):
+        return _analysis_table_artifact(
+            name="calibration",
+            description="Calibration bins unavailable due to missing/invalid probability inputs.",
+            columns=[
+                {"name": "bin", "type": "int", "nullable": False},
+                {"name": "bin_start", "type": "float", "nullable": False},
+                {"name": "bin_end", "type": "float", "nullable": False},
+                {"name": "sample_count", "type": "int", "nullable": False},
+                {"name": "avg_pred_proba", "type": "float", "nullable": True},
+                {"name": "observed_positive_rate", "type": "float", "nullable": True},
+            ],
+            rows=[],
+        )
+    bin_count = max(2, min(100, int(bins or 10)))
+    bucket_counts = [0 for _ in range(bin_count)]
+    bucket_prob_sum = [0.0 for _ in range(bin_count)]
+    bucket_pos_sum = [0 for _ in range(bin_count)]
+    for idx, prob_raw in enumerate(y_prob):
+        prob = max(0.0, min(1.0, float(prob_raw)))
+        bucket = min(bin_count - 1, int(prob * bin_count))
+        bucket_counts[bucket] += 1
+        bucket_prob_sum[bucket] += prob
+        is_positive = 1 if str(y_true[idx]) == positive_label else 0
+        bucket_pos_sum[bucket] += is_positive
+    rows: list[dict[str, Any]] = []
+    for bucket in range(bin_count):
+        count = bucket_counts[bucket]
+        start = float(bucket) / float(bin_count)
+        end = float(bucket + 1) / float(bin_count)
+        avg_prob = (bucket_prob_sum[bucket] / float(count)) if count > 0 else None
+        observed_rate = (float(bucket_pos_sum[bucket]) / float(count)) if count > 0 else None
+        rows.append(
+            {
+                "bin": bucket,
+                "bin_start": start,
+                "bin_end": end,
+                "sample_count": count,
+                "avg_pred_proba": avg_prob,
+                "observed_positive_rate": observed_rate,
+            }
+        )
+    return _analysis_table_artifact(
+        name="calibration",
+        description="Calibration bins with predicted probability vs observed positive rate.",
+        columns=[
+            {"name": "bin", "type": "int", "nullable": False},
+            {"name": "bin_start", "type": "float", "nullable": False},
+            {"name": "bin_end", "type": "float", "nullable": False},
+            {"name": "sample_count", "type": "int", "nullable": False},
+            {"name": "avg_pred_proba", "type": "float", "nullable": True},
+            {"name": "observed_positive_rate", "type": "float", "nullable": True},
+        ],
+        rows=rows,
+    )
+
+
 async def _exec_builtin_ml_tool(
     tool_id: str,
     args: Dict[str, Any],
@@ -772,9 +957,40 @@ async def _exec_builtin_ml_tool(
         model = LogisticRegression(max_iter=int(args.get("max_iter") or 200))
         model.fit(x, y)
         pred = model.predict(x)
+        probas = model.predict_proba(x) if hasattr(model, "predict_proba") else None
         average = "weighted"
         coef = getattr(model, "coef_", None)
         intercept = getattr(model, "intercept_", None)
+        coef_for_importance: list[float] = []
+        if hasattr(coef, "tolist"):
+            coef_list = coef.tolist()
+            if isinstance(coef_list, list) and coef_list and isinstance(coef_list[0], list):
+                width = len(coef_list[0])
+                for c_idx in range(width):
+                    vals = [abs(float(row[c_idx])) for row in coef_list if c_idx < len(row)]
+                    coef_for_importance.append((sum(vals) / len(vals)) if vals else 0.0)
+            elif isinstance(coef_list, list):
+                coef_for_importance = [abs(float(v)) for v in coef_list]
+        positive_label = str(args.get("positive_label") or (model.classes_[-1] if len(model.classes_) > 0 else "1"))
+        positive_prob_index = len(model.classes_) - 1 if len(model.classes_) > 0 else 0
+        y_prob: list[float] = []
+        if hasattr(probas, "tolist"):
+            proba_list = probas.tolist()
+            if isinstance(proba_list, list):
+                for row in proba_list:
+                    if isinstance(row, list) and row:
+                        idx = min(max(0, positive_prob_index), len(row) - 1)
+                        y_prob.append(float(row[idx]))
+        analysis_artifacts = [
+            _feature_importance_artifact(feature_cols=feature_cols, importances=coef_for_importance),
+            _classification_confusion_matrix_artifact(y_true=y, y_pred=pred.tolist() if hasattr(pred, "tolist") else list(pred)),
+            _calibration_artifact(
+                y_true=y,
+                y_prob=y_prob,
+                positive_label=positive_label,
+                bins=int(args.get("calibration_bins") or 10),
+            ),
+        ]
         return {
             "task": "classification",
             "model": "LogisticRegression",
@@ -797,6 +1013,7 @@ async def _exec_builtin_ml_tool(
                 "coef": coef.tolist() if hasattr(coef, "tolist") else None,
                 "intercept": intercept.tolist() if hasattr(intercept, "tolist") else None,
             },
+            "analysis_artifacts": analysis_artifacts,
         }
 
     if tool_id == "ml.sklearn.train_regressor":
@@ -815,6 +1032,16 @@ async def _exec_builtin_ml_tool(
         mse = float(mean_squared_error(y, pred))
         coef = getattr(model, "coef_", None)
         intercept = getattr(model, "intercept_", None)
+        coef_for_importance: list[float] = []
+        if hasattr(coef, "tolist"):
+            coef_list = coef.tolist()
+            if isinstance(coef_list, list):
+                coef_for_importance = [abs(float(v)) for v in coef_list]
+        pred_list = pred.tolist() if hasattr(pred, "tolist") else list(pred)
+        analysis_artifacts = [
+            _feature_importance_artifact(feature_cols=feature_cols, importances=coef_for_importance),
+            _regression_residuals_artifact(y_true=[float(v) for v in y], y_pred=[float(v) for v in pred_list]),
+        ]
         return {
             "task": "regression",
             "model": "LinearRegression",
@@ -835,6 +1062,7 @@ async def _exec_builtin_ml_tool(
                 "coef": coef.tolist() if hasattr(coef, "tolist") else None,
                 "intercept": float(intercept) if intercept is not None else None,
             },
+            "analysis_artifacts": analysis_artifacts,
         }
 
     if tool_id == "ml.sklearn.cross_validate":
@@ -916,12 +1144,48 @@ async def _exec_builtin_ml_tool(
                     "mse": mse,
                     "rmse": float(mse**0.5),
                 },
+                "analysis_artifacts": [
+                    _regression_residuals_artifact(
+                        y_true=[float(v) for v in y_true],
+                        y_pred=[float(v) for v in y_pred],
+                    )
+                ],
             }
         if task == "classification":
             y_true = _ml_label_vector(rows, label_col, cast_float=False)
             y_pred = _ml_prediction_vector(args, rows, pred_col, cast_float=False)
             if len(y_true) != len(y_pred):
                 raise ValueError("ml.sklearn.evaluate classification requires y_true/y_pred with matching lengths")
+            probs_raw = args.get("probs")
+            proba_col = str(args.get("proba_col") or "").strip()
+            probs: list[float] = []
+            if isinstance(probs_raw, list):
+                for idx, item in enumerate(probs_raw):
+                    try:
+                        probs.append(float(item))
+                    except Exception as exc:
+                        raise ValueError(f"Probability at index {idx} is non-numeric") from exc
+            elif proba_col:
+                for r_idx, row in enumerate(rows):
+                    if proba_col not in row:
+                        raise ValueError(f"Missing probability '{proba_col}' in row {r_idx}")
+                    try:
+                        probs.append(float(row[proba_col]))
+                    except Exception as exc:
+                        raise ValueError(f"Probability '{proba_col}' in row {r_idx} is non-numeric") from exc
+            positive_label = str(args.get("positive_label") or (sorted({str(v) for v in y_true})[-1] if y_true else "1"))
+            analysis_artifacts = [
+                _classification_confusion_matrix_artifact(y_true=y_true, y_pred=y_pred),
+            ]
+            if probs:
+                analysis_artifacts.append(
+                    _calibration_artifact(
+                        y_true=y_true,
+                        y_prob=probs,
+                        positive_label=positive_label,
+                        bins=int(args.get("calibration_bins") or 10),
+                    )
+                )
             average = "weighted"
             return {
                 "task": "classification",
@@ -934,6 +1198,7 @@ async def _exec_builtin_ml_tool(
                     "recall": float(recall_score(y_true, y_pred, average=average, zero_division=0)),
                     "f1": float(f1_score(y_true, y_pred, average=average, zero_division=0)),
                 },
+                "analysis_artifacts": analysis_artifacts,
             }
         raise ValueError("ml.sklearn.evaluate args.task must be 'classification' or 'regression'")
 

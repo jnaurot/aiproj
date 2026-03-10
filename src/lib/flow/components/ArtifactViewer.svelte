@@ -8,6 +8,10 @@
 		getArtifactPreviewUrl,
 		getArtifactUrl
 	} from '$lib/flow/client/runs';
+	import {
+		type AnalysisArtifact,
+		extractAnalysisArtifacts
+	} from '$lib/flow/components/artifactAnalysis';
 	import { extractComponentWrapperOutputs } from '$lib/flow/components/artifactWrapper';
 
 export let artifactId: string;
@@ -72,6 +76,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	let meta: ArtifactMeta | null = null;
 	let text: string | null = null;
 	let jsonObj: any = null;
+	let analysisArtifacts: AnalysisArtifact[] = [];
 	let imageUrl: string | null = null;
 	let audioUrl: string | null = null;
 	let videoUrl: string | null = null;
@@ -584,6 +589,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 
 	$: jsonRootOpen = jsonEstimatedSize > 0 && jsonEstimatedSize <= 200_000;
 	$: componentWrapperOutputs = extractComponentWrapperOutputs(jsonObj);
+	$: analysisArtifacts = extractAnalysisArtifacts(jsonObj);
 
 	function isTableLike(ct: string, payloadSchema: Record<string, any> | null | undefined): boolean {
 		const t = String(ct ?? '').toLowerCase();
@@ -857,6 +863,24 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 			</div>
 		</div>
 	{/if}
+	{#if analysisArtifacts.length > 0}
+		<div class="block">
+			<div class="label">Analysis Artifacts</div>
+			<div class="inputsList">
+				{#each analysisArtifacts as item (`${item.name}:${item.kind}`)}
+					<div class="inputItem staticItem">
+						<span class="inputLabel">{item.name}</span>
+						<span class="inputMeta">{item.kind}</span>
+						<span class="inputMeta">rows {item.rowCount}</span>
+						<span class="inputMeta">fields {item.fields.length}</span>
+						{#if item.description}
+							<span class="inputMeta">{item.description}</span>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</div>
+	{/if}
 	{#if hasPayloadSchema}
 		<div class="block">
 			<div class="label">Typed Schema</div>
@@ -1066,6 +1090,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		border-radius: 8px;
 		text-align: left;
 		cursor: pointer;
+	}
+	.staticItem {
+		cursor: default;
 	}
 	.inputId {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',

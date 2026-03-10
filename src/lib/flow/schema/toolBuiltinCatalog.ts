@@ -150,7 +150,8 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 	{
 		id: 'ml.sklearn.train_classifier',
 		label: 'Train Classifier',
-		description: 'Train LogisticRegression on full dataset and emit metrics + model spec.',
+		description:
+			'Train LogisticRegression and emit metrics + model spec + typed analysis artifacts (feature importance, confusion matrix, calibration).',
 		profiles: ['ml', 'full', 'custom'],
 		defaultArgs: {
 			rows: [
@@ -167,7 +168,8 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 	{
 		id: 'ml.sklearn.train_regressor',
 		label: 'Train Regressor',
-		description: 'Train LinearRegression on full dataset and emit metrics + model spec.',
+		description:
+			'Train LinearRegression and emit metrics + model spec + typed analysis artifacts (feature importance, residuals).',
 		profiles: ['ml', 'full', 'custom'],
 		defaultArgs: {
 			rows: [
@@ -203,18 +205,21 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 	{
 		id: 'ml.sklearn.evaluate',
 		label: 'Evaluate Predictions',
-		description: 'Compute evaluation metrics from ground-truth and prediction columns.',
+		description:
+			'Compute metrics and typed error-analysis artifacts (classification: confusion/calibration, regression: residuals).',
 		profiles: ['ml', 'full', 'custom'],
 		defaultArgs: {
 			rows: [
-				{ label: 'A', prediction: 'A' },
-				{ label: 'A', prediction: 'B' },
-				{ label: 'B', prediction: 'B' },
-				{ label: 'B', prediction: 'B' }
+				{ label: 'A', prediction: 'A', pred_proba: 0.81 },
+				{ label: 'A', prediction: 'B', pred_proba: 0.44 },
+				{ label: 'B', prediction: 'B', pred_proba: 0.77 },
+				{ label: 'B', prediction: 'B', pred_proba: 0.92 }
 			],
 			task: 'classification',
 			label_col: 'label',
-			pred_col: 'prediction'
+			pred_col: 'prediction',
+			proba_col: 'pred_proba',
+			calibration_bins: 5
 		}
 	},
 	{

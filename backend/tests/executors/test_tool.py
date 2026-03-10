@@ -462,6 +462,19 @@ async def test_exec_tool_builtin_ml_sklearn_train_classifier():
 	assert isinstance(payload.get("metrics_train"), dict)
 	assert "accuracy" in payload.get("metrics_train", {})
 	assert isinstance(payload.get("model_spec"), dict)
+	analysis_artifacts = payload.get("analysis_artifacts") or []
+	assert isinstance(analysis_artifacts, list)
+	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
+	assert {"feature_importance", "confusion_matrix", "calibration"}.issubset(artifact_names)
+	feature_importance = next(
+		(a for a in analysis_artifacts if isinstance(a, dict) and a.get("name") == "feature_importance"),
+		None,
+	)
+	assert isinstance(feature_importance, dict)
+	assert ((feature_importance.get("typed_schema") or {}).get("type")) == "table"
+	fi_rows = feature_importance.get("rows") or []
+	assert isinstance(fi_rows, list)
+	assert fi_rows and "feature" in fi_rows[0] and "importance" in fi_rows[0]
 
 
 @pytest.mark.asyncio
@@ -498,6 +511,16 @@ async def test_exec_tool_builtin_ml_sklearn_train_regressor():
 	assert isinstance(payload.get("metrics_train"), dict)
 	assert "rmse" in payload.get("metrics_train", {})
 	assert isinstance(payload.get("model_spec"), dict)
+	analysis_artifacts = payload.get("analysis_artifacts") or []
+	assert isinstance(analysis_artifacts, list)
+	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
+	assert {"feature_importance", "residuals"}.issubset(artifact_names)
+	residuals = next((a for a in analysis_artifacts if isinstance(a, dict) and a.get("name") == "residuals"), None)
+	assert isinstance(residuals, dict)
+	assert ((residuals.get("typed_schema") or {}).get("type")) == "table"
+	res_rows = residuals.get("rows") or []
+	assert isinstance(res_rows, list)
+	assert res_rows and "residual" in res_rows[0]
 
 
 @pytest.mark.asyncio
@@ -573,6 +596,53 @@ async def test_exec_tool_builtin_ml_sklearn_evaluate():
 	assert payload.get("task") == "classification"
 	assert isinstance(payload.get("metrics"), dict)
 	assert "f1" in payload.get("metrics", {})
+	analysis_artifacts = payload.get("analysis_artifacts") or []
+	assert isinstance(analysis_artifacts, list)
+	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
+	assert "confusion_matrix" in artifact_names
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_evaluate_with_calibration():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_eval_cls_calib",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.evaluate",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"label": "A", "prediction": "A", "pred_proba": 0.82},
+							{"label": "A", "prediction": "B", "pred_proba": 0.41},
+							{"label": "B", "prediction": "B", "pred_proba": 0.77},
+							{"label": "B", "prediction": "B", "pred_proba": 0.93},
+						],
+						"task": "classification",
+						"label_col": "label",
+						"pred_col": "prediction",
+						"proba_col": "pred_proba",
+						"calibration_bins": 4,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_eval_cls_calib", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	analysis_artifacts = payload.get("analysis_artifacts") or []
+	assert isinstance(analysis_artifacts, list)
+	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
+	assert {"confusion_matrix", "calibration"}.issubset(artifact_names)
+	calibration = next((a for a in analysis_artifacts if isinstance(a, dict) and a.get("name") == "calibration"), None)
+	assert isinstance(calibration, dict)
+	calib_rows = calibration.get("rows") or []
+	assert isinstance(calib_rows, list)
+	assert len(calib_rows) == 4
 
 
 @pytest.mark.asyncio
