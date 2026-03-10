@@ -1546,6 +1546,41 @@ def _explicit_schema_from_node(node: Dict[str, Any]) -> Optional[Any]:
     return None
 
 
+def _declared_expected_typed_schema_from_node(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    data = node.get("data", {}) if isinstance(node, dict) else {}
+    schema_env = data.get("schema") if isinstance(data, dict) and isinstance(data.get("schema"), dict) else {}
+    expected = schema_env.get("expectedSchema") if isinstance(schema_env.get("expectedSchema"), dict) else {}
+    typed = expected.get("typedSchema") if isinstance(expected.get("typedSchema"), dict) else None
+    if not isinstance(typed, dict):
+        return None
+    typed_type = str(typed.get("type") or "").strip().lower()
+    if typed_type == "string":
+        typed_type = "text"
+    if typed_type not in {"table", "json", "text", "binary", "embeddings", "unknown"}:
+        return None
+    fields_raw = typed.get("fields") if isinstance(typed.get("fields"), list) else []
+    fields = []
+    for f in fields_raw:
+        if not isinstance(f, dict):
+            continue
+        name = str(f.get("name") or "").strip()
+        if not name:
+            continue
+        f_type = str(f.get("type") or "unknown").strip().lower() or "unknown"
+        if f_type == "string":
+            f_type = "text"
+        fields.append(
+            {
+                "name": name,
+                "type": f_type,
+                "nullable": bool(f.get("nullable", True)),
+            }
+        )
+    if typed_type != "table":
+        fields = []
+    return {"type": typed_type, "fields": fields}
+
+
 def _source_table_provenance(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file").lower()
@@ -1586,6 +1621,33 @@ def _source_table_provenance(node: Dict[str, Any], params: Dict[str, Any]) -> Di
 
 
 def _expected_schema_contract_for_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    declared_typed = _declared_expected_typed_schema_from_node(node)
+    if declared_typed is not None:
+        canonical: Dict[str, Any] = {
+            "schema_version": 1,
+            "typed_schema": {
+                "type": str(declared_typed.get("type") or "unknown"),
+                "fields": declared_typed.get("fields") if isinstance(declared_typed.get("fields"), list) else [],
+            },
+        }
+        if str(declared_typed.get("type") or "") == "table":
+            table_cols = canonical_table_columns(
+                [
+                    {
+                        "name": str(f.get("name") or "").strip(),
+                        "type": str(f.get("type") or "unknown").strip() or "unknown",
+                    }
+                    for f in (declared_typed.get("fields") or [])
+                    if isinstance(f, dict) and str(f.get("name") or "").strip()
+                ]
+            )
+            canonical["table"] = {"columns": table_cols}
+        return {
+            "schemaObject": canonical,
+            "schemaFingerprint": contract_schema_fingerprint(canonical),
+            "schemaSource": "declared",
+            "typedSchema": declared_typed,
+        }
     explicit_schema = _explicit_schema_from_node(node)
     if explicit_schema is not None:
         canonical = {"schema_version": 1, "explicit_schema": explicit_schema}
@@ -1601,6 +1663,49 @@ def _expected_schema_contract_for_node(node: Dict[str, Any]) -> Dict[str, Any]:
         "schemaFingerprint": contract_schema_fingerprint(canonical),
         "schemaSource": f"default:{default_contract}",
     }
+
+
+def _expected_output_schema_error(
+    *,
+    node: Dict[str, Any],
+    artifact: Artifact,
+    expected_schema: Optional[Dict[str, Any]],
+    strict_coercion_policy: bool,
+) -> Optional[ContractMismatchError]:
+    expected = expected_schema if isinstance(expected_schema, dict) else {}
+    expected_typed = expected.get("typedSchema") if isinstance(expected.get("typedSchema"), dict) else None
+    if not isinstance(expected_typed, dict):
+        return None
+    policy = _coercion_policy_for_node(node) if strict_coercion_policy else "allow_lossy"
+    actual_typed = _artifact_typed_schema(artifact)
+    ok, ts_info = _typed_schema_compatibility(
+        expected=expected_typed,
+        actual=actual_typed,
+        policy=policy,
+    )
+    if ok:
+        return None
+    reason = str(ts_info.get("reason") or "").strip().lower() if isinstance(ts_info, dict) else ""
+    code = "SCHEMA_CONTRACT_MISMATCH"
+    if reason == "missing_columns":
+        code = "SCHEMA_MISSING_FIELD"
+    elif reason in {"type_mismatch", "column_type_mismatch"}:
+        code = "SCHEMA_TYPE_MISMATCH"
+    return ContractMismatchError(
+        "Expected output schema mismatch",
+        code=code,
+        details=_contract_details(
+            missing_columns=ts_info.get("missingColumns") if isinstance(ts_info, dict) else [],
+            expected={
+                "typedSchema": expected_typed,
+                "coercionPolicy": policy,
+            },
+            actual={
+                "typedSchema": actual_typed,
+                "mismatchedColumns": ts_info.get("mismatchedColumns") if isinstance(ts_info, dict) else [],
+            },
+        ),
+    )
 
 
 def _expected_mime_for_port(port: str) -> str:
@@ -4839,6 +4944,14 @@ async def run_graph(
                         phase="post_write_bind",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
+                    expected_output_error = _expected_output_schema_error(
+                        node=n,
+                        artifact=artifact,
+                        expected_schema=expected_schema,
+                        strict_coercion_policy=bool(strict_coercion_policy),
+                    )
+                    if expected_output_error is not None:
+                        raise expected_output_error
                     await _emit({
                         "type": "node_output",
                         "runId": run_id,

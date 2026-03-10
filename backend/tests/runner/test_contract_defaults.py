@@ -20,6 +20,7 @@ from app.runner.contracts import (
 from app.runner.run import (
     _available_columns_for_port,
     _cached_artifact_contract_mismatch,
+    _expected_output_schema_error,
     _expected_schema_contract_for_node,
     _missing_column_details,
     _source_payload_schema,
@@ -73,6 +74,34 @@ def _artifact_with_schema_fp(schema_fp: str) -> Artifact:
     )
 
 
+def _artifact_table(columns: list[dict]) -> Artifact:
+    return Artifact(
+        artifact_id="b" * 64,
+        node_kind="source",
+        params_hash="p" * 64,
+        upstream_ids=[],
+        created_at=datetime.now(timezone.utc),
+        execution_version="v1",
+        mime_type="text/csv; charset=utf-8",
+        port_type="table",
+        size_bytes=0,
+        storage_uri="artifact://b",
+        payload_schema={
+            "schema_version": 1,
+            "type": "table",
+            "schema": {
+                "contract": "TABLE_V1",
+                "version": 1,
+                "table": {"columns": columns},
+            },
+        },
+        run_id="r1",
+        graph_id="g1",
+        node_id="n1",
+        exec_key="b" * 64,
+    )
+
+
 def test_default_contract_mapping():
     assert default_contract_for_node(_node("source", source_kind="file")) == TABLE_ANY_V1
     assert (
@@ -120,6 +149,48 @@ def test_expected_schema_source_explicit_vs_default():
     assert str(explicit["schemaFingerprint"])
     assert str(defaulted["schemaSource"]).startswith("default:")
     assert str(defaulted["schemaFingerprint"])
+
+
+def test_expected_schema_source_declared_from_node_schema():
+    declared_node = _node("source", source_kind="file")
+    declared_node["data"]["schema"] = {
+        "expectedSchema": {
+            "source": "declared",
+            "typedSchema": {
+                "type": "table",
+                "fields": [{"name": "id", "type": "text"}],
+            },
+        }
+    }
+
+    declared = _expected_schema_contract_for_node(declared_node)
+    assert declared["schemaSource"] == "declared"
+    assert declared.get("typedSchema", {}).get("type") == "table"
+    assert str(declared["schemaFingerprint"])
+
+
+def test_expected_output_schema_runtime_enforcement_missing_field():
+    node = _node("source", source_kind="file")
+    expected_schema = {
+        "typedSchema": {
+            "type": "table",
+            "fields": [
+                {"name": "id", "type": "unknown"},
+                {"name": "price", "type": "unknown"},
+            ],
+        }
+    }
+    artifact = _artifact_table([{"name": "id", "type": "unknown"}])
+
+    err = _expected_output_schema_error(
+        node=node,
+        artifact=artifact,
+        expected_schema=expected_schema,
+        strict_coercion_policy=True,
+    )
+    assert err is not None
+    assert err.code == "SCHEMA_MISSING_FIELD"
+    assert "price" in (err.details or {}).get("missingColumns", [])
 
 
 def test_default_schema_still_gates_cache_mismatch():
