@@ -15,6 +15,7 @@ import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
 import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
 import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
+import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
 import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
 import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
@@ -2210,19 +2211,6 @@ function normalizeHintType(raw: unknown): string {
 	return value;
 }
 
-function canSafelyCoerceSchemaType(providedType: string, requiredType: string): boolean {
-	if (!providedType || !requiredType) return false;
-	if (providedType === requiredType) return true;
-	const allowed = new Set([
-		'text->table',
-		'json->table',
-		'table->json',
-		'text->json',
-		'json->text'
-	]);
-	return allowed.has(`${providedType}->${requiredType}`);
-}
-
 function adapterSuggestionForTypes(providedType: string, requiredType: string): string | null {
 	const key = `${providedType}->${requiredType}`;
 	if (key === 'text->table') return "Insert Transform adapter: op='text_to_table'.";
@@ -2232,7 +2220,7 @@ function adapterSuggestionForTypes(providedType: string, requiredType: string): 
 }
 
 type SchemaCompatibility =
-	| { ok: true }
+	| { ok: true; warning?: 'lossy_coercion'; suggestion?: string | null }
 	| { ok: false; reason: 'type_mismatch' | 'missing_required_columns'; missingColumns?: string[]; suggestion?: string | null };
 
 function isSchemaCompatible(
@@ -2241,8 +2229,8 @@ function isSchemaCompatible(
 ): SchemaCompatibility {
 	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
 	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
-	const sameOrCoercible = canSafelyCoerceSchemaType(providedType, requiredType);
-	if (!sameOrCoercible) {
+	const coercion = evaluateSchemaCoercion(providedType, requiredType);
+	if (!coercion.allowed) {
 		return {
 			ok: false,
 			reason: 'type_mismatch',
@@ -2263,6 +2251,13 @@ function isSchemaCompatible(
 			return { ok: false, reason: 'missing_required_columns', missingColumns: missing };
 		}
 	}
+	if (coercion.lossy) {
+		return {
+			ok: true,
+			warning: 'lossy_coercion',
+			suggestion: adapterSuggestionForTypes(providedType, requiredType)
+		};
+	}
 	return { ok: true };
 }
 
@@ -2273,6 +2268,7 @@ export type EdgeSchemaConstraint = {
 	providedSchema: Record<string, any>;
 	requiredSchema: Record<string, any>;
 	compatible: boolean;
+	warning?: 'lossy_coercion';
 	reason?: 'type_mismatch' | 'missing_required_columns';
 	missingColumns?: string[];
 	suggestions: string[];
@@ -2354,11 +2350,14 @@ function computeEdgeSchemaConstraintsInternal(
 			providedSchema,
 			requiredSchema,
 			compatible: check.ok,
+			warning: check.ok ? check.warning : undefined,
 			reason: check.ok ? undefined : check.reason,
 			missingColumns: check.ok ? undefined : check.missingColumns,
 			suggestions:
 				check.ok
-					? []
+					? check.warning && check.suggestion
+						? [check.suggestion]
+						: []
 					: check.reason === 'type_mismatch'
 						? check.suggestion
 							? [check.suggestion]
@@ -2382,6 +2381,20 @@ function computeEdgeSchemaDiagnosticsInternal(
 	const out: Record<string, EdgeSchemaDiagnostic | null> = {};
 	for (const [edgeId, constraint] of Object.entries(constraints ?? {})) {
 		if (constraint.compatible) {
+			if (constraint.warning === 'lossy_coercion') {
+				out[edgeId] = {
+					edgeId,
+					code: 'EDGE_SCHEMA_TYPE_MISMATCH',
+					severity: 'warning',
+					message: `Lossy coercion: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
+					details: {
+						providedSchema: constraint.providedSchema,
+						requiredSchema: constraint.requiredSchema
+					},
+					suggestions: constraint.suggestions ?? []
+				};
+				continue;
+			}
 			out[edgeId] = null;
 			continue;
 		}

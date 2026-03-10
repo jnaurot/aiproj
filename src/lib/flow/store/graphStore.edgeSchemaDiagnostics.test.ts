@@ -39,4 +39,31 @@ describe('graphStore edge schema diagnostics', () => {
 		expect(diagnostics.e1?.details?.providedSchema?.type).toBe('string');
 		expect(diagnostics.e1?.details?.requiredSchema?.type).toBe('binary');
 	});
+
+	it('emits warning diagnostics for lossy coercions', () => {
+		const nodes: any[] = [
+			{
+				id: 'n_source',
+				data: {
+					kind: 'source',
+					sourceKind: 'api',
+					ports: { in: null, out: 'json' },
+					params: {}
+				}
+			},
+			{
+				id: 'n_llm',
+				data: {
+					kind: 'llm',
+					ports: { in: 'text', out: 'text' },
+					params: {}
+				}
+			}
+		];
+		const edges: any[] = [{ id: 'e2', source: 'n_source', target: 'n_llm' }];
+		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
+		const diagnostics = __computeEdgeSchemaDiagnosticsForTest(constraints);
+		expect(diagnostics.e2).toBeTruthy();
+		expect(diagnostics.e2?.severity).toBe('warning');
+	});
 });

@@ -62,6 +62,7 @@ import {
 		type GuidedRecommendation
 	} from './components/dsmlGuidedUx';
 	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
+	import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
@@ -1240,15 +1241,8 @@ async function scrollToBottom() {
 	}
 
 	function isSchemaCompatibleConnection(outPort: PortType, inPort: PortType): boolean {
-		if (outPort === inPort) return true;
-		const allowed = new Set([
-			'text->table',
-			'json->table',
-			'table->json',
-			'text->json',
-			'json->text'
-		]);
-		return allowed.has(`${outPort}->${inPort}`);
+		const decision = evaluateSchemaCoercion(outPort, inPort);
+		return decision.allowed;
 	}
 
 	function isValidConnection(conn: Connection) {
