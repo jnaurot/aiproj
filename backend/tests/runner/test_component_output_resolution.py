@@ -277,3 +277,49 @@ async def test_resolve_input_refs_ignores_legacy_component_output_binding_for_na
         )
 
     assert exc.value.code == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"
+
+
+@pytest.mark.asyncio
+async def test_resolve_input_refs_component_prefers_expanded_output_bridge_for_nested_runtime_ids():
+    component_id = "cmp:parent_instance:n_child_component"
+    bridge_source_id = "cmp:parent_instance:cmp:n_child_component:n_llm_source"
+    edges = {
+        "e1": {
+            "id": "e1",
+            "source": component_id,
+            "target": "llm1",
+            "sourceHandle": "llm",
+            "targetHandle": "in",
+            "data": {"contract": {"out": "text", "in": "text"}},
+        },
+        "bridge-llm": {
+            "id": "bridge-llm",
+            "source": bridge_source_id,
+            "target": component_id,
+            "targetHandle": "llm",
+        },
+    }
+    component_node = {
+        "id": component_id,
+        "data": {
+            "kind": "component",
+            "params": {
+                "api": {"outputs": [{"name": "llm", "portType": "text"}]},
+                "bindings": {"outputs": {"llm": {"nodeId": "n_llm_source", "artifact": "current"}}},
+            },
+        },
+    }
+
+    refs = await resolve_input_refs(
+        edges=edges,
+        node_id="llm1",
+        get_current_artifact=lambda node_id: (
+            "wrapper_a1"
+            if node_id == component_id
+            else ("direct_art_llm" if node_id == bridge_source_id else None)
+        ),
+        get_node_by_id=lambda node_id: component_node if node_id == component_id else None,
+        artifact_store=_NoopArtifactStore(),
+    )
+
+    assert refs == [("in", "direct_art_llm")]

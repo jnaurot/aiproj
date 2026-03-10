@@ -92,6 +92,39 @@ def _resolve_component_output_artifact_from_bindings(
     return {"artifact_id": resolved, "has_binding": True, "runtime_node_id": runtime_node_id}
 
 
+def _resolve_component_output_artifact_from_output_edges(
+    *,
+    edges: Dict[str, Dict[str, Any]],
+    component_instance_node_id: str,
+    output_name: str,
+    get_current_artifact,
+) -> Dict[str, Any]:
+    candidates: list[Dict[str, Any]] = []
+    for e in edges.values():
+        if str(e.get("target") or "").strip() != component_instance_node_id:
+            continue
+        handle = str(e.get("targetHandle") or "out").strip() or "out"
+        if handle != output_name:
+            continue
+        src = str(e.get("source") or "").strip()
+        if not src:
+            continue
+        candidates.append(e)
+    if not candidates:
+        return {"artifact_id": None, "runtime_node_id": None, "edge_id": None, "edge_count": 0}
+    candidates.sort(key=lambda edge: str(edge.get("id") or ""))
+    chosen = candidates[0]
+    runtime_node_id = str(chosen.get("source") or "").strip()
+    aid = get_current_artifact(runtime_node_id) if runtime_node_id else None
+    resolved = str(aid or "").strip() or None
+    return {
+        "artifact_id": resolved,
+        "runtime_node_id": runtime_node_id or None,
+        "edge_id": str(chosen.get("id") or ""),
+        "edge_count": len(candidates),
+    }
+
+
 async def resolve_input_refs(
     edges: Dict[str, Dict[str, Any]],
     node_id: str,
@@ -146,13 +179,41 @@ async def resolve_input_refs(
                         },
                     ),
                 )
+            bridge = _resolve_component_output_artifact_from_output_edges(
+                edges=edges,
+                component_instance_node_id=str(src),
+                output_name=source_handle,
+                get_current_artifact=get_current_artifact,
+            )
+            if bridge.get("artifact_id"):
+                aid = str(bridge["artifact_id"])
+            elif bridge.get("runtime_node_id"):
+                raise ContractMismatchError(
+                    f"Component output '{source_handle}' could not be resolved from bindings",
+                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                    details=_contract_details(
+                        expected={"sourceHandle": source_handle, "resolvedArtifact": True},
+                        actual={
+                            "edgeId": str(e.get("id") or ""),
+                            "componentArtifactId": str(aid),
+                            "boundRuntimeNodeId": str(bridge.get("runtime_node_id") or ""),
+                            "outputEdgeId": str(bridge.get("edge_id") or ""),
+                            "resolvedArtifact": False,
+                        },
+                    ),
+                )
+
             direct = _resolve_component_output_artifact_from_bindings(
                 src_node=src_node,
                 component_instance_node_id=str(src),
                 output_name=source_handle,
                 get_current_artifact=get_current_artifact,
             )
-            if direct.get("artifact_id"):
+            if bridge.get("edge_count"):
+                # Expanded component output edges are the source of truth for runtime IDs.
+                # If the bridge exists and produced no artifact, we already raised above.
+                pass
+            elif direct.get("artifact_id"):
                 aid = str(direct["artifact_id"])
             elif bool(direct.get("has_binding")):
                 raise ContractMismatchError(
