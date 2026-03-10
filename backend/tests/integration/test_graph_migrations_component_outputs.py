@@ -299,6 +299,80 @@ def test_canonicalize_graph_payload_defaults_builtin_profile_storage():
 	assert builtin.get("customPackages") == []
 
 
+def test_canonicalize_graph_payload_derives_ports_from_kind_and_params():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "src1",
+				"type": "source",
+				"position": {"x": 0, "y": 0},
+				"data": {"kind": "source", "sourceKind": "file", "params": {"output": {"mode": "text"}}},
+			},
+			{
+				"id": "tx1",
+				"type": "transform",
+				"position": {"x": 300, "y": 0},
+				"data": {"kind": "transform", "params": {"op": "text_to_table"}},
+			},
+			{
+				"id": "llm1",
+				"type": "llm",
+				"position": {"x": 600, "y": 0},
+				"data": {"kind": "llm", "params": {"output": {"mode": "json"}}},
+			},
+		],
+		"edges": [],
+	}
+	next_graph, notes = canonicalize_graph_payload(graph)
+	assert isinstance(notes, list)
+	nodes = {str(n.get("id") or ""): n for n in next_graph.get("nodes", [])}
+	assert (((nodes["src1"].get("data") or {}).get("ports") or {}).get("in")) is None
+	assert str((((nodes["src1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "text"
+	assert str((((nodes["tx1"].get("data") or {}).get("ports") or {}).get("in") or "")) == "text"
+	assert str((((nodes["tx1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "table"
+	assert str((((nodes["llm1"].get("data") or {}).get("ports") or {}).get("in") or "")) == "text"
+	assert str((((nodes["llm1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "json"
+	assert any(str(note.get("code") or "") == "NODE_PORTS_DERIVED" for note in notes)
+
+
+def test_canonicalize_graph_payload_updates_edge_contracts_after_port_derivation():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "src1",
+				"type": "source",
+				"position": {"x": 0, "y": 0},
+				"data": {"kind": "source", "sourceKind": "file", "params": {"output": {"mode": "text"}}},
+			},
+			{
+				"id": "tx1",
+				"type": "transform",
+				"position": {"x": 300, "y": 0},
+				"data": {"kind": "transform", "params": {"op": "text_to_table"}},
+			},
+		],
+		"edges": [
+			{
+				"id": "e1",
+				"source": "src1",
+				"sourceHandle": "out",
+				"target": "tx1",
+				"targetHandle": "in",
+			}
+		],
+	}
+	next_graph, _ = canonicalize_graph_payload(graph)
+	edge = next_graph["edges"][0]
+	contract = ((edge.get("data") or {}).get("contract") or {})
+	assert str(contract.get("out") or "") == "text"
+	assert str(contract.get("in") or "") == "text"
+	payload = contract.get("payload") if isinstance(contract.get("payload"), dict) else {}
+	assert str(((payload.get("source") or {}).get("type") or "")) == "string"
+	assert str(((payload.get("target") or {}).get("type") or "")) == "string"
+
+
 def test_graph_create_revision_applies_component_migration_normalization():
 	graph_id = f"graph_migrate_cmp_{uuid4().hex[:8]}"
 	with TestClient(app) as client:

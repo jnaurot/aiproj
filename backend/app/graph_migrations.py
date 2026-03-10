@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, List, Optional, Tuple
 
-from .runner.capabilities import allowed_port_types
+from .runner.capabilities import allowed_port_types, allowed_ports
 
 
 def _normalize_port_type(value: Any) -> Optional[str]:
@@ -126,6 +126,78 @@ def _node_out_port_type(node: Dict[str, Any]) -> Optional[str]:
 	return _normalize_port_type(ports.get("out"))
 
 
+def _preferred_port(candidates: set[str], preferred: List[str]) -> Optional[str]:
+	for value in preferred:
+		if value in candidates:
+			return value
+	if not candidates:
+		return None
+	return sorted(candidates)[0]
+
+
+def _derive_source_out_port(params: Dict[str, Any], source_kind_raw: Any) -> Optional[str]:
+	output = params.get("output") if isinstance(params.get("output"), dict) else {}
+	mode = str(params.get("output_mode") or output.get("mode") or "").strip().lower()
+	if mode in {"table", "json", "text", "binary", "embeddings"}:
+		return mode
+	source_kind = str(source_kind_raw or "").strip().lower()
+	return "json" if source_kind == "api" else "table"
+
+
+def _derive_llm_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+	output = params.get("output") if isinstance(params.get("output"), dict) else {}
+	mode = str(output.get("mode") or "").strip().lower()
+	if mode in {"json", "binary", "embeddings"}:
+		return "text", mode
+	return "text", "text"
+
+
+def _derive_transform_ports(params: Dict[str, Any], transform_kind_raw: Any) -> Tuple[Optional[str], Optional[str]]:
+	op = str(params.get("op") or transform_kind_raw or "").strip().lower()
+	if op == "json_to_table":
+		return "json", "table"
+	if op == "text_to_table":
+		return "text", "table"
+	if op == "table_to_json":
+		return "table", "json"
+	return "table", "table"
+
+
+def _derive_tool_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+	provider = str(params.get("provider") or "").strip().lower() or None
+	allowed_in = {str(v).strip().lower() for v in allowed_ports("tool", "in", provider=provider)}
+	allowed_out = {str(v).strip().lower() for v in allowed_ports("tool", "out", provider=provider)}
+	in_port = _preferred_port(allowed_in, ["json", "table", "text", "binary", "embeddings"])
+	out_port = _preferred_port(allowed_out, ["json", "text", "binary", "table", "embeddings"])
+	return _normalize_port_type(in_port), _normalize_port_type(out_port)
+
+
+def _derive_component_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+	api = params.get("api") if isinstance(params.get("api"), dict) else {}
+	inputs = api.get("inputs") if isinstance(api.get("inputs"), list) else []
+	in_port = None
+	if inputs and isinstance(inputs[0], dict):
+		in_port = _normalize_port_type(inputs[0].get("portType"))
+	return in_port, None
+
+
+def _derive_node_ports(node: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+	data = _node_data(node)
+	kind = str(data.get("kind") or "").strip().lower()
+	params = data.get("params") if isinstance(data.get("params"), dict) else {}
+	if kind == "source":
+		return None, _derive_source_out_port(params, data.get("sourceKind"))
+	if kind == "llm":
+		return _derive_llm_ports(params)
+	if kind == "transform":
+		return _derive_transform_ports(params, data.get("transformKind"))
+	if kind == "tool":
+		return _derive_tool_ports(params)
+	if kind == "component":
+		return _derive_component_ports(params)
+	return None, None
+
+
 def _canonicalize_builtin_tool_params(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
 	data = _node_data(node)
 	if str(data.get("kind") or "").strip().lower() != "tool":
@@ -202,17 +274,23 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		kind = str(data.get("kind") or "").strip().lower()
 		if kind:
 			data["kind"] = kind
-		ports = data.get("ports")
-		if isinstance(ports, dict):
-			for direction in ("in", "out"):
-				ports[direction] = _normalize_port_type(ports.get(direction))
-		if kind == "component":
-			# Component output routing/type is declared per API output handle.
-			# Keep ports.out non-authoritative in persisted metadata.
-			if not isinstance(ports, dict):
-				ports = {}
-				data["ports"] = ports
-			ports["out"] = None
+		ports_before = data.get("ports") if isinstance(data.get("ports"), dict) else {}
+		derived_in, derived_out = _derive_node_ports(next_node)
+		data["ports"] = {
+			"in": _normalize_port_type(derived_in),
+			"out": _normalize_port_type(derived_out),
+		}
+		if (
+			_normalize_port_type(ports_before.get("in")) != data["ports"]["in"]
+			or _normalize_port_type(ports_before.get("out")) != data["ports"]["out"]
+		):
+			notes.append(
+				{
+					"code": "NODE_PORTS_DERIVED",
+					"nodeId": str(next_node.get("id") or ""),
+					"message": "Derived node.data.ports from node kind + params.",
+				}
+			)
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node

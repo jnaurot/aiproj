@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
 
+from ..graph_migrations import canonicalize_graph_payload
 from ..runner.nodes.transform import load_table_from_artifact_bytes
 from ..runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from ..runner.run import _determinism_env_for_node, _normalized_params_for_exec_key
@@ -307,7 +308,8 @@ async def create_run(req: RunRequest, request: Request):
         raise HTTPException(400, "runMode='selected_only' requires runFrom")
 
     graph_id = str(req.graphId)
-    await rt.start_run(run_id, req.graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
+    canonical_graph, _ = canonicalize_graph_payload(req.graph)
+    await rt.start_run(run_id, canonical_graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
     
     return RunCreated(schemaVersion=1, runId=run_id, graphId=graph_id)
 
@@ -344,10 +346,11 @@ async def accept_node_params(run_id: str, node_id: str, req: AcceptNodeParamsReq
     if not h:
         raise HTTPException(404, "Unknown runId")
     graph_id = str(getattr(h, "graph_id", "") or "").strip()
+    canonical_graph, _ = canonicalize_graph_payload(req.graph)
     try:
         out = await rt.accept_node_params(
             run_id=run_id,
-            graph=req.graph,
+            graph=canonical_graph,
             node_id=node_id,
             params=req.params,
         )
@@ -363,7 +366,8 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
     if not graph_id:
         raise HTTPException(400, "graphId is required")
 
-    nodes = (req.graph or {}).get("nodes", []) if isinstance(req.graph, dict) else []
+    canonical_graph, _ = canonicalize_graph_payload(req.graph)
+    nodes = (canonical_graph or {}).get("nodes", []) if isinstance(canonical_graph, dict) else []
     target = None
     for n in nodes:
         if str(n.get("id")) == str(req.nodeId):

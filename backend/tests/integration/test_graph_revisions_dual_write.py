@@ -119,3 +119,47 @@ def test_graph_revision_not_written_even_with_legacy_env(monkeypatch):
 		assert res.status_code == 200, res.text
 		rev = client.app.state.graph_revisions.get_latest(graph_id)
 		assert rev is None
+
+
+def test_create_run_canonicalizes_graph_ports_before_runtime(monkeypatch):
+	monkeypatch.setenv("GRAPH_STORE_V2_WRITE", "1")
+	monkeypatch.setenv("GRAPH_STORE_V2_READ", "1")
+	captured_graph = {}
+
+	with TestClient(app) as client:
+		rt = client.app.state.runtime
+
+		async def _fake_start_run(self, run_id, graph, run_from, run_mode=None, graph_id=None):
+			captured_graph["value"] = graph
+			h = self.get_run(run_id)
+			if h:
+				h.graph_id = str(graph_id or "")
+				h.graph = graph
+				h.status = "finished"
+
+		rt.start_run = MethodType(_fake_start_run, rt)
+
+		graph_id = f"graph_phase2_run_ports_{uuid4().hex[:8]}"
+		graph = {
+			"version": 1,
+			"nodes": [
+				{
+					"id": "src1",
+					"type": "source",
+					"position": {"x": 0, "y": 0},
+					"data": {
+						"kind": "source",
+						"sourceKind": "file",
+						"params": {"output": {"mode": "text"}},
+					},
+				}
+			],
+			"edges": [],
+		}
+		res = client.post("/runs", json={"graphId": graph_id, "runFrom": None, "graph": graph})
+		assert res.status_code == 200, res.text
+		canonical = captured_graph.get("value") or {}
+		node = (canonical.get("nodes") or [{}])[0]
+		ports = ((node.get("data") or {}).get("ports") or {})
+		assert ports.get("in") is None
+		assert str(ports.get("out") or "") == "text"
