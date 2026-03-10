@@ -109,6 +109,87 @@ def _nested_parent_component_definition():
     }
 
 
+def _child_text_component_definition():
+    return {
+        "graph": {
+            "nodes": [
+                {
+                    "id": "inner_tool",
+                    "data": {
+                        "kind": "tool",
+                        "label": "Inner Text Tool",
+                        "params": {"provider": "builtin", "builtin": {"toolId": "echo", "args": {}}},
+                        "ports": {"in": "text", "out": "text"},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "text_out",
+                    "portType": "text",
+                    "required": True,
+                    "typedSchema": {"type": "text", "fields": []},
+                }
+            ],
+        },
+    }
+
+
+def _nested_parent_wrapper_binding_definition():
+    return {
+        "graph": {
+            "nodes": [
+                {
+                    "id": "inner_component",
+                    "data": {
+                        "kind": "component",
+                        "label": "Inner Nested Component",
+                        "params": {
+                            "componentRef": {"componentId": "cmp_child_text", "revisionId": "rev_child_text"},
+                            "bindings": {
+                                "inputs": {},
+                                "outputs": {
+                                    "text_out": {"nodeId": "inner_tool", "artifact": "current"},
+                                },
+                                "config": {},
+                            },
+                            "config": {},
+                            "api": {
+                                "inputs": [],
+                                "outputs": [
+                                    {
+                                        "name": "text_out",
+                                        "portType": "text",
+                                        "required": True,
+                                        "typedSchema": {"type": "text", "fields": []},
+                                    }
+                                ],
+                            },
+                        },
+                        "ports": {"in": None, "out": None},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "text_out",
+                    "portType": "text",
+                    "required": True,
+                    "typedSchema": {"type": "text", "fields": []},
+                }
+            ],
+        },
+    }
+
+
 def _graph(component_revision_id: str, *, output_artifact_mode: str = "current"):
     return {
         "nodes": [
@@ -746,3 +827,116 @@ async def test_component_run_expands_nested_component_references(monkeypatch):
     )
     assert ("cmp_parent", "rev_parent") in component_store.calls
     assert ("cmp_child", "rev_child") in component_store.calls
+
+
+@pytest.mark.asyncio
+async def test_component_nested_wrapper_binding_preserves_child_output_typed_schema(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+    store = MemoryArtifactStore()
+    cache = ExecutionCache()
+    events = []
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "text", "payload": f"payload:{node['id']}", "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
+
+    component_store = _ComponentStoreStub(
+        {
+            ("cmp_parent_wrapper", "rev_parent_wrapper"): SimpleNamespace(
+                definition=_nested_parent_wrapper_binding_definition()
+            ),
+            ("cmp_child_text", "rev_child_text"): SimpleNamespace(
+                definition=_child_text_component_definition()
+            ),
+        }
+    )
+    runtime_ref = SimpleNamespace(component_revisions=component_store)
+    graph = {
+        "nodes": [
+            {
+                "id": "src",
+                "data": {
+                    "kind": "source",
+                    "label": "Source",
+                    "sourceKind": "file",
+                    "params": {"snapshot_id": "a" * 64, "file_format": "txt", "output_mode": "text"},
+                    "ports": {"in": None, "out": "text"},
+                },
+            },
+            {
+                "id": "cmp_node",
+                "data": {
+                    "kind": "component",
+                    "label": "Parent Component",
+                    "params": {
+                        "componentRef": {
+                            "componentId": "cmp_parent_wrapper",
+                            "revisionId": "rev_parent_wrapper",
+                        },
+                        "api": {
+                            "inputs": [],
+                            "outputs": [
+                                {
+                                    "name": "text_out",
+                                    "portType": "text",
+                                    "required": True,
+                                    "typedSchema": {"type": "text", "fields": []},
+                                }
+                            ],
+                        },
+                        "bindings": {
+                            "inputs": {},
+                            # Intentionally bind to nested component node wrapper, not inner tool bridge.
+                            "outputs": {"text_out": {"nodeId": "inner_component", "artifact": "current"}},
+                            "config": {},
+                        },
+                        "config": {},
+                    },
+                    "ports": {"in": "text", "out": None},
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "src", "target": "cmp_node"}],
+    }
+
+    await run_mod.run_graph(
+        run_id="run-component-nested-wrapper-schema",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-component-nested-wrapper-schema", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-nested-wrapper-schema",
+    )
+
+    assert any(
+        e.get("type") == "node_finished" and e.get("nodeId") == "cmp_node" and e.get("status") == "succeeded"
+        for e in events
+    )
+    parent_output = next(
+        e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "cmp_node"
+    )
+    art = await store.get(str(parent_output["artifactId"]))
+    wrapper_bytes = await store.read(str(art.artifact_id))
+    wrapper_data = json.loads(wrapper_bytes.decode("utf-8")) if isinstance(wrapper_bytes, (bytes, bytearray)) else {}
+    outputs = (
+        (wrapper_data.get("outputs") if isinstance(wrapper_data, dict) else None)
+        or (((wrapper_data.get("payload") or {}).get("outputs")) if isinstance(wrapper_data.get("payload"), dict) else None)
+        or {}
+    )
+    text_out = outputs.get("text_out") if isinstance(outputs, dict) else {}
+    assert isinstance(text_out, dict)
+    assert str((text_out.get("typed_schema_expected") or {}).get("type") or "") == "text"
+    assert str((text_out.get("typed_schema_observed") or {}).get("type") or "") == "text"

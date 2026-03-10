@@ -125,6 +125,83 @@ def _resolve_component_output_artifact_from_output_edges(
     }
 
 
+def _normalize_typed_schema_for_runtime(raw: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return None
+    typed_type = str(raw.get("type") or "").strip().lower()
+    if typed_type == "string":
+        typed_type = "text"
+    if typed_type not in {"table", "json", "text", "binary", "embeddings", "unknown"}:
+        return None
+    fields_raw = raw.get("fields") if isinstance(raw.get("fields"), list) else []
+    fields = []
+    for field in fields_raw:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip()
+        if not name:
+            continue
+        f_type = str(field.get("type") or "unknown").strip().lower() or "unknown"
+        if f_type == "string":
+            f_type = "text"
+        fields.append(
+            {
+                "name": name,
+                "type": f_type,
+                "nullable": bool(field.get("nullable", True)),
+            }
+        )
+    if typed_type != "table":
+        fields = []
+    return {"type": typed_type, "fields": fields}
+
+
+def _typed_schema_type_to_port_type(typed_schema: Optional[Dict[str, Any]]) -> str:
+    t = str((typed_schema or {}).get("type") or "").strip().lower()
+    if t in {"table", "json", "text", "binary", "embeddings"}:
+        return t
+    return "unknown"
+
+
+async def _component_wrapper_output_typed_schema(
+    *,
+    artifact_store: Any,
+    artifact_id: str,
+    output_name: str,
+) -> Optional[Dict[str, Any]]:
+    if artifact_store is None or not hasattr(artifact_store, "read"):
+        return None
+    aid = str(artifact_id or "").strip()
+    out_name = str(output_name or "").strip()
+    if not aid or not out_name:
+        return None
+    try:
+        payload_bytes = await artifact_store.read(aid)
+    except Exception:
+        return None
+    if not isinstance(payload_bytes, (bytes, bytearray)):
+        return None
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except Exception:
+        return None
+    root = payload if isinstance(payload, dict) else {}
+    if isinstance(root.get("payload"), dict):
+        root = root.get("payload")  # legacy wrapper envelope compatibility
+    outputs = root.get("outputs") if isinstance(root.get("outputs"), dict) else {}
+    out = outputs.get(out_name) if isinstance(outputs, dict) else None
+    if not isinstance(out, dict):
+        return None
+    observed = _normalize_typed_schema_for_runtime(out.get("typed_schema_observed"))
+    if observed is not None:
+        return observed
+    declared = _normalize_typed_schema_for_runtime(out.get("typed_schema_expected"))
+    if declared is not None:
+        return declared
+    fallback = _normalize_typed_schema_for_runtime(out.get("typed_schema"))
+    return fallback
+
+
 async def resolve_input_refs(
     edges: Dict[str, Dict[str, Any]],
     node_id: str,
@@ -163,6 +240,8 @@ async def resolve_input_refs(
                 if isinstance(o, dict) and str((o or {}).get("name") or "").strip()
             }
             source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+            if source_handle == "out" and len(declared_output_names) == 1:
+                source_handle = next(iter(declared_output_names))
             if declared_output_names and source_handle not in declared_output_names:
                 raise ContractMismatchError(
                     "Component edge references undeclared output handle",
@@ -4482,6 +4561,15 @@ async def run_graph(
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
                         declared_port_type = str(out_decl.get("portType") or "json").strip().lower() or "json"
                         actual_port_type = str(_infer_artifact_port_type(bound_artifact) or "json").strip().lower() or "json"
+                        wrapper_typed = await _component_wrapper_output_typed_schema(
+                            artifact_store=context.artifact_store,
+                            artifact_id=bound_artifact_id,
+                            output_name=out_name,
+                        )
+                        if wrapper_typed is not None:
+                            wrapper_port_type = _typed_schema_type_to_port_type(wrapper_typed)
+                            if wrapper_port_type != "unknown":
+                                actual_port_type = wrapper_port_type
                         coercion_policy = (
                             _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
                         )
@@ -4499,8 +4587,12 @@ async def run_graph(
                                     actual={"artifactId": bound_artifact_id, "portType": actual_port_type},
                                 ),
                             )
-                        declared_typed = out_decl.get("typedSchema") if isinstance(out_decl.get("typedSchema"), dict) else None
-                        actual_typed = _artifact_typed_schema(bound_artifact)
+                        declared_typed = (
+                            _normalize_typed_schema_for_runtime(out_decl.get("typedSchema"))
+                            if isinstance(out_decl.get("typedSchema"), dict)
+                            else None
+                        )
+                        actual_typed = wrapper_typed if wrapper_typed is not None else _artifact_typed_schema(bound_artifact)
                         ts_ok, ts_info = _typed_schema_compatibility(
                             expected=declared_typed,
                             actual=actual_typed,
@@ -4530,6 +4622,8 @@ async def run_graph(
                             "mime_type": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
                             "port_type": actual_port_type,
                             "typed_schema": declared_typed,
+                            "typed_schema_expected": declared_typed,
+                            "typed_schema_observed": actual_typed,
                             "required": bool(out_decl.get("required", True)),
                         }
                     for out_decl in declared_outputs:
