@@ -16,12 +16,6 @@ export default defineConfig({
     server: {
         fs: {
             allow: [resolve(__dirname, 'shared')]
-        },
-        proxy: {
-            "/runs": {
-                target: "http://localhost:8000", // your FastAPI port
-                changeOrigin: true
-            },
         }
     }
 });

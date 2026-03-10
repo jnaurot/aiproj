@@ -23,6 +23,13 @@ npx sv create --template minimal --no-types --add tailwindcss="plugins:none" sve
 Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
 
 ```sh
+# configure frontend -> backend target
+cp .env.example .env
+
+# run backend in docker (from repo root)
+docker compose --profile backend-cpu-dev up backend
+
+# run frontend
 npm run dev
 
 # or start the server and open the app in a new browser tab

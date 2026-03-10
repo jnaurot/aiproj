@@ -1,4 +1,5 @@
 import type { PortType } from '$lib/flow/types';
+import { backendUrl } from '$lib/flow/client/backend';
 
 export type BackendCapabilitiesResponse = {
 	schemaVersion: number;
@@ -15,10 +16,11 @@ export type BackendCapabilitiesResponse = {
 };
 
 export async function getBackendCapabilities(): Promise<BackendCapabilitiesResponse> {
-	const res = await fetch('/api/capabilities');
+	const url = backendUrl('/api/capabilities');
+	const res = await fetch(url);
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
-		throw new Error(`/api/capabilities failed: ${res.status} ${text}`);
+		throw new Error(`${url} failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as BackendCapabilitiesResponse;
 }

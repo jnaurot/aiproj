@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.no_cuda_guard import find_cuda_violations_in_specs
+from app.services.no_cuda_guard import _is_effective_installed_requirement, find_cuda_violations_in_specs
 
 
 def test_find_cuda_violations_in_specs_detects_nvidia_and_cuda_markers():
@@ -27,3 +27,11 @@ def test_find_cuda_violations_in_specs_ignores_rocm_specs():
 		source="test",
 	)
 	assert [v.item for v in violations] == []
+
+
+def test_is_effective_installed_requirement_ignores_unselected_extra():
+	assert _is_effective_installed_requirement('cudf-polars-cu12; extra == "gpu"') is False
+
+
+def test_is_effective_installed_requirement_keeps_non_extra_marker():
+	assert _is_effective_installed_requirement('nvidia-cublas-cu12; python_version >= "3.8"') is True

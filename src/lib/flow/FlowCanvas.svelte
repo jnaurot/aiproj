@@ -189,8 +189,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	//ViewArtifact
 	type InspectorMode = 'edit' | 'inputs' | 'output' | 'ports';
 	let inspectorMode: InspectorMode = 'edit';
-	let inspectorTopRatio = 0.5;
-	let resizingInspector = false;
+	let inspectorTopWeight = 2;
+	let environmentWeight = 1;
+	let runLogsWeight = 1;
+	let inspectorTopPaneEl: HTMLElement | null = null;
+	let environmentPaneEl: HTMLElement | null = null;
+	let runLogsPaneEl: HTMLElement | null = null;
+	type InspectorSplitPair = 'top_env' | 'env_logs';
+	let activeInspectorSplit: InspectorSplitPair | null = null;
+	let splitStartY = 0;
+	let splitPaneAStartPx = 0;
+	let splitPaneBStartPx = 0;
 	let subtypeError: string | null = null;
 	let subtypeErrorNodeId: string | null = null;
 	let subtypeErrorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -207,6 +216,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let envInstallPendingByProfile: Record<string, boolean> = {};
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
+	let nodeInspectorCollapsed = false;
+	let environmentCollapsed = false;
+	let runLogsCollapsed = false;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
 		inspectorMode: InspectorMode;
@@ -1848,30 +1860,43 @@ async function scrollToBottom() {
 		graphStore.setNodeMeta(node.id, { presetRef: undefined });
 	}
 
-	function clampInspectorRatio(v: number): number {
-		return Math.max(0.2, Math.min(0.8, v));
-	}
-
-	function updateInspectorSplit(clientY: number) {
-		if (!inspectorPane) return;
-		const rect = inspectorPane.getBoundingClientRect();
-		if (rect.height <= 0) return;
-		const ratio = (clientY - rect.top) / rect.height;
-		inspectorTopRatio = clampInspectorRatio(ratio);
-	}
-
-	function onInspectorSplitDown(event: PointerEvent) {
-		resizingInspector = true;
-		updateInspectorSplit(event.clientY);
+	function beginInspectorSplit(pair: InspectorSplitPair, event: PointerEvent) {
+		const paneA = pair === 'top_env' ? inspectorTopPaneEl : environmentPaneEl;
+		const paneB = pair === 'top_env' ? environmentPaneEl : runLogsPaneEl;
+		if (!paneA || !paneB) return;
+		const aRect = paneA.getBoundingClientRect();
+		const bRect = paneB.getBoundingClientRect();
+		if (aRect.height <= 0 || bRect.height <= 0) return;
+		activeInspectorSplit = pair;
+		splitStartY = event.clientY;
+		splitPaneAStartPx = aRect.height;
+		splitPaneBStartPx = bRect.height;
 	}
 
 	function onInspectorSplitMove(event: PointerEvent) {
-		if (!resizingInspector) return;
-		updateInspectorSplit(event.clientY);
+		if (!activeInspectorSplit) return;
+		const minPanePx = 96;
+		const pairStartPx = splitPaneAStartPx + splitPaneBStartPx;
+		if (pairStartPx <= 0) return;
+		const dy = event.clientY - splitStartY;
+		const nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, splitPaneAStartPx + dy));
+		const nextPaneB = pairStartPx - nextPaneA;
+
+		if (activeInspectorSplit === 'top_env') {
+			const total = inspectorTopWeight + environmentWeight;
+			if (total <= 0) return;
+			inspectorTopWeight = (total * nextPaneA) / pairStartPx;
+			environmentWeight = total - inspectorTopWeight;
+		} else {
+			const total = environmentWeight + runLogsWeight;
+			if (total <= 0) return;
+			environmentWeight = (total * nextPaneA) / pairStartPx;
+			runLogsWeight = total - environmentWeight;
+		}
 	}
 
 	function onInspectorSplitUp() {
-		resizingInspector = false;
+		activeInspectorSplit = null;
 	}
 
 	async function refreshWorkspaceEnvironmentPanel(): Promise<void> {
@@ -2127,14 +2152,26 @@ async function scrollToBottom() {
 	</div>
 
 	<aside class="inspector" bind:this={inspectorPane}>
-		<div class="inspectorTop" style={`flex: 0 0 ${Math.round(inspectorTopRatio * 100)}%;`}>
+		<div
+			class="inspectorPane inspectorTop"
+			bind:this={inspectorTopPaneEl}
+			style={nodeInspectorCollapsed ? 'flex: 0 0 auto;' : `flex: ${inspectorTopWeight} 1 0;`}
+		>
 			<!-- <h3>Inspector</h3> -->
 
 			{#if $selectedNode}
 				<div class="card editorCard">
-					<div class="head">
-						<div style="min-width:0;display:flex;align-items:center;gap:8px;">
-							{#if isEditingTitle}
+						<div class="head">
+							<div style="min-width:0;display:flex;align-items:center;gap:8px;">
+								<button
+									type="button"
+									class="tabBtn sectionToggle"
+									title={nodeInspectorCollapsed ? 'Expand Node Inspector' : 'Collapse Node Inspector'}
+									on:click={() => (nodeInspectorCollapsed = !nodeInspectorCollapsed)}
+								>
+									<span class="sectionToggleIcon" aria-hidden="true">{nodeInspectorCollapsed ? '▸' : '▾'}</span>
+								</button>
+								{#if isEditingTitle}
 								<input
 									id="node-title-input"
 									value={titleDraft}
@@ -2183,113 +2220,113 @@ async function scrollToBottom() {
 							{/if}
 						</div>
 
-						<div class="headPills">
-							<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
-								{displayNodeStatus ?? 'idle'}
-							</span>
-							{#if selectedComponentHasUpdate}
-								<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
-									update {selectedComponentLatestRevisionId}
+							<div class="headPills">
+								<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
+									{displayNodeStatus ?? 'idle'}
 								</span>
-							{/if}
-						</div>
-					</div>
-					<div class="inspectorTabs">
-						<button
-							class="tabBtn"
-							class:active={inspectorMode === 'edit'}
-							on:click={() => (inspectorMode = 'edit')}
-						>
-							Edit
-						</button>
-
-						<button
-							class="tabBtn"
-							class:active={inspectorMode === 'inputs'}
-							disabled={!hasInputs}
-							on:click={() => (inspectorMode = 'inputs')}
-						>
-							Inputs
-						</button>
-						<button
-							class="tabBtn"
-							class:active={inspectorMode === 'output'}
-							disabled={!hasOutput}
-							on:click={() => (inspectorMode = 'output')}
-						>
-							Output
-						</button>
-						<button
-							class="tabBtn"
-							class:active={inspectorMode === 'ports'}
-							on:click={() => (inspectorMode = 'ports')}
-						>
-							Ports
-						</button>
-						{#if inspectorMode === 'edit' && $selectedNode}
-							<select
-								class="nodeTypeSwitch"
-								aria-label="Node subtype"
-								value={
-									$selectedNode.data.kind === 'source'
-										? selectedSourceKind
-										: $selectedNode.data.kind === 'llm'
-											? selectedLlmKind
-											: $selectedNode.data.kind === 'transform'
-												? selectedTransformKind
-												: $selectedNode.data.kind === 'tool'
-													? selectedToolProvider
-													: selectedComponentKind
-								}
-								on:change={(e) => setSelectedNodeSubtype((e.currentTarget as HTMLSelectElement).value)}
-							>
-								{#if $selectedNode.data.kind === 'source'}
-									<option value="file">file</option>
-									<option value="database">database</option>
-									<option value="api">api</option>
-								{:else if $selectedNode.data.kind === 'llm'}
-									<option value="ollama">ollama</option>
-									<option value="openai_compat">openai_compat</option>
-								{:else if $selectedNode.data.kind === 'transform'}
-									<option value="filter">filter</option>
-									<option value="select">select</option>
-									<option value="rename">rename</option>
-									<option value="derive">derive</option>
-									<option value="aggregate">aggregate</option>
-									<option value="join">join</option>
-									<option value="sort">sort</option>
-									<option value="limit">limit</option>
-									<option value="dedupe">dedupe</option>
-									<option value="split">split</option>
-									<option value="sql">sql</option>
-								{:else if $selectedNode.data.kind === 'tool'}
-									<option value="mcp">mcp</option>
-									<option value="http">http</option>
-									<option value="function">function</option>
-									<option value="python">python</option>
-									<option value="js">js</option>
-									<option value="shell">shell</option>
-									<option value="db">db</option>
-									<option value="builtin">builtin</option>
-								{:else if $selectedNode.data.kind === 'component'}
-									<option value="graph_component">graph_component</option>
+								{#if selectedComponentHasUpdate}
+									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
+										update {selectedComponentLatestRevisionId}
+									</span>
 								{/if}
-							</select>
-						{/if}
-						{#if subtypeError}
-							<span class="subtypeError" aria-live="polite">{subtypeError}</span>
-						{/if}
-						
-					</div>
+							</div>
+						</div>
+						{#if !nodeInspectorCollapsed}
+							<div class="inspectorTabs">
+								<button
+									class="tabBtn"
+									class:active={inspectorMode === 'edit'}
+									on:click={() => (inspectorMode = 'edit')}
+								>
+									Edit
+								</button>
 
-					<div class="editorScroll">
-						{#if inspectorMode === 'edit'}
-							<NodeInspector />
-						{:else if inspectorMode === 'inputs'}
-							<div class="inputsView">
-								{#if inputResolutions.length === 0}
-									<div class="inputMissing">No input ports.</div>
-								{:else}
+								<button
+									class="tabBtn"
+									class:active={inspectorMode === 'inputs'}
+									disabled={!hasInputs}
+									on:click={() => (inspectorMode = 'inputs')}
+								>
+									Inputs
+								</button>
+								<button
+									class="tabBtn"
+									class:active={inspectorMode === 'output'}
+									disabled={!hasOutput}
+									on:click={() => (inspectorMode = 'output')}
+								>
+									Output
+								</button>
+								<button
+									class="tabBtn"
+									class:active={inspectorMode === 'ports'}
+									on:click={() => (inspectorMode = 'ports')}
+								>
+									Ports
+								</button>
+								{#if inspectorMode === 'edit' && $selectedNode}
+									<select
+										class="nodeTypeSwitch"
+										aria-label="Node subtype"
+										value={
+											$selectedNode.data.kind === 'source'
+												? selectedSourceKind
+												: $selectedNode.data.kind === 'llm'
+													? selectedLlmKind
+													: $selectedNode.data.kind === 'transform'
+														? selectedTransformKind
+														: $selectedNode.data.kind === 'tool'
+															? selectedToolProvider
+															: selectedComponentKind
+										}
+										on:change={(e) => setSelectedNodeSubtype((e.currentTarget as HTMLSelectElement).value)}
+									>
+										{#if $selectedNode.data.kind === 'source'}
+											<option value="file">file</option>
+											<option value="database">database</option>
+											<option value="api">api</option>
+										{:else if $selectedNode.data.kind === 'llm'}
+											<option value="ollama">ollama</option>
+											<option value="openai_compat">openai_compat</option>
+										{:else if $selectedNode.data.kind === 'transform'}
+											<option value="filter">filter</option>
+											<option value="select">select</option>
+											<option value="rename">rename</option>
+											<option value="derive">derive</option>
+											<option value="aggregate">aggregate</option>
+											<option value="join">join</option>
+											<option value="sort">sort</option>
+											<option value="limit">limit</option>
+											<option value="dedupe">dedupe</option>
+											<option value="split">split</option>
+											<option value="sql">sql</option>
+										{:else if $selectedNode.data.kind === 'tool'}
+											<option value="mcp">mcp</option>
+											<option value="http">http</option>
+											<option value="function">function</option>
+											<option value="python">python</option>
+											<option value="js">js</option>
+											<option value="shell">shell</option>
+											<option value="db">db</option>
+											<option value="builtin">builtin</option>
+										{:else if $selectedNode.data.kind === 'component'}
+											<option value="graph_component">graph_component</option>
+										{/if}
+									</select>
+								{/if}
+								{#if subtypeError}
+									<span class="subtypeError" aria-live="polite">{subtypeError}</span>
+								{/if}
+							</div>
+
+							<div class="editorScroll">
+								{#if inspectorMode === 'edit'}
+									<NodeInspector />
+								{:else if inspectorMode === 'inputs'}
+									<div class="inputsView">
+									{#if inputResolutions.length === 0}
+										<div class="inputMissing">No input ports.</div>
+									{:else}
 									{#each inputResolutions as input (input.inPort)}
 										<div class="inputCard">
 											<div class="inputHead">
@@ -2367,157 +2404,204 @@ async function scrollToBottom() {
 										</div>
 									{/if}
 								{/if}
+									</div>
+								{:else if inspectorMode === 'output'}
+									<ArtifactViewer
+										artifactId={activeArtifactId}
+										graphId={$graphStore.graphId}
+										mimeType={nodeOut.mimeType}
+										portType={nodeOut.portType}
+										cached={nodeOut.cached}
+										cacheDecision={nodeOut.cacheDecision}
+										preview={nodeOut.preview}
+										onJumpToNode={jumpToNodeFromArtifact}
+									/>
+								{:else}
+									<PortsEditor selectedNode={$selectedNode} />
+								{/if}
 							</div>
-						{:else if inspectorMode === 'output'}
-							<ArtifactViewer
-								artifactId={activeArtifactId}
-								graphId={$graphStore.graphId}
-								mimeType={nodeOut.mimeType}
-								portType={nodeOut.portType}
-								cached={nodeOut.cached}
-								cacheDecision={nodeOut.cacheDecision}
-								preview={nodeOut.preview}
-								onJumpToNode={jumpToNodeFromArtifact}
-							/>
-						{:else}
-							<PortsEditor selectedNode={$selectedNode} />
+
+							{#if inspectorMode === 'edit' && !hideInspectorApplyRow}
+								<!-- Apply row (applies to any draft-only fields in editors) -->
+								<div class="inspectorActions">
+									<button on:click={saveSelectedNodeAsPreset} disabled={!$selectedNode}>
+										Save Preset
+									</button>
+									<button
+										on:click={deleteSelectedPresetRef}
+										disabled={!selectedPresetRefExists}
+										title={selectedPresetRefExists
+											? 'Delete linked preset'
+											: 'No linked preset to delete'}
+									>
+										Delete Preset
+									</button>
+									<button
+										class="primary"
+										disabled={inspectorAcceptDisabled}
+										title={inspectorAcceptTooltip}
+										on:click={() => void acceptInspectorDraftAction()}
+									>
+										Accept
+									</button>
+
+									<button
+										disabled={!$graphStore.inspector.dirty}
+										on:click={() => graphStore.revertInspectorDraft()}
+									>
+										Revert
+									</button>
+								</div>
+								{#if inspectorSystemNotice}
+									<div class="inspectorSystemNote" aria-live="polite">{inspectorSystemNotice}</div>
+								{/if}
+							{/if}
 						{/if}
 					</div>
-
-					{#if inspectorMode === 'edit' && !hideInspectorApplyRow}
-						<!-- Apply row (applies to any draft-only fields in editors) -->
-						<div class="inspectorActions">
-							<button on:click={saveSelectedNodeAsPreset} disabled={!$selectedNode}>
-								Save Preset
-							</button>
-							<button
-								on:click={deleteSelectedPresetRef}
-								disabled={!selectedPresetRefExists}
-								title={selectedPresetRefExists
-									? 'Delete linked preset'
-									: 'No linked preset to delete'}
-							>
-								Delete Preset
-							</button>
-							<button
-								class="primary"
-								disabled={inspectorAcceptDisabled}
-								title={inspectorAcceptTooltip}
-								on:click={() => void acceptInspectorDraftAction()}
-							>
-								Accept
-							</button>
-
-							<button
-								disabled={!$graphStore.inspector.dirty}
-								on:click={() => graphStore.revertInspectorDraft()}
-							>
-								Revert
-							</button>
-						</div>
-						{#if inspectorSystemNotice}
-							<div class="inspectorSystemNote" aria-live="polite">{inspectorSystemNotice}</div>
-						{/if}
-					{/if}
-				</div>
 			{:else}
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
-		<button
-			type="button"
-			class="inspectorSplitter"
-			aria-label="Resize inspector panels"
-			on:pointerdown={onInspectorSplitDown}
-		></button>
-		<div class="inspectorBottom">
+		{#if !nodeInspectorCollapsed && !environmentCollapsed}
+			<button
+				type="button"
+				class="inspectorSplitter"
+				aria-label="Resize Node Inspector and Environment panels"
+				on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
+			></button>
+		{/if}
+		<div
+			class="inspectorPane inspectorEnv"
+			bind:this={environmentPaneEl}
+			style={environmentCollapsed ? 'flex: 0 0 auto;' : `flex: ${environmentWeight} 1 0;`}
+		>
 			<div class="envPanel">
-				<div class="envPanelHead">
-					<h3>Environment</h3>
-					<button
-						class="tabBtn envRefreshBtn"
-						on:click={() => void refreshWorkspaceEnvironmentPanel()}
-						disabled={envProfilesLoading}
-					>
-						{envProfilesLoading ? 'Refreshing...' : 'Refresh'}
-					</button>
-				</div>
-				<div class="envPanelSummary">
-					{envProfilesInstalledCount}/{envProfiles.length} installed
-					{#if envProfilesMissingCount > 0}
-						<span class="envMissing">({envProfilesMissingCount} missing)</span>
-					{/if}
-				</div>
-				{#if envProfilesError}
-					<div class="envPanelError">{envProfilesError}</div>
-				{/if}
-				<div class="envProfileList">
-					{#if !envProfilesLoading && envProfiles.length === 0}
-						<div class="envProfileEmpty">No profiles available.</div>
-					{/if}
-					{#each envProfiles as profile (profile.profileId)}
-						<div class="envProfileRow">
-							<div class="envProfileMeta">
-								<div class="envProfileTitle">
-									<span class="mono">{profile.profileId}</span>
-									<span class={`pill ${profile.installed ? 'st-succeeded' : 'st-stale'}`}>
-										{profile.installed ? 'installed' : 'missing'}
-									</span>
-								</div>
-								{#if !profile.installed && profile.missingPackages.length > 0}
-									<div class="envProfileMissing">
-										missing: {profile.missingPackages.join(', ')}
-									</div>
-								{/if}
-								{#if profile.platformNotes?.length}
-									<div class="envProfileNotes">
-										{profile.platformNotes.join(' ')}
-									</div>
-								{/if}
-							</div>
+					<div class="envPanelHead">
+						<div class="sectionHeadTitle">
+							<h3>Environment</h3>
 							<button
-								class="tabBtn envInstallBtn"
-								disabled={Boolean(envInstallPendingByProfile[profile.profileId])}
-								on:click={() => void installWorkspaceProfile(profile.profileId)}
+								type="button"
+								class="tabBtn sectionToggle"
+								title={environmentCollapsed ? 'Expand Environment' : 'Collapse Environment'}
+								on:click={() => (environmentCollapsed = !environmentCollapsed)}
 							>
-								{#if envInstallPendingByProfile[profile.profileId]}
-									Installing...
-								{:else if profile.installed}
-									Reinstall
-								{:else}
-									Install
-								{/if}
+								<span class="sectionToggleIcon" aria-hidden="true">{environmentCollapsed ? '▸' : '▾'}</span>
 							</button>
+						</div>
+						{#if !environmentCollapsed}
+							<button
+								class="tabBtn envRefreshBtn"
+								on:click={() => void refreshWorkspaceEnvironmentPanel()}
+								disabled={envProfilesLoading}
+							>
+								{envProfilesLoading ? 'Refreshing...' : 'Refresh'}
+							</button>
+						{/if}
+					</div>
+					{#if !environmentCollapsed}
+						<div class="envPanelSummary">
+							{envProfilesInstalledCount}/{envProfiles.length} installed
+							{#if envProfilesMissingCount > 0}
+								<span class="envMissing">({envProfilesMissingCount} missing)</span>
+							{/if}
+						</div>
+						{#if envProfilesError}
+							<div class="envPanelError">{envProfilesError}</div>
+						{/if}
+						<div class="envProfileList">
+							{#if !envProfilesLoading && envProfiles.length === 0}
+								<div class="envProfileEmpty">No profiles available.</div>
+							{/if}
+							{#each envProfiles as profile (profile.profileId)}
+								<div class="envProfileRow">
+									<div class="envProfileMeta">
+										<div class="envProfileTitle">
+											<span class="mono">{profile.profileId}</span>
+											<span class={`pill ${profile.installed ? 'st-succeeded' : 'st-stale'}`}>
+												{profile.installed ? 'installed' : 'missing'}
+											</span>
+										</div>
+										{#if !profile.installed && profile.missingPackages.length > 0}
+											<div class="envProfileMissing">
+												missing: {profile.missingPackages.join(', ')}
+											</div>
+										{/if}
+										{#if profile.platformNotes?.length}
+											<div class="envProfileNotes">
+												{profile.platformNotes.join(' ')}
+											</div>
+										{/if}
+									</div>
+									<button
+										class="tabBtn envInstallBtn"
+										disabled={Boolean(envInstallPendingByProfile[profile.profileId])}
+										on:click={() => void installWorkspaceProfile(profile.profileId)}
+									>
+										{#if envInstallPendingByProfile[profile.profileId]}
+											Installing...
+										{:else if profile.installed}
+											Reinstall
+										{:else}
+											Install
+										{/if}
+									</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
+			</div>
+		</div>
+		{#if !environmentCollapsed && !runLogsCollapsed}
+			<button
+				type="button"
+				class="inspectorSplitter"
+				aria-label="Resize Environment and Run Logs panels"
+				on:pointerdown={(event) => beginInspectorSplit('env_logs', event)}
+			></button>
+		{/if}
+		<div
+			class="inspectorPane inspectorLogs"
+			bind:this={runLogsPaneEl}
+			style={runLogsCollapsed ? 'flex: 0 0 auto;' : `flex: ${runLogsWeight} 1 0;`}
+		>
+			<div class="sectionHeadTitle">
+				<h3>Run Logs</h3>
+				<button
+					type="button"
+					class="tabBtn sectionToggle"
+					title={runLogsCollapsed ? 'Expand Run Logs' : 'Collapse Run Logs'}
+					on:click={() => (runLogsCollapsed = !runLogsCollapsed)}
+				>
+					<span class="sectionToggleIcon" aria-hidden="true">{runLogsCollapsed ? '▸' : '▾'}</span>
+				</button>
+			</div>
+			{#if !runLogsCollapsed}
+				<input
+					class="logFilterInput"
+					placeholder="Filter logs..."
+					aria-label="Filter run logs"
+					bind:value={runLogFilter}
+				/>
+				<div class="logs" bind:this={scrollElement}>
+					{#each filteredLogs as l (l.id)}
+						<div class={`log ${l.level}`}>
+							<span class="ts">{l.ts}</span>
+							<span class="msg">
+								{#if l.componentPath?.length}
+									<span class="nid">[Component: {l.componentPath.join(' > ')}]</span>
+								{/if}
+								{#if l.nodeId}
+									<span class="nid">[{l.nodeId}]</span>
+								{/if}
+								{l.message}
+							</span>
 						</div>
 					{/each}
 				</div>
-			</div>
-			<h3>Run Logs</h3>
-			<input
-				class="logFilterInput"
-				placeholder="Filter logs..."
-				aria-label="Filter run logs"
-				bind:value={runLogFilter}
-			/>
-			<div class="logs" bind:this={scrollElement}>
-				{#each filteredLogs as l (l.id)}
-					<div class={`log ${l.level}`}>
-						<span class="ts">{l.ts}</span>
-						<span class="msg">
-							{#if l.componentPath?.length}
-								<span class="nid">[Component: {l.componentPath.join(' > ')}]</span>
-							{/if}
-							{#if l.nodeId}
-								<span class="nid">[{l.nodeId}]</span>
-							{/if}
-							{l.message}
-						</span>
-					</div>
-				{/each}
-			</div>
+			{/if}
 		</div>
-	</aside>
-</div>
+		</aside>
+	</div>
 
 <style>
 	@import './styles/inspectorForm.css';
@@ -2842,10 +2926,16 @@ async function scrollToBottom() {
 		gap: 8px;
 	}
 
+	.inspectorPane {
+		min-height: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
 	.inspectorTop {
 		min-height: 0;
 		overflow: hidden;
-		padding-bottom: 20px;
 	}
 
 	.inspectorSplitter {
@@ -2868,12 +2958,9 @@ async function scrollToBottom() {
 		outline: none;
 	}
 
-	.inspectorBottom {
-		flex: 1;
+	.inspectorEnv,
+	.inspectorLogs {
 		min-height: 0;
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
 	}
 
 	.envPanel {
@@ -2881,7 +2968,9 @@ async function scrollToBottom() {
 		border-radius: 12px;
 		background: #0f1115;
 		padding: 10px;
-		margin-bottom: 10px;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.envPanelHead {
@@ -2889,6 +2978,29 @@ async function scrollToBottom() {
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
+	}
+
+	.sectionHead,
+	.sectionHeadTitle {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.sectionHead {
+		justify-content: space-between;
+	}
+
+	.sectionToggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 4px 8px;
+	}
+
+	.sectionToggleIcon {
+		font-size: 11px;
+		opacity: 0.85;
 	}
 
 	.envPanelHead h3 {

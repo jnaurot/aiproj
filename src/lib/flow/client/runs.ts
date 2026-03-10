@@ -1,4 +1,5 @@
 import type { RunEvent } from "$lib/flow/types/run";
+import { backendUrl } from "$lib/flow/client/backend";
 
 export type EventBatcherOptions = {
 	maxBatchSize?: number;
@@ -62,7 +63,7 @@ function requireGraphId(graphId: string): string {
 function withGraphId(path: string, graphId: string, extra?: Record<string, string | number>) {
   const params = new URLSearchParams({ graphId: requireGraphId(graphId) });
   for (const [k, v] of Object.entries(extra ?? {})) params.set(k, String(v));
-  return `${path}?${params.toString()}`;
+  return backendUrl(`${path}?${params.toString()}`);
 }
 
 export function getArtifactUrl(artifactId: string, graphId: string) {
@@ -105,7 +106,7 @@ export async function createRun(req: {
   cacheMode?: "default_on" | "force_off" | "force_on";
   graph: any;
 }) {
-  const res = await fetch("/api/runs", {
+  const res = await fetch(backendUrl("/api/runs"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -120,7 +121,7 @@ export async function createRun(req: {
 }
 
 export async function getRun(runId: string) {
-  const res = await fetch(`/runs/${encodeURIComponent(runId)}`);
+  const res = await fetch(backendUrl(`/api/runs/${encodeURIComponent(runId)}`));
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`getRun failed: ${res.status} ${text}`);
@@ -145,7 +146,7 @@ export async function acceptNodeParams(req: {
 }) {
   console.log("[accept-params] req.params", req.params);
   const res = await fetch(
-    `/runs/${encodeURIComponent(req.runId)}/nodes/${encodeURIComponent(req.nodeId)}/accept-params`,
+    backendUrl(`/runs/${encodeURIComponent(req.runId)}/nodes/${encodeURIComponent(req.nodeId)}/accept-params`),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -170,7 +171,7 @@ export async function resolveSourceNode(req: {
 	nodeId: string;
 	params?: Record<string, unknown>;
 }) {
-	const res = await fetch('/api/runs/resolve/source', {
+	const res = await fetch(backendUrl('/api/runs/resolve/source'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(req)
@@ -203,7 +204,7 @@ export function streamRunEvents(
   onEvent: (ev: RunEvent) => void,
   onError: (err: unknown) => void
 ) {
-  const es = new EventSource(`/api/runs/${runId}/events`);
+  const es = new EventSource(backendUrl(`/api/runs/${runId}/events`));
   let closed = false;
   let terminalSeen = false;
 
@@ -242,7 +243,7 @@ export function streamRunEvents(
 export async function uploadSnapshot(file: File) {
   const body = new FormData();
   body.append("file", file);
-  const res = await fetch("/api/snapshots", {
+  const res = await fetch(backendUrl("/api/snapshots"), {
     method: "POST",
     body,
   });
@@ -266,7 +267,7 @@ export async function uploadSnapshot(file: File) {
 export async function getSnapshotMeta(snapshotId: string) {
 	const sid = String(snapshotId ?? '').trim();
 	if (!sid) throw new Error('snapshotId is required');
-	const res = await fetch(`/api/snapshots/${encodeURIComponent(sid)}/meta`);
+	const res = await fetch(backendUrl(`/api/snapshots/${encodeURIComponent(sid)}/meta`));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`getSnapshotMeta failed: ${res.status} ${text}`);
@@ -287,7 +288,7 @@ export async function getSnapshotMeta(snapshotId: string) {
 export async function getSnapshot(snapshotId: string) {
 	const sid = String(snapshotId ?? '').trim();
 	if (!sid) throw new Error('snapshotId is required');
-	const res = await fetch(`/api/snapshots/${encodeURIComponent(sid)}`);
+	const res = await fetch(backendUrl(`/api/snapshots/${encodeURIComponent(sid)}`));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`getSnapshot failed: ${res.status} ${text}`);
@@ -306,7 +307,7 @@ export async function getSnapshot(snapshotId: string) {
 }
 
 export async function getGlobalCacheConfig() {
-	const res = await fetch('/runs/cache/config');
+	const res = await fetch(backendUrl('/runs/cache/config'));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`getGlobalCacheConfig failed: ${res.status} ${text}`);
@@ -328,7 +329,7 @@ export async function setGlobalCacheConfig(
 					enabled: config.enabled,
 					mode: config.mode
 				};
-	const res = await fetch('/runs/cache/config', {
+	const res = await fetch(backendUrl('/runs/cache/config'), {
 		method: 'PUT',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(payload)
@@ -360,18 +361,11 @@ export type DbSchemaTable = {
 };
 
 export async function getToolDbSchema(connectionRef: string) {
-	let res = await fetch('/runs/tools/db/schema', {
+	const res = await fetch(backendUrl('/runs/tools/db/schema'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ connectionRef })
 	});
-	if (res.status === 404) {
-		res = await fetch('/api/runs/tools/db/schema', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ connectionRef })
-		});
-	}
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
 		throw new Error(`getToolDbSchema failed: ${res.status} ${text}`);

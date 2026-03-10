@@ -4,7 +4,6 @@ export type ToolbarEditingContext = 'graph' | 'component';
 
 export function buildProjectMenuItems(editingContext: ToolbarEditingContext = 'graph'): ToolbarMenuItem[] {
 	const isComponentContext = editingContext === 'component';
-	const isGraphContext = editingContext === 'graph';
 	return [
 		{ id: 'new_graph', label: 'New Graph' },
 		{ id: 'save_graph', label: isComponentContext ? 'Save Component Revision' : 'Save Graph' },
@@ -13,8 +12,7 @@ export function buildProjectMenuItems(editingContext: ToolbarEditingContext = 'g
 		{ id: 'load_graph', label: 'Load Graph' },
 		{
 			id: 'save_as_component',
-			label: isComponentContext ? 'Save as New Component' : 'Save as Component',
-			disabled: isGraphContext
+			label: isComponentContext ? 'Save as New Component' : 'Save as Component'
 		},
 		{ id: 'import_graph', label: 'Import' },
 		{ id: 'export_graph', label: 'Export' },
@@ -75,7 +73,6 @@ export function dispatchProjectMenuAction(
 	handlers: ProjectToolbarHandlers
 ): void {
 	if (editingContext === 'component' && (actionId === 'save_version' || actionId === 'save_as_graph')) return;
-	if (editingContext === 'graph' && actionId === 'save_as_component') return;
 	if (actionId === 'new_graph') handlers.newGraph();
 	if (actionId === 'save_graph') routePrimarySaveAction(editingContext, handlers);
 	if (actionId === 'save_version') handlers.saveVersion();

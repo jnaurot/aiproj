@@ -67,6 +67,37 @@ def find_cuda_violations_in_lockfile(path: Path) -> List[CudaViolation]:
 	return violations
 
 
+def _is_effective_installed_requirement(req_text: str) -> bool:
+	req = str(req_text or "").strip()
+	if not req:
+		return False
+	try:
+		from packaging.markers import default_environment
+		from packaging.requirements import InvalidRequirement, Requirement
+	except Exception:
+		parts = req.split(";", maxsplit=1)
+		if len(parts) < 2:
+			return True
+		marker = str(parts[1] or "").strip().lower()
+		if not marker:
+			return True
+		if "extra" in marker and "==" in marker and '""' not in marker and "''" not in marker:
+			return False
+		return True
+	try:
+		parsed = Requirement(req)
+	except InvalidRequirement:
+		return True
+	if parsed.marker is None:
+		return True
+	env = default_environment()
+	env["extra"] = ""
+	try:
+		return bool(parsed.marker.evaluate(env))
+	except Exception:
+		return True
+
+
 def find_cuda_violations_in_installed_distributions() -> List[CudaViolation]:
 	violations: List[CudaViolation] = []
 	for dist in metadata.distributions():
@@ -78,6 +109,8 @@ def find_cuda_violations_in_installed_distributions() -> List[CudaViolation]:
 				CudaViolation(source="installed", item=label, reason="cuda-linked installed distribution")
 			)
 		for req in dist.requires or []:
+			if not _is_effective_installed_requirement(req):
+				continue
 			if _contains_cuda_marker(req):
 				violations.append(
 					CudaViolation(

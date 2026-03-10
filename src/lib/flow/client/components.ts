@@ -1,3 +1,5 @@
+import { backendUrl } from '$lib/flow/client/backend';
+
 export type ComponentCatalogItem = {
 	componentId: string;
 	createdAt: string;
@@ -139,10 +141,11 @@ type ListComponentRevisionsResponse = {
 };
 
 async function _fetchJson<T>(url: string): Promise<T> {
-	const res = await fetch(url);
+	const fullUrl = backendUrl(url);
+	const res = await fetch(fullUrl);
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
-		throw new Error(`${url} failed: ${res.status} ${text}`);
+		throw new Error(`${fullUrl} failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as T;
 }
@@ -196,7 +199,7 @@ export async function createComponentRevision(
 	if (!body.componentId) {
 		throw new Error('componentId is required');
 	}
-	const res = await fetch('/api/components', {
+	const res = await fetch(backendUrl('/api/components'), {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify(body)
@@ -211,7 +214,7 @@ export async function createComponentRevision(
 export async function validateComponentRevision(
 	req: ValidateComponentRevisionRequest
 ): Promise<ValidateComponentRevisionResponse> {
-	const res = await fetch('/api/components/validate', {
+	const res = await fetch(backendUrl('/api/components/validate'), {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({
@@ -236,7 +239,7 @@ export async function renameComponent(
 	const next = String(nextComponentId ?? '').trim();
 	if (!cid) throw new Error('componentId is required');
 	if (!next) throw new Error('nextComponentId is required');
-	const res = await fetch(`/api/components/${encodeURIComponent(cid)}`, {
+	const res = await fetch(backendUrl(`/api/components/${encodeURIComponent(cid)}`), {
 		method: 'PATCH',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({ componentId: next })
@@ -251,7 +254,7 @@ export async function renameComponent(
 export async function deleteComponent(componentId: string): Promise<DeleteComponentResponse> {
 	const cid = String(componentId ?? '').trim();
 	if (!cid) throw new Error('componentId is required');
-	const res = await fetch(`/api/components/${encodeURIComponent(cid)}`, {
+	const res = await fetch(backendUrl(`/api/components/${encodeURIComponent(cid)}`), {
 		method: 'DELETE'
 	});
 	if (!res.ok) {
@@ -270,7 +273,7 @@ export async function deleteComponentRevision(
 	if (!cid) throw new Error('componentId is required');
 	if (!rid) throw new Error('revisionId is required');
 	const res = await fetch(
-		`/api/components/${encodeURIComponent(cid)}/revisions/${encodeURIComponent(rid)}`,
+		backendUrl(`/api/components/${encodeURIComponent(cid)}/revisions/${encodeURIComponent(rid)}`),
 		{ method: 'DELETE' }
 	);
 	if (!res.ok) {

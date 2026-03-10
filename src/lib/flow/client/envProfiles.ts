@@ -1,3 +1,5 @@
+import { backendUrl } from '$lib/flow/client/backend';
+
 export type EnvProfileStatus = {
 	profileId: string;
 	packages: string[];
@@ -46,7 +48,7 @@ function _asErrorText(status: number, text: string): string {
 }
 
 export async function listEnvProfiles(): Promise<ListEnvProfilesResponse> {
-	const res = await fetch('/api/env/profiles');
+	const res = await fetch(backendUrl('/api/env/profiles'));
 	if (!res.ok) {
 		const text = _asErrorText(res.status, await res.text().catch(() => ''));
 		throw new Error(`listEnvProfiles failed: ${res.status} ${text}`);
@@ -57,7 +59,7 @@ export async function listEnvProfiles(): Promise<ListEnvProfilesResponse> {
 export async function installEnvProfile(profileId: string): Promise<InstallEnvProfileResponse> {
 	const pid = String(profileId ?? '').trim();
 	if (!pid) throw new Error('profileId is required');
-	const res = await fetch('/api/env/profiles/install', {
+	const res = await fetch(backendUrl('/api/env/profiles/install'), {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({ profileId: pid })

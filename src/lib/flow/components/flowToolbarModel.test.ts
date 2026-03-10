@@ -23,7 +23,7 @@ describe('flowToolbarModel', () => {
 			'Delete Graph',
 			'Reset'
 		]);
-		expect(items.find((i) => i.id === 'save_as_component')?.disabled).toBe(true);
+		expect(items.find((i) => i.id === 'save_as_component')?.disabled).toBeFalsy();
 		expect(items.find((i) => i.id === 'save_version')?.disabled).toBeFalsy();
 		expect(items.find((i) => i.id === 'save_as_graph')?.disabled).toBeFalsy();
 	});
@@ -85,7 +85,7 @@ describe('flowToolbarModel', () => {
 		expect(handlers.saveVersion).toHaveBeenCalledTimes(1);
 		expect(handlers.saveGraphAs).toHaveBeenCalledTimes(1);
 		expect(handlers.loadGraph).toHaveBeenCalledTimes(1);
-		expect(handlers.saveAsComponent).toHaveBeenCalledTimes(0);
+		expect(handlers.saveAsComponent).toHaveBeenCalledTimes(1);
 		expect(handlers.importGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.exportGraph).toHaveBeenCalledTimes(1);
 		expect(handlers.deleteGraph).toHaveBeenCalledTimes(1);
@@ -108,7 +108,6 @@ describe('flowToolbarModel', () => {
 		};
 		dispatchProjectMenuAction('save_version', 'component', handlers);
 		dispatchProjectMenuAction('save_as_graph', 'component', handlers);
-		dispatchProjectMenuAction('save_as_component', 'graph', handlers);
 		expect(handlers.saveVersion).toHaveBeenCalledTimes(0);
 		expect(handlers.saveGraphAs).toHaveBeenCalledTimes(0);
 		expect(handlers.saveAsComponent).toHaveBeenCalledTimes(0);

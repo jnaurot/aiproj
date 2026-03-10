@@ -1,3 +1,5 @@
+import { backendUrl } from '$lib/flow/client/backend';
+
 export type GraphFeatureFlags = {
 	schemaVersion: number;
 	flags: {
@@ -172,10 +174,11 @@ export type DeleteGraphRevisionResponse = {
 };
 
 async function _fetchJson<T>(url: string): Promise<T> {
-	const res = await fetch(url);
+	const fullUrl = backendUrl(url);
+	const res = await fetch(fullUrl);
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
-		throw new Error(`${url} failed: ${res.status} ${text}`);
+		throw new Error(`${fullUrl} failed: ${res.status} ${text}`);
 	}
 	return (await res.json()) as T;
 }
@@ -224,7 +227,7 @@ export async function getGraphRevision(
 export async function createGraphRevision(
 	req: CreateGraphRevisionRequest
 ): Promise<CreateGraphRevisionResponse> {
-	const res = await fetch('/api/graphs', {
+	const res = await fetch(backendUrl('/api/graphs'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(req)
@@ -254,7 +257,7 @@ export async function exportGraphPackage(
 export async function importGraphPackage(
 	req: ImportGraphPackageRequest
 ): Promise<ImportGraphPackageResponse> {
-	const res = await fetch('/api/graphs/import', {
+	const res = await fetch(backendUrl('/api/graphs/import'), {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify(req)
@@ -269,7 +272,7 @@ export async function importGraphPackage(
 export async function deleteGraph(graphId: string): Promise<DeleteGraphResponse> {
 	const gid = String(graphId ?? '').trim();
 	if (!gid) throw new Error('graphId is required');
-	const res = await fetch(`/api/graphs/${encodeURIComponent(gid)}`, {
+	const res = await fetch(backendUrl(`/api/graphs/${encodeURIComponent(gid)}`), {
 		method: 'DELETE'
 	});
 	if (!res.ok) {
@@ -288,7 +291,7 @@ export async function deleteGraphRevision(
 	if (!gid) throw new Error('graphId is required');
 	if (!rid) throw new Error('revisionId is required');
 	const res = await fetch(
-		`/api/graphs/${encodeURIComponent(gid)}/revisions/${encodeURIComponent(rid)}`,
+		backendUrl(`/api/graphs/${encodeURIComponent(gid)}/revisions/${encodeURIComponent(rid)}`),
 		{
 			method: 'DELETE'
 		}
