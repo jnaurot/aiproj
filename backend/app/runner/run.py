@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import inspect
 import json
 import re
 import traceback
@@ -45,6 +47,8 @@ from ..executors.builtin_profiles import (
 from ..feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
+
+_EXECUTOR_CODE_HASH_CACHE: Dict[tuple[str, int], str] = {}
 
 
 def iso_now() -> str:
@@ -1085,6 +1089,9 @@ def _artifact_metadata_v1(
     created_at_iso: str,
     run_id: Optional[str],
     graph_id: Optional[str],
+    determinism_fingerprint: Optional[str] = None,
+    code_hash: Optional[str] = None,
+    profile_lock: Optional[str] = None,
     component_context: Optional[Dict[str, Any]] = None,
     lineage_v1: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -1104,6 +1111,12 @@ def _artifact_metadata_v1(
         "runId": run_id,
         "graphId": graph_id,
     }
+    if isinstance(determinism_fingerprint, str) and determinism_fingerprint.strip():
+        out["determinismFingerprint"] = determinism_fingerprint.strip()
+    if isinstance(code_hash, str) and code_hash.strip():
+        out["codeHash"] = code_hash.strip()
+    if isinstance(profile_lock, str) and profile_lock.strip():
+        out["profileLock"] = profile_lock.strip()
     if isinstance(schema, dict):
         out["schema"] = schema
     if isinstance(component_context, dict) and component_context:
@@ -1617,11 +1630,102 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _determinism_fingerprint(determinism_env: Optional[Dict[str, Any]]) -> str:
+    normalized = _sanitize_for_fingerprint(dict(determinism_env or {}))
+    return sha256_hex(canonical_json(normalized).encode("utf-8"))
+
+
+def _determinism_code_hash_from_env(determinism_env: Optional[Dict[str, Any]]) -> str:
+    env = determinism_env if isinstance(determinism_env, dict) else {}
+    return str(env.get("executor_code_hash") or "").strip()
+
+
+def _determinism_profile_lock_from_env(determinism_env: Optional[Dict[str, Any]]) -> Optional[str]:
+    env = determinism_env if isinstance(determinism_env, dict) else {}
+    raw = env.get("tool_profile_lock")
+    lock = str(raw or "").strip()
+    return lock or None
+
+
+def _executor_code_hash_for_kind(kind: str) -> str:
+    key = str(kind or "").strip().lower()
+    fn: Any = None
+    if key == "source":
+        fn = exec_source
+    elif key == "transform":
+        fn = run_transform
+    elif key == "llm":
+        fn = exec_llm
+    elif key == "tool":
+        fn = exec_tool
+    fn_id = id(fn) if fn is not None else 0
+    cache_key = (key, fn_id)
+    cached = _EXECUTOR_CODE_HASH_CACHE.get(cache_key)
+    if cached:
+        return cached
+
+    digest_input = ""
+    try:
+        if fn is not None:
+            digest_input = inspect.getsource(fn)
+    except Exception:
+        digest_input = ""
+    if not digest_input:
+        try:
+            module = inspect.getmodule(fn) if fn is not None else None
+            module_path = getattr(module, "__file__", None)
+            if isinstance(module_path, str) and module_path:
+                with open(module_path, "rb") as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            pass
+    if not digest_input:
+        digest_input = f"{key}:{str(getattr(fn, '__qualname__', 'unknown'))}"
+    digest = _sha256_text(digest_input)
+    _EXECUTOR_CODE_HASH_CACHE[cache_key] = digest
+    return digest
+
+
+def _tool_profile_lock(params: Dict[str, Any]) -> Optional[str]:
+    p = params if isinstance(params, dict) else {}
+    provider = str(p.get("provider") or "").strip().lower()
+    if provider != "builtin":
+        return None
+    builtin_cfg = p.get("builtin")
+    if not isinstance(builtin_cfg, dict):
+        builtin_cfg = {}
+    try:
+        resolved = resolve_builtin_environment(builtin_cfg)
+    except Exception:
+        profile_id = str((builtin_cfg or {}).get("profileId") or "core").strip() or "core"
+        return f"invalid:{profile_id}"
+    explicit_lock = str(resolved.get("locked") or "").strip()
+    if explicit_lock:
+        return explicit_lock
+    profile_id = str(resolved.get("profileId") or "core").strip() or "core"
+    install_target = str(
+        resolved.get("installTarget")
+        or BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id, "cpu_dev")
+    ).strip() or "cpu_dev"
+    packages = [
+        str(pkg).strip()
+        for pkg in (resolved.get("packages") if isinstance(resolved.get("packages"), list) else [])
+        if str(pkg).strip()
+    ]
+    packages_key = "|".join(sorted(packages))
+    return f"profile:{profile_id}:{install_target}:{_sha256_text(packages_key)}"
+
+
 def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    env: Dict[str, Any]
     if kind == "llm":
         output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
         input_encoding = str((params.get("input_encoding") or params.get("inputEncoding") or "text"))
-        return {
+        env = {
             "llm_input_format": "artifact_input_v2",
             "llm_input_encoding": input_encoding,
             "llm_table_format": "csv_v1",
@@ -1631,9 +1735,18 @@ def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, An
             "llm_table_sort_rows": _env_bool("LLM_TABLE_SORT_ROWS", True),
             "llm_output_mode": output_mode,
         }
-    if kind == "transform":
-        return {"transform_engine": "duckdb"}
-    return {}
+    elif kind == "transform":
+        env = {"transform_engine": "duckdb"}
+    elif kind == "tool":
+        provider = str((params.get("provider") if isinstance(params, dict) else "") or "").strip().lower()
+        env = {"tool_provider": provider}
+        profile_lock = _tool_profile_lock(params if isinstance(params, dict) else {})
+        if profile_lock:
+            env["tool_profile_lock"] = profile_lock
+    else:
+        env = {}
+    env["executor_code_hash"] = _executor_code_hash_for_kind(kind)
+    return env
 
 
 def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
@@ -1688,6 +1801,74 @@ async def _record_consumers(
         consumer_exec_key=consumer_exec_key,
         output_artifact_id=output_artifact_id,
     )
+
+
+def _artifact_meta_v1_from_artifact(artifact: Optional[Artifact]) -> Dict[str, Any]:
+    if artifact is None:
+        return {}
+    payload_schema = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    meta = payload_schema.get("artifactMetadataV1") if isinstance(payload_schema.get("artifactMetadataV1"), dict) else {}
+    return meta if isinstance(meta, dict) else {}
+
+
+async def _classify_cache_miss_reason(
+    *,
+    context: GraphContext,
+    node_id: str,
+    exec_key: str,
+    node_state_hash: str,
+    upstream_ids: list[str],
+    determinism_env: Dict[str, Any],
+    node_impl_version: str,
+) -> str:
+    latest_fn = getattr(context.artifact_store, "get_latest_node_artifact", None)
+    if not callable(latest_fn):
+        return "CACHE_ENTRY_MISSING"
+    latest_artifact_id = await latest_fn(
+        graph_id=context.graph_id,
+        node_id=node_id,
+        exclude_artifact_id=exec_key,
+    )
+    if not isinstance(latest_artifact_id, str) or not latest_artifact_id.strip():
+        return "CACHE_ENTRY_MISSING"
+    try:
+        previous_artifact = await context.artifact_store.get(str(latest_artifact_id))
+    except Exception:
+        return "CACHE_ENTRY_MISSING"
+    meta = _artifact_meta_v1_from_artifact(previous_artifact)
+    if not meta:
+        return "CACHE_ENTRY_MISSING"
+
+    prev_code_hash = str(meta.get("codeHash") or "").strip()
+    cur_code_hash = _determinism_code_hash_from_env(determinism_env)
+    if prev_code_hash and cur_code_hash and prev_code_hash != cur_code_hash:
+        return "BUILD_CHANGED"
+
+    if str(meta.get("nodeImplVersion") or "") != str(node_impl_version or ""):
+        return "BUILD_CHANGED"
+
+    if str(meta.get("paramsFingerprint") or "") != str(node_state_hash or ""):
+        return "PARAMS_CHANGED"
+
+    prev_upstream = [
+        str(aid)
+        for aid in (meta.get("upstreamArtifactIds") if isinstance(meta.get("upstreamArtifactIds"), list) else [])
+        if isinstance(aid, str) and aid.strip()
+    ]
+    if sorted(prev_upstream) != sorted(str(aid) for aid in (upstream_ids or []) if str(aid).strip()):
+        return "INPUT_CHANGED"
+
+    prev_det_fp = str(meta.get("determinismFingerprint") or "").strip()
+    cur_det_fp = _determinism_fingerprint(determinism_env)
+    if prev_det_fp and prev_det_fp != cur_det_fp:
+        return "ENV_CHANGED"
+
+    prev_profile_lock = str(meta.get("profileLock") or "").strip()
+    cur_profile_lock = str(_determinism_profile_lock_from_env(determinism_env) or "").strip()
+    if prev_profile_lock and cur_profile_lock and prev_profile_lock != cur_profile_lock:
+        return "ENV_CHANGED"
+
+    return "CACHE_ENTRY_MISSING"
 
 
 
@@ -1830,6 +2011,7 @@ async def run_graph(
         actual_contract_fingerprint: Optional[str] = None,
         mismatch_kind: Optional[str] = None,
         reason: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> None:
         d = decision if decision in _CACHE_DECISIONS else "cache_miss"
         # Contract note: reason is required on the wire; we always resolve one.
@@ -1865,7 +2047,22 @@ async def run_graph(
             evt["actualContractFingerprint"] = actual_contract_fingerprint
         if mismatch_kind:
             evt["mismatchKind"] = mismatch_kind
+        if isinstance(detail, dict) and detail:
+            evt["detail"] = detail
         await _emit(evt)
+        await _emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    f"[cache] node={node_id} kind={node_kind} decision={d} "
+                    f"reason={resolved_reason} exec_key={str(exec_key)[:12]}"
+                ),
+                "nodeId": node_id,
+            }
+        )
 
     async def _emit_cache_summary_once() -> None:
         nonlocal cache_summary_emitted
@@ -2268,6 +2465,7 @@ async def run_graph(
                 }
                 print("[debug-exec-inputs]", json.dumps(debug_payload, sort_keys=True))
             source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
+            node_impl_version = _node_impl_version(kind)
             node_state_hash = build_node_state_hash(
                 node=n,
                 params=normalized_params_for_hash,
@@ -2283,11 +2481,22 @@ async def run_graph(
                 input_refs=input_refs,
                 determinism_env=determinism_env,
                 execution_version=context.execution_version,
-                node_impl_version=_node_impl_version(kind),
+                node_impl_version=node_impl_version,
             )
             expected_schema = _expected_schema_contract_for_node(n)
             cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
             cache_resolution = "CACHE_HIT" if cached_artifact_id else "CACHE_MISS"
+            cache_miss_reason = "CACHE_ENTRY_MISSING"
+            if use_cache_for_node and cache_resolution == "CACHE_MISS":
+                cache_miss_reason = await _classify_cache_miss_reason(
+                    context=context,
+                    node_id=node_id,
+                    exec_key=exec_key,
+                    node_state_hash=node_state_hash,
+                    upstream_ids=upstream_ids,
+                    determinism_env=determinism_env,
+                    node_impl_version=node_impl_version,
+                )
             logger.debug(
                 "resolve_phase run_id=%s node_id=%s exec_key=%s cache_resolution=%s",
                 run_id,
@@ -2308,11 +2517,13 @@ async def run_graph(
                 "upstream_ids": upstream_ids,
                 "input_refs": input_refs,
                 "node_state_hash": node_state_hash,
+                "node_impl_version": node_impl_version,
                 "exec_key": exec_key,
                 "artifact_id": exec_key,
                 "expected_schema": expected_schema,
                 "cache_resolution": cache_resolution,
                 "cached_artifact_id": cached_artifact_id,
+                "cache_miss_reason": cache_miss_reason,
                 "resolve_input_refs_error": resolve_input_refs_error,
             }
 
@@ -2349,11 +2560,13 @@ async def run_graph(
             upstream_ids = resolved["upstream_ids"]
             input_refs = resolved["input_refs"]
             node_state_hash = resolved["node_state_hash"]
+            node_impl_version = resolved["node_impl_version"]
             exec_key = resolved["exec_key"]
             artifact_id = resolved["artifact_id"]
             expected_schema = resolved["expected_schema"]
             cache_resolution = resolved["cache_resolution"]
             cached_artifact_id = resolved["cached_artifact_id"]
+            cache_miss_reason = str(resolved.get("cache_miss_reason") or "CACHE_ENTRY_MISSING")
             resolve_input_refs_error = resolved.get("resolve_input_refs_error")
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
 
@@ -2677,6 +2890,14 @@ async def run_graph(
                     node_kind=kind,
                     decision="cache_miss",
                     exec_key=exec_key,
+                    reason=cache_miss_reason,
+                    detail={
+                        "paramsFingerprint": node_state_hash,
+                        "upstreamArtifactIds": sorted(upstream_ids),
+                        "determinismFingerprint": _determinism_fingerprint(determinism_env),
+                        "codeHash": _determinism_code_hash_from_env(determinism_env),
+                        "profileLock": _determinism_profile_lock_from_env(determinism_env),
+                    },
                 )
                 if cache_only:
                     msg = (
@@ -3515,7 +3736,7 @@ async def run_graph(
                             exec_key=exec_key,
                             node_id=node_id,
                             node_type=kind,
-                            node_impl_version=_node_impl_version(kind),
+                            node_impl_version=node_impl_version,
                             params_fingerprint=node_state_hash,
                             upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
                             contract_fingerprint=contract_fingerprint,
@@ -3526,6 +3747,9 @@ async def run_graph(
                             created_at_iso=created_at_dt.isoformat(),
                             run_id=run_id,
                             graph_id=context.graph_id,
+                            determinism_fingerprint=_determinism_fingerprint(determinism_env),
+                            code_hash=_determinism_code_hash_from_env(determinism_env),
+                            profile_lock=_determinism_profile_lock_from_env(determinism_env),
                             component_context=(
                                 (n.get("data", {}) or {}).get("_componentContext")
                                 if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
@@ -4248,7 +4472,7 @@ async def run_graph(
                         exec_key=exec_key,
                         node_id=node_id,
                         node_type=kind,
-                        node_impl_version=_node_impl_version(kind),
+                        node_impl_version=node_impl_version,
                         params_fingerprint=artifact_params_hash,
                         upstream_artifact_ids=sorted(upstream_ids),
                         contract_fingerprint=contract_fingerprint,
@@ -4259,6 +4483,9 @@ async def run_graph(
                         created_at_iso=created_at_dt.isoformat(),
                         run_id=run_id,
                         graph_id=context.graph_id,
+                        determinism_fingerprint=_determinism_fingerprint(determinism_env),
+                        code_hash=_determinism_code_hash_from_env(determinism_env),
+                        profile_lock=_determinism_profile_lock_from_env(determinism_env),
                         component_context=(
                             (n.get("data", {}) or {}).get("_componentContext")
                             if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
