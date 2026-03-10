@@ -46,19 +46,36 @@ def build_component_dependency_manifest(
     definition: Dict[str, Any],
     *,
     component_store: Any,
+    root_component_id: str = "",
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     graph = definition.get("graph") if isinstance(definition.get("graph"), dict) else {}
     direct_refs, diagnostics = _extract_component_refs_from_graph(graph)
     if component_store is None:
         return {"schemaVersion": 1, "dependencies": [], "unresolved": []}, diagnostics
 
+    root_component = str(root_component_id or "").strip()
     queue: List[Dict[str, Any]] = []
     for ref in direct_refs:
+        component_id = str(ref.get("componentId") or "").strip()
+        revision_id = str(ref.get("revisionId") or "").strip()
+        if root_component and component_id == root_component:
+            diagnostics.append(
+                {
+                    "code": "COMPONENT_DEPENDENCY_CYCLE",
+                    "path": "graph.nodes",
+                    "message": (
+                        f"Component dependency cycle detected: {root_component} -> "
+                        f"{component_id}@{revision_id}"
+                    ),
+                    "severity": "error",
+                }
+            )
         queue.append(
             {
-                "componentId": str(ref.get("componentId") or "").strip(),
-                "revisionId": str(ref.get("revisionId") or "").strip(),
+                "componentId": component_id,
+                "revisionId": revision_id,
                 "depth": 1,
+                "ancestry": [root_component] if root_component else [],
             }
         )
 
@@ -71,6 +88,11 @@ def build_component_dependency_manifest(
         component_id = str(current.get("componentId") or "").strip()
         revision_id = str(current.get("revisionId") or "").strip()
         depth = int(current.get("depth") or 1)
+        ancestry = [
+            str(item).strip()
+            for item in (current.get("ancestry") if isinstance(current.get("ancestry"), list) else [])
+            if str(item).strip()
+        ]
         if not component_id or not revision_id:
             continue
         key = (component_id, revision_id)
@@ -102,11 +124,25 @@ def build_component_dependency_manifest(
             path_prefix=f"dependency[{component_id}@{revision_id}].graph.nodes",
         )
         for child_ref in child_refs:
+            child_component_id = str(child_ref.get("componentId") or "").strip()
+            child_revision_id = str(child_ref.get("revisionId") or "").strip()
+            if child_component_id in set(ancestry + [component_id]):
+                cycle_path = ancestry + [component_id, f"{child_component_id}@{child_revision_id}"]
+                diagnostics.append(
+                    {
+                        "code": "COMPONENT_DEPENDENCY_CYCLE",
+                        "path": f"dependency[{component_id}@{revision_id}]",
+                        "message": f"Component dependency cycle detected: {' -> '.join(cycle_path)}",
+                        "severity": "error",
+                    }
+                )
+                continue
             queue.append(
                 {
-                    "componentId": str(child_ref.get("componentId") or "").strip(),
-                    "revisionId": str(child_ref.get("revisionId") or "").strip(),
+                    "componentId": child_component_id,
+                    "revisionId": child_revision_id,
                     "depth": depth + 1,
+                    "ancestry": ancestry + [component_id],
                 }
             )
 

@@ -420,6 +420,97 @@ def test_component_routes_dependency_revision_override_rejects_incompatible_revi
         assert "COMPONENT_DEPENDENCY_OVERRIDE_INCOMPATIBLE" in codes
 
 
+def test_component_routes_reject_direct_dependency_cycle():
+    component_id = f"cmp_cycle_direct_{uuid4().hex[:8]}"
+    payload = _component_with_single_dependency_payload(
+        "cycle-direct",
+        child_component_id=component_id,
+        child_revision_id="rev_any",
+    )
+    with TestClient(app) as client:
+        res = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "cycle-direct",
+                **payload,
+            },
+        )
+        assert res.status_code == 422, res.text
+        detail = res.json().get("detail", {})
+        diagnostics = detail.get("diagnostics") if isinstance(detail, dict) else []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_CYCLE" in codes
+
+
+def test_component_routes_reject_transitive_dependency_cycle():
+    with TestClient(app) as client:
+        component_a = f"cmp_cycle_a_{uuid4().hex[:8]}"
+        a_v1 = client.post(
+            "/components",
+            json={
+                "componentId": component_a,
+                "message": "a-v1",
+                **_component_payload("a-v1"),
+            },
+        )
+        assert a_v1.status_code == 200, a_v1.text
+        a_v1_rev = str(a_v1.json()["revisionId"] or "")
+        assert a_v1_rev
+
+        component_c = f"cmp_cycle_c_{uuid4().hex[:8]}"
+        c_v1 = client.post(
+            "/components",
+            json={
+                "componentId": component_c,
+                "message": "c-v1",
+                **_component_with_single_dependency_payload(
+                    "c-v1",
+                    child_component_id=component_a,
+                    child_revision_id=a_v1_rev,
+                ),
+            },
+        )
+        assert c_v1.status_code == 200, c_v1.text
+        c_v1_rev = str(c_v1.json()["revisionId"] or "")
+        assert c_v1_rev
+
+        component_b = f"cmp_cycle_b_{uuid4().hex[:8]}"
+        b_v1 = client.post(
+            "/components",
+            json={
+                "componentId": component_b,
+                "message": "b-v1",
+                **_component_with_single_dependency_payload(
+                    "b-v1",
+                    child_component_id=component_c,
+                    child_revision_id=c_v1_rev,
+                ),
+            },
+        )
+        assert b_v1.status_code == 200, b_v1.text
+        b_v1_rev = str(b_v1.json()["revisionId"] or "")
+        assert b_v1_rev
+
+        a_v2 = client.post(
+            "/components",
+            json={
+                "componentId": component_a,
+                "message": "a-v2-cycle",
+                **_component_with_single_dependency_payload(
+                    "a-v2",
+                    child_component_id=component_b,
+                    child_revision_id=b_v1_rev,
+                ),
+            },
+        )
+        assert a_v2.status_code == 422, a_v2.text
+        detail = a_v2.json().get("detail", {})
+        diagnostics = detail.get("diagnostics") if isinstance(detail, dict) else []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_CYCLE" in codes
+
+
 def test_component_routes_reject_invalid_payload():
     with TestClient(app) as client:
         res = client.post(

@@ -350,7 +350,9 @@ async def validate_component_revision(req: ComponentValidateRequest):
     normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(normalized_definition))
     normalized_diagnostics.extend(_component_builtin_environment_diagnostics(normalized_definition))
     _, dependency_diagnostics = build_component_dependency_manifest(
-        normalized_definition, component_store=None
+        normalized_definition,
+        component_store=None,
+        root_component_id="",
     )
     normalized_diagnostics.extend(dependency_diagnostics)
     diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
@@ -405,6 +407,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
     dependency_manifest, dependency_diagnostics = build_component_dependency_manifest(
         definition,
         component_store=store,
+        root_component_id=str(req.componentId or "").strip(),
     )
     diagnostics.extend(dependency_diagnostics)
     errors = [d for d in diagnostics if d.get("severity") == "error"]
