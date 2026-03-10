@@ -9,6 +9,7 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
+	TransformQualityGateParams,
 	TransformSqlParams,
 	TransformSplitParams
 } from '$lib/flow/schema/transform';
@@ -94,6 +95,11 @@ export const defaultTransformSplitParams: TransformSplitParams = {
 	maxParts: 5000
 };
 
+export const defaultTransformQualityGateParams: TransformQualityGateParams = {
+	checks: [],
+	stopOnFail: true
+};
+
 export const defaultTransformParamsByKind = {
 	filter: {
 		op: 'filter',
@@ -164,6 +170,13 @@ export const defaultTransformParamsByKind = {
 		notes: '',
 		cache: { enabled: false },
 		split: defaultTransformSplitParams
+	},
+	quality_gate: {
+		op: 'quality_gate',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		quality_gate: defaultTransformQualityGateParams
 	},
 	sql: {
 		op: 'sql',

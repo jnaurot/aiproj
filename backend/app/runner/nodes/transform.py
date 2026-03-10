@@ -27,6 +27,7 @@ OP_KEYS = {
     "limit": "limit",
     "dedupe": "dedupe",
     "split": "split",
+    "quality_gate": "quality_gate",
     "sql": "sql",
 }
 
@@ -108,7 +109,7 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
     # keep only the active op payload
     keep_key = OP_KEYS[op]
-    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","sql","code"):
+    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","quality_gate","sql","code"):
         if k != keep_key:
             p.pop(k, None)
 
@@ -265,6 +266,94 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         p["aggregate"] = {
             "groupBy": group_by,
             "metrics": metrics,
+        }
+
+    if op == "quality_gate":
+        raw = p.get("quality_gate") if isinstance(p.get("quality_gate"), dict) else {}
+        checks_raw = raw.get("checks")
+        checks: List[Dict[str, Any]] = []
+        if isinstance(checks_raw, list):
+            for item in checks_raw:
+                if not isinstance(item, dict):
+                    continue
+                kind = str(item.get("kind") or "").strip().lower()
+                severity = str(item.get("severity") or "fail").strip().lower()
+                severity = "warn" if severity == "warn" else "fail"
+                if kind == "null_pct":
+                    column = str(item.get("column") or "").strip()
+                    if not column:
+                        continue
+                    max_null_pct = float(item.get("maxNullPct") or 0.0)
+                    max_null_pct = min(1.0, max(0.0, max_null_pct))
+                    checks.append({
+                        "kind": "null_pct",
+                        "column": column,
+                        "maxNullPct": max_null_pct,
+                        "severity": severity,
+                    })
+                    continue
+                if kind == "range":
+                    column = str(item.get("column") or "").strip()
+                    if not column:
+                        continue
+                    has_min = item.get("min") is not None and str(item.get("min")).strip() != ""
+                    has_max = item.get("max") is not None and str(item.get("max")).strip() != ""
+                    if not has_min and not has_max:
+                        continue
+                    check: Dict[str, Any] = {"kind": "range", "column": column, "severity": severity}
+                    if has_min:
+                        check["min"] = float(item.get("min"))
+                    if has_max:
+                        check["max"] = float(item.get("max"))
+                    check["inclusiveMin"] = bool(item.get("inclusiveMin", True))
+                    check["inclusiveMax"] = bool(item.get("inclusiveMax", True))
+                    max_out_of_range_pct = float(item.get("maxOutOfRangePct") or 0.0)
+                    check["maxOutOfRangePct"] = min(1.0, max(0.0, max_out_of_range_pct))
+                    checks.append(check)
+                    continue
+                if kind == "uniqueness":
+                    column = str(item.get("column") or "").strip()
+                    if not column:
+                        continue
+                    min_unique_ratio = float(item.get("minUniqueRatio") or 0.0)
+                    checks.append({
+                        "kind": "uniqueness",
+                        "column": column,
+                        "minUniqueRatio": min(1.0, max(0.0, min_unique_ratio)),
+                        "severity": severity,
+                    })
+                    continue
+                if kind == "class_balance":
+                    column = str(item.get("column") or "").strip()
+                    if not column:
+                        continue
+                    min_minority_ratio = float(item.get("minMinorityRatio") or 0.0)
+                    max_dominant_ratio = float(item.get("maxDominantRatio") or 1.0)
+                    checks.append({
+                        "kind": "class_balance",
+                        "column": column,
+                        "minMinorityRatio": min(1.0, max(0.0, min_minority_ratio)),
+                        "maxDominantRatio": min(1.0, max(0.0, max_dominant_ratio)),
+                        "severity": severity,
+                    })
+                    continue
+                if kind == "leakage":
+                    feature_column = str(item.get("featureColumn") or "").strip()
+                    target_column = str(item.get("targetColumn") or "").strip()
+                    if not feature_column or not target_column:
+                        continue
+                    max_abs_correlation = float(item.get("maxAbsCorrelation") or 1.0)
+                    checks.append({
+                        "kind": "leakage",
+                        "featureColumn": feature_column,
+                        "targetColumn": target_column,
+                        "maxAbsCorrelation": min(1.0, max(0.0, max_abs_correlation)),
+                        "severity": severity,
+                    })
+                    continue
+        p["quality_gate"] = {
+            "checks": checks,
+            "stopOnFail": bool(raw.get("stopOnFail", True)),
         }
 
     return p
@@ -599,6 +688,220 @@ def _execute_aggregate_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.
     ordered_cols = group_by + [m["name"] for m in metrics]
     return out.reindex(columns=ordered_cols)
 
+
+def _quality_gate_report(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Dict[str, Any]:
+    checks = spec.get("checks") if isinstance(spec.get("checks"), list) else []
+    columns = [str(c) for c in list(primary_df.columns)]
+    col_set = set(columns)
+    fail_violations: List[Dict[str, Any]] = []
+    warn_violations: List[Dict[str, Any]] = []
+
+    def add_violation(*, severity: str, payload: Dict[str, Any]) -> None:
+        if severity == "warn":
+            warn_violations.append(payload)
+        else:
+            fail_violations.append(payload)
+
+    for idx, raw in enumerate(checks):
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").strip().lower()
+        severity = "warn" if str(raw.get("severity") or "fail").strip().lower() == "warn" else "fail"
+        if kind == "null_pct":
+            column = str(raw.get("column") or "").strip()
+            if column not in col_set:
+                add_violation(severity=severity, payload={
+                    "index": idx, "kind": kind, "severity": severity, "column": column,
+                    "reason": "missing_column",
+                })
+                continue
+            max_null_pct = float(raw.get("maxNullPct") or 0.0)
+            series = primary_df[column]
+            total = int(len(series))
+            null_count = int(series.isna().sum())
+            null_pct = (float(null_count) / float(total)) if total > 0 else 0.0
+            if null_pct > max_null_pct:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "column": column,
+                    "observedNullPct": null_pct,
+                    "thresholdMaxNullPct": max_null_pct,
+                })
+            continue
+
+        if kind == "range":
+            column = str(raw.get("column") or "").strip()
+            if column not in col_set:
+                add_violation(severity=severity, payload={
+                    "index": idx, "kind": kind, "severity": severity, "column": column,
+                    "reason": "missing_column",
+                })
+                continue
+            has_min = "min" in raw and raw.get("min") is not None and str(raw.get("min")).strip() != ""
+            has_max = "max" in raw and raw.get("max") is not None and str(raw.get("max")).strip() != ""
+            if not has_min and not has_max:
+                continue
+            min_value = float(raw.get("min")) if has_min else None
+            max_value = float(raw.get("max")) if has_max else None
+            inclusive_min = bool(raw.get("inclusiveMin", True))
+            inclusive_max = bool(raw.get("inclusiveMax", True))
+            max_out_of_range_pct = float(raw.get("maxOutOfRangePct") or 0.0)
+            numeric = pd.to_numeric(primary_df[column], errors="coerce")
+            non_null = numeric.dropna()
+            denom = int(len(non_null))
+            if denom == 0:
+                continue
+            outside_mask = pd.Series(False, index=non_null.index)
+            if min_value is not None:
+                if inclusive_min:
+                    outside_mask = outside_mask | (non_null < min_value)
+                else:
+                    outside_mask = outside_mask | (non_null <= min_value)
+            if max_value is not None:
+                if inclusive_max:
+                    outside_mask = outside_mask | (non_null > max_value)
+                else:
+                    outside_mask = outside_mask | (non_null >= max_value)
+            outside = int(outside_mask.sum())
+            outside_pct = float(outside) / float(denom)
+            if outside_pct > max_out_of_range_pct:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "column": column,
+                    "observedOutOfRangePct": outside_pct,
+                    "thresholdMaxOutOfRangePct": max_out_of_range_pct,
+                    "min": min_value,
+                    "max": max_value,
+                })
+            continue
+
+        if kind == "uniqueness":
+            column = str(raw.get("column") or "").strip()
+            if column not in col_set:
+                add_violation(severity=severity, payload={
+                    "index": idx, "kind": kind, "severity": severity, "column": column,
+                    "reason": "missing_column",
+                })
+                continue
+            min_unique_ratio = float(raw.get("minUniqueRatio") or 0.0)
+            series = primary_df[column].dropna()
+            denom = int(len(series))
+            unique_ratio = (float(series.nunique(dropna=True)) / float(denom)) if denom > 0 else 0.0
+            if unique_ratio < min_unique_ratio:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "column": column,
+                    "observedUniqueRatio": unique_ratio,
+                    "thresholdMinUniqueRatio": min_unique_ratio,
+                })
+            continue
+
+        if kind == "class_balance":
+            column = str(raw.get("column") or "").strip()
+            if column not in col_set:
+                add_violation(severity=severity, payload={
+                    "index": idx, "kind": kind, "severity": severity, "column": column,
+                    "reason": "missing_column",
+                })
+                continue
+            min_minority_ratio = float(raw.get("minMinorityRatio") or 0.0)
+            max_dominant_ratio = float(raw.get("maxDominantRatio") or 1.0)
+            series = primary_df[column].dropna()
+            if len(series) == 0:
+                continue
+            ratios = series.value_counts(normalize=True, dropna=True)
+            dominant_ratio = float(ratios.max()) if len(ratios) > 0 else 0.0
+            minority_ratio = float(ratios.min()) if len(ratios) > 0 else 0.0
+            if dominant_ratio > max_dominant_ratio or minority_ratio < min_minority_ratio:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "column": column,
+                    "observedDominantRatio": dominant_ratio,
+                    "observedMinorityRatio": minority_ratio,
+                    "thresholdMaxDominantRatio": max_dominant_ratio,
+                    "thresholdMinMinorityRatio": min_minority_ratio,
+                })
+            continue
+
+        if kind == "leakage":
+            feature_column = str(raw.get("featureColumn") or "").strip()
+            target_column = str(raw.get("targetColumn") or "").strip()
+            if feature_column not in col_set or target_column not in col_set:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "featureColumn": feature_column,
+                    "targetColumn": target_column,
+                    "reason": "missing_column",
+                })
+                continue
+            max_abs_corr = float(raw.get("maxAbsCorrelation") or 1.0)
+            left = pd.to_numeric(primary_df[feature_column], errors="coerce")
+            right = pd.to_numeric(primary_df[target_column], errors="coerce")
+            if left.isna().all():
+                left_codes, _ = pd.factorize(primary_df[feature_column], sort=True)
+                left = pd.Series(left_codes, index=primary_df.index, dtype="float64").where(left_codes >= 0)
+            if right.isna().all():
+                right_codes, _ = pd.factorize(primary_df[target_column], sort=True)
+                right = pd.Series(right_codes, index=primary_df.index, dtype="float64").where(right_codes >= 0)
+            pair = pd.DataFrame({"left": left, "right": right}).dropna()
+            if len(pair) < 2:
+                continue
+            corr = float(pair["left"].corr(pair["right"]))
+            if pd.isna(corr):
+                continue
+            abs_corr = abs(corr)
+            if abs_corr > max_abs_corr:
+                add_violation(severity=severity, payload={
+                    "index": idx,
+                    "kind": kind,
+                    "severity": severity,
+                    "featureColumn": feature_column,
+                    "targetColumn": target_column,
+                    "observedAbsCorrelation": abs_corr,
+                    "thresholdMaxAbsCorrelation": max_abs_corr,
+                })
+            continue
+
+    return {
+        "checksEvaluated": int(len(checks)),
+        "failViolations": fail_violations,
+        "warnViolations": warn_violations,
+        "failed": bool(fail_violations),
+    }
+
+
+def _quality_gate_failure_message(report: Dict[str, Any]) -> str:
+    violations = report.get("failViolations") if isinstance(report.get("failViolations"), list) else []
+    if not violations:
+        return "quality_gate failed"
+    first = violations[0] if isinstance(violations[0], dict) else {}
+    kind = str(first.get("kind") or "unknown")
+    if "column" in first:
+        return f"quality_gate failed: {kind} on column {first.get('column')}"
+    if "featureColumn" in first and "targetColumn" in first:
+        return (
+            f"quality_gate failed: {kind} on "
+            f"{first.get('featureColumn')}->{first.get('targetColumn')}"
+        )
+    return f"quality_gate failed: {kind}"
+
+
+def _execute_quality_gate_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
+    report = _quality_gate_report(primary_df, spec)
+    if bool(report.get("failed")):
+        raise ValueError(_quality_gate_failure_message(report))
+    return primary_df
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
@@ -628,6 +931,9 @@ def execute_transform_op(
     if op == "aggregate":
         spec = params["aggregate"]
         return _execute_aggregate_op(primary_df, spec)
+    if op == "quality_gate":
+        spec = params["quality_gate"]
+        return _execute_quality_gate_op(primary_df, spec)
 
     if duckdb is None:
         raise ModuleNotFoundError("duckdb is required for non-split transform operations")
@@ -813,8 +1119,20 @@ def run_transform(
     join_lookup: Optional[Dict[str, pd.DataFrame]],
 ) -> TransformResult:
     op = params["op"]
-    
-    out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
+    quality_gate_report: Optional[Dict[str, Any]] = None
+    if op == "quality_gate":
+        spec = params["quality_gate"]
+        primary_df = input_tables.get("in")
+        if primary_df is None:
+            if not input_tables:
+                raise ValueError("Transform has no input tables (expected at least one).")
+            primary_df = next(iter(input_tables.values()))
+        quality_gate_report = _quality_gate_report(primary_df, spec)
+        if bool(quality_gate_report.get("failed")):
+            raise ValueError(_quality_gate_failure_message(quality_gate_report))
+        out_df = primary_df
+    else:
+        out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
 
     payload = df_to_csv_bytes(out_df)
     meta = {
@@ -823,4 +1141,6 @@ def run_transform(
         "content_hash": sha256_hex(payload),
         "format": "csv",
     }
+    if quality_gate_report is not None:
+        meta["quality_gate"] = quality_gate_report
     return TransformResult(payload_bytes=payload, mime_type="text/csv; charset=utf-8", meta=meta)

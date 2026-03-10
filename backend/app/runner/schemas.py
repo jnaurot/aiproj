@@ -431,6 +431,7 @@ class TransformParamsCurrent(NodeParamSchema):
         "limit",
         "dedupe",
         "split",
+        "quality_gate",
         "sql",
     ]
     enabled: bool = True
@@ -446,6 +447,7 @@ class TransformParamsCurrent(NodeParamSchema):
     limit: Optional[Dict[str, Any]] = None
     dedupe: Optional[Dict[str, Any]] = None
     split: Optional[Dict[str, Any]] = None
+    quality_gate: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
 
     def validate_required(self) -> List[str]:
@@ -460,6 +462,7 @@ class TransformParamsCurrent(NodeParamSchema):
             "limit": "limit",
             "dedupe": "dedupe",
             "split": "split",
+            "quality_gate": "quality_gate",
             "sql": "sql",
         }
         payload_key = op_to_payload.get(self.op)
@@ -877,6 +880,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "limit": "limit",
                 "dedupe": "dedupe",
                 "split": "split",
+                "quality_gate": "quality_gate",
                 "sql": "sql",
             }.get(op)
             payload = norm.get(payload_key) if payload_key else None
@@ -1039,6 +1043,37 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("split.flags allows only i, m, s")
                     if not isinstance(max_parts, int) or max_parts < 1 or max_parts > 100000:
                         errors.append("split.maxParts must be an integer between 1 and 100000")
+                elif op == "quality_gate":
+                    checks = payload.get("checks")
+                    if not isinstance(checks, list):
+                        errors.append("quality_gate.checks must be an array")
+                    else:
+                        for i, check in enumerate(checks):
+                            if not isinstance(check, dict):
+                                errors.append(f"quality_gate.checks[{i}] must be an object")
+                                continue
+                            kind = str(check.get("kind") or "").strip().lower()
+                            severity = str(check.get("severity") or "fail").strip().lower()
+                            if severity not in {"warn", "fail"}:
+                                errors.append(f"quality_gate.checks[{i}].severity must be one of: warn, fail")
+                            if kind not in {"null_pct", "range", "uniqueness", "class_balance", "leakage"}:
+                                errors.append(
+                                    f"quality_gate.checks[{i}].kind must be one of: null_pct, range, uniqueness, class_balance, leakage"
+                                )
+                                continue
+                            if kind in {"null_pct", "range", "uniqueness", "class_balance"}:
+                                if not str(check.get("column") or "").strip():
+                                    errors.append(f"quality_gate.checks[{i}].column is required")
+                            if kind == "range":
+                                has_min = check.get("min") is not None and str(check.get("min")).strip() != ""
+                                has_max = check.get("max") is not None and str(check.get("max")).strip() != ""
+                                if not has_min and not has_max:
+                                    errors.append(f"quality_gate.checks[{i}] range check requires min and/or max")
+                            if kind == "leakage":
+                                if not str(check.get("featureColumn") or "").strip():
+                                    errors.append(f"quality_gate.checks[{i}].featureColumn is required")
+                                if not str(check.get("targetColumn") or "").strip():
+                                    errors.append(f"quality_gate.checks[{i}].targetColumn is required")
         elif kind == "tool":
             norm_tool = normalize_tool_params_frontend(params)
             tool_model = ToolProviderParams.model_validate(norm_tool)

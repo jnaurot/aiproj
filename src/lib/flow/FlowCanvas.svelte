@@ -2299,6 +2299,7 @@ async function scrollToBottom() {
 											<option value="limit">limit</option>
 											<option value="dedupe">dedupe</option>
 											<option value="split">split</option>
+											<option value="quality_gate">quality_gate</option>
 											<option value="sql">sql</option>
 										{:else if $selectedNode.data.kind === 'tool'}
 											<option value="mcp">mcp</option>

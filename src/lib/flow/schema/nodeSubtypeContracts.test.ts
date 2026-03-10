@@ -68,6 +68,16 @@ describe('node subtype contract schemas', () => {
 				by: ['sku'],
 			}).success
 		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.quality_gate.safeParse({
+				stopOnFail: true,
+				checks: [
+					{ kind: 'null_pct', column: 'text', maxNullPct: 0.1, severity: 'fail' },
+					{ kind: 'uniqueness', column: 'id', minUniqueRatio: 0.99, severity: 'warn' },
+				],
+			}).success
+		).toBe(true);
 	});
 
 	it('accepts valid tool providers and component params', () => {

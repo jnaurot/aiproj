@@ -9,9 +9,10 @@ import TransformSortEditor from './TransformSortEditor.svelte';
 import TransformLimitEditor from './TransformLimitEditor.svelte';
 import TransformDedupeEditor from './TransformDedupeEditor.svelte';
 import TransformSplitEditor from './TransformSplitEditor.svelte';
+import TransformQualityGateEditor from './TransformQualityGateEditor.svelte';
 import TransformSqlEditor from './TransformSqlEditor.svelte';
 
-// filter, select, rename, derive, aggregate, join, sort, limit, dedupe, sql
+// filter, select, rename, derive, aggregate, join, sort, limit, dedupe, split, quality_gate, sql
 
 export type EditorCommitMode = 'draft' | 'immediate';
 
@@ -26,6 +27,7 @@ export const TransformEditorCommitModeByKind = {
 	limit: 'immediate',
 	dedupe: 'immediate',
 	split: 'draft',
+	quality_gate: 'immediate',
 	sql: 'draft'
 } as const satisfies Record<string, EditorCommitMode>;
 
@@ -40,5 +42,6 @@ export const TransformEditorByKind = {
     limit: TransformLimitEditor,
     dedupe: TransformDedupeEditor,
     split: TransformSplitEditor,
+    quality_gate: TransformQualityGateEditor,
     sql: TransformSqlEditor
 } as const;

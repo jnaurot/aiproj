@@ -79,6 +79,8 @@ const OP_TO_BLOCK: Record<string, string> = {
   sort: "sort",
   limit: "limit",
   dedupe: "dedupe",
+  split: "split",
+  quality_gate: "quality_gate",
   sql: "sql",
 };
 
@@ -92,6 +94,21 @@ const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   sort: ["by"],
   limit: ["n"],
   dedupe: ["allColumns", "by"],
+  split: [
+    "sourceColumn",
+    "outColumn",
+    "mode",
+    "lineBreak",
+    "pattern",
+    "delimiter",
+    "flags",
+    "trim",
+    "dropEmpty",
+    "emitIndex",
+    "emitSourceRow",
+    "maxParts",
+  ],
+  quality_gate: ["checks", "stopOnFail"],
   sql: ["dialect", "query"],
 };
 

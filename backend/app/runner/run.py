@@ -874,7 +874,7 @@ def _transform_output_columns(
         if emit_source_row:
             out.append({"name": "source_row", "type": "int"})
         return canonical_table_columns(out)
-    if op_l in {"sort", "limit", "dedupe", "filter", "sql"}:
+    if op_l in {"sort", "limit", "dedupe", "filter", "quality_gate", "sql"}:
         # sql may differ but keep deterministic fallback if no parser.
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
     return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
@@ -3522,6 +3522,44 @@ async def run_graph(
                                         available_source=available_source,
                                     ),
                                 )
+                        elif op == "quality_gate":
+                            gate_spec = norm.get("quality_gate") or {}
+                            checks = gate_spec.get("checks") if isinstance(gate_spec.get("checks"), list) else []
+                            available_cols, available_source = _available_columns_for_port(
+                                port=primary_port,
+                                input_schema_cols_by_port=input_schema_cols_by_port,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            for idx, check in enumerate(checks):
+                                if not isinstance(check, dict):
+                                    continue
+                                kind = str(check.get("kind") or "").strip().lower()
+                                referenced: list[str] = []
+                                if kind in {"null_pct", "range", "uniqueness", "class_balance"}:
+                                    col = str(check.get("column") or "").strip()
+                                    if col:
+                                        referenced.append(col)
+                                elif kind == "leakage":
+                                    feature_col = str(check.get("featureColumn") or "").strip()
+                                    target_col = str(check.get("targetColumn") or "").strip()
+                                    if feature_col:
+                                        referenced.append(feature_col)
+                                    if target_col:
+                                        referenced.append(target_col)
+                                missing_cols = [c for c in referenced if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: quality_gate references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="quality_gate",
+                                            param_path=f"params.quality_gate.checks.{idx}",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
 
                         try:
                             res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
@@ -3546,6 +3584,29 @@ async def run_graph(
                             "message": f"transform: produced {len(res.payload_bytes)} bytes, content_hash={res.meta.get('content_hash')}",
                             "nodeId": node_id,
                         })
+                        quality_gate_meta = (res.meta.get("quality_gate") if isinstance(res.meta, dict) else None)
+                        warn_violations = (
+                            quality_gate_meta.get("warnViolations")
+                            if isinstance(quality_gate_meta, dict) and isinstance(quality_gate_meta.get("warnViolations"), list)
+                            else []
+                        )
+                        if warn_violations:
+                            await _emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": json.dumps(
+                                    {
+                                        "op": "quality_gate",
+                                        "warnViolations": warn_violations,
+                                        "checksEvaluated": quality_gate_meta.get("checksEvaluated"),
+                                    },
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                ),
+                                "nodeId": node_id,
+                            })
 
                         # 5) store artifact bytes + cache
                         artifact_id = exec_key  # keep your convention
@@ -3636,7 +3697,7 @@ async def run_graph(
                             }
 
                         enriched_cols: list[dict[str, str]] = []
-                        passthrough_ops = {"filter", "sort", "limit", "dedupe", "sql", "select"}
+                        passthrough_ops = {"filter", "sort", "limit", "dedupe", "quality_gate", "sql", "select"}
                         for c in output_cols:
                             if not isinstance(c, dict):
                                 continue

@@ -64,6 +64,7 @@ describe('schemaPropagation', () => {
 			'limit',
 			'dedupe',
 			'split',
+			'quality_gate',
 			'sql'
 		];
 		for (const kind of kinds) {

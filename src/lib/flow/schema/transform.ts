@@ -12,6 +12,7 @@ const TransformKindSchema = z.enum(["filter",
   "limit",
   "dedupe",
   "split",
+  "quality_gate",
   "sql"]);
 
 // ─────────────────────────────────────────────
@@ -227,6 +228,74 @@ export const TransformSplitParamsSchema = z
 	})
 	.strip();
 
+const TransformQualityGateSeveritySchema = z.enum(['warn', 'fail']).default('fail');
+
+export const TransformQualityGateCheckSchema = z
+	.discriminatedUnion('kind', [
+		z
+			.object({
+				kind: z.literal('null_pct'),
+				column: z.string().min(1),
+				maxNullPct: z.number().min(0).max(1).default(0),
+				severity: TransformQualityGateSeveritySchema
+			})
+			.strip(),
+		z
+			.object({
+				kind: z.literal('range'),
+				column: z.string().min(1),
+				min: z.number().optional(),
+				max: z.number().optional(),
+				inclusiveMin: z.boolean().default(true),
+				inclusiveMax: z.boolean().default(true),
+				maxOutOfRangePct: z.number().min(0).max(1).default(0),
+				severity: TransformQualityGateSeveritySchema
+			})
+			.superRefine((v, ctx) => {
+				if (v.min === undefined && v.max === undefined) {
+					ctx.addIssue({
+						code: 'custom',
+						path: ['min'],
+						message: 'Range check requires min and/or max'
+					});
+				}
+			})
+			.strip(),
+		z
+			.object({
+				kind: z.literal('uniqueness'),
+				column: z.string().min(1),
+				minUniqueRatio: z.number().min(0).max(1).default(1),
+				severity: TransformQualityGateSeveritySchema
+			})
+			.strip(),
+		z
+			.object({
+				kind: z.literal('class_balance'),
+				column: z.string().min(1),
+				minMinorityRatio: z.number().min(0).max(1).default(0),
+				maxDominantRatio: z.number().min(0).max(1).default(1),
+				severity: TransformQualityGateSeveritySchema
+			})
+			.strip(),
+		z
+			.object({
+				kind: z.literal('leakage'),
+				featureColumn: z.string().min(1),
+				targetColumn: z.string().min(1),
+				maxAbsCorrelation: z.number().min(0).max(1).default(0.95),
+				severity: TransformQualityGateSeveritySchema
+			})
+			.strip()
+	]);
+
+export const TransformQualityGateParamsSchema = z
+	.object({
+		checks: z.array(TransformQualityGateCheckSchema).default([]),
+		stopOnFail: z.boolean().default(true)
+	})
+	.strip();
+
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
   select: TransformSelectParamsSchema,
@@ -238,6 +307,7 @@ export const TransformParamsSchemaByKind = {
   limit: TransformLimitParamsSchema,
   dedupe: TransformDedupeParamsSchema,
   split: TransformSplitParamsSchema,
+  quality_gate: TransformQualityGateParamsSchema,
   sql: TransformSqlParamsSchema
 } as const
 
@@ -253,6 +323,7 @@ export type TransformLimitParams  = z.infer<typeof   TransformLimitParamsSchema>
 export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchema>;
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
 export type TransformSplitParams = z.infer<typeof TransformSplitParamsSchema>;
+export type TransformQualityGateParams = z.infer<typeof TransformQualityGateParamsSchema>;
 
 
 // ---- common params (shared across all ops) ----
@@ -321,6 +392,11 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("split"),
     split: TransformSplitParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("quality_gate"),
+    quality_gate: TransformQualityGateParamsSchema
   }).strip(),
 
   TransformCommonSchema.extend({
