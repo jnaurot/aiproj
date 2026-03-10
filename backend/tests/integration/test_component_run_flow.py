@@ -18,8 +18,10 @@ from app.runner.metadata import NodeOutput
 class _ComponentStoreStub:
     def __init__(self, revisions):
         self._revisions = revisions
+        self.calls = []
 
     def get_revision(self, component_id: str, revision_id: str):
+        self.calls.append((component_id, revision_id))
         return self._revisions.get((component_id, revision_id))
 
 
@@ -76,6 +78,34 @@ def _multi_output_component_definition():
                 {"name": "source", "portType": "text", "required": True, "typedSchema": {"type": "text", "fields": []}},
             ],
         },
+    }
+
+
+def _nested_parent_component_definition():
+    return {
+        "graph": {
+            "nodes": [
+                {
+                    "id": "inner_component",
+                    "data": {
+                        "kind": "component",
+                        "label": "Inner Nested Component",
+                        "params": {
+                            "componentRef": {"componentId": "cmp_child", "revisionId": "rev_child"},
+                            "bindings": {
+                                "inputs": {},
+                                "outputs": {"out": {"nodeId": "cmp:inner_component:inner_tool", "artifact": "current"}},
+                                "config": {},
+                            },
+                            "config": {},
+                        },
+                        "ports": {"in": "text", "out": "json"},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {"inputs": [], "outputs": [{"name": "out", "portType": "json"}]},
     }
 
 
@@ -624,3 +654,95 @@ async def test_component_named_output_undeclared_handle_fails_without_wrapper_fa
         for e in events
     )
     assert any(e.get("type") == "run_finished" and e.get("status") == "failed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_component_run_expands_nested_component_references(monkeypatch):
+    run_mod = importlib.import_module("app.runner.run")
+    store = MemoryArtifactStore()
+    cache = ExecutionCache()
+    events = []
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+    monkeypatch.setattr(run_mod, "missing_packages_for_packages", lambda _packages: [])
+
+    component_store = _ComponentStoreStub(
+        {
+            ("cmp_parent", "rev_parent"): SimpleNamespace(definition=_nested_parent_component_definition()),
+            ("cmp_child", "rev_child"): SimpleNamespace(definition=_component_definition()),
+        }
+    )
+    runtime_ref = SimpleNamespace(component_revisions=component_store)
+
+    graph = {
+        "nodes": [
+            {
+                "id": "src",
+                "data": {
+                    "kind": "source",
+                    "label": "Source",
+                    "sourceKind": "file",
+                    "params": {"snapshot_id": "a" * 64, "file_format": "txt", "output_mode": "text"},
+                    "ports": {"in": None, "out": "text"},
+                },
+            },
+            {
+                "id": "cmp_node",
+                "data": {
+                    "kind": "component",
+                    "label": "Parent Component",
+                    "params": {
+                        "componentRef": {"componentId": "cmp_parent", "revisionId": "rev_parent"},
+                        "bindings": {
+                            "inputs": {},
+                            "outputs": {"out": {"nodeId": "cmp:inner_component:inner_tool", "artifact": "current"}},
+                            "config": {},
+                        },
+                        "config": {},
+                    },
+                    "ports": {"in": "text", "out": "json"},
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "src", "target": "cmp_node"}],
+    }
+
+    await run_mod.run_graph(
+        run_id="run-component-nested-1",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-component-nested-1", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        runtime_ref=runtime_ref,
+        graph_id="graph-component-nested",
+    )
+
+    nested_internal_output = next(
+        (
+            e
+            for e in events
+            if e.get("type") == "node_output"
+            and str(e.get("nodeId") or "").startswith("cmp:cmp_node:cmp:inner_component:")
+        ),
+        None,
+    )
+    assert nested_internal_output is not None
+    assert any(
+        e.get("type") == "node_finished" and e.get("nodeId") == "cmp_node" and e.get("status") == "succeeded"
+        for e in events
+    )
+    assert ("cmp_parent", "rev_parent") in component_store.calls
+    assert ("cmp_child", "rev_child") in component_store.calls
