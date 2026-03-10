@@ -241,7 +241,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let nodeInspectorCollapsed = false;
 	let environmentCollapsed = false;
 	let runLogsCollapsed = false;
-	let guidedDsmlDismissed = false;
+	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
 		inspectorMode: InspectorMode;
@@ -3453,6 +3453,10 @@ async function scrollToBottom() {
 		align-items: center;
 		gap: 8px;
 		flex-wrap: wrap;
+	}
+
+	.guidedActions .primary {
+		font-size: 12px;
 	}
 
 	.guidedInlineExample {
