@@ -16,6 +16,8 @@ export type InputSchemaProvenance = {
 export type InputSchemaEnvelope = {
 	contract: string;
 	version?: number;
+	source?: string;
+	state?: string;
 	table?: {
 		columns?: InputSchemaColumn[];
 		coercion?: { mode?: string; lossy?: boolean; notes?: string };
@@ -33,6 +35,8 @@ export type InputSchemaView = {
 	rowCount: number | null;
 	provenance: InputSchemaProvenance | null;
 	coercion: { mode: string; lossy: boolean; notes?: string } | null;
+	schemaSource: string;
+	schemaState: string;
 };
 
 function normalizeColumns(columns: unknown): InputSchemaColumn[] {
@@ -92,6 +96,8 @@ export function parseInputSchemaView(
 							? { notes: String(schema.table.coercion.notes) }
 							: {})
 					}
-				: null
+				: null,
+		schemaSource: String(schema?.source ?? (ps.source as string | undefined) ?? 'unknown'),
+		schemaState: String(schema?.state ?? (ps.state as string | undefined) ?? 'unknown')
 	};
 }

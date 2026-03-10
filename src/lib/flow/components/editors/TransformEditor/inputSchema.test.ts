@@ -56,4 +56,20 @@ describe('parseInputSchemaView', () => {
 		});
 		expect(parsed.columns).toEqual([{ name: 'text', type: 'string' }]);
 	});
+
+	it('captures schema source/state metadata for UI badges', () => {
+		const parsed = parseInputSchemaView('a4', 'Source.in', {
+			type: 'table',
+			schema: {
+				contract: 'TABLE_V1',
+				source: 'sample',
+				state: 'partial',
+				table: {
+					columns: [{ name: 'value', type: 'number' }]
+				}
+			}
+		});
+		expect(parsed.schemaSource).toBe('sample');
+		expect(parsed.schemaState).toBe('partial');
+	});
 });
