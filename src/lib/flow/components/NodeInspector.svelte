@@ -135,6 +135,29 @@
 	}
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
+	$: schemaDriftSummary = (() => {
+		const expected = (selectedNode?.data as any)?.schema?.expectedSchema?.typedSchema;
+		const observed = (selectedNode?.data as any)?.schema?.observedSchema?.typedSchema;
+		if (!expected || !observed) return null;
+		const expectedType = String(expected?.type ?? 'unknown').trim().toLowerCase();
+		const observedType = String(observed?.type ?? 'unknown').trim().toLowerCase();
+		const issues: string[] = [];
+		if (expectedType !== 'unknown' && observedType !== 'unknown' && expectedType !== observedType) {
+			issues.push(`type ${expectedType}->${observedType}`);
+		}
+		if (expectedType === 'table' && observedType === 'table') {
+			const expectedFields = Array.isArray(expected?.fields) ? expected.fields : [];
+			const observedFields = Array.isArray(observed?.fields) ? observed.fields : [];
+			const observedNames = new Set(
+				observedFields.map((f: Record<string, unknown>) => String(f?.name ?? '').trim().toLowerCase())
+			);
+			const missing = expectedFields
+				.map((f: Record<string, unknown>) => String(f?.name ?? '').trim())
+				.filter((name: string) => name.length > 0 && !observedNames.has(name.toLowerCase()));
+			if (missing.length > 0) issues.push(`missing: ${missing.join(', ')}`);
+		}
+		return issues.length > 0 ? issues.join(' | ') : null;
+	})();
 	let expectedSchemaDraft = '';
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
@@ -416,6 +439,9 @@
 					<button type="button" on:click={useInferredExpectedSchema}>Use inferred</button>
 					<button type="button" on:click={clearExpectedSchema}>Clear</button>
 				</div>
+				{#if schemaDriftSummary}
+					<div class="expectedSchemaDrift">Drift: {schemaDriftSummary}</div>
+				{/if}
 				{#if expectedSchemaError}
 					<div class="expectedSchemaError">{expectedSchemaError}</div>
 				{/if}
@@ -594,6 +620,11 @@
 	.expectedSchemaError {
 		font-size: 11px;
 		color: var(--ni-error-text);
+	}
+
+	.expectedSchemaDrift {
+		font-size: 11px;
+		color: #f59e0b;
 	}
 
 	.schemaContract {

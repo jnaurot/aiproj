@@ -1369,6 +1369,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					cacheDecision: nextCacheDecision
 				}
 			};
+			let driftLogMessage: string | null = null;
 			const nodes = state.nodes.map((node) => {
 				if (String(node.id ?? '') !== evt.nodeId) return node;
 				const observedSchema = deriveObservedSchemaObservationFromNodeOutput(
@@ -1385,6 +1386,21 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					observedSchema
 				});
 				if (!parsedSchema.success) return node;
+				const drift = computeSchemaDriftSummary(
+					(parsedSchema.data as any)?.expectedSchema?.typedSchema,
+					(parsedSchema.data as any)?.observedSchema?.typedSchema
+				);
+				if (drift.hasDrift) {
+					const details: string[] = [];
+					if (drift.typeMismatch) details.push('type mismatch');
+					if (drift.missingColumns.length > 0) {
+						details.push(`missing columns: ${drift.missingColumns.join(', ')}`);
+					}
+					if (drift.mismatchedColumns.length > 0) {
+						details.push(`column type drift: ${drift.mismatchedColumns.join(', ')}`);
+					}
+					driftLogMessage = `[schema-drift] expected vs observed drift detected (${details.join('; ') || 'unknown'})`;
+				}
 				return {
 					...node,
 					data: {
@@ -1393,12 +1409,16 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					}
 				};
 			});
-			return withGraphMeta({
+			const baseNext = withGraphMeta({
 				...state,
 				nodes,
 				nodeOutputs,
 				nodeBindings
 			});
+			if (driftLogMessage) {
+				return logPush(baseNext, 'warn', driftLogMessage, evt.nodeId);
+			}
+			return baseNext;
 		}
 		case 'cache_decision': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
@@ -2615,6 +2635,65 @@ function deriveObservedSchemaObservationFromNodeOutput(
 		state: 'fresh',
 		schemaFingerprint: fingerprintTypedSchema(typedSchema),
 		updatedAt: String((evt as any)?.at ?? new Date().toISOString())
+	};
+}
+
+function computeSchemaDriftSummary(
+	expectedRaw: unknown,
+	observedRaw: unknown
+): {
+	hasDrift: boolean;
+	typeMismatch: boolean;
+	missingColumns: string[];
+	mismatchedColumns: string[];
+} {
+	const expected = expectedRaw && typeof expectedRaw === 'object' ? (expectedRaw as Record<string, unknown>) : null;
+	const observed = observedRaw && typeof observedRaw === 'object' ? (observedRaw as Record<string, unknown>) : null;
+	if (!expected || !observed) {
+		return { hasDrift: false, typeMismatch: false, missingColumns: [], mismatchedColumns: [] };
+	}
+	const expectedType = normalizeTypedSchemaPrimitive(expected.type);
+	const observedType = normalizeTypedSchemaPrimitive(observed.type);
+	const typeMismatch =
+		expectedType !== 'unknown' &&
+		observedType !== 'unknown' &&
+		expectedType !== observedType;
+	if (expectedType !== 'table' || observedType !== 'table') {
+		return { hasDrift: typeMismatch, typeMismatch, missingColumns: [], mismatchedColumns: [] };
+	}
+	const expectedFields = normalizeSchemaFields(expected.fields);
+	const observedFields = normalizeSchemaFields(observed.fields);
+	const observedByName = new Map<string, SchemaField>();
+	for (const field of observedFields) {
+		const key = String(field.name ?? '').trim().toLowerCase();
+		if (!key) continue;
+		observedByName.set(key, field);
+	}
+	const missingColumns: string[] = [];
+	const mismatchedColumns: string[] = [];
+	for (const field of expectedFields) {
+		const name = String(field.name ?? '').trim();
+		if (!name) continue;
+		const observedField = observedByName.get(name.toLowerCase());
+		if (!observedField) {
+			missingColumns.push(name);
+			continue;
+		}
+		const expectedTypeForField = String(field.type ?? 'unknown').trim().toLowerCase() || 'unknown';
+		const observedTypeForField = String(observedField.type ?? 'unknown').trim().toLowerCase() || 'unknown';
+		if (
+			expectedTypeForField !== 'unknown' &&
+			observedTypeForField !== 'unknown' &&
+			expectedTypeForField !== observedTypeForField
+		) {
+			mismatchedColumns.push(name);
+		}
+	}
+	return {
+		hasDrift: typeMismatch || missingColumns.length > 0 || mismatchedColumns.length > 0,
+		typeMismatch,
+		missingColumns,
+		mismatchedColumns
 	};
 }
 

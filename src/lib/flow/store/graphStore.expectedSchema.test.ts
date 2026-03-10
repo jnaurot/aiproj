@@ -1,7 +1,7 @@
 import { get } from 'svelte/store';
 import { describe, expect, it } from 'vitest';
 
-import { graphStore } from './graphStore';
+import { __applyRunEventForTest, graphStore, type GraphState } from './graphStore';
 
 describe('graphStore expected schema authoring', () => {
 	it('persists and clears node expected schema envelope', () => {
@@ -58,5 +58,34 @@ describe('graphStore expected schema authoring', () => {
 		const preflight = graphStore.getSavePreflight();
 		expect(preflight.ok).toBe(false);
 		expect(preflight.diagnostics.some((d) => d.code === 'EXPECTED_SCHEMA_PORT_MISMATCH')).toBe(true);
+	});
+
+	it('emits schema drift warning in run logs when observed output violates expected schema', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('source', { x: 10, y: 10 });
+		const saveResult = graphStore.setNodeExpectedSchema(nodeId, {
+			type: 'json',
+			fields: []
+		});
+		expect((saveResult as any)?.ok).toBe(true);
+
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_output',
+				runId: 'run_drift',
+				at: '2026-03-10T20:00:00Z',
+				nodeId,
+				artifactId: 'artifact_drift',
+				portType: 'text',
+				mimeType: 'text/plain',
+				preview: 'hello'
+			},
+			'run_drift'
+		);
+		const lastLog = next.logs[next.logs.length - 1];
+		expect(lastLog?.level).toBe('warn');
+		expect(String(lastLog?.message ?? '')).toContain('[schema-drift]');
 	});
 });
