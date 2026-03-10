@@ -221,6 +221,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let splitStartY = 0;
 	let splitPaneAStartPx = 0;
 	let splitPaneBStartPx = 0;
+	let splitEnvLogsBypassEnvironment = false;
 	let subtypeError: string | null = null;
 	let subtypeErrorNodeId: string | null = null;
 	let subtypeErrorTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2059,27 +2060,49 @@ async function scrollToBottom() {
 		graphStore.setNodeMeta(node.id, { presetRef: undefined });
 	}
 
-	function beginInspectorSplit(pair: InspectorSplitPair, event: PointerEvent) {
-		const paneA = pair === 'top_env' ? inspectorTopPaneEl : environmentPaneEl;
+	async function beginInspectorSplit(pair: InspectorSplitPair, event: PointerEvent) {
+		if (pair === 'env_logs' && runLogsCollapsed) {
+			runLogsCollapsed = false;
+			await tick();
+		}
+		splitEnvLogsBypassEnvironment = pair === 'env_logs' && environmentCollapsed;
+		const paneA =
+			pair === 'top_env'
+				? inspectorTopPaneEl
+				: splitEnvLogsBypassEnvironment
+					? inspectorTopPaneEl
+					: environmentPaneEl;
 		const paneB = pair === 'top_env' ? environmentPaneEl : runLogsPaneEl;
 		if (!paneA || !paneB) return;
 		const aRect = paneA.getBoundingClientRect();
 		const bRect = paneB.getBoundingClientRect();
-		if (aRect.height <= 0 || bRect.height <= 0) return;
+		const pairStartPx = aRect.height + bRect.height;
+		if (pairStartPx <= 0) return;
+		const totalWeight =
+			pair === 'top_env'
+				? Math.max(0.001, inspectorTopWeight + environmentWeight)
+				: Math.max(0.001, environmentWeight + runLogsWeight);
+		const paneAWeight = pair === 'top_env' ? inspectorTopWeight : environmentWeight;
+		const paneAFromWeight = (pairStartPx * paneAWeight) / totalWeight;
+		const paneBFromWeight = pairStartPx - paneAFromWeight;
+		const paneAStart = aRect.height > 0 ? aRect.height : paneAFromWeight;
+		const paneBStart = bRect.height > 0 ? bRect.height : paneBFromWeight;
+		const normalizedA = Math.max(0, Math.min(pairStartPx, paneAStart));
+		const normalizedB = Math.max(0, pairStartPx - normalizedA);
 		activeInspectorSplit = pair;
 		splitStartY = event.clientY;
-		splitPaneAStartPx = aRect.height;
-		splitPaneBStartPx = bRect.height;
+		splitPaneAStartPx = normalizedB > 0 ? normalizedA : paneAFromWeight;
+		splitPaneBStartPx = pairStartPx - splitPaneAStartPx;
 	}
 
 	function onInspectorSplitMove(event: PointerEvent) {
 		if (!activeInspectorSplit) return;
-		const minPanePx = 96;
 		const pairStartPx = splitPaneAStartPx + splitPaneBStartPx;
 		if (pairStartPx <= 0) return;
+		const minPanePx =
+			activeInspectorSplit === 'env_logs' && splitEnvLogsBypassEnvironment ? 64 : 96;
 		const dy = event.clientY - splitStartY;
 		const nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, splitPaneAStartPx + dy));
-		const nextPaneB = pairStartPx - nextPaneA;
 
 		if (activeInspectorSplit === 'top_env') {
 			const total = inspectorTopWeight + environmentWeight;
@@ -2087,15 +2110,23 @@ async function scrollToBottom() {
 			inspectorTopWeight = (total * nextPaneA) / pairStartPx;
 			environmentWeight = total - inspectorTopWeight;
 		} else {
-			const total = environmentWeight + runLogsWeight;
-			if (total <= 0) return;
-			environmentWeight = (total * nextPaneA) / pairStartPx;
-			runLogsWeight = total - environmentWeight;
+			if (splitEnvLogsBypassEnvironment) {
+				const total = inspectorTopWeight + runLogsWeight;
+				if (total <= 0) return;
+				inspectorTopWeight = (total * nextPaneA) / pairStartPx;
+				runLogsWeight = total - inspectorTopWeight;
+			} else {
+				const total = environmentWeight + runLogsWeight;
+				if (total <= 0) return;
+				environmentWeight = (total * nextPaneA) / pairStartPx;
+				runLogsWeight = total - environmentWeight;
+			}
 		}
 	}
 
 	function onInspectorSplitUp() {
 		activeInspectorSplit = null;
+		splitEnvLogsBypassEnvironment = false;
 	}
 
 	async function refreshWorkspaceEnvironmentPanel(): Promise<void> {
@@ -2743,14 +2774,12 @@ async function scrollToBottom() {
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
-		{#if !nodeInspectorCollapsed && !environmentCollapsed}
-			<button
-				type="button"
-				class="inspectorSplitter"
-				aria-label="Resize Node Inspector and Environment panels"
-				on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
-			></button>
-		{/if}
+		<button
+			type="button"
+			class="inspectorSplitter"
+			aria-label="Resize Node Inspector and Environment panels"
+			on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
+		></button>
 		<div
 			class="inspectorPane inspectorEnv"
 			bind:this={environmentPaneEl}
@@ -2832,14 +2861,12 @@ async function scrollToBottom() {
 					{/if}
 			</div>
 		</div>
-		{#if !environmentCollapsed && !runLogsCollapsed}
-			<button
-				type="button"
-				class="inspectorSplitter"
-				aria-label="Resize Environment and Run Logs panels"
-				on:pointerdown={(event) => beginInspectorSplit('env_logs', event)}
-			></button>
-		{/if}
+		<button
+			type="button"
+			class="inspectorSplitter"
+			aria-label="Resize Environment and Run Logs panels"
+			on:pointerdown={(event) => beginInspectorSplit('env_logs', event)}
+		></button>
 		<div
 			class="inspectorPane inspectorLogs"
 			bind:this={runLogsPaneEl}
