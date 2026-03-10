@@ -55,7 +55,6 @@ import {
 } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
-import { getAllowedPortsForNode, getGraphPersistenceFeatureFlags } from '$lib/flow/portCapabilities';
 import {
 	buildRunCreateRequest,
 	computeGraphFreshness,
@@ -296,10 +295,7 @@ function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; 
 			out: (componentPorts.out ?? null) as PortType | null
 		};
 	}
-	return {
-		in: (data.ports?.in ?? null) as PortType | null,
-		out: (data.ports?.out ?? null) as PortType | null
-	};
+	return { in: null, out: null };
 }
 
 function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
@@ -330,10 +326,6 @@ function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNo
 			...node,
 			data: {
 				...node.data,
-				ports: {
-					in: derived.in,
-					out: derived.out
-				},
 				...(nextSchema ? { schema: nextSchema } : {})
 			}
 		};
@@ -743,14 +735,12 @@ function resolveUpstreamArtifact(
 export function resolveNodeInputsFromState(state: GraphState, nodeId: string): InputResolution[] {
 	const node = state.nodes.find((n) => n.id === nodeId);
 	if (!node) return [];
-	const inPortType = node.data?.ports?.in ?? null;
-	const hasInputPort = inPortType !== null && inPortType !== undefined;
 	const incoming = (state.edges ?? [])
 		.filter((e) => e.target === nodeId)
 		.slice()
 		.sort((a, b) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
 	const inPorts = new Set<string>();
-	if (hasInputPort) inPorts.add('in');
+	if (incoming.length === 0) inPorts.add('in');
 	for (const e of incoming) inPorts.add(normalizeHandleId((e as any).targetHandle, 'in'));
 	const orderedInPorts = Array.from(inPorts).sort((a, b) => a.localeCompare(b));
 	const resolutions: InputResolution[] = [];
@@ -1797,21 +1787,16 @@ function stripToDTO(
 	edges: Edge<PipelineEdgeData>[],
 	graphId?: string
 ): PipelineGraphDTO {
-	const shouldOmitPorts = Boolean(
-		getGraphPersistenceFeatureFlags().GRAPH_PERSIST_DERIVED_PORTS_OMITTED
-	);
-	const persistedNodes = shouldOmitPorts
-		? nodes.map((node) => {
-			const data = (node as any)?.data;
-			if (!data || typeof data !== 'object') return node;
-			const nextData = { ...data } as Record<string, unknown>;
-			delete (nextData as any).ports;
-			return {
-				...node,
-				data: nextData as PipelineNodeData & Record<string, unknown>
-			};
-		})
-		: nodes;
+	const persistedNodes = nodes.map((node) => {
+		const data = (node as any)?.data;
+		if (!data || typeof data !== 'object') return node;
+		const nextData = { ...data } as Record<string, unknown>;
+		delete (nextData as any).ports;
+		return {
+			...node,
+			data: nextData as PipelineNodeData & Record<string, unknown>
+		};
+	});
 	const dto: PipelineGraphDTO = {
 		version: 1,
 		nodes: persistedNodes as any,
@@ -1820,15 +1805,13 @@ function stripToDTO(
 	if (graphId) {
 		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
 	}
-	if (shouldOmitPorts) {
-		dto.meta = {
-			...(dto.meta ?? {}),
-			migrations: {
-				...(((dto.meta ?? {}) as any).migrations ?? {}),
-				OMIT_NODE_PORTS_V1: true
-			}
-		} as any;
-	}
+	dto.meta = {
+		...(dto.meta ?? {}),
+		migrations: {
+			...(((dto.meta ?? {}) as any).migrations ?? {}),
+			OMIT_NODE_PORTS_V1: true
+		}
+	} as any;
 	return dto;
 }
 
@@ -2198,20 +2181,6 @@ function buildSavePreflightDiagnostics(
 
 	for (const node of workingNodes) {
 		diagnostics.push(...toolBuiltinPreflightDiagnostics(node));
-		if (node.data && Object.prototype.hasOwnProperty.call(node.data as any, 'ports')) {
-			const authoredIn = normalizeComponentPortType((node.data as any)?.ports?.in ?? null);
-			const authoredOut = normalizeComponentPortType((node.data as any)?.ports?.out ?? null);
-			const derived = derivePortsForNodeData(node.data as PipelineNodeData);
-			const mismatch = authoredIn !== derived.in || authoredOut !== derived.out;
-			diagnostics.push({
-				code: 'PORTS_AUTHORED_DEPRECATED',
-				path: `nodes.${String(node.id)}.data.ports`,
-				message: mismatch
-					? 'Authored node.data.ports is deprecated and differs from schema-derived ports. Save will use derived values.'
-					: 'Authored node.data.ports is deprecated. Ports are derived from schema/contracts.',
-				severity: 'warning'
-			});
-		}
 		const expectedSchema = (node.data as any)?.schema?.expectedSchema;
 		if (expectedSchema != null) {
 			const expectedTypedRaw =
@@ -2227,12 +2196,13 @@ function buildSavePreflightDiagnostics(
 					severity: 'error'
 				});
 			} else if (node.data.kind !== 'component') {
-				const outPort = normalizeComponentPortType((node.data as any)?.ports?.out ?? null);
-				if (outPort && expectedTyped.type !== 'unknown' && outPort !== expectedTyped.type) {
+				const outHint = sourcePayloadHint(node as any, 'out', 'out');
+				const outType = normalizeTypedSchemaPrimitive((outHint as any)?.type);
+				if (outType !== 'unknown' && expectedTyped.type !== 'unknown' && outType !== expectedTyped.type) {
 					diagnostics.push({
 						code: 'EXPECTED_SCHEMA_PORT_MISMATCH',
 						path: `nodes.${String(node.id)}.data.schema.expectedSchema.typedSchema.type`,
-						message: `Expected schema type "${expectedTyped.type}" must align with derived out port "${outPort}".`,
+						message: `Expected schema type "${expectedTyped.type}" must align with derived output type "${outType}".`,
 						severity: 'error'
 					});
 				}
@@ -2305,7 +2275,8 @@ function getPortType(
 ): PortType | null {
 	const n = nodes.find((x) => x.id === sourceId);
 	if (!n) return null;
-	return (n.data.ports?.[whichPort as 'in' | 'out'] ?? null) as PortType | null;
+	const derived = derivePortsForNodeData(n.data);
+	return (whichPort === 'in' ? derived.in : derived.out) as PortType | null;
 }
 
 function componentApiOutputPortType(
@@ -2336,7 +2307,7 @@ function sourcePortTypeForEdge(
 	if (node.data.kind === 'component') {
 		return componentApiOutputPortType(node, String((edge as any).sourceHandle ?? 'out'));
 	}
-	return (node.data.ports?.out ?? null) as PortType | null;
+	return derivePortsForNodeData(node.data).out;
 }
 
 function sourcePayloadHint(
@@ -2379,7 +2350,8 @@ function sourcePayloadHint(
 		// Component edge payload hint must come from selected API output only.
 		return { type: 'unknown' };
 	}
-	const port = node.data.ports?.[whichPort] ?? null;
+	const derivedPorts = derivePortsForNodeData(node.data);
+	const port = whichPort === 'in' ? derivedPorts.in : derivedPorts.out;
 	if (port === 'table') {
 		let fields: SchemaField[] | undefined;
 		if (node.data.kind === 'source') {
@@ -3347,7 +3319,6 @@ export const graphStore = (() => {
 		config: { params?: unknown; ports?: { in?: PortType | null; out?: PortType | null } }
 	) {
 		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
-		let invalidateFromPortChange = false;
 
 		update((s) => {
 			let nodes = s.nodes;
@@ -3381,10 +3352,6 @@ export const graphStore = (() => {
 				};
 				return logPush(s, 'warn', out.error, nodeId);
 			}
-			const previousPorts = {
-				in: (currentNode.data.ports?.in ?? null) as PortType | null,
-				out: (currentNode.data.ports?.out ?? null) as PortType | null
-			};
 			const effectivePorts = derivePortsForNodeData(currentNode.data);
 			const { in: inPort, out: outPort } = effectivePorts;
 			if (inPort !== null && !isPortType(inPort)) {
@@ -3396,47 +3363,18 @@ export const graphStore = (() => {
 				return logPush(s, 'warn', out.error!, nodeId);
 			}
 
-			const allowedIn = getAllowedPortsForNode(currentNode as any, 'in');
-			const allowedOut = getAllowedPortsForNode(currentNode as any, 'out');
-			if (inPort !== null && !allowedIn.includes(inPort)) {
-				out = {
-					ok: false,
-					error: `${currentNode.data.kind} derived input port '${String(inPort)}' is not supported`
-				};
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-			if (outPort !== null && !allowedOut.includes(outPort)) {
-				out = {
-					ok: false,
-					error: `${currentNode.data.kind} derived output port '${String(outPort)}' is not supported`
-				};
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-
-			// capture connectivity BEFORE changes
-			const incoming = edges.filter((e) => e.target === nodeId);
-			const outgoing = edges.filter((e) => e.source === nodeId);
-
 			nodes = nodes.map((n) => {
 				if (n.id !== nodeId) return n;
 				return {
 					...n,
 					data: {
 						...n.data,
-						ports: {
-							in: inPort,
-							out: outPort
-						},
 						meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 					}
 				};
 			});
 
-			// NOW read what we actually set
 			const updatedNode = nodes.find((n) => n.id === nodeId)!;
-			const pin = updatedNode.data.ports?.in ?? null;
-			const pout = updatedNode.data.ports?.out ?? null;
-			const portsChanged = previousPorts.in !== pin || previousPorts.out !== pout;
 
 			if (updatedNode.data.kind === 'component') {
 				const reconciled = reconcileComponentOutgoingEdges(
@@ -3451,22 +3389,6 @@ export const graphStore = (() => {
 				}
 			}
 
-			// Invariant: cannot null a port that is currently used by edges
-			if (incoming.length > 0 && pin == null) {
-				out = {
-					ok: false,
-					error: 'Cannot set input port to null while node has incoming edges.'
-				};
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-			if (outgoing.length > 0 && pout == null && updatedNode.data.kind !== 'component') {
-				out = {
-					ok: false,
-					error: 'Cannot set output port to null while node has outgoing edges.'
-				};
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-
 			const pr = pruneAndRecontractEdgesStrict(nodes, edges);
 			if (pr.ok === false) {
 				out = { ok: false, error: pr.error };
@@ -3475,9 +3397,6 @@ export const graphStore = (() => {
 			edges = pr.edges;
 			if (pr.prunedIds?.length) {
 				removedEdgeIds = [...removedEdgeIds, ...pr.prunedIds];
-			}
-			if (portsChanged) {
-				invalidateFromPortChange = true;
 			}
 			if (removedEdgeIds.length) {
 				const uniq = Array.from(new Set(removedEdgeIds.filter((id) => id.length > 0)));
@@ -3488,10 +3407,6 @@ export const graphStore = (() => {
 			persist(next);
 			return next;
 		});
-
-		if (out.ok && invalidateFromPortChange) {
-			applyLocalStaleInvalidation(nodeId, 'PORTS_CHANGED');
-		}
 
 		return out;
 	}
@@ -4531,8 +4446,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const targetHandle = targetHandleRaw.length > 0 ? targetHandleRaw : undefined;
 			const sourceHint = sourcePayloadHint(sourceNode as any, 'out', sourceHandle ?? 'out');
 			const targetHint = targetPayloadHint(targetNode as any);
-			const providedType = normalizeHintType(sourceHint?.type ?? sourceNode.data?.ports?.out ?? 'unknown');
-			const requiredType = normalizeHintType(targetHint?.type ?? targetNode.data?.ports?.in ?? 'unknown');
+			const providedType = normalizeHintType(sourceHint?.type ?? 'unknown');
+			const requiredType = normalizeHintType(targetHint?.type ?? 'unknown');
 			const adapterKind = (input?.adapterKind ?? adapterKindForTypes(providedType, requiredType)) as
 				| AdapterTransformKind
 				| null;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 
-import { __setGraphPersistenceFeatureFlagsForTest } from '$lib/flow/portCapabilities';
 import {
 	__buildNodeSchemaContractSnapshotForTest,
 	__stripToDTOForTest,
@@ -10,7 +9,6 @@ import {
 
 describe('graphStore schema lifecycle golden', () => {
 	it('preserves declared expected schema while persisting schema-only payloads', () => {
-		__setGraphPersistenceFeatureFlagsForTest({ GRAPH_PERSIST_DERIVED_PORTS_OMITTED: true });
 		graphStore.hardResetGraph();
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 260, y: 0 });
@@ -70,7 +68,5 @@ describe('graphStore schema lifecycle golden', () => {
 			  "status": "clean",
 			}
 		`);
-
-		__setGraphPersistenceFeatureFlagsForTest({ GRAPH_PERSIST_DERIVED_PORTS_OMITTED: false });
 	});
 });

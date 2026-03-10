@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { get } from 'svelte/store';
 
-import { graphStore } from './graphStore';
+import { __stripToDTOForTest, graphStore } from './graphStore';
 
-describe('graphStore ports deprecation preflight', () => {
-	it('warns when authored node.data.ports is present', () => {
+describe('graphStore legacy ports import handling', () => {
+	it('accepts legacy node.data.ports and omits them from persisted payloads', () => {
 		graphStore.hardResetGraph();
 		const applied = graphStore.loadGraphDocument(
 			{
@@ -29,7 +30,12 @@ describe('graphStore ports deprecation preflight', () => {
 
 		const preflight = graphStore.getSavePreflight();
 		const warning = preflight.diagnostics.find((d) => d.code === 'PORTS_AUTHORED_DEPRECATED');
-		expect(warning).toBeTruthy();
-		expect(warning?.severity).toBe('warning');
+		expect(warning).toBeUndefined();
+		expect(preflight.ok).toBe(true);
+
+		const state = get(graphStore);
+		const dto = __stripToDTOForTest(state.nodes as any, state.edges as any, state.graphId);
+		const node = (dto.nodes ?? [])[0] as any;
+		expect(Object.prototype.hasOwnProperty.call(node?.data ?? {}, 'ports')).toBe(false);
 	});
 });
