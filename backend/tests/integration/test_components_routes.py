@@ -674,6 +674,42 @@ def test_component_validate_reports_builtin_environment_profiles(monkeypatch):
         assert "COMPONENT_ENV_PROFILES_MISSING" in codes
 
 
+def test_component_validate_reports_missing_dependency_not_found():
+    payload = _component_with_single_dependency_payload(
+        "validate-missing-dependency",
+        child_component_id="cmp_missing_validate",
+        child_revision_id="crev_missing_validate",
+    )
+    with TestClient(app) as client:
+        res = client.post("/components/validate", json=payload)
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["ok"] is False
+        diagnostics = body.get("diagnostics") or []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_NOT_FOUND" in codes
+
+
+def test_component_validate_reports_direct_cycle_when_component_id_provided():
+    component_id = f"cmp_validate_cycle_{uuid4().hex[:8]}"
+    payload = _component_with_single_dependency_payload(
+        "validate-cycle",
+        child_component_id=component_id,
+        child_revision_id="rev_any",
+    )
+    with TestClient(app) as client:
+        res = client.post(
+            "/components/validate",
+            json={"componentId": component_id, **payload},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["ok"] is False
+        diagnostics = body.get("diagnostics") or []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_CYCLE" in codes
+
+
 def test_component_routes_history_multiple_revisions():
     component_id = f"cmp_history_{uuid4().hex[:8]}"
     with TestClient(app) as client:

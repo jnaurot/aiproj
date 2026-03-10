@@ -94,6 +94,12 @@ export type ComponentValidationDiagnostic = {
 };
 
 export type ValidateComponentRevisionRequest = {
+	componentId?: string;
+	dependencyRevisionOverrides?: Array<{
+		componentId: string;
+		fromRevisionId: string;
+		toRevisionId: string;
+	}>;
 	graph: {
 		nodes: unknown[];
 		edges: unknown[];
@@ -230,9 +236,17 @@ export async function validateComponentRevision(
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({
+			componentId: req.componentId ? String(req.componentId).trim() : undefined,
 			graph: req.graph,
 			api: req.api,
 			configSchema: req.configSchema ?? {},
+			dependencyRevisionOverrides: Array.isArray(req.dependencyRevisionOverrides)
+				? req.dependencyRevisionOverrides.map((item) => ({
+						componentId: String(item.componentId ?? '').trim(),
+						fromRevisionId: String(item.fromRevisionId ?? '').trim(),
+						toRevisionId: String(item.toRevisionId ?? '').trim()
+					}))
+				: undefined,
 			schemaVersion: Number(req.schemaVersion ?? 1)
 		})
 	});

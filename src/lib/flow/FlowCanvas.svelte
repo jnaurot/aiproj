@@ -1623,6 +1623,7 @@ async function scrollToBottom() {
 		}
 		try {
 			const preflight = await validateComponentRevision({
+				componentId,
 				schemaVersion: 1,
 				graph: {
 					nodes: structuredClone(currentNodes) as unknown[],
@@ -1691,6 +1692,7 @@ async function scrollToBottom() {
 			const api = ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract);
 			const configSchema = (detail?.definition?.configSchema ?? {}) as Record<string, unknown>;
 			const preflight = await validateComponentRevision({
+				componentId,
 				schemaVersion: Number(detail?.schemaVersion ?? 1) || 1,
 				graph: {
 					nodes: structuredClone(currentNodes) as unknown[],

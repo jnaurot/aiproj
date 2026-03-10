@@ -269,6 +269,53 @@ def _component_builtin_environment_diagnostics(definition: Dict[str, Any]) -> li
     return diagnostics
 
 
+def _prepare_component_definition(
+    raw_definition: Dict[str, Any],
+    *,
+    schema_version: int,
+    component_store: Any,
+    root_component_id: str,
+    dependency_revision_overrides: Optional[list[dict[str, str]]] = None,
+) -> tuple[Dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    raw_diagnostics = [d.as_dict() for d in validate_component_definition(raw_definition)]
+    definition, migration_notes = canonicalize_component_definition(
+        raw_definition,
+        int(schema_version or COMPONENT_SCHEMA_VERSION),
+    )
+
+    override_diagnostics: list[dict[str, Any]] = []
+    if dependency_revision_overrides:
+        if component_store is None:
+            override_diagnostics.append(
+                {
+                    "code": "COMPONENT_DEPENDENCY_OVERRIDE_UNAVAILABLE",
+                    "path": "dependencyRevisionOverrides",
+                    "message": "Dependency revision overrides require component registry access.",
+                    "severity": "error",
+                }
+            )
+        else:
+            definition, override_diagnostics = _apply_dependency_revision_overrides(
+                definition,
+                overrides=dependency_revision_overrides,
+                component_store=component_store,
+            )
+
+    normalized_diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
+    normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
+    normalized_diagnostics.extend(_component_builtin_environment_diagnostics(definition))
+    normalized_diagnostics.extend(override_diagnostics)
+
+    dependency_manifest, dependency_diagnostics = build_component_dependency_manifest(
+        definition,
+        component_store=component_store,
+        root_component_id=root_component_id,
+    )
+    normalized_diagnostics.extend(dependency_diagnostics)
+    definition["dependencyManifest"] = dependency_manifest
+    return definition, migration_notes, raw_diagnostics, normalized_diagnostics
+
+
 class ComponentRevisionWriteRequest(BaseModel):
     componentId: Optional[str] = None
     revisionId: Optional[str] = None
@@ -329,32 +376,56 @@ class ComponentRenameRequest(BaseModel):
 
 
 class ComponentValidateRequest(BaseModel):
+    componentId: Optional[str] = None
     graph: Dict[str, Any]
     api: Dict[str, Any]
     configSchema: Optional[Dict[str, Any]] = None
+    dependencyRevisionOverrides: Optional[list[dict[str, str]]] = None
     schemaVersion: int = COMPONENT_SCHEMA_VERSION
+
+    @field_validator("dependencyRevisionOverrides")
+    @classmethod
+    def validate_dependency_revision_overrides(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("dependencyRevisionOverrides must be an array")
+        out: list[dict[str, str]] = []
+        for idx, raw in enumerate(v):
+            if not isinstance(raw, dict):
+                raise ValueError(f"dependencyRevisionOverrides[{idx}] must be an object")
+            component_id = str(raw.get("componentId") or "").strip()
+            from_revision_id = str(raw.get("fromRevisionId") or "").strip()
+            to_revision_id = str(raw.get("toRevisionId") or "").strip()
+            if not component_id or not from_revision_id or not to_revision_id:
+                raise ValueError(
+                    f"dependencyRevisionOverrides[{idx}] requires componentId, fromRevisionId, and toRevisionId"
+                )
+            out.append(
+                {
+                    "componentId": component_id,
+                    "fromRevisionId": from_revision_id,
+                    "toRevisionId": to_revision_id,
+                }
+            )
+        return out
 
 
 @router.post("/validate")
-async def validate_component_revision(req: ComponentValidateRequest):
+async def validate_component_revision(req: ComponentValidateRequest, request: Request):
+    store = getattr(request.app.state, "component_revisions", None)
     raw_definition = {
         "graph": req.graph,
         "api": req.api,
         "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
     }
-    raw_diagnostics = [d.as_dict() for d in validate_component_definition(raw_definition)]
-    normalized_definition, migration_notes = canonicalize_component_definition(
-        raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
+    normalized_definition, migration_notes, raw_diagnostics, normalized_diagnostics = _prepare_component_definition(
+        raw_definition,
+        schema_version=int(req.schemaVersion or COMPONENT_SCHEMA_VERSION),
+        component_store=store,
+        root_component_id=str(req.componentId or "").strip(),
+        dependency_revision_overrides=req.dependencyRevisionOverrides or [],
     )
-    normalized_diagnostics = [d.as_dict() for d in validate_component_definition(normalized_definition)]
-    normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(normalized_definition))
-    normalized_diagnostics.extend(_component_builtin_environment_diagnostics(normalized_definition))
-    _, dependency_diagnostics = build_component_dependency_manifest(
-        normalized_definition,
-        component_store=None,
-        root_component_id="",
-    )
-    normalized_diagnostics.extend(dependency_diagnostics)
     diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
     ok = len([d for d in diagnostics if d.get("severity") == "error"]) == 0
     return {
@@ -378,7 +449,13 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
         "api": req.api,
         "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
     }
-    raw_diagnostics = [d.as_dict() for d in validate_component_definition(raw_definition)]
+    definition, migration_notes, raw_diagnostics, normalized_diagnostics = _prepare_component_definition(
+        raw_definition,
+        schema_version=int(req.schemaVersion or COMPONENT_SCHEMA_VERSION),
+        component_store=store,
+        root_component_id=str(req.componentId or "").strip(),
+        dependency_revision_overrides=req.dependencyRevisionOverrides or [],
+    )
     raw_errors = [d for d in raw_diagnostics if d.get("severity") == "error"]
     if raw_errors:
         raise HTTPException(
@@ -389,27 +466,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
                 "diagnostics": raw_errors,
             },
         )
-    definition, migration_notes = canonicalize_component_definition(
-        raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
-    )
-    override_diagnostics: list[dict[str, Any]] = []
-    overrides = req.dependencyRevisionOverrides or []
-    if overrides:
-        definition, override_diagnostics = _apply_dependency_revision_overrides(
-            definition,
-            overrides=overrides,
-            component_store=store,
-        )
-    diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
-    diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
-    diagnostics.extend(_component_builtin_environment_diagnostics(definition))
-    diagnostics.extend(override_diagnostics)
-    dependency_manifest, dependency_diagnostics = build_component_dependency_manifest(
-        definition,
-        component_store=store,
-        root_component_id=str(req.componentId or "").strip(),
-    )
-    diagnostics.extend(dependency_diagnostics)
+    diagnostics = normalized_diagnostics
     errors = [d for d in diagnostics if d.get("severity") == "error"]
     if errors:
         raise HTTPException(
@@ -420,7 +477,6 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
                 "diagnostics": errors,
             },
         )
-    definition["dependencyManifest"] = dependency_manifest
 
     try:
         revision = store.create_revision(
