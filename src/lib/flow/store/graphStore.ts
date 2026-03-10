@@ -2133,11 +2133,9 @@ function sourcePayloadHint(
 		const typed = (decl as any)?.typedSchema ?? null;
 		const typedType = String((typed as any)?.type ?? '').trim().toLowerCase();
 		if (typedType === 'table') {
-			const fields = Array.isArray((typed as any)?.fields) ? (typed as any).fields : [];
-			const columns = fields
-				.map((f: any) => String(f?.name ?? '').trim())
-				.filter((name: string) => name.length > 0);
-			return columns.length > 0 ? { type: 'table', columns } : { type: 'table' };
+			const fields = normalizeSchemaFields((typed as any)?.fields);
+			const columns = schemaFieldNames(fields);
+			return columns.length > 0 ? { type: 'table', fields, columns } : { type: 'table' };
 		}
 		if (typedType === 'json') return { type: 'json' };
 		if (typedType === 'text') return { type: 'string' };
@@ -2152,19 +2150,28 @@ function sourcePayloadHint(
 	}
 	const port = node.data.ports?.[whichPort] ?? null;
 	if (port === 'table') {
-		let columns: string[] | undefined;
+		let fields: SchemaField[] | undefined;
 		if (node.data.kind === 'source') {
 			const params: any = node.data.params ?? {};
 			const sourceKind = node.data.sourceKind;
 			if (sourceKind === 'file') {
 				const fileFormat = String(params?.file_format ?? 'csv').toLowerCase();
-				if (fileFormat === 'txt') columns = ['text'];
+				if (fileFormat === 'txt') {
+					fields = normalizeSchemaFields([{ name: 'text', type: 'string', nullable: true }]);
+				}
 				if (fileFormat === 'pdf') {
-					columns = ['page_number', 'text', 'has_tables', 'table_count', 'tables'];
+					fields = normalizeSchemaFields([
+						{ name: 'page_number', type: 'integer', nullable: false },
+						{ name: 'text', type: 'string', nullable: true },
+						{ name: 'has_tables', type: 'boolean', nullable: false },
+						{ name: 'table_count', type: 'integer', nullable: false },
+						{ name: 'tables', type: 'json', nullable: true }
+					]);
 				}
 			}
 		}
-		return columns ? { type: 'table', columns } : { type: 'table' };
+		const columns = schemaFieldNames(fields ?? []);
+		return fields && fields.length > 0 ? { type: 'table', fields, columns } : { type: 'table' };
 	}
 	if (port === 'json') return { type: 'json' };
 	if (port === 'text') return { type: 'string' };
@@ -2179,11 +2186,25 @@ function targetPayloadHint(node: Node<PipelineNodeData>) {
 	const op = params?.op ?? node.data.transformKind;
 	if (op === 'select') {
 		const cols = params?.select?.columns;
-		if (Array.isArray(cols) && cols.length > 0) return { type: 'table', required_columns: cols };
+		if (Array.isArray(cols) && cols.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(cols);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
 	}
 	if (op === 'split') {
 		const sourceColumn = String(params?.split?.sourceColumn ?? '').trim();
-		if (sourceColumn) return { type: 'table', required_columns: [sourceColumn] };
+		if (sourceColumn) {
+			const requiredFields = makeSchemaFieldsFromColumns([sourceColumn]);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
 	}
 	if (op === 'quality_gate') {
 		const checks = Array.isArray(params?.quality_gate?.checks) ? params.quality_gate.checks : [];
@@ -2200,7 +2221,14 @@ function targetPayloadHint(node: Node<PipelineNodeData>) {
 			const column = String(check?.column ?? '').trim();
 			if (column) required.add(column);
 		}
-		if (required.size > 0) return { type: 'table', required_columns: Array.from(required) };
+		if (required.size > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(Array.from(required));
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
 	}
 	return sourcePayloadHint(node, 'in');
 }
@@ -2209,6 +2237,73 @@ function normalizeHintType(raw: unknown): string {
 	const value = String(raw ?? '').trim().toLowerCase();
 	if (value === 'string') return 'text';
 	return value;
+}
+
+type SchemaField = {
+	name: string;
+	type: string;
+	nullable: boolean;
+	constraints?: Record<string, unknown>;
+};
+
+function normalizeSchemaField(raw: unknown): SchemaField | null {
+	if (!raw || typeof raw !== 'object') return null;
+	const name = String((raw as any).name ?? '').trim();
+	if (!name) return null;
+	const typeRaw = String((raw as any).type ?? 'unknown').trim().toLowerCase();
+	const type = typeRaw.length > 0 ? typeRaw : 'unknown';
+	const nullable =
+		typeof (raw as any).nullable === 'boolean'
+			? Boolean((raw as any).nullable)
+			: String(type).toLowerCase() === 'unknown';
+	const constraints =
+		(raw as any).constraints && typeof (raw as any).constraints === 'object'
+			? ({ ...(raw as any).constraints } as Record<string, unknown>)
+			: undefined;
+	return { name, type, nullable, constraints };
+}
+
+function normalizeSchemaFields(raw: unknown): SchemaField[] {
+	if (!Array.isArray(raw)) return [];
+	const preferred = new Map<string, SchemaField>();
+	for (const item of raw) {
+		const field = normalizeSchemaField(item);
+		if (!field) continue;
+		const key = field.name.toLowerCase();
+		const existing = preferred.get(key);
+		if (!existing) {
+			preferred.set(key, field);
+			continue;
+		}
+		const existingUnknown = existing.type === 'unknown';
+		const nextUnknown = field.type === 'unknown';
+		if (existingUnknown && !nextUnknown) {
+			preferred.set(key, field);
+			continue;
+		}
+		if (existing.type === field.type && existing.nullable && !field.nullable) {
+			preferred.set(key, field);
+		}
+	}
+	return Array.from(preferred.values());
+}
+
+function schemaFieldNames(fields: SchemaField[]): string[] {
+	return fields.map((field) => String(field.name ?? '').trim()).filter((name) => name.length > 0);
+}
+
+function makeSchemaFieldsFromColumns(columns: unknown, fallbackType = 'unknown'): SchemaField[] {
+	if (!Array.isArray(columns)) return [];
+	return normalizeSchemaFields(
+		columns
+			.map((col) => String(col ?? '').trim())
+			.filter((name) => name.length > 0)
+			.map((name) => ({ name, type: fallbackType, nullable: true }))
+	);
+}
+
+export function __normalizeSchemaFieldsForTest(raw: unknown): SchemaField[] {
+	return normalizeSchemaFields(raw);
 }
 
 type AdapterTransformKind = 'text_to_table' | 'json_to_table' | 'table_to_json';
@@ -2255,14 +2350,24 @@ function isSchemaCompatible(
 			adapterKind
 		};
 	}
-	const providedColumns = Array.isArray(providedSchema?.columns)
-		? providedSchema.columns.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0)
-		: [];
-	const requiredColumns = Array.isArray(requiredSchema?.required_columns)
-		? requiredSchema.required_columns
-				.map((c: unknown) => String(c ?? '').trim())
-				.filter((c: string) => c.length > 0)
-		: [];
+	const providedFields = normalizeSchemaFields(providedSchema?.fields);
+	const providedColumns =
+		providedFields.length > 0
+			? schemaFieldNames(providedFields)
+			: Array.isArray(providedSchema?.columns)
+				? providedSchema.columns
+						.map((c: unknown) => String(c ?? '').trim())
+						.filter((c: string) => c.length > 0)
+				: [];
+	const requiredFields = normalizeSchemaFields(requiredSchema?.required_fields);
+	const requiredColumns =
+		requiredFields.length > 0
+			? schemaFieldNames(requiredFields)
+			: Array.isArray(requiredSchema?.required_columns)
+				? requiredSchema.required_columns
+						.map((c: unknown) => String(c ?? '').trim())
+						.filter((c: string) => c.length > 0)
+				: [];
 	if (requiredColumns.length > 0 && providedColumns.length > 0) {
 		const missing = requiredColumns.filter((c) => !providedColumns.includes(c));
 		if (missing.length > 0) {
@@ -2315,17 +2420,21 @@ function inferredTransformOutputHint(node: Node<PipelineNodeData>): Record<strin
 	if (op === 'json_to_table' || op === 'text_to_table') return { type: 'table' };
 	if (op === 'split') {
 		const outColumn = String(params?.split?.outColumn ?? 'part').trim() || 'part';
-		const cols = [outColumn];
-		if (Boolean(params?.split?.emitIndex ?? true)) cols.push('index');
-		if (Boolean(params?.split?.emitSourceRow ?? true)) cols.push('source_row');
-		return { type: 'table', columns: cols };
+		const fields: SchemaField[] = [{ name: outColumn, type: 'string', nullable: true }];
+		if (Boolean(params?.split?.emitIndex ?? true)) {
+			fields.push({ name: 'index', type: 'integer', nullable: false });
+		}
+		if (Boolean(params?.split?.emitSourceRow ?? true)) {
+			fields.push({ name: 'source_row', type: 'integer', nullable: false });
+		}
+		return { type: 'table', fields, columns: schemaFieldNames(fields) };
 	}
 	if (op === 'select') {
 		const mode = String(params?.select?.mode ?? 'include').trim().toLowerCase();
-		const cols = Array.isArray(params?.select?.columns)
-			? params.select.columns.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0)
-			: [];
-		if (mode === 'include' && cols.length > 0) return { type: 'table', columns: cols };
+		const fields = makeSchemaFieldsFromColumns(params?.select?.columns);
+		if (mode === 'include' && fields.length > 0) {
+			return { type: 'table', fields, columns: schemaFieldNames(fields) };
+		}
 	}
 	return undefined;
 }
