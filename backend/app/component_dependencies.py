@@ -115,6 +115,14 @@ def build_component_dependency_manifest(
                     "revisionId": revision_id,
                 }
             )
+            diagnostics.append(
+                {
+                    "code": "COMPONENT_DEPENDENCY_NOT_FOUND",
+                    "path": "graph.nodes",
+                    "message": f"Component dependency not found: {component_id}@{revision_id}",
+                    "severity": "error",
+                }
+            )
             continue
 
         child_definition = revision.definition if isinstance(revision.definition, dict) else {}

@@ -195,13 +195,30 @@ def test_component_routes_create_list_get():
 
 def test_component_routes_create_supports_nested_component_nodes():
     component_id = f"cmp_nested_route_{uuid4().hex[:8]}"
+    child_component_id = f"cmp_nested_child_{uuid4().hex[:8]}"
     with TestClient(app) as client:
+        child_create = client.post(
+            "/components",
+            json={
+                "componentId": child_component_id,
+                "message": "child-v1",
+                **_component_payload("child-v1"),
+            },
+        )
+        assert child_create.status_code == 200, child_create.text
+        child_revision_id = str(child_create.json()["revisionId"] or "")
+        assert child_revision_id
+
         res = client.post(
             "/components",
             json={
                 "componentId": component_id,
                 "message": "nested-v1",
-                **_nested_component_payload("nested-v1"),
+                **_component_with_single_dependency_payload(
+                    "nested-v1",
+                    child_component_id=child_component_id,
+                    child_revision_id=child_revision_id,
+                ),
             },
         )
         assert res.status_code == 200, res.text
@@ -216,6 +233,28 @@ def test_component_routes_create_supports_nested_component_nodes():
         nodes = definition["graph"]["nodes"]
         assert len(nodes) == 1
         assert str((nodes[0].get("data") or {}).get("kind") or "") == "component"
+
+
+def test_component_routes_reject_dependency_reference_not_found():
+    component_id = f"cmp_dep_missing_{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        res = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "missing-dependency",
+                **_component_with_single_dependency_payload(
+                    "missing-dependency",
+                    child_component_id="cmp_missing_child",
+                    child_revision_id="crev_missing",
+                ),
+            },
+        )
+        assert res.status_code == 422, res.text
+        detail = res.json().get("detail", {})
+        diagnostics = detail.get("diagnostics") if isinstance(detail, dict) else []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_NOT_FOUND" in codes
 
 
 def test_component_routes_dependency_manifest_collects_transitive_references():
