@@ -61,6 +61,11 @@ export type CreateComponentRevisionRequest = {
 	parentRevisionId?: string;
 	message?: string;
 	schemaVersion?: number;
+	dependencyRevisionOverrides?: Array<{
+		componentId: string;
+		fromRevisionId: string;
+		toRevisionId: string;
+	}>;
 	graph: {
 		nodes: unknown[];
 		edges: unknown[];
@@ -192,6 +197,13 @@ export async function createComponentRevision(
 		parentRevisionId: req.parentRevisionId ? String(req.parentRevisionId).trim() : undefined,
 		message: req.message ?? '',
 		schemaVersion: Number(req.schemaVersion ?? 1),
+		dependencyRevisionOverrides: Array.isArray(req.dependencyRevisionOverrides)
+			? req.dependencyRevisionOverrides.map((item) => ({
+					componentId: String(item.componentId ?? '').trim(),
+					fromRevisionId: String(item.fromRevisionId ?? '').trim(),
+					toRevisionId: String(item.toRevisionId ?? '').trim()
+				}))
+			: undefined,
 		graph: req.graph,
 		api: req.api,
 		configSchema: req.configSchema ?? {}

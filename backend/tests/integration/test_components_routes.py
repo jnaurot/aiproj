@@ -303,6 +303,123 @@ def test_component_routes_reject_dependency_without_revision_id():
         assert "COMPONENT_DEPENDENCY_REFERENCE_INVALID" in codes
 
 
+def test_component_routes_dependency_revision_override_allows_compatible_revision():
+    with TestClient(app) as client:
+        child_component_id = f"cmp_override_child_{uuid4().hex[:8]}"
+        child_v1 = client.post(
+            "/components",
+            json={
+                "componentId": child_component_id,
+                "message": "child-v1",
+                **_component_payload("child-v1"),
+            },
+        )
+        assert child_v1.status_code == 200, child_v1.text
+        child_v1_rev = str(child_v1.json()["revisionId"] or "")
+        assert child_v1_rev
+
+        child_v2 = client.post(
+            "/components",
+            json={
+                "componentId": child_component_id,
+                "message": "child-v2",
+                **_component_payload("child-v2"),
+            },
+        )
+        assert child_v2.status_code == 200, child_v2.text
+        child_v2_rev = str(child_v2.json()["revisionId"] or "")
+        assert child_v2_rev
+        assert child_v2_rev != child_v1_rev
+
+        parent_component_id = f"cmp_override_parent_{uuid4().hex[:8]}"
+        parent_create = client.post(
+            "/components",
+            json={
+                "componentId": parent_component_id,
+                "message": "parent-v1",
+                "dependencyRevisionOverrides": [
+                    {
+                        "componentId": child_component_id,
+                        "fromRevisionId": child_v1_rev,
+                        "toRevisionId": child_v2_rev,
+                    }
+                ],
+                **_component_with_single_dependency_payload(
+                    "parent-v1",
+                    child_component_id=child_component_id,
+                    child_revision_id=child_v1_rev,
+                ),
+            },
+        )
+        assert parent_create.status_code == 200, parent_create.text
+        parent_rev = str(parent_create.json()["revisionId"] or "")
+        assert parent_rev
+        parent_detail = client.get(f"/components/{parent_component_id}/revisions/{parent_rev}")
+        assert parent_detail.status_code == 200, parent_detail.text
+        graph_nodes = parent_detail.json()["definition"]["graph"]["nodes"]
+        component_ref = (((graph_nodes[0].get("data") or {}).get("params") or {}).get("componentRef") or {})
+        assert str(component_ref.get("componentId") or "") == child_component_id
+        assert str(component_ref.get("revisionId") or "") == child_v2_rev
+
+
+def test_component_routes_dependency_revision_override_rejects_incompatible_revision():
+    with TestClient(app) as client:
+        child_component_id = f"cmp_override_bad_child_{uuid4().hex[:8]}"
+        child_v1 = client.post(
+            "/components",
+            json={
+                "componentId": child_component_id,
+                "message": "child-v1",
+                **_component_payload("child-v1"),
+            },
+        )
+        assert child_v1.status_code == 200, child_v1.text
+        child_v1_rev = str(child_v1.json()["revisionId"] or "")
+        assert child_v1_rev
+
+        incompatible_payload = _component_payload("child-v2-incompatible")
+        incompatible_payload["api"]["outputs"][0]["portType"] = "text"
+        incompatible_payload["api"]["outputs"][0]["typedSchema"] = {"type": "text", "fields": []}
+        child_v2 = client.post(
+            "/components",
+            json={
+                "componentId": child_component_id,
+                "message": "child-v2",
+                **incompatible_payload,
+            },
+        )
+        assert child_v2.status_code == 200, child_v2.text
+        child_v2_rev = str(child_v2.json()["revisionId"] or "")
+        assert child_v2_rev
+        assert child_v2_rev != child_v1_rev
+
+        parent_component_id = f"cmp_override_bad_parent_{uuid4().hex[:8]}"
+        parent_create = client.post(
+            "/components",
+            json={
+                "componentId": parent_component_id,
+                "message": "parent-v1",
+                "dependencyRevisionOverrides": [
+                    {
+                        "componentId": child_component_id,
+                        "fromRevisionId": child_v1_rev,
+                        "toRevisionId": child_v2_rev,
+                    }
+                ],
+                **_component_with_single_dependency_payload(
+                    "parent-v1",
+                    child_component_id=child_component_id,
+                    child_revision_id=child_v1_rev,
+                ),
+            },
+        )
+        assert parent_create.status_code == 422, parent_create.text
+        detail = parent_create.json().get("detail", {})
+        diagnostics = detail.get("diagnostics") if isinstance(detail, dict) else []
+        codes = {str(d.get("code") or "") for d in diagnostics if isinstance(d, dict)}
+        assert "COMPONENT_DEPENDENCY_OVERRIDE_INCOMPATIBLE" in codes
+
+
 def test_component_routes_reject_invalid_payload():
     with TestClient(app) as client:
         res = client.post(

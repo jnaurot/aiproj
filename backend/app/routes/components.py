@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import json
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -14,6 +16,133 @@ from app.component_contracts import (
 from app.executors.builtin_profiles import missing_packages_for_packages, resolve_builtin_environment
 
 router = APIRouter()
+
+
+def _stable_json(value: Dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _revision_contract_snapshot(revision: Any) -> Dict[str, Any]:
+    definition = revision.definition if isinstance(getattr(revision, "definition", None), dict) else {}
+    contract = definition.get("contractSnapshot") if isinstance(definition.get("contractSnapshot"), dict) else {}
+    if not contract:
+        contract = definition.get("api") if isinstance(definition.get("api"), dict) else {}
+    inputs = contract.get("inputs") if isinstance(contract.get("inputs"), list) else []
+    outputs = contract.get("outputs") if isinstance(contract.get("outputs"), list) else []
+    return {"inputs": inputs, "outputs": outputs}
+
+
+def _apply_dependency_revision_overrides(
+    definition: Dict[str, Any],
+    *,
+    overrides: list[dict[str, str]],
+    component_store: Any,
+) -> tuple[Dict[str, Any], list[dict[str, Any]]]:
+    if not overrides:
+        return definition, []
+    graph = definition.get("graph") if isinstance(definition.get("graph"), dict) else {}
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    diagnostics: list[dict[str, Any]] = []
+    override_counts: dict[tuple[str, str, str], int] = {}
+    next_definition = copy.deepcopy(definition)
+    next_graph = next_definition.get("graph") if isinstance(next_definition.get("graph"), dict) else {}
+    next_nodes = next_graph.get("nodes") if isinstance(next_graph.get("nodes"), list) else []
+
+    for override in overrides:
+        key = (
+            str(override.get("componentId") or "").strip(),
+            str(override.get("fromRevisionId") or "").strip(),
+            str(override.get("toRevisionId") or "").strip(),
+        )
+        override_counts[key] = 0
+
+    for idx, node in enumerate(nodes):
+        if not isinstance(node, dict) or idx >= len(next_nodes) or not isinstance(next_nodes[idx], dict):
+            continue
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        if str(data.get("kind") or "").strip().lower() != "component":
+            continue
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        component_ref = params.get("componentRef") if isinstance(params.get("componentRef"), dict) else {}
+        component_id = str(component_ref.get("componentId") or "").strip()
+        revision_id = str(component_ref.get("revisionId") or "").strip()
+        if not component_id or not revision_id:
+            continue
+
+        for override in overrides:
+            ov_component_id = str(override.get("componentId") or "").strip()
+            ov_from_revision_id = str(override.get("fromRevisionId") or "").strip()
+            ov_to_revision_id = str(override.get("toRevisionId") or "").strip()
+            if component_id != ov_component_id or revision_id != ov_from_revision_id:
+                continue
+
+            current_revision = component_store.get_revision(component_id, ov_from_revision_id)
+            target_revision = component_store.get_revision(component_id, ov_to_revision_id)
+            if current_revision is None or target_revision is None:
+                diagnostics.append(
+                    {
+                        "code": "COMPONENT_DEPENDENCY_OVERRIDE_NOT_FOUND",
+                        "path": f"graph.nodes[{idx}].data.params.componentRef",
+                        "message": (
+                            f"Override target must resolve existing revisions: "
+                            f"{component_id}@{ov_from_revision_id} -> {component_id}@{ov_to_revision_id}"
+                        ),
+                        "severity": "error",
+                    }
+                )
+                continue
+
+            current_contract = _revision_contract_snapshot(current_revision)
+            target_contract = _revision_contract_snapshot(target_revision)
+            if _stable_json(current_contract) != _stable_json(target_contract):
+                diagnostics.append(
+                    {
+                        "code": "COMPONENT_DEPENDENCY_OVERRIDE_INCOMPATIBLE",
+                        "path": f"graph.nodes[{idx}].data.params.componentRef.revisionId",
+                        "message": (
+                            f"Override must be strictly contract-compatible: "
+                            f"{component_id}@{ov_from_revision_id} -> {component_id}@{ov_to_revision_id}"
+                        ),
+                        "severity": "error",
+                    }
+                )
+                continue
+
+            next_data = next_nodes[idx].get("data") if isinstance(next_nodes[idx].get("data"), dict) else {}
+            next_params = next_data.get("params") if isinstance(next_data.get("params"), dict) else {}
+            next_component_ref = (
+                next_params.get("componentRef")
+                if isinstance(next_params.get("componentRef"), dict)
+                else {}
+            )
+            next_component_ref["revisionId"] = ov_to_revision_id
+            next_params["componentRef"] = next_component_ref
+            next_data["params"] = next_params
+            next_nodes[idx]["data"] = next_data
+
+            override_key = (ov_component_id, ov_from_revision_id, ov_to_revision_id)
+            override_counts[override_key] = int(override_counts.get(override_key, 0) or 0) + 1
+
+    for override in overrides:
+        override_key = (
+            str(override.get("componentId") or "").strip(),
+            str(override.get("fromRevisionId") or "").strip(),
+            str(override.get("toRevisionId") or "").strip(),
+        )
+        if int(override_counts.get(override_key, 0) or 0) > 0:
+            continue
+        diagnostics.append(
+            {
+                "code": "COMPONENT_DEPENDENCY_OVERRIDE_UNMATCHED",
+                "path": "dependencyRevisionOverrides",
+                "message": (
+                    f"Override did not match any dependency reference: "
+                    f"{override_key[0]}@{override_key[1]} -> {override_key[0]}@{override_key[2]}"
+                ),
+                "severity": "error",
+            }
+        )
+    return next_definition, diagnostics
 
 
 def _post_canonical_port_schema_diagnostics(definition: Dict[str, Any]) -> list[dict[str, str]]:
@@ -149,6 +278,7 @@ class ComponentRevisionWriteRequest(BaseModel):
     graph: Dict[str, Any]
     api: Dict[str, Any]
     configSchema: Optional[Dict[str, Any]] = None
+    dependencyRevisionOverrides: Optional[list[dict[str, str]]] = None
 
     @field_validator("graph")
     @classmethod
@@ -165,6 +295,33 @@ class ComponentRevisionWriteRequest(BaseModel):
         if not isinstance(v.get("inputs"), list) or not isinstance(v.get("outputs"), list):
             raise ValueError("api must include inputs[] and outputs[]")
         return v
+
+    @field_validator("dependencyRevisionOverrides")
+    @classmethod
+    def validate_dependency_revision_overrides(cls, v):
+        if v is None:
+            return v
+        if not isinstance(v, list):
+            raise ValueError("dependencyRevisionOverrides must be an array")
+        out: list[dict[str, str]] = []
+        for idx, raw in enumerate(v):
+            if not isinstance(raw, dict):
+                raise ValueError(f"dependencyRevisionOverrides[{idx}] must be an object")
+            component_id = str(raw.get("componentId") or "").strip()
+            from_revision_id = str(raw.get("fromRevisionId") or "").strip()
+            to_revision_id = str(raw.get("toRevisionId") or "").strip()
+            if not component_id or not from_revision_id or not to_revision_id:
+                raise ValueError(
+                    f"dependencyRevisionOverrides[{idx}] requires componentId, fromRevisionId, and toRevisionId"
+                )
+            out.append(
+                {
+                    "componentId": component_id,
+                    "fromRevisionId": from_revision_id,
+                    "toRevisionId": to_revision_id,
+                }
+            )
+        return out
 
 
 class ComponentRenameRequest(BaseModel):
@@ -233,9 +390,18 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
     definition, migration_notes = canonicalize_component_definition(
         raw_definition, int(req.schemaVersion or COMPONENT_SCHEMA_VERSION)
     )
+    override_diagnostics: list[dict[str, Any]] = []
+    overrides = req.dependencyRevisionOverrides or []
+    if overrides:
+        definition, override_diagnostics = _apply_dependency_revision_overrides(
+            definition,
+            overrides=overrides,
+            component_store=store,
+        )
     diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
     diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
     diagnostics.extend(_component_builtin_environment_diagnostics(definition))
+    diagnostics.extend(override_diagnostics)
     dependency_manifest, dependency_diagnostics = build_component_dependency_manifest(
         definition,
         component_store=store,
