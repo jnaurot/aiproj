@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 
+from app.component_dependencies import build_component_dependency_manifest
 from app.component_contracts import (
     COMPONENT_SCHEMA_VERSION,
     canonicalize_component_definition,
@@ -191,6 +192,10 @@ async def validate_component_revision(req: ComponentValidateRequest):
     normalized_diagnostics = [d.as_dict() for d in validate_component_definition(normalized_definition)]
     normalized_diagnostics.extend(_post_canonical_port_schema_diagnostics(normalized_definition))
     normalized_diagnostics.extend(_component_builtin_environment_diagnostics(normalized_definition))
+    _, dependency_diagnostics = build_component_dependency_manifest(
+        normalized_definition, component_store=None
+    )
+    normalized_diagnostics.extend(dependency_diagnostics)
     diagnostics = raw_diagnostics + [d for d in normalized_diagnostics if d not in raw_diagnostics]
     ok = len([d for d in diagnostics if d.get("severity") == "error"]) == 0
     return {
@@ -231,6 +236,11 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
     diagnostics = [d.as_dict() for d in validate_component_definition(definition)]
     diagnostics.extend(_post_canonical_port_schema_diagnostics(definition))
     diagnostics.extend(_component_builtin_environment_diagnostics(definition))
+    dependency_manifest, dependency_diagnostics = build_component_dependency_manifest(
+        definition,
+        component_store=store,
+    )
+    diagnostics.extend(dependency_diagnostics)
     errors = [d for d in diagnostics if d.get("severity") == "error"]
     if errors:
         raise HTTPException(
@@ -241,6 +251,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
                 "diagnostics": errors,
             },
         )
+    definition["dependencyManifest"] = dependency_manifest
 
     try:
         revision = store.create_revision(
