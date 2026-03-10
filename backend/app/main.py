@@ -61,6 +61,9 @@ async def get_capabilities():
         "signature": capability_signature(),
         "capabilities": caps,
         "featureFlags": {
+            "GRAPH_PERSIST_DERIVED_PORTS_OMITTED": bool(
+                flags.get("GRAPH_PERSIST_DERIVED_PORTS_OMITTED", False)
+            ),
             "STRICT_SCHEMA_EDGE_CHECKS": bool(flags.get("STRICT_SCHEMA_EDGE_CHECKS", True)),
             "STRICT_SCHEMA_EDGE_CHECKS_V2": bool(flags.get("STRICT_SCHEMA_EDGE_CHECKS_V2", True)),
             "STRICT_COERCION_POLICY": bool(flags.get("STRICT_COERCION_POLICY", True)),

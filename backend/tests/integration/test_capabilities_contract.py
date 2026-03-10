@@ -28,6 +28,7 @@ def test_capabilities_endpoint_matches_shared_contract_file():
     assert body.get("schemaVersion") == 1
     assert body.get("signature") == expected_sig
     assert body.get("capabilities") == payload
+    assert body.get("featureFlags", {}).get("GRAPH_PERSIST_DERIVED_PORTS_OMITTED") in {True, False}
     assert body.get("featureFlags", {}).get("STRICT_SCHEMA_EDGE_CHECKS") in {True, False}
     assert body.get("featureFlags", {}).get("STRICT_SCHEMA_EDGE_CHECKS_V2") in {True, False}
     assert body.get("featureFlags", {}).get("STRICT_COERCION_POLICY") in {True, False}

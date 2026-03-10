@@ -22,6 +22,8 @@ def get_feature_flags() -> Dict[str, bool]:
         "GRAPH_STORE_V2_READ": True,
         "GRAPH_STORE_V2_WRITE": True,
         "GRAPH_EXPORT_V2": True,
+        # Optional migration gate: omit authored node.data.ports in persisted graphs.
+        "GRAPH_PERSIST_DERIVED_PORTS_OMITTED": _env_bool("GRAPH_PERSIST_DERIVED_PORTS_OMITTED", False),
         # TKT-023 rollout toggles for runtime contract strictness.
         "STRICT_SCHEMA_EDGE_CHECKS": _env_bool("STRICT_SCHEMA_EDGE_CHECKS", True),
         "STRICT_SCHEMA_EDGE_CHECKS_V2": _env_bool("STRICT_SCHEMA_EDGE_CHECKS_V2", True),

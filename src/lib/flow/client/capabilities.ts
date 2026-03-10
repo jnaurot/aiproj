@@ -5,6 +5,7 @@ export type BackendCapabilitiesResponse = {
 	schemaVersion: number;
 	signature: string;
 	featureFlags?: {
+		GRAPH_PERSIST_DERIVED_PORTS_OMITTED?: boolean;
 		STRICT_SCHEMA_EDGE_CHECKS?: boolean;
 		STRICT_SCHEMA_EDGE_CHECKS_V2?: boolean;
 		STRICT_COERCION_POLICY?: boolean;

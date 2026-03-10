@@ -14,6 +14,7 @@ def test_runs_diagnostics_endpoint_available():
 		assert "artifactMemo" in body
 		assert "activeRuns" in body
 		assert "featureFlags" in body
+		assert body["featureFlags"]["GRAPH_PERSIST_DERIVED_PORTS_OMITTED"] in {True, False}
 		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS"] in {True, False}
 		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS_V2"] in {True, False}
 		assert body["featureFlags"]["STRICT_COERCION_POLICY"] in {True, False}
