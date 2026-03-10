@@ -22,7 +22,7 @@ let activeFlags: {
 	STRICT_SCHEMA_EDGE_CHECKS: true,
 	STRICT_SCHEMA_EDGE_CHECKS_V2: true,
 	STRICT_COERCION_POLICY: true,
-	GRAPH_PERSIST_DERIVED_PORTS_OMITTED: false
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED: true
 };
 
 function getNodesMap(): Record<string, any> {
@@ -123,7 +123,7 @@ export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
 			STRICT_SCHEMA_EDGE_CHECKS_V2: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS_V2 ?? true),
 			STRICT_COERCION_POLICY: Boolean(response?.featureFlags?.STRICT_COERCION_POLICY ?? true),
 			GRAPH_PERSIST_DERIVED_PORTS_OMITTED: Boolean(
-				response?.featureFlags?.GRAPH_PERSIST_DERIVED_PORTS_OMITTED ?? false
+				response?.featureFlags?.GRAPH_PERSIST_DERIVED_PORTS_OMITTED ?? true
 			)
 		};
 		NODE_CAPABILITIES = buildNodeCapabilities();

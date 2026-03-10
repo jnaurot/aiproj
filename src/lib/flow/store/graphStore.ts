@@ -2198,6 +2198,20 @@ function buildSavePreflightDiagnostics(
 
 	for (const node of workingNodes) {
 		diagnostics.push(...toolBuiltinPreflightDiagnostics(node));
+		if (node.data && Object.prototype.hasOwnProperty.call(node.data as any, 'ports')) {
+			const authoredIn = normalizeComponentPortType((node.data as any)?.ports?.in ?? null);
+			const authoredOut = normalizeComponentPortType((node.data as any)?.ports?.out ?? null);
+			const derived = derivePortsForNodeData(node.data as PipelineNodeData);
+			const mismatch = authoredIn !== derived.in || authoredOut !== derived.out;
+			diagnostics.push({
+				code: 'PORTS_AUTHORED_DEPRECATED',
+				path: `nodes.${String(node.id)}.data.ports`,
+				message: mismatch
+					? 'Authored node.data.ports is deprecated and differs from schema-derived ports. Save will use derived values.'
+					: 'Authored node.data.ports is deprecated. Ports are derived from schema/contracts.',
+				severity: 'warning'
+			});
+		}
 		const expectedSchema = (node.data as any)?.schema?.expectedSchema;
 		if (expectedSchema != null) {
 			const expectedTypedRaw =
