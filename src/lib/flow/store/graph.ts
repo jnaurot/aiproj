@@ -163,6 +163,26 @@ function normalizeExistingForTransformPatch(existing: unknown, patch: unknown): 
   return next;
 }
 
+function patchIncludesBuiltinArgs(patch: unknown): boolean {
+  if (!isObject(patch)) return false;
+  const builtin = patch.builtin;
+  if (!isObject(builtin)) return false;
+  return isObject(builtin.args);
+}
+
+function normalizeExistingForToolBuiltinPatch(existing: unknown, patch: unknown): unknown {
+  if (!isObject(existing) || !isObject(patch)) return existing;
+  if (!patchIncludesBuiltinArgs(patch)) return existing;
+
+  const next: Record<string, unknown> = { ...existing };
+  const existingBuiltin = isObject(next.builtin) ? (next.builtin as Record<string, unknown>) : {};
+  next.builtin = {
+    ...existingBuiltin,
+    args: {}
+  };
+  return next;
+}
+
 export function updateNodeParamsValidated(
   nodes: Node<PipelineNodeData>[],
   nodeId: string,
@@ -179,6 +199,8 @@ export function updateNodeParamsValidated(
   const existingForMerge =
     node.data.kind === "transform"
       ? normalizeExistingForTransformPatch(existing, normalizedPatch)
+      : node.data.kind === "tool"
+        ? normalizeExistingForToolBuiltinPatch(existing, normalizedPatch)
       : existing;
   const pick = pickValidation(node.data, normalizedPatch, existingForMerge);
   const defaultsForMerge =

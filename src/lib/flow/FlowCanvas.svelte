@@ -227,6 +227,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let nodeInspectorCollapsed = false;
 	let environmentCollapsed = false;
 	let runLogsCollapsed = false;
+	let guidedDsmlDismissed = false;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
 		inspectorMode: InspectorMode;
@@ -2327,56 +2328,79 @@ async function scrollToBottom() {
 			style={nodeInspectorCollapsed ? 'flex: 0 0 auto;' : `flex: ${inspectorTopWeight} 1 0;`}
 		>
 			<!-- <h3>Inspector</h3> -->
-			<div class="card guidedCard" role="region" aria-label="Guided workflow recommendations">
-				<div class="guidedHead">
-					<b>Guided DS/ML</b>
+			{#if guidedDsmlDismissed}
+				<div class="guidedRestoreRow">
 					<button
 						type="button"
 						class="tabBtn"
-						on:click={openStarterTemplatePicker}
-						aria-label="Add starter template"
+						aria-label="Show guided DS/ML panel"
+						on:click={() => (guidedDsmlDismissed = false)}
 					>
-						Starter Templates
+						Show Guided DS/ML
 					</button>
 				</div>
-				<div class="guidedBody">
-					<div class="guidedHintTitle">{guidedNextStep.label}</div>
-					<div class="guidedHintDescription">{guidedNextStep.description}</div>
-					<div class="guidedActions">
-						<button
-							type="button"
-							class="primary"
-							on:click={() => runGuidedRecommendation(guidedNextStep)}
-							aria-label="Apply recommended next step"
-						>
-							Do Next Step
-						</button>
-						{#if $selectedNode && guidedPresetsForSelectedKind.length > 0}
-							<button
-								type="button"
-								class="runSecondary"
-								on:click={openOperationPresetPickerForSelectedNode}
-								aria-label="Open operation presets for selected node"
-							>
-								Operation Presets
-							</button>
-						{/if}
-					</div>
-					{#if $selectedNode && guidedInlinePreset}
-						<div class="guidedInlineExample">
-							<span class="mono">Inline example:</span> {guidedInlinePreset.name}
+			{:else}
+				<div class="card guidedCard" role="region" aria-label="Guided workflow recommendations">
+					<div class="guidedHead">
+						<b>Guided DS/ML</b>
+						<div class="guidedHeadActions">
 							<button
 								type="button"
 								class="tabBtn"
-								on:click={() => applyGuidedOperationPresetToNode($selectedNode.id, guidedInlinePreset)}
-								aria-label="Apply inline example"
+								on:click={openStarterTemplatePicker}
+								aria-label="Add starter template"
 							>
-								Use Example
+								Starter Templates
+							</button>
+							<button
+								type="button"
+								class="tabBtn guidedCloseBtn"
+								aria-label="Close guided DS/ML panel"
+								on:click={() => (guidedDsmlDismissed = true)}
+							>
+								Close
 							</button>
 						</div>
-					{/if}
+					</div>
+					<div class="guidedBody">
+						<div class="guidedHintTitle">{guidedNextStep.label}</div>
+						<div class="guidedHintDescription">{guidedNextStep.description}</div>
+						<div class="guidedActions">
+							<button
+								type="button"
+								class="primary"
+								on:click={() => runGuidedRecommendation(guidedNextStep)}
+								aria-label="Apply recommended next step"
+							>
+								Do Next Step
+							</button>
+							{#if $selectedNode && guidedPresetsForSelectedKind.length > 0}
+								<button
+									type="button"
+									class="runSecondary"
+									on:click={openOperationPresetPickerForSelectedNode}
+									aria-label="Open operation presets for selected node"
+								>
+									Operation Presets
+								</button>
+							{/if}
+						</div>
+						{#if $selectedNode && guidedInlinePreset}
+							<div class="guidedInlineExample">
+								<span class="mono">Inline example:</span> {guidedInlinePreset.name}
+								<button
+									type="button"
+									class="tabBtn"
+									on:click={() => applyGuidedOperationPresetToNode($selectedNode.id, guidedInlinePreset)}
+									aria-label="Apply inline example"
+								>
+									Use Example
+								</button>
+							</div>
+						{/if}
+					</div>
 				</div>
-			</div>
+			{/if}
 
 			{#if $selectedNode}
 				<div class="card editorCard">
@@ -3310,6 +3334,21 @@ async function scrollToBottom() {
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
+	}
+
+	.guidedHeadActions {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.guidedCloseBtn {
+		padding-inline: 7px;
+	}
+
+	.guidedRestoreRow {
+		display: flex;
+		justify-content: flex-start;
 	}
 
 	.guidedBody {

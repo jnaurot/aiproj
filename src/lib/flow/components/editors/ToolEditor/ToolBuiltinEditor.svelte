@@ -26,7 +26,6 @@
 	let customPackagesErrors: string[] = [];
 	let advancedOpen = false;
 	let lastCustomPackagesHydrationSignature = '';
-	let operationArgsByToolId: Record<string, Record<string, unknown>> = {};
 
 	$: builtin = params?.builtin ?? defaultBuiltin;
 	$: profileId = (builtin.profileId ?? 'core') as ToolBuiltinProfileId;
@@ -43,29 +42,14 @@
 		customPackagesErrors = [];
 	}
 
-	function rememberCurrentArgsForToolId(toolId: string, args: Record<string, unknown> | undefined): void {
-		const key = (toolId ?? '').trim();
-		if (!key) return;
-		operationArgsByToolId = {
-			...operationArgsByToolId,
-			[key]: { ...(args ?? {}) }
-		};
-	}
-
 	function commitArgs(text: string): void {
 		const parsed = tryParseJson(text);
 		if (parsed === undefined) return;
-		rememberCurrentArgsForToolId(builtin.toolId ?? '', parsed as Record<string, unknown>);
 		onCommit({ builtin: { ...builtin, args: parsed as Record<string, unknown> } });
 	}
 
 	function cloneDefaultArgs(value: Record<string, unknown>): Record<string, unknown> {
 		return JSON.parse(JSON.stringify(value ?? {})) as Record<string, unknown>;
-	}
-
-	function isEmptyArgs(argsValue: unknown): boolean {
-		if (!argsValue || typeof argsValue !== 'object' || Array.isArray(argsValue)) return true;
-		return Object.keys(argsValue as Record<string, unknown>).length === 0;
 	}
 
 	function handleProfileChange(event: Event): void {
@@ -84,17 +68,11 @@
 	}
 
 	function applyToolId(nextToolId: string): void {
-		const prevToolId = (builtin.toolId ?? '').trim();
-		if (prevToolId) {
-			rememberCurrentArgsForToolId(prevToolId, builtin.args ?? {});
-		}
 		const operation = getBuiltinOperationById(nextToolId);
-		const cachedArgs = nextToolId ? operationArgsByToolId[nextToolId] : undefined;
-		const shouldSeedArgs = !cachedArgs && operation && isEmptyArgs(builtin.args);
 		const nextBuiltin: BuiltinParams['builtin'] = {
 			...builtin,
 			toolId: nextToolId,
-			args: cachedArgs ?? (shouldSeedArgs ? cloneDefaultArgs(operation.defaultArgs) : (builtin.args ?? {}))
+			args: operation ? cloneDefaultArgs(operation.defaultArgs) : {}
 		};
 		onDraft({ builtin: nextBuiltin });
 		onCommit({ builtin: nextBuiltin });
@@ -108,7 +86,6 @@
 	function seedExampleArgs(): void {
 		const operation = getBuiltinOperationById(builtin.toolId);
 		if (!operation) return;
-		rememberCurrentArgsForToolId(builtin.toolId ?? '', operation.defaultArgs);
 		const nextBuiltin: BuiltinParams['builtin'] = {
 			...builtin,
 			args: cloneDefaultArgs(operation.defaultArgs)
