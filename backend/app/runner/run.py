@@ -715,7 +715,11 @@ def _typed_schema_compatibility(
     exp = expected if isinstance(expected, dict) else None
     act = actual if isinstance(actual, dict) else None
     if exp is None or act is None:
-        return True, {"coercionApplied": False, "missingColumns": []}
+        return True, {
+            "coercionApplied": False,
+            "missingColumns": [],
+            "mismatchedColumns": [],
+        }
     exp_t = str(exp.get("type") or "unknown").strip().lower() or "unknown"
     act_t = str(act.get("type") or "unknown").strip().lower() or "unknown"
     coercion_applied = False
@@ -723,19 +727,65 @@ def _typed_schema_compatibility(
         if policy == "allow_lossy":
             coercion_applied = True
         else:
-            return False, {"coercionApplied": False, "reason": "type_mismatch", "expectedType": exp_t, "actualType": act_t, "missingColumns": []}
+            return False, {
+                "coercionApplied": False,
+                "reason": "type_mismatch",
+                "expectedType": exp_t,
+                "actualType": act_t,
+                "missingColumns": [],
+                "mismatchedColumns": [],
+            }
     if exp_t == "table" and act_t == "table":
         exp_fields = exp.get("fields") if isinstance(exp.get("fields"), list) else []
         act_fields = act.get("fields") if isinstance(act.get("fields"), list) else []
         exp_names = [str(f.get("name") or "").strip() for f in exp_fields if isinstance(f, dict)]
         act_names = {str(f.get("name") or "").strip() for f in act_fields if isinstance(f, dict)}
         missing = sorted([n for n in exp_names if n and n not in act_names])
+        exp_types = {
+            str(f.get("name") or "").strip(): str(f.get("type") or "unknown").strip().lower() or "unknown"
+            for f in exp_fields
+            if isinstance(f, dict) and str(f.get("name") or "").strip()
+        }
+        act_types = {
+            str(f.get("name") or "").strip(): str(f.get("type") or "unknown").strip().lower() or "unknown"
+            for f in act_fields
+            if isinstance(f, dict) and str(f.get("name") or "").strip()
+        }
+        mismatched = sorted(
+            [
+                name
+                for name in exp_types.keys()
+                if name in act_types
+                and exp_types.get(name) not in {"", "unknown"}
+                and act_types.get(name) not in {"", "unknown"}
+                and exp_types.get(name) != act_types.get(name)
+            ]
+        )
+        if mismatched:
+            if policy == "allow_lossy":
+                coercion_applied = True
+            else:
+                return False, {
+                    "coercionApplied": False,
+                    "reason": "column_type_mismatch",
+                    "missingColumns": [],
+                    "mismatchedColumns": mismatched,
+                }
         if missing:
             if policy == "allow_lossy":
                 coercion_applied = True
             else:
-                return False, {"coercionApplied": False, "reason": "missing_columns", "missingColumns": missing}
-    return True, {"coercionApplied": coercion_applied, "missingColumns": []}
+                return False, {
+                    "coercionApplied": False,
+                    "reason": "missing_columns",
+                    "missingColumns": missing,
+                    "mismatchedColumns": [],
+                }
+    return True, {
+        "coercionApplied": coercion_applied,
+        "missingColumns": [],
+        "mismatchedColumns": [],
+    }
 
 
 def _component_output_port_compatible(
@@ -2244,6 +2294,7 @@ async def run_graph(
                     upstream_art = await context.artifact_store.get(upstream_id)
                     upstream_pt = _infer_artifact_port_type(upstream_art)
                     expected_in = str(declared_in or "").strip()
+                    actual_ts = _artifact_typed_schema(upstream_art)
                     if expected_in and upstream_pt != expected_in:
                         if coercion_policy == "allow_lossy":
                             await _emit({
@@ -2267,8 +2318,32 @@ async def run_graph(
                                 ),
                             )
                             break
+                    if expected_in == "table" and upstream_pt == "table":
+                        ts_fields = actual_ts.get("fields") if isinstance(actual_ts.get("fields"), list) else []
+                        has_typed_columns = any(
+                            isinstance(f, dict) and str(f.get("name") or "").strip()
+                            for f in ts_fields
+                        )
+                        if not has_typed_columns:
+                            preflight_error = ContractMismatchError(
+                                "Input edge contract mismatch: table input is missing typed schema columns",
+                                code="CONTRACT_EDGE_TYPED_SCHEMA_MISSING",
+                                details=_contract_details(
+                                    expected={
+                                        "inPortType": "table",
+                                        "typedSchema": {"type": "table", "fields": "non-empty"},
+                                        "coercionPolicy": coercion_policy,
+                                        "inputPort": input_port,
+                                    },
+                                    actual={
+                                        "artifactId": upstream_id,
+                                        "portType": upstream_pt,
+                                        "typedSchema": actual_ts or {},
+                                    },
+                                ),
+                            )
+                            break
                     expected_ts = _declared_component_input_schema(n, str(input_port or "in"))
-                    actual_ts = _artifact_typed_schema(upstream_art)
                     ok_ts, ts_info = _typed_schema_compatibility(
                         expected=expected_ts,
                         actual=actual_ts,
@@ -2288,6 +2363,11 @@ async def run_graph(
                                 actual={
                                     "artifactId": upstream_id,
                                     "typedSchema": actual_ts or {},
+                                    "mismatchedColumns": (
+                                        ts_info.get("mismatchedColumns")
+                                        if isinstance(ts_info, dict)
+                                        else []
+                                    ),
                                 },
                             ),
                         )
@@ -3662,7 +3742,15 @@ async def run_graph(
                                 details=_contract_details(
                                     missing_columns=ts_info.get("missingColumns") if isinstance(ts_info, dict) else [],
                                     expected={"output": out_name, "typedSchema": declared_typed or {}, "coercionPolicy": coercion_policy},
-                                    actual={"artifactId": bound_artifact_id, "typedSchema": actual_typed or {}},
+                                    actual={
+                                        "artifactId": bound_artifact_id,
+                                        "typedSchema": actual_typed or {},
+                                        "mismatchedColumns": (
+                                            ts_info.get("mismatchedColumns")
+                                            if isinstance(ts_info, dict)
+                                            else []
+                                        ),
+                                    },
                                 ),
                             )
                         wrapper_upstream_ids.append(bound_artifact_id)

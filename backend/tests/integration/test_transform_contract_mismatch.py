@@ -222,6 +222,8 @@ async def test_transform_dedupe_missing_column_returns_missing_column(monkeypatc
 async def test_transform_non_table_payload_schema_type_fails_with_expected_actual(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     transform_calls = {"count": 0}
+    monkeypatch.setenv("STRICT_SCHEMA_EDGE_CHECKS", "0")
+    monkeypatch.setenv("STRICT_COERCION_POLICY", "0")
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(
@@ -274,6 +276,74 @@ async def test_transform_non_table_payload_schema_type_fails_with_expected_actua
     assert detail_payload.get("expected", {}).get("payloadType") == "table"
     assert detail_payload.get("actual", {}).get("payloadType") == "json"
     assert isinstance(detail_payload.get("actual", {}).get("artifactId"), str)
+
+
+@pytest.mark.asyncio
+async def test_transform_table_input_requires_typed_columns(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    transform_calls = {"count": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data=[{"text": "hello"}],
+        )
+
+    def _fake_source_payload_schema(out_contract, data_value, source_meta=None):
+        # Simulate legacy/invalid table payload metadata without typed columns.
+        return {"schema_version": 1, "type": "table", "columns": []}
+
+    def _fake_run_transform(params, input_tables, join_lookup=None):
+        transform_calls["count"] += 1
+        return types.SimpleNamespace(
+            payload_bytes=b"text\nhello\n",
+            mime_type="text/csv; charset=utf-8",
+            meta={"columns": ["text"]},
+        )
+
+    monkeypatch.setenv("STRICT_SCHEMA_EDGE_CHECKS", "1")
+    monkeypatch.setenv("STRICT_COERCION_POLICY", "1")
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "_source_payload_schema", _fake_source_payload_schema)
+    monkeypatch.setattr(run_mod, "run_transform", _fake_run_transform)
+
+    events = []
+    store = DiskArtifactStore(tmp_path / "artifacts")
+    cache = SqliteExecutionCache(str(tmp_path / "artifacts" / "meta" / "artifacts.sqlite"))
+    graph = _graph_for_select_missing_column()
+    graph["nodes"][1]["data"]["params"] = {"op": "limit", "limit": {"n": 1}}
+
+    await run_mod.run_graph(
+        run_id="run-transform-typed-columns-required",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-transform-typed-columns-required", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-transform-contract-mismatch",
+    )
+
+    assert transform_calls["count"] == 0
+    finish = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "transform_1"]
+    assert finish and finish[-1].get("status") == "failed"
+    assert finish[-1].get("errorCode") == "CONTRACT_EDGE_TYPED_SCHEMA_MISSING"
+    details = finish[-1].get("errorDetails") or {}
+    assert details.get("expected", {}).get("inPortType") == "table"
+    assert details.get("expected", {}).get("typedSchema", {}).get("fields") == "non-empty"
+    assert details.get("actual", {}).get("typedSchema", {}).get("fields") == []
+
+    out = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "transform_1"]
+    assert not out
+    detail_logs = [
+        e
+        for e in events
+        if e.get("type") == "log"
+        and e.get("nodeId") == "transform_1"
+        and '"CONTRACT_EDGE_TYPED_SCHEMA_MISSING"' in str(e.get("message", ""))
+    ]
+    assert detail_logs
 
 
 @pytest.mark.asyncio
