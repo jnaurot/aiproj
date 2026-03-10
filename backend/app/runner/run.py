@@ -1086,6 +1086,7 @@ def _artifact_metadata_v1(
     run_id: Optional[str],
     graph_id: Optional[str],
     component_context: Optional[Dict[str, Any]] = None,
+    lineage_v1: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     out = {
         "metadataVersion": 1,
@@ -1112,7 +1113,125 @@ def _artifact_metadata_v1(
             "instanceNodeId": str(component_context.get("instanceNodeId") or ""),
             "internalNodeId": str(component_context.get("internalNodeId") or ""),
         }
+    if isinstance(lineage_v1, dict) and lineage_v1:
+        out["lineageV1"] = lineage_v1
     return out
+
+
+async def _artifact_lineage_v1(
+    *,
+    artifact_id: str,
+    upstream_artifact_ids: list[str],
+    node_params: Dict[str, Any],
+    node_id: str,
+    run_id: Optional[str],
+    graph_id: Optional[str],
+    exec_key: str,
+    artifact_store: Any,
+) -> Dict[str, Any]:
+    parent_ids = sorted({str(a).strip() for a in (upstream_artifact_ids or []) if str(a).strip()})
+    producer_ref = {
+        "role": "producer",
+        "artifactId": str(artifact_id or ""),
+        "runId": str(run_id or ""),
+        "graphId": str(graph_id or ""),
+        "nodeId": str(node_id or ""),
+        "execKey": str(exec_key or ""),
+    }
+    run_refs: list[Dict[str, str]] = [producer_ref]
+
+    snapshot_refs: list[Dict[str, str]] = []
+    snapshot_id = None
+    if isinstance(node_params, dict):
+        snapshot_id = node_params.get("snapshot_id") or node_params.get("snapshotId")
+    if isinstance(snapshot_id, str) and snapshot_id.strip():
+        snapshot_refs.append({"snapshotId": str(snapshot_id).strip().lower(), "role": "source_input"})
+
+    if parent_ids and artifact_store is not None and hasattr(artifact_store, "get"):
+        for parent_artifact_id in parent_ids:
+            try:
+                parent_art = await artifact_store.get(parent_artifact_id)
+            except Exception:
+                continue
+            run_refs.append(
+                {
+                    "role": "parent_producer",
+                    "artifactId": str(parent_artifact_id),
+                    "runId": str(getattr(parent_art, "run_id", "") or ""),
+                    "graphId": str(getattr(parent_art, "graph_id", "") or ""),
+                    "nodeId": str(getattr(parent_art, "node_id", "") or ""),
+                    "execKey": str(getattr(parent_art, "exec_key", "") or ""),
+                }
+            )
+            parent_ps = parent_art.payload_schema if isinstance(parent_art.payload_schema, dict) else {}
+            parent_meta = (
+                parent_ps.get("artifactMetadataV1")
+                if isinstance(parent_ps.get("artifactMetadataV1"), dict)
+                else {}
+            )
+            parent_lineage = (
+                parent_meta.get("lineageV1")
+                if isinstance(parent_meta.get("lineageV1"), dict)
+                else {}
+            )
+            parent_snapshots = (
+                parent_lineage.get("snapshotRefs")
+                if isinstance(parent_lineage.get("snapshotRefs"), list)
+                else []
+            )
+            for snap in parent_snapshots:
+                if isinstance(snap, dict) and str(snap.get("snapshotId") or "").strip():
+                    snapshot_refs.append(
+                        {
+                            "snapshotId": str(snap.get("snapshotId") or "").strip().lower(),
+                            "role": str(snap.get("role") or "ancestor"),
+                        }
+                    )
+
+    # Deterministic de-duplication.
+    unique_snapshot_keys: set[tuple[str, str]] = set()
+    deduped_snapshots: list[Dict[str, str]] = []
+    for snap in snapshot_refs:
+        sid = str(snap.get("snapshotId") or "").strip().lower()
+        role = str(snap.get("role") or "").strip() or "ancestor"
+        if not sid:
+            continue
+        key = (sid, role)
+        if key in unique_snapshot_keys:
+            continue
+        unique_snapshot_keys.add(key)
+        deduped_snapshots.append({"snapshotId": sid, "role": role})
+
+    unique_run_keys: set[tuple[str, str]] = set()
+    deduped_run_refs: list[Dict[str, str]] = []
+    for ref in run_refs:
+        role = str(ref.get("role") or "").strip() or "producer"
+        aid = str(ref.get("artifactId") or "").strip()
+        if not aid:
+            continue
+        key = (role, aid)
+        if key in unique_run_keys:
+            continue
+        unique_run_keys.add(key)
+        deduped_run_refs.append(
+            {
+                "role": role,
+                "artifactId": aid,
+                "runId": str(ref.get("runId") or ""),
+                "graphId": str(ref.get("graphId") or ""),
+                "nodeId": str(ref.get("nodeId") or ""),
+                "execKey": str(ref.get("execKey") or ""),
+            }
+        )
+
+    return {
+        "schemaVersion": 1,
+        "datasetVersionId": str(artifact_id or ""),
+        "artifactId": str(artifact_id or ""),
+        "parentArtifactIds": parent_ids,
+        "snapshotRefs": deduped_snapshots,
+        "runRefs": deduped_run_refs,
+    }
 
 
 def _is_contract_mismatch_error(message: str) -> bool:
@@ -3382,6 +3501,16 @@ async def run_graph(
                                 canonical_schema_for_contract(default_contract_for_node(n))
                             )
                         contract_fingerprint = schema_fp
+                        lineage_v1 = await _artifact_lineage_v1(
+                            artifact_id=artifact_id,
+                            upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
+                            node_params=params if isinstance(params, dict) else {},
+                            node_id=node_id,
+                            run_id=run_id,
+                            graph_id=context.graph_id,
+                            exec_key=exec_key,
+                            artifact_store=context.artifact_store,
+                        )
                         base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
                             exec_key=exec_key,
                             node_id=node_id,
@@ -3402,6 +3531,7 @@ async def run_graph(
                                 if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
                                 else None
                             ),
+                            lineage_v1=lineage_v1,
                         )
                         artifact = Artifact(
                             artifact_id=artifact_id,
@@ -4104,6 +4234,16 @@ async def run_graph(
                             canonical_schema_for_contract(default_contract_for_node(n))
                         )
                     contract_fingerprint = schema_fp
+                    lineage_v1 = await _artifact_lineage_v1(
+                        artifact_id=artifact_id,
+                        upstream_artifact_ids=sorted(upstream_ids),
+                        node_params=params if isinstance(params, dict) else {},
+                        node_id=node_id,
+                        run_id=run_id,
+                        graph_id=context.graph_id,
+                        exec_key=exec_key,
+                        artifact_store=context.artifact_store,
+                    )
                     base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
                         exec_key=exec_key,
                         node_id=node_id,
@@ -4124,6 +4264,7 @@ async def run_graph(
                             if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
                             else None
                         ),
+                        lineage_v1=lineage_v1,
                     )
 
                     artifact = Artifact(

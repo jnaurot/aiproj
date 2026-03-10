@@ -61,6 +61,79 @@ def _extract_builtin_environment(payload_schema: Optional[Dict[str, Any]]) -> Op
     return out
 
 
+def _extract_dataset_lineage(
+    *,
+    artifact_id: str,
+    upstream_ids: list[str],
+    payload_schema: Optional[Dict[str, Any]],
+    node_id: Optional[str],
+    run_id: Optional[str],
+    graph_id: Optional[str],
+    exec_key: Optional[str],
+) -> Dict[str, Any]:
+    artifact_meta = (
+        payload_schema.get("artifactMetadataV1")
+        if isinstance(payload_schema, dict) and isinstance(payload_schema.get("artifactMetadataV1"), dict)
+        else {}
+    )
+    lineage = artifact_meta.get("lineageV1") if isinstance(artifact_meta.get("lineageV1"), dict) else {}
+    parent_ids = lineage.get("parentArtifactIds") if isinstance(lineage.get("parentArtifactIds"), list) else []
+    snapshot_refs = lineage.get("snapshotRefs") if isinstance(lineage.get("snapshotRefs"), list) else []
+    run_refs = lineage.get("runRefs") if isinstance(lineage.get("runRefs"), list) else []
+
+    normalized_parent_ids = [str(a) for a in parent_ids if isinstance(a, str) and a.strip()]
+    if not normalized_parent_ids:
+        normalized_parent_ids = [str(a) for a in (upstream_ids or []) if isinstance(a, str) and a.strip()]
+
+    normalized_snapshot_refs: list[Dict[str, str]] = []
+    for snap in snapshot_refs:
+        if not isinstance(snap, dict):
+            continue
+        sid = str(snap.get("snapshotId") or "").strip().lower()
+        if not sid:
+            continue
+        normalized_snapshot_refs.append({"snapshotId": sid, "role": str(snap.get("role") or "ancestor")})
+
+    normalized_run_refs: list[Dict[str, str]] = []
+    for ref in run_refs:
+        if not isinstance(ref, dict):
+            continue
+        aid = str(ref.get("artifactId") or "").strip()
+        if not aid:
+            continue
+        normalized_run_refs.append(
+            {
+                "role": str(ref.get("role") or "producer"),
+                "artifactId": aid,
+                "runId": str(ref.get("runId") or ""),
+                "graphId": str(ref.get("graphId") or ""),
+                "nodeId": str(ref.get("nodeId") or ""),
+                "execKey": str(ref.get("execKey") or ""),
+            }
+        )
+
+    if not normalized_run_refs:
+        normalized_run_refs = [
+            {
+                "role": "producer",
+                "artifactId": str(artifact_id),
+                "runId": str(run_id or ""),
+                "graphId": str(graph_id or ""),
+                "nodeId": str(node_id or ""),
+                "execKey": str(exec_key or ""),
+            }
+        ]
+
+    return {
+        "schemaVersion": 1,
+        "datasetVersionId": str(lineage.get("datasetVersionId") or artifact_id),
+        "artifactId": str(artifact_id),
+        "parentArtifactIds": sorted(set(normalized_parent_ids)),
+        "snapshotRefs": normalized_snapshot_refs,
+        "runRefs": normalized_run_refs,
+    }
+
+
 
 class RunRequest(BaseModel):
     graphId: str
@@ -598,9 +671,19 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
     if component_meta:
         producer["component"] = component_meta
         producer["aliasNodeId"] = str(component_meta.get("instanceNodeId") or art.node_id or "")
+    lineage = _extract_dataset_lineage(
+        artifact_id=art.artifact_id,
+        upstream_ids=upstream_ids,
+        payload_schema=payload_schema,
+        node_id=art.node_id,
+        run_id=art.run_id,
+        graph_id=art.graph_id,
+        exec_key=art.exec_key,
+    )
     return {
         "schemaVersion": 1,
         "artifactId": art.artifact_id,
+        "datasetVersionId": lineage.get("datasetVersionId"),
         "nodeKind": art.node_kind,
         "portType": art.port_type,
         "mimeType": art.mime_type,
@@ -620,6 +703,7 @@ async def get_artifact_meta(artifact_id: str, request: Request, graphId: str = Q
         "graphId": art.graph_id,
         "producerExecKey": art.exec_key,
         "producer": producer,
+        "lineage": lineage,
         "payloadSchema": payload_schema,
         "builtinEnvironment": builtin_env,
     }
@@ -696,8 +780,18 @@ async def get_artifact_lineage(
         if component_meta:
             producer["component"] = component_meta
             producer["aliasNodeId"] = str(component_meta.get("instanceNodeId") or art.node_id or "")
+        lineage = _extract_dataset_lineage(
+            artifact_id=art.artifact_id,
+            upstream_ids=art.upstream_ids or [],
+            payload_schema=payload_schema,
+            node_id=art.node_id,
+            run_id=art.run_id,
+            graph_id=art.graph_id,
+            exec_key=art.exec_key,
+        )
         node = {
             "artifactId": art.artifact_id,
+            "datasetVersionId": lineage.get("datasetVersionId"),
             "nodeKind": art.node_kind,
             "portType": art.port_type,
             "mimeType": art.mime_type,
@@ -710,6 +804,7 @@ async def get_artifact_lineage(
                 {"artifactId": up_id, "label": _alpha_input_label(i)}
                 for i, up_id in enumerate(art.upstream_ids or [])
             ],
+            "lineage": lineage,
             "builtinEnvironment": builtin_env,
         }
         if d <= 0:
@@ -722,6 +817,51 @@ async def get_artifact_lineage(
         "artifactId": artifact_id,
         "depth": depth,
         "lineage": await _build(artifact_id, depth),
+    }
+
+
+@router.get("/datasets/{dataset_version_id}")
+async def get_dataset_version(
+    dataset_version_id: str,
+    request: Request,
+    graphId: str = Query(...),
+):
+    rt = request.app.state.runtime
+    store = rt.artifact_store
+    dataset_id = str(dataset_version_id or "").strip()
+    if not dataset_id:
+        raise HTTPException(400, "dataset_version_id is required")
+    if not await store.exists(dataset_id):
+        raise HTTPException(404, "Dataset version not found")
+    art = await store.get(dataset_id)
+    if not getattr(art, "graph_id", None) or str(art.graph_id) != str(graphId):
+        raise HTTPException(404, "Dataset version not found")
+    payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else None
+    lineage = _extract_dataset_lineage(
+        artifact_id=art.artifact_id,
+        upstream_ids=art.upstream_ids or [],
+        payload_schema=payload_schema,
+        node_id=art.node_id,
+        run_id=art.run_id,
+        graph_id=art.graph_id,
+        exec_key=art.exec_key,
+    )
+    return {
+        "schemaVersion": 1,
+        "datasetVersionId": lineage.get("datasetVersionId"),
+        "artifactId": art.artifact_id,
+        "nodeKind": art.node_kind,
+        "portType": art.port_type,
+        "mimeType": art.mime_type,
+        "createdAt": art.created_at.isoformat(),
+        "producer": {
+            "nodeId": art.node_id,
+            "runId": art.run_id,
+            "graphId": art.graph_id,
+            "execKey": art.exec_key,
+        },
+        "lineage": lineage,
+        "payloadSchema": payload_schema,
     }
 
 
