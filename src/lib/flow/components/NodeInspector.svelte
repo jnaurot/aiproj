@@ -135,6 +135,56 @@
 	}
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
+	let expectedSchemaDraft = '';
+	let expectedSchemaError = '';
+	let expectedSchemaNodeId = '';
+
+	function normalizeExpectedSchemaDraft(node: any): string {
+		const typed =
+			node?.data?.schema?.expectedSchema?.typedSchema ??
+			node?.data?.schema?.inferredSchema?.typedSchema ??
+			{ type: 'unknown', fields: [] };
+		return JSON.stringify(typed, null, 2);
+	}
+
+	$: if (selectedNode?.id && selectedNode.id !== expectedSchemaNodeId) {
+		expectedSchemaNodeId = selectedNode.id;
+		expectedSchemaDraft = normalizeExpectedSchemaDraft(selectedNode);
+		expectedSchemaError = '';
+	}
+
+	function useInferredExpectedSchema(): void {
+		if (!selectedNode) return;
+		const typed = (selectedNode.data as any)?.schema?.inferredSchema?.typedSchema ?? { type: 'unknown', fields: [] };
+		expectedSchemaDraft = JSON.stringify(typed, null, 2);
+		expectedSchemaError = '';
+	}
+
+	function clearExpectedSchema(): void {
+		if (!selectedNode?.id) return;
+		const result = graphStore.setNodeExpectedSchema(selectedNode.id, null);
+		if (!(result as any)?.ok) {
+			expectedSchemaError = String((result as any)?.error ?? 'Failed to clear expected schema');
+			return;
+		}
+		expectedSchemaDraft = JSON.stringify({ type: 'unknown', fields: [] }, null, 2);
+		expectedSchemaError = '';
+	}
+
+	function saveExpectedSchema(): void {
+		if (!selectedNode?.id) return;
+		try {
+			const parsed = JSON.parse(expectedSchemaDraft || '{}');
+			const result = graphStore.setNodeExpectedSchema(selectedNode.id, parsed);
+			if (!(result as any)?.ok) {
+				expectedSchemaError = String((result as any)?.error ?? 'Failed to save expected schema');
+				return;
+			}
+			expectedSchemaError = '';
+		} catch (error) {
+			expectedSchemaError = String((error as Error)?.message ?? 'Expected schema must be valid JSON.');
+		}
+	}
 
 	$: if (selectedNode?.id && isTransform) {
 		const nodeId = selectedNode.id;
@@ -352,6 +402,25 @@
 				/>
 			{/if}
 		{/if}
+		{#if !isComponent}
+			<div class="expectedSchemaEditor">
+				<div class="expectedSchemaHead">Expected Output Schema</div>
+				<textarea
+					class="expectedSchemaTextarea"
+					rows="7"
+					bind:value={expectedSchemaDraft}
+					spellcheck="false"
+				/>
+				<div class="expectedSchemaActions">
+					<button type="button" on:click={saveExpectedSchema}>Save expected</button>
+					<button type="button" on:click={useInferredExpectedSchema}>Use inferred</button>
+					<button type="button" on:click={clearExpectedSchema}>Clear</button>
+				</div>
+				{#if expectedSchemaError}
+					<div class="expectedSchemaError">{expectedSchemaError}</div>
+				{/if}
+			</div>
+		{/if}
 		<div class={`schemaContract schemaContract-${schemaContract.status}`}>
 			<div class="schemaHead">Schema Contract</div>
 			<div class="schemaStatus">Status: {schemaContract.status}</div>
@@ -488,6 +557,43 @@
 	.schemaAssistHint {
 		font-size: 11px;
 		color: var(--ni-muted);
+	}
+
+	.expectedSchemaEditor {
+		margin-top: 8px;
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px;
+		background: var(--ni-card);
+		display: grid;
+		gap: 6px;
+	}
+
+	.expectedSchemaHead {
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	.expectedSchemaTextarea {
+		width: 100%;
+		min-height: 112px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
+			monospace;
+	}
+
+	.expectedSchemaActions {
+		display: flex;
+		gap: 8px;
+	}
+
+	.expectedSchemaActions button {
+		font-size: 11px;
+		padding: 4px 8px;
+	}
+
+	.expectedSchemaError {
+		font-size: 11px;
+		color: var(--ni-error-text);
 	}
 
 	.schemaContract {

@@ -2178,6 +2178,32 @@ function buildSavePreflightDiagnostics(
 
 	for (const node of workingNodes) {
 		diagnostics.push(...toolBuiltinPreflightDiagnostics(node));
+		const expectedSchema = (node.data as any)?.schema?.expectedSchema;
+		if (expectedSchema != null) {
+			const expectedTypedRaw =
+				typeof (expectedSchema as any)?.typedSchema === 'object'
+					? ((expectedSchema as any).typedSchema as Record<string, unknown>)
+					: null;
+			const expectedTyped = payloadHintToTypedSchema(expectedTypedRaw);
+			if (!expectedTyped) {
+				diagnostics.push({
+					code: 'EXPECTED_SCHEMA_INVALID',
+					path: `nodes.${String(node.id)}.data.schema.expectedSchema.typedSchema`,
+					message: 'Expected schema must define a valid typedSchema.type.',
+					severity: 'error'
+				});
+			} else if (node.data.kind !== 'component') {
+				const outPort = normalizeComponentPortType((node.data as any)?.ports?.out ?? null);
+				if (outPort && expectedTyped.type !== 'unknown' && outPort !== expectedTyped.type) {
+					diagnostics.push({
+						code: 'EXPECTED_SCHEMA_PORT_MISMATCH',
+						path: `nodes.${String(node.id)}.data.schema.expectedSchema.typedSchema.type`,
+						message: `Expected schema type "${expectedTyped.type}" must align with derived out port "${outPort}".`,
+						severity: 'error'
+					});
+				}
+			}
+		}
 		if (node.data.kind !== 'component') continue;
 		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
@@ -2543,6 +2569,12 @@ function fingerprintTypedSchema(typedSchemaRaw: unknown): string | undefined {
 		fields: normalizeTypedSchemaFields(Array.isArray(typed.fields) ? typed.fields : [])
 	};
 	return JSON.stringify(normalized);
+}
+
+function hasSchemaEnvelopeContent(raw: unknown): boolean {
+	if (!raw || typeof raw !== 'object') return false;
+	const env = raw as Record<string, unknown>;
+	return Boolean(env.inferredSchema || env.expectedSchema || env.observedSchema);
 }
 
 function deriveInferredSchemaObservationForNode(node: Node<PipelineNodeData>): NodeSchemaObservation | null {
@@ -3341,6 +3373,69 @@ export const graphStore = (() => {
 		return out;
 	}
 
+	function setNodeExpectedSchemaImpl(
+		nodeId: string,
+		typedSchema: Record<string, unknown> | null
+	): { ok: boolean; error?: string } {
+		let result: { ok: boolean; error?: string } = { ok: true };
+		update((s) => {
+			const node = s.nodes.find((n) => n.id === nodeId);
+			if (!node) {
+				result = { ok: false, error: 'Node not found' };
+				return s;
+			}
+			const existingSchema =
+				node.data?.schema && typeof node.data.schema === 'object'
+					? ({ ...(node.data.schema as Record<string, unknown>) } as Record<string, unknown>)
+					: {};
+			if (typedSchema == null) {
+				delete (existingSchema as any).expectedSchema;
+			} else {
+				const normalizedTyped = payloadHintToTypedSchema(typedSchema);
+				if (!normalizedTyped) {
+					result = { ok: false, error: 'Expected schema must include a valid typed schema type.' };
+					return logPush(s, 'warn', result.error, nodeId);
+				}
+				(existingSchema as any).expectedSchema = {
+					typedSchema: normalizedTyped,
+					source: 'declared',
+					state: 'fresh',
+					schemaFingerprint: fingerprintTypedSchema(normalizedTyped),
+					updatedAt: new Date().toISOString()
+				};
+			}
+			const parsed = NodeSchemaEnvelopeSchema.safeParse(existingSchema);
+			if (!parsed.success) {
+				result = { ok: false, error: 'Expected schema is invalid.' };
+				return logPush(s, 'warn', result.error, nodeId);
+			}
+			const nodes = s.nodes.map((n) => {
+				if (n.id !== nodeId) return n;
+				const schema = parsed.data;
+				const nextData: Record<string, unknown> = {
+					...(n.data as Record<string, unknown>),
+					meta: { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>), updatedAt: new Date().toISOString() }
+				};
+				if (hasSchemaEnvelopeContent(schema)) {
+					nextData.schema = schema;
+				} else {
+					delete nextData.schema;
+				}
+				return {
+					...n,
+					data: nextData as PipelineNodeData & Record<string, unknown>
+				};
+			});
+			const next = logPush({ ...s, nodes }, 'info', 'Expected schema updated', nodeId);
+			persist(next);
+			return next;
+		});
+		if (result.ok) {
+			applyLocalStaleInvalidation(nodeId, 'PARAMS_CHANGED');
+		}
+		return result;
+	}
+
 	type UpdateNodeConfig = {
 		params?: unknown;
 		ports?: {
@@ -3852,6 +3947,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			return resolveNodeInputsFromState(s, nodeId);
 		},
 		updateNodeConfig: updateNodeConfigImpl,
+		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
+			return setNodeExpectedSchemaImpl(nodeId, typedSchema);
+		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
 			const nextParams = structuredClone(defaultSourceParamsByKind[nextKind]);
