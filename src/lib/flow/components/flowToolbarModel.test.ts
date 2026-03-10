@@ -37,9 +37,10 @@ describe('flowToolbarModel', () => {
 		expect(items.find((i) => i.id === 'save_as_graph')?.disabled).toBe(true);
 	});
 
-	it('builds expected Add menu items with Preset before Component', () => {
+	it('builds expected Add menu items with starter templates and presets', () => {
 		const items = buildAddMenuItems(true);
 		expect(items.map((i) => i.label)).toEqual([
+			'Starter Template',
 			'Source',
 			'Transform',
 			'LLM',
@@ -128,6 +129,7 @@ describe('flowToolbarModel', () => {
 
 	it('dispatches add actions including component', () => {
 		const handlers = {
+			addStarterTemplate: vi.fn(),
 			addSource: vi.fn(),
 			addTransform: vi.fn(),
 			addLlm: vi.fn(),
@@ -135,12 +137,14 @@ describe('flowToolbarModel', () => {
 			addComponent: vi.fn(),
 			addFromPreset: vi.fn()
 		};
+		dispatchAddMenuAction('add_starter_template', handlers);
 		dispatchAddMenuAction('add_source', handlers);
 		dispatchAddMenuAction('add_transform', handlers);
 		dispatchAddMenuAction('add_llm', handlers);
 		dispatchAddMenuAction('add_tool', handlers);
 		dispatchAddMenuAction('add_component', handlers);
 		dispatchAddMenuAction('add_from_preset', handlers);
+		expect(handlers.addStarterTemplate).toHaveBeenCalledTimes(1);
 		expect(handlers.addSource).toHaveBeenCalledTimes(1);
 		expect(handlers.addTransform).toHaveBeenCalledTimes(1);
 		expect(handlers.addLlm).toHaveBeenCalledTimes(1);

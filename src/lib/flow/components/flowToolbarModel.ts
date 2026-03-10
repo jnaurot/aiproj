@@ -23,6 +23,7 @@ export function buildProjectMenuItems(editingContext: ToolbarEditingContext = 'g
 
 export function buildAddMenuItems(hasPresets: boolean): ToolbarMenuItem[] {
 	return [
+		{ id: 'add_starter_template', label: 'Starter Template' },
 		{ id: 'add_source', label: 'Source' },
 		{ id: 'add_transform', label: 'Transform' },
 		{ id: 'add_llm', label: 'LLM' },
@@ -86,6 +87,7 @@ export function dispatchProjectMenuAction(
 }
 
 export type AddToolbarHandlers = {
+	addStarterTemplate: () => void;
 	addSource: () => void;
 	addTransform: () => void;
 	addLlm: () => void;
@@ -95,6 +97,7 @@ export type AddToolbarHandlers = {
 };
 
 export function dispatchAddMenuAction(actionId: string, handlers: AddToolbarHandlers): void {
+	if (actionId === 'add_starter_template') handlers.addStarterTemplate();
 	if (actionId === 'add_source') handlers.addSource();
 	if (actionId === 'add_transform') handlers.addTransform();
 	if (actionId === 'add_llm') handlers.addLlm();

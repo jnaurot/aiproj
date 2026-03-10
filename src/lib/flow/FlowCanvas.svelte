@@ -53,6 +53,14 @@ import {
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
+	import {
+		DSML_STARTER_TEMPLATES,
+		getOperationPresetsForKind,
+		getStarterTemplateById,
+		recommendNextStep,
+		type GuidedOperationPreset,
+		type GuidedRecommendation
+	} from './components/dsmlGuidedUx';
 	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
@@ -326,9 +334,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		(((inspectorParams as any)?.sourceKind ?? ($selectedNode?.data as any)?.sourceKind ?? 'file') as SourceKind);
 	$: selectedTransformKind =
 		(((inspectorParams as any)?.transformKind ?? ($selectedNode?.data as any)?.transformKind ?? 'select') as TransformKind);
-		$: selectedToolProvider = (((inspectorParams as any)?.provider ??
+	$: selectedToolProvider = (((inspectorParams as any)?.provider ??
 		($selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider);
+	$: selectedNodeKind = ($selectedNode?.data?.kind ?? null) as NodeKind | null;
+	$: guidedNextStep = recommendNextStep(nodes, selectedNodeKind);
+	$: guidedPresetsForSelectedKind = getOperationPresetsForKind(selectedNodeKind);
+	$: guidedInlinePreset = guidedPresetsForSelectedKind[0] ?? null;
 	$: selectedComponentKind =
 		(((inspectorParams as any)?.componentKind ??
 			($selectedNode?.data as any)?.componentKind ??
@@ -501,6 +513,22 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		{ id: 'cmd_add_llm', label: 'Add LLM', run: () => void addNode('llm') },
 		{ id: 'cmd_add_tool', label: 'Add Tool', run: () => void addNode('tool') },
 		{ id: 'cmd_add_component', label: 'Add Component', run: () => void addComponentNodeWithPicker() },
+		{ id: 'cmd_add_starter_template', label: 'Add Starter Template', run: () => void openStarterTemplatePicker() },
+		{
+			id: 'cmd_apply_operation_preset',
+			label: 'Apply Operation Preset',
+			disabled: !$selectedNode || guidedPresetsForSelectedKind.length === 0,
+			run: () => void openOperationPresetPickerForSelectedNode()
+		},
+		{
+			id: 'cmd_apply_inline_example',
+			label: 'Apply Inline Example',
+			disabled: !$selectedNode || !guidedInlinePreset,
+			run: () => {
+				if (!$selectedNode || !guidedInlinePreset) return;
+				applyGuidedOperationPresetToNode($selectedNode.id, guidedInlinePreset);
+			}
+		},
 		{ id: 'cmd_import', label: 'Import', run: () => void triggerImportGraphPackageV2() },
 		{ id: 'cmd_export', label: 'Export', run: () => void exportGraphPackageV2() }
 	] satisfies CommandItem[];
@@ -1013,6 +1041,146 @@ async function scrollToBottom() {
 		setCenter(pos.x, pos.y, { zoom: vp.zoom, duration: 250 });
 	}
 
+	function applyGuidedOperationPresetToNode(nodeId: string, preset: GuidedOperationPreset): void {
+		const state = get(graphStore) as GraphState;
+		const node = (state.nodes ?? []).find((n) => n.id === nodeId);
+		if (!node) return;
+		if (node.data.kind !== preset.kind) {
+			showToast(`Preset "${preset.name}" requires a ${preset.kind} node.`, 'warn');
+			return;
+		}
+		if (preset.kind === 'source' && preset.sourceKind) {
+			graphStore.setSourceKind(nodeId, preset.sourceKind);
+		} else if (preset.kind === 'transform' && preset.transformKind) {
+			graphStore.setTransformKind(nodeId, preset.transformKind);
+		} else if (preset.kind === 'tool' && preset.toolProvider) {
+			graphStore.setToolProvider(nodeId, preset.toolProvider);
+		}
+		graphStore.updateNodeConfig(nodeId, {
+			params: structuredClone(preset.params),
+			ports: {
+				in: preset.ports?.in ?? null,
+				out: preset.ports?.out ?? null
+			}
+		});
+		showToast(`Applied preset: ${preset.name}`, 'info');
+	}
+
+	function openOperationPresetPickerForSelectedNode(): void {
+		const node = $selectedNode;
+		if (!node) {
+			showToast('Select a node first.', 'warn');
+			return;
+		}
+		const options = getOperationPresetsForKind(node.data.kind);
+		if (options.length === 0) {
+			showToast(`No operation presets available for ${node.data.kind}.`, 'warn');
+			return;
+		}
+		const lines = options.map((preset, index) => `${index + 1}. ${preset.name} - ${preset.description}`).join('\n');
+		const raw = window.prompt(`Apply operation preset:\n${lines}\n\nEnter number (1-${options.length})`, '1');
+		if (!raw) return;
+		const pick = Number(raw);
+		if (!Number.isInteger(pick) || pick < 1 || pick > options.length) {
+			showToast('Invalid preset selection.', 'warn');
+			return;
+		}
+		applyGuidedOperationPresetToNode(node.id, options[pick - 1]);
+	}
+
+	function applyStarterTemplate(templateId: string): void {
+		const template = getStarterTemplateById(templateId);
+		if (!template) {
+			showToast('Starter template not found.', 'error');
+			return;
+		}
+		const vp = getViewport();
+		const centerScreen = { x: window.innerWidth * 0.3, y: window.innerHeight * 0.5 };
+		const anchor = screenToFlowPosition(centerScreen);
+		const nodeIdByTemplateId: Record<string, string> = {};
+		for (const definition of template.nodes) {
+			const nodeId = graphStore.addNode(definition.kind, {
+				x: anchor.x + Number(definition.position?.x ?? 0),
+				y: anchor.y + Number(definition.position?.y ?? 0)
+			});
+			nodeIdByTemplateId[definition.id] = nodeId;
+			if (definition.kind === 'source' && definition.sourceKind) {
+				graphStore.setSourceKind(nodeId, definition.sourceKind);
+			} else if (definition.kind === 'transform' && definition.transformKind) {
+				graphStore.setTransformKind(nodeId, definition.transformKind);
+			} else if (definition.kind === 'tool' && definition.toolProvider) {
+				graphStore.setToolProvider(nodeId, definition.toolProvider);
+			}
+			graphStore.updateNodeTitle(nodeId, definition.label);
+			graphStore.updateNodeConfig(nodeId, {
+				params: structuredClone(definition.params ?? {}),
+				ports: {
+					in: definition.ports?.in ?? null,
+					out: definition.ports?.out ?? null
+				}
+			});
+		}
+		for (const edge of template.edges) {
+			const source = nodeIdByTemplateId[edge.source];
+			const target = nodeIdByTemplateId[edge.target];
+			if (!source || !target) continue;
+			const sourceTemplate = template.nodes.find((n) => n.id === edge.source);
+			const targetTemplate = template.nodes.find((n) => n.id === edge.target);
+			graphStore.addEdge({
+				id: `e_${crypto.randomUUID()}`,
+				source,
+				target,
+				markerEnd: { type: MarkerType.ArrowClosed },
+				data: {
+					exec: 'idle',
+					contract: {
+						out: sourceTemplate?.ports?.out ?? null,
+						in: targetTemplate?.ports?.in ?? null
+					}
+				}
+			});
+		}
+		const focusId = nodeIdByTemplateId[template.nodes[template.nodes.length - 1]?.id ?? ''];
+		if (focusId) graphStore.selectNode(focusId);
+		setCenter(anchor.x + 320, anchor.y, { zoom: vp.zoom, duration: 260 });
+		showToast(`Starter template added: ${template.name}`, 'info');
+	}
+
+	function openStarterTemplatePicker(): void {
+		const lines = DSML_STARTER_TEMPLATES.map(
+			(template, index) => `${index + 1}. ${template.name} - ${template.description}`
+		).join('\n');
+		const raw = window.prompt(
+			`Add starter template:\n${lines}\n\nEnter number (1-${DSML_STARTER_TEMPLATES.length})`,
+			'1'
+		);
+		if (!raw) return;
+		const pick = Number(raw);
+		if (!Number.isInteger(pick) || pick < 1 || pick > DSML_STARTER_TEMPLATES.length) {
+			showToast('Invalid starter template selection.', 'warn');
+			return;
+		}
+		applyStarterTemplate(DSML_STARTER_TEMPLATES[pick - 1].id);
+	}
+
+	function runGuidedRecommendation(recommendation: GuidedRecommendation): void {
+		if (recommendation.action === 'add_node' && recommendation.nodeKind) {
+			addNode(recommendation.nodeKind);
+			return;
+		}
+		if (recommendation.action === 'open_template') {
+			openStarterTemplatePicker();
+			return;
+		}
+		if (recommendation.action === 'apply_preset') {
+			openOperationPresetPickerForSelectedNode();
+			return;
+		}
+		if (recommendation.action === 'run') {
+			runFromStart();
+		}
+	}
+
 	function coercePortType(t: any): PortType | null {
 		// normalize anything that might exist in params (e.g., markdown)
 		if (t === 'markdown') return 'text';
@@ -1202,6 +1370,7 @@ async function scrollToBottom() {
 
 	function onAddMenuSelect(actionId: string) {
 		dispatchAddMenuAction(actionId, {
+			addStarterTemplate: openStarterTemplatePicker,
 			addSource: () => addNode('source'),
 			addTransform: () => addNode('transform'),
 			addLlm: () => addNode('llm'),
@@ -2158,6 +2327,56 @@ async function scrollToBottom() {
 			style={nodeInspectorCollapsed ? 'flex: 0 0 auto;' : `flex: ${inspectorTopWeight} 1 0;`}
 		>
 			<!-- <h3>Inspector</h3> -->
+			<div class="card guidedCard" role="region" aria-label="Guided workflow recommendations">
+				<div class="guidedHead">
+					<b>Guided DS/ML</b>
+					<button
+						type="button"
+						class="tabBtn"
+						on:click={openStarterTemplatePicker}
+						aria-label="Add starter template"
+					>
+						Starter Templates
+					</button>
+				</div>
+				<div class="guidedBody">
+					<div class="guidedHintTitle">{guidedNextStep.label}</div>
+					<div class="guidedHintDescription">{guidedNextStep.description}</div>
+					<div class="guidedActions">
+						<button
+							type="button"
+							class="primary"
+							on:click={() => runGuidedRecommendation(guidedNextStep)}
+							aria-label="Apply recommended next step"
+						>
+							Do Next Step
+						</button>
+						{#if $selectedNode && guidedPresetsForSelectedKind.length > 0}
+							<button
+								type="button"
+								class="runSecondary"
+								on:click={openOperationPresetPickerForSelectedNode}
+								aria-label="Open operation presets for selected node"
+							>
+								Operation Presets
+							</button>
+						{/if}
+					</div>
+					{#if $selectedNode && guidedInlinePreset}
+						<div class="guidedInlineExample">
+							<span class="mono">Inline example:</span> {guidedInlinePreset.name}
+							<button
+								type="button"
+								class="tabBtn"
+								on:click={() => applyGuidedOperationPresetToNode($selectedNode.id, guidedInlinePreset)}
+								aria-label="Apply inline example"
+							>
+								Use Example
+							</button>
+						</div>
+					{/if}
+				</div>
+			</div>
 
 			{#if $selectedNode}
 				<div class="card editorCard">
@@ -3079,6 +3298,49 @@ async function scrollToBottom() {
 		border-radius: 12px;
 		padding: 12px;
 		background: #0f1115;
+	}
+
+	.guidedCard {
+		display: grid;
+		gap: 8px;
+	}
+
+	.guidedHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.guidedBody {
+		display: grid;
+		gap: 6px;
+	}
+
+	.guidedHintTitle {
+		font-size: 13px;
+		font-weight: 600;
+	}
+
+	.guidedHintDescription {
+		font-size: 12px;
+		opacity: 0.82;
+	}
+
+	.guidedActions {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+
+	.guidedInlineExample {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 12px;
+		opacity: 0.9;
+		flex-wrap: wrap;
 	}
 
 	.head {
