@@ -13,8 +13,13 @@ type NodeCapabilities = {
 };
 
 let activeCaps = capsRaw as any;
-let activeFlags: { STRICT_SCHEMA_EDGE_CHECKS: boolean; STRICT_COERCION_POLICY: boolean } = {
+let activeFlags: {
+	STRICT_SCHEMA_EDGE_CHECKS: boolean;
+	STRICT_SCHEMA_EDGE_CHECKS_V2: boolean;
+	STRICT_COERCION_POLICY: boolean;
+} = {
 	STRICT_SCHEMA_EDGE_CHECKS: true,
+	STRICT_SCHEMA_EDGE_CHECKS_V2: true,
 	STRICT_COERCION_POLICY: true
 };
 
@@ -70,9 +75,21 @@ export let NODE_CAPABILITIES: Record<
 
 export function getStrictSchemaFeatureFlags(): {
 	STRICT_SCHEMA_EDGE_CHECKS: boolean;
+	STRICT_SCHEMA_EDGE_CHECKS_V2: boolean;
 	STRICT_COERCION_POLICY: boolean;
 } {
 	return { ...activeFlags };
+}
+
+export function __setStrictSchemaFeatureFlagsForTest(flags: {
+	STRICT_SCHEMA_EDGE_CHECKS?: boolean;
+	STRICT_SCHEMA_EDGE_CHECKS_V2?: boolean;
+	STRICT_COERCION_POLICY?: boolean;
+}): void {
+	activeFlags = {
+		...activeFlags,
+		...flags
+	};
 }
 
 export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
@@ -83,6 +100,7 @@ export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
 		activeCaps = caps;
 		activeFlags = {
 			STRICT_SCHEMA_EDGE_CHECKS: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS ?? true),
+			STRICT_SCHEMA_EDGE_CHECKS_V2: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS_V2 ?? true),
 			STRICT_COERCION_POLICY: Boolean(response?.featureFlags?.STRICT_COERCION_POLICY ?? true)
 		};
 		NODE_CAPABILITIES = buildNodeCapabilities();

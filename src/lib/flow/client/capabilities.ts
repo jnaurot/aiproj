@@ -6,6 +6,7 @@ export type BackendCapabilitiesResponse = {
 	signature: string;
 	featureFlags?: {
 		STRICT_SCHEMA_EDGE_CHECKS?: boolean;
+		STRICT_SCHEMA_EDGE_CHECKS_V2?: boolean;
 		STRICT_COERCION_POLICY?: boolean;
 	};
 	capabilities: {

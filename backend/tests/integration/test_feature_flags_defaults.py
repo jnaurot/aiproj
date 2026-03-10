@@ -8,6 +8,7 @@ def test_graph_feature_flag_defaults_enabled(monkeypatch):
 		monkeypatch.delenv(key, raising=False)
 	for key in (
 		"STRICT_SCHEMA_EDGE_CHECKS",
+		"STRICT_SCHEMA_EDGE_CHECKS_V2",
 		"STRICT_COERCION_POLICY",
 	):
 		monkeypatch.delenv(key, raising=False)
@@ -16,15 +17,18 @@ def test_graph_feature_flag_defaults_enabled(monkeypatch):
 	assert flags["GRAPH_STORE_V2_WRITE"] is True
 	assert flags["GRAPH_EXPORT_V2"] is True
 	assert flags["STRICT_SCHEMA_EDGE_CHECKS"] is True
+	assert flags["STRICT_SCHEMA_EDGE_CHECKS_V2"] is True
 	assert flags["STRICT_COERCION_POLICY"] is True
 	assert "LEGACY_COMPONENT_WRAPPER_FALLBACK" not in flags
 
 
 def test_strict_feature_flags_support_env_override(monkeypatch):
 	monkeypatch.setenv("STRICT_SCHEMA_EDGE_CHECKS", "0")
+	monkeypatch.setenv("STRICT_SCHEMA_EDGE_CHECKS_V2", "0")
 	monkeypatch.setenv("STRICT_COERCION_POLICY", "false")
 	flags = get_feature_flags()
 	assert flags["STRICT_SCHEMA_EDGE_CHECKS"] is False
+	assert flags["STRICT_SCHEMA_EDGE_CHECKS_V2"] is False
 	assert flags["STRICT_COERCION_POLICY"] is False
 	assert "LEGACY_COMPONENT_WRAPPER_FALLBACK" not in flags
 

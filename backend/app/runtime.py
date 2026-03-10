@@ -461,6 +461,7 @@ class RuntimeManager:
             "activeRuns": runs,
             "featureFlags": {
                 "STRICT_SCHEMA_EDGE_CHECKS": bool(get_feature_flags().get("STRICT_SCHEMA_EDGE_CHECKS", True)),
+                "STRICT_SCHEMA_EDGE_CHECKS_V2": bool(get_feature_flags().get("STRICT_SCHEMA_EDGE_CHECKS_V2", True)),
                 "STRICT_COERCION_POLICY": bool(get_feature_flags().get("STRICT_COERCION_POLICY", True)),
             },
             "rolloutMetrics": dict(self.rollout_metrics),

@@ -15,6 +15,7 @@ def test_runs_diagnostics_endpoint_available():
 		assert "activeRuns" in body
 		assert "featureFlags" in body
 		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS"] in {True, False}
+		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS_V2"] in {True, False}
 		assert body["featureFlags"]["STRICT_COERCION_POLICY"] in {True, False}
 		assert "LEGACY_COMPONENT_WRAPPER_FALLBACK" not in body["featureFlags"]
 		assert "rolloutMetrics" in body

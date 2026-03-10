@@ -24,5 +24,6 @@ def get_feature_flags() -> Dict[str, bool]:
         "GRAPH_EXPORT_V2": True,
         # TKT-023 rollout toggles for runtime contract strictness.
         "STRICT_SCHEMA_EDGE_CHECKS": _env_bool("STRICT_SCHEMA_EDGE_CHECKS", True),
+        "STRICT_SCHEMA_EDGE_CHECKS_V2": _env_bool("STRICT_SCHEMA_EDGE_CHECKS_V2", True),
         "STRICT_COERCION_POLICY": _env_bool("STRICT_COERCION_POLICY", True),
     }

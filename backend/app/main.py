@@ -62,6 +62,7 @@ async def get_capabilities():
         "capabilities": caps,
         "featureFlags": {
             "STRICT_SCHEMA_EDGE_CHECKS": bool(flags.get("STRICT_SCHEMA_EDGE_CHECKS", True)),
+            "STRICT_SCHEMA_EDGE_CHECKS_V2": bool(flags.get("STRICT_SCHEMA_EDGE_CHECKS_V2", True)),
             "STRICT_COERCION_POLICY": bool(flags.get("STRICT_COERCION_POLICY", True)),
         },
     }
