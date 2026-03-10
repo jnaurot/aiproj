@@ -146,6 +146,57 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 				{ id: 2, city: 'Austin', score: 0.6 }
 			]
 		}
+	},
+	{
+		id: 'ml.sklearn.classification_report',
+		label: 'Sklearn Classification Report',
+		description: 'Train LogisticRegression and return accuracy/precision/recall/f1.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 0.1, x2: 1.1, label: 'A' },
+				{ x1: 0.2, x2: 1.0, label: 'A' },
+				{ x1: 1.2, x2: 0.1, label: 'B' },
+				{ x1: 1.1, x2: 0.2, label: 'B' }
+			],
+			label_col: 'label',
+			feature_cols: ['x1', 'x2'],
+			test_size: 0.25,
+			random_state: 42
+		}
+	},
+	{
+		id: 'ml.sklearn.regression_report',
+		label: 'Sklearn Regression Report',
+		description: 'Train LinearRegression and return r2/mae/mse/rmse.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 1, x2: 2, y: 5 },
+				{ x1: 2, x2: 1, y: 5 },
+				{ x1: 3, x2: 4, y: 11 },
+				{ x1: 4, x2: 3, y: 11 }
+			],
+			label_col: 'y',
+			feature_cols: ['x1', 'x2'],
+			test_size: 0.25,
+			random_state: 42
+		}
+	},
+	{
+		id: 'ml.scipy.describe',
+		label: 'SciPy Describe',
+		description: 'Compute stats.describe summary for numeric columns.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ a: 1, b: 10 },
+				{ a: 2, b: 20 },
+				{ a: 3, b: 30 },
+				{ a: 4, b: 40 }
+			],
+			numeric_cols: ['a', 'b']
+		}
 	}
 ];
 

@@ -349,3 +349,108 @@ async def test_exec_tool_builtin_data_pyarrow_schema():
 	fields = payload.get("fields") or []
 	assert isinstance(fields, list)
 	assert any(isinstance(f, dict) and f.get("name") == "city" for f in fields)
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_classification_report():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.classification_report",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 0.1, "x2": 1.1, "label": "A"},
+							{"x1": 0.2, "x2": 1.0, "label": "A"},
+							{"x1": 1.2, "x2": 0.1, "label": "B"},
+							{"x1": 1.1, "x2": 0.2, "label": "B"},
+							{"x1": 0.15, "x2": 1.05, "label": "A"},
+							{"x1": 1.15, "x2": 0.15, "label": "B"},
+						],
+						"label_col": "label",
+						"feature_cols": ["x1", "x2"],
+						"test_size": 0.33,
+						"random_state": 42,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_cls", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("model") == "LogisticRegression"
+	assert isinstance(payload.get("metrics"), dict)
+	assert "accuracy" in payload.get("metrics", {})
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_regression_report():
+	pytest.importorskip("sklearn")
+	node = {
+		"id": "n_builtin_ml_reg",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.regression_report",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 1, "x2": 2, "y": 5},
+							{"x1": 2, "x2": 1, "y": 5},
+							{"x1": 3, "x2": 4, "y": 11},
+							{"x1": 4, "x2": 3, "y": 11},
+							{"x1": 5, "x2": 6, "y": 17},
+							{"x1": 6, "x2": 5, "y": 17},
+						],
+						"label_col": "y",
+						"feature_cols": ["x1", "x2"],
+						"test_size": 0.33,
+						"random_state": 42,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_reg", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("model") == "LinearRegression"
+	assert isinstance(payload.get("metrics"), dict)
+	assert "rmse" in payload.get("metrics", {})
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_scipy_describe():
+	pytest.importorskip("scipy")
+	node = {
+		"id": "n_builtin_ml_scipy",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.scipy.describe",
+					"profileId": "ml",
+					"args": {
+						"rows": [{"a": 1, "b": 10}, {"a": 2, "b": 20}, {"a": 3, "b": 30}, {"a": 4, "b": 40}],
+						"numeric_cols": ["a", "b"],
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_ml_scipy", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	summary = payload.get("summary") or {}
+	assert isinstance(summary, dict)
+	assert "a" in summary
+	assert "mean" in (summary.get("a") or {})

@@ -592,6 +592,193 @@ async def _exec_builtin_data_tool(
     raise ValueError(f"Unsupported data builtin toolId: {tool_id}")
 
 
+def _ml_rows_and_columns(args: Dict[str, Any], input_value: Any) -> tuple[list[dict[str, Any]], list[str]]:
+    rows = _rows_from_data_input(args, input_value)
+    if not rows:
+        raise ValueError("ML operation requires non-empty tabular rows")
+    all_columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row.keys():
+            s = str(key)
+            if s in seen:
+                continue
+            seen.add(s)
+            all_columns.append(s)
+    return rows, all_columns
+
+
+def _ml_feature_columns(args: Dict[str, Any], all_columns: list[str], label_col: str) -> list[str]:
+    raw = args.get("feature_cols")
+    if isinstance(raw, list) and raw:
+        out = [str(c) for c in raw if str(c).strip()]
+    else:
+        out = [c for c in all_columns if c != label_col]
+    if not out:
+        raise ValueError("No feature columns available")
+    return out
+
+
+def _ml_feature_matrix(rows: list[dict[str, Any]], feature_cols: list[str]) -> list[list[float]]:
+    matrix: list[list[float]] = []
+    for r_idx, row in enumerate(rows):
+        vector: list[float] = []
+        for col in feature_cols:
+            if col not in row:
+                raise ValueError(f"Missing feature '{col}' in row {r_idx}")
+            try:
+                vector.append(float(row[col]))
+            except Exception as exc:
+                raise ValueError(f"Feature '{col}' in row {r_idx} is non-numeric") from exc
+        matrix.append(vector)
+    return matrix
+
+
+def _ml_label_vector(rows: list[dict[str, Any]], label_col: str, cast_float: bool = False) -> list[Any]:
+    labels: list[Any] = []
+    for r_idx, row in enumerate(rows):
+        if label_col not in row:
+            raise ValueError(f"Missing label '{label_col}' in row {r_idx}")
+        value = row[label_col]
+        if cast_float:
+            try:
+                value = float(value)
+            except Exception as exc:
+                raise ValueError(f"Label '{label_col}' in row {r_idx} is non-numeric") from exc
+        labels.append(value)
+    return labels
+
+
+async def _exec_builtin_ml_tool(
+    tool_id: str,
+    args: Dict[str, Any],
+    input_value: Any,
+) -> Dict[str, Any]:
+    rows, all_columns = _ml_rows_and_columns(args, input_value)
+
+    if tool_id == "ml.sklearn.classification_report":
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+        from sklearn.model_selection import train_test_split
+
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.classification_report requires args.label_col")
+        feature_cols = _ml_feature_columns(args, all_columns, label_col)
+        x = _ml_feature_matrix(rows, feature_cols)
+        y = _ml_label_vector(rows, label_col, cast_float=False)
+        test_size = float(args.get("test_size") or 0.2)
+        random_state = int(args.get("random_state") or 42)
+        stratify = y if len(set(y)) > 1 else None
+
+        x_train, x_test, y_train, y_test = train_test_split(
+            x,
+            y,
+            test_size=test_size,
+            random_state=random_state,
+            stratify=stratify,
+        )
+        model = LogisticRegression(max_iter=int(args.get("max_iter") or 200))
+        model.fit(x_train, y_train)
+        pred = model.predict(x_test)
+
+        average = "weighted"
+        return {
+            "model": "LogisticRegression",
+            "row_count": len(rows),
+            "train_rows": len(x_train),
+            "test_rows": len(x_test),
+            "feature_cols": feature_cols,
+            "label_col": label_col,
+            "classes": [str(c) for c in list(model.classes_)],
+            "metrics": {
+                "accuracy": float(accuracy_score(y_test, pred)),
+                "precision": float(precision_score(y_test, pred, average=average, zero_division=0)),
+                "recall": float(recall_score(y_test, pred, average=average, zero_division=0)),
+                "f1": float(f1_score(y_test, pred, average=average, zero_division=0)),
+            },
+        }
+
+    if tool_id == "ml.sklearn.regression_report":
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        from sklearn.model_selection import train_test_split
+
+        label_col = str(args.get("label_col") or "").strip()
+        if not label_col:
+            raise ValueError("ml.sklearn.regression_report requires args.label_col")
+        feature_cols = _ml_feature_columns(args, all_columns, label_col)
+        x = _ml_feature_matrix(rows, feature_cols)
+        y = _ml_label_vector(rows, label_col, cast_float=True)
+        test_size = float(args.get("test_size") or 0.2)
+        random_state = int(args.get("random_state") or 42)
+
+        x_train, x_test, y_train, y_test = train_test_split(
+            x,
+            y,
+            test_size=test_size,
+            random_state=random_state,
+        )
+        model = LinearRegression()
+        model.fit(x_train, y_train)
+        pred = model.predict(x_test)
+        mse = float(mean_squared_error(y_test, pred))
+        return {
+            "model": "LinearRegression",
+            "row_count": len(rows),
+            "train_rows": len(x_train),
+            "test_rows": len(x_test),
+            "feature_cols": feature_cols,
+            "label_col": label_col,
+            "metrics": {
+                "r2": float(r2_score(y_test, pred)),
+                "mae": float(mean_absolute_error(y_test, pred)),
+                "mse": mse,
+                "rmse": float(mse**0.5),
+            },
+        }
+
+    if tool_id == "ml.scipy.describe":
+        from scipy import stats
+
+        numeric_cols_raw = args.get("numeric_cols")
+        if isinstance(numeric_cols_raw, list) and numeric_cols_raw:
+            numeric_cols = [str(c) for c in numeric_cols_raw]
+        else:
+            numeric_cols = list(all_columns)
+
+        summaries: Dict[str, Any] = {}
+        for col in numeric_cols:
+            values: list[float] = []
+            for r_idx, row in enumerate(rows):
+                if col not in row:
+                    continue
+                try:
+                    values.append(float(row[col]))
+                except Exception as exc:
+                    raise ValueError(f"Column '{col}' has non-numeric value at row {r_idx}") from exc
+            if not values:
+                continue
+            desc = stats.describe(values)
+            summaries[col] = {
+                "nobs": int(desc.nobs),
+                "min": float(desc.minmax[0]),
+                "max": float(desc.minmax[1]),
+                "mean": float(desc.mean),
+                "variance": float(desc.variance) if desc.variance is not None else None,
+                "skewness": float(desc.skewness) if desc.skewness is not None else None,
+                "kurtosis": float(desc.kurtosis) if desc.kurtosis is not None else None,
+            }
+
+        return {
+            "row_count": len(rows),
+            "columns_profiled": list(summaries.keys()),
+            "summary": summaries,
+        }
+
+    raise ValueError(f"Unsupported ml builtin toolId: {tool_id}")
+
+
 async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
@@ -1414,6 +1601,8 @@ async def exec_tool(
                 result = await _exec_builtin_core_tool(tool_id, args, input_value, input_ctx, perms)
             elif tool_id.startswith("data."):
                 result = await _exec_builtin_data_tool(tool_id, args, input_value)
+            elif tool_id.startswith("ml."):
+                result = await _exec_builtin_ml_tool(tool_id, args, input_value)
             else:
                 return NodeOutput(
                     status="failed",
