@@ -2176,12 +2176,32 @@ function targetPayloadHint(node: Node<PipelineNodeData>) {
 
 	const params: any = node.data.params ?? {};
 	const op = params?.op ?? node.data.transformKind;
-	if (op !== 'select') return sourcePayloadHint(node, 'in');
-
-	const cols = params?.select?.columns;
-	if (!Array.isArray(cols) || cols.length === 0) return sourcePayloadHint(node, 'in');
-
-	return { type: 'table', required_columns: cols };
+	if (op === 'select') {
+		const cols = params?.select?.columns;
+		if (Array.isArray(cols) && cols.length > 0) return { type: 'table', required_columns: cols };
+	}
+	if (op === 'split') {
+		const sourceColumn = String(params?.split?.sourceColumn ?? '').trim();
+		if (sourceColumn) return { type: 'table', required_columns: [sourceColumn] };
+	}
+	if (op === 'quality_gate') {
+		const checks = Array.isArray(params?.quality_gate?.checks) ? params.quality_gate.checks : [];
+		const required = new Set<string>();
+		for (const check of checks) {
+			const kind = String(check?.kind ?? '').trim().toLowerCase();
+			if (kind === 'leakage') {
+				const feature = String(check?.featureColumn ?? '').trim();
+				const target = String(check?.targetColumn ?? '').trim();
+				if (feature) required.add(feature);
+				if (target) required.add(target);
+				continue;
+			}
+			const column = String(check?.column ?? '').trim();
+			if (column) required.add(column);
+		}
+		if (required.size > 0) return { type: 'table', required_columns: Array.from(required) };
+	}
+	return sourcePayloadHint(node, 'in');
 }
 
 function normalizeHintType(raw: unknown): string {
@@ -2244,6 +2264,103 @@ function isSchemaCompatible(
 		}
 	}
 	return { ok: true };
+}
+
+export type EdgeSchemaConstraint = {
+	edgeId: string;
+	sourceNodeId: string;
+	targetNodeId: string;
+	providedSchema: Record<string, any>;
+	requiredSchema: Record<string, any>;
+	compatible: boolean;
+	reason?: 'type_mismatch' | 'missing_required_columns';
+	missingColumns?: string[];
+	suggestions: string[];
+};
+
+function inferredTransformOutputHint(node: Node<PipelineNodeData>): Record<string, any> | undefined {
+	if (node.data.kind !== 'transform') return undefined;
+	const params: any = node.data.params ?? {};
+	const op = String(params?.op ?? node.data.transformKind ?? '').trim().toLowerCase();
+	if (op === 'table_to_json') return { type: 'json' };
+	if (op === 'json_to_table' || op === 'text_to_table') return { type: 'table' };
+	if (op === 'split') {
+		const outColumn = String(params?.split?.outColumn ?? 'part').trim() || 'part';
+		const cols = [outColumn];
+		if (Boolean(params?.split?.emitIndex ?? true)) cols.push('index');
+		if (Boolean(params?.split?.emitSourceRow ?? true)) cols.push('source_row');
+		return { type: 'table', columns: cols };
+	}
+	if (op === 'select') {
+		const mode = String(params?.select?.mode ?? 'include').trim().toLowerCase();
+		const cols = Array.isArray(params?.select?.columns)
+			? params.select.columns.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0)
+			: [];
+		if (mode === 'include' && cols.length > 0) return { type: 'table', columns: cols };
+	}
+	return undefined;
+}
+
+function buildProvidedSchema(
+	node: Node<PipelineNodeData>,
+	sourceHandle: string
+): Record<string, any> {
+	return (
+		inferredTransformOutputHint(node) ??
+		(sourcePayloadHint(node as any, 'out', sourceHandle) as Record<string, any> | undefined) ??
+		{ type: 'unknown' }
+	);
+}
+
+function buildRequiredSchema(node: Node<PipelineNodeData>): Record<string, any> {
+	return (targetPayloadHint(node as any) as Record<string, any> | undefined) ?? { type: 'unknown' };
+}
+
+function computeEdgeSchemaConstraintsInternal(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[]
+): Record<string, EdgeSchemaConstraint> {
+	const byNodeId = new Map(nodes.map((n) => [n.id, n]));
+	const out: Record<string, EdgeSchemaConstraint> = {};
+	for (const edge of edges) {
+		const edgeId = String(edge.id ?? '');
+		if (!edgeId) continue;
+		const sourceNodeId = String(edge.source ?? '');
+		const targetNodeId = String(edge.target ?? '');
+		const sourceNode = byNodeId.get(sourceNodeId);
+		const targetNode = byNodeId.get(targetNodeId);
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		if (!sourceNode || !targetNode) continue;
+		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
+		const requiredSchema = buildRequiredSchema(targetNode as any);
+		const check = isSchemaCompatible(providedSchema, requiredSchema);
+		out[edgeId] = {
+			edgeId,
+			sourceNodeId,
+			targetNodeId,
+			providedSchema,
+			requiredSchema,
+			compatible: check.ok,
+			reason: check.ok ? undefined : check.reason,
+			missingColumns: check.ok ? undefined : check.missingColumns,
+			suggestions:
+				check.ok
+					? []
+					: check.reason === 'type_mismatch'
+						? check.suggestion
+							? [check.suggestion]
+							: []
+						: []
+		};
+	}
+	return out;
+}
+
+export function __computeEdgeSchemaConstraintsForTest(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[]
+): Record<string, EdgeSchemaConstraint> {
+	return computeEdgeSchemaConstraintsInternal(nodes, edges);
 }
 
 type EdgeInvalidReason =
@@ -4670,4 +4787,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 export const selectedNode = derived(graphStore, ($s) =>
 	$s.selectedNodeId ? ($s.nodes.find((n) => n.id === $s.selectedNodeId) ?? null) : null
+);
+
+export const edgeSchemaConstraints = derived(graphStore, ($s) =>
+	computeEdgeSchemaConstraintsInternal($s.nodes as any, $s.edges as any)
 );
