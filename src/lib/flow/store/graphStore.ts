@@ -19,6 +19,10 @@ import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
 import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
 import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
 import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
+import {
+	NodeSchemaEnvelopeSchema,
+	type NodeSchemaObservation
+} from '$lib/flow/schema/schemaContract';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph, clearGraphDraft } from './persist';
@@ -301,7 +305,7 @@ function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; 
 function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
 	return nodes.map((node) => {
 		const derived = derivePortsForNodeData(node.data);
-		return {
+		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
 			data: {
 				...node.data,
@@ -309,6 +313,28 @@ function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNo
 					in: derived.in,
 					out: derived.out
 				}
+			}
+		} as Node<PipelineNodeData>);
+		const existingSchema =
+			node.data?.schema && typeof node.data.schema === 'object'
+				? (node.data.schema as Record<string, unknown>)
+				: {};
+		const nextSchemaRaw = {
+			...existingSchema,
+			...(inferredSchema ? { inferredSchema } : {})
+		};
+		const parsedSchema = NodeSchemaEnvelopeSchema.safeParse(nextSchemaRaw);
+		const nextSchema =
+			Object.keys(nextSchemaRaw).length > 0 && parsedSchema.success ? parsedSchema.data : node.data.schema;
+		return {
+			...node,
+			data: {
+				...node.data,
+				ports: {
+					in: derived.in,
+					out: derived.out
+				},
+				...(nextSchema ? { schema: nextSchema } : {})
 			}
 		};
 	});
@@ -1343,8 +1369,33 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					cacheDecision: nextCacheDecision
 				}
 			};
+			const nodes = state.nodes.map((node) => {
+				if (String(node.id ?? '') !== evt.nodeId) return node;
+				const observedSchema = deriveObservedSchemaObservationFromNodeOutput(
+					evt as Extract<KnownRunEvent, { type: 'node_output' }>,
+					node as Node<PipelineNodeData>
+				);
+				if (!observedSchema) return node;
+				const existingSchema =
+					node.data?.schema && typeof node.data.schema === 'object'
+						? (node.data.schema as Record<string, unknown>)
+						: {};
+				const parsedSchema = NodeSchemaEnvelopeSchema.safeParse({
+					...existingSchema,
+					observedSchema
+				});
+				if (!parsedSchema.success) return node;
+				return {
+					...node,
+					data: {
+						...node.data,
+						schema: parsedSchema.data
+					}
+				};
+			});
 			return withGraphMeta({
 				...state,
+				nodes,
 				nodeOutputs,
 				nodeBindings
 			});
@@ -2231,8 +2282,16 @@ function sourcePortTypeForEdge(
 function sourcePayloadHint(
 	node: Node<PipelineNodeData>,
 	whichPort: 'in' | 'out',
-	handleId: string = 'out'
+	handleId: string = 'out',
+	opts?: { preferNodeSchema?: boolean }
 ) {
+	const preferNodeSchema = opts?.preferNodeSchema !== false;
+	if (preferNodeSchema) {
+		const observedHint = typedSchemaToPayloadHint((node.data as any)?.schema?.observedSchema?.typedSchema);
+		if (observedHint) return observedHint;
+		const inferredHint = typedSchemaToPayloadHint((node.data as any)?.schema?.inferredSchema?.typedSchema);
+		if (inferredHint) return inferredHint;
+	}
 	if (node.data.kind === 'component' && whichPort === 'out') {
 		const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
 			? ((node.data as any).params.api.outputs as any[])
@@ -2412,6 +2471,119 @@ function makeSchemaFieldsFromColumns(columns: unknown, fallbackType = 'unknown')
 			.filter((name) => name.length > 0)
 			.map((name) => ({ name, type: fallbackType, nullable: true }))
 	);
+}
+
+type TypedSchemaPrimitive = 'table' | 'json' | 'text' | 'binary' | 'embeddings' | 'unknown';
+
+function normalizeTypedSchemaPrimitive(raw: unknown): TypedSchemaPrimitive {
+	const value = String(raw ?? '').trim().toLowerCase();
+	if (value === 'table') return 'table';
+	if (value === 'json' || value === 'object' || value === 'array') return 'json';
+	if (value === 'text' || value === 'string') return 'text';
+	if (value === 'binary' || value === 'bytes') return 'binary';
+	if (value === 'embeddings' || value === 'embedding') return 'embeddings';
+	return 'unknown';
+}
+
+function schemaFieldTypeToTypedPrimitive(raw: unknown): TypedSchemaPrimitive {
+	const normalized = normalizeTypedSchemaPrimitive(raw);
+	if (normalized !== 'unknown') return normalized;
+	return 'unknown';
+}
+
+function normalizeTypedSchemaFields(raw: unknown): Array<{
+	name: string;
+	type: TypedSchemaPrimitive;
+	nullable?: boolean;
+}> {
+	const fields = normalizeSchemaFields(raw);
+	return fields.map((field) => ({
+		name: field.name,
+		type: schemaFieldTypeToTypedPrimitive(field.type),
+		nullable: field.nullable
+	}));
+}
+
+function payloadHintToTypedSchema(payloadHint: unknown): { type: TypedSchemaPrimitive; fields: Array<{ name: string; type: TypedSchemaPrimitive; nullable?: boolean }> } | null {
+	if (!payloadHint || typeof payloadHint !== 'object') return null;
+	const hint = payloadHint as Record<string, unknown>;
+	const type = normalizeTypedSchemaPrimitive(hint.type);
+	if (type === 'unknown') return null;
+	const rawFields = Array.isArray(hint.fields)
+		? hint.fields
+		: (Array.isArray(hint.required_fields) ? hint.required_fields : []);
+	if (type !== 'table') {
+		return { type, fields: [] };
+	}
+	return { type: 'table', fields: normalizeTypedSchemaFields(rawFields) };
+}
+
+function typedSchemaToPayloadHint(typedSchemaRaw: unknown): Record<string, unknown> | null {
+	if (!typedSchemaRaw || typeof typedSchemaRaw !== 'object') return null;
+	const typedSchema = typedSchemaRaw as Record<string, unknown>;
+	const type = normalizeTypedSchemaPrimitive(typedSchema.type);
+	if (type === 'unknown') return null;
+	if (type === 'table') {
+		const fields = normalizeTypedSchemaFields(Array.isArray(typedSchema.fields) ? typedSchema.fields : []);
+		return {
+			type: 'table',
+			fields,
+			columns: schemaFieldNames(fields as any)
+		};
+	}
+	if (type === 'text') return { type: 'string' };
+	return { type };
+}
+
+function fingerprintTypedSchema(typedSchemaRaw: unknown): string | undefined {
+	const typed = typedSchemaRaw && typeof typedSchemaRaw === 'object' ? (typedSchemaRaw as Record<string, unknown>) : null;
+	if (!typed) return undefined;
+	const normalized = {
+		type: normalizeTypedSchemaPrimitive(typed.type),
+		fields: normalizeTypedSchemaFields(Array.isArray(typed.fields) ? typed.fields : [])
+	};
+	return JSON.stringify(normalized);
+}
+
+function deriveInferredSchemaObservationForNode(node: Node<PipelineNodeData>): NodeSchemaObservation | null {
+	const hint = sourcePayloadHint(node, 'out', 'out', { preferNodeSchema: false });
+	const typed = payloadHintToTypedSchema(hint);
+	if (!typed) return null;
+	const source = node.data.kind === 'component' ? 'component_contract' : 'sample';
+	const updatedAt = String(
+		(node.data as any)?.meta?.updatedAt ?? (node.data as any)?.meta?.createdAt ?? new Date().toISOString()
+	);
+	return {
+		typedSchema: typed,
+		source,
+		state: typed.type === 'unknown' ? 'partial' : 'fresh',
+		schemaFingerprint: fingerprintTypedSchema(typed),
+		updatedAt
+	};
+}
+
+function deriveObservedSchemaObservationFromNodeOutput(
+	evt: Extract<KnownRunEvent, { type: 'node_output' }>,
+	node: Node<PipelineNodeData> | undefined
+): NodeSchemaObservation | null {
+	const observedType = normalizeTypedSchemaPrimitive((evt as any)?.portType ?? '');
+	if (observedType === 'unknown') return null;
+	const inferredFields =
+		(node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields &&
+		Array.isArray((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
+			? normalizeTypedSchemaFields((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
+			: [];
+	const typedSchema =
+		observedType === 'table'
+			? { type: 'table' as const, fields: inferredFields }
+			: { type: observedType, fields: [] };
+	return {
+		typedSchema,
+		source: 'runtime',
+		state: 'fresh',
+		schemaFingerprint: fingerprintTypedSchema(typedSchema),
+		updatedAt: String((evt as any)?.at ?? new Date().toISOString())
+	};
 }
 
 export function __normalizeSchemaFieldsForTest(raw: unknown): SchemaField[] {
