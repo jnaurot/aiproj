@@ -152,19 +152,22 @@ def expand_graph_components(
             )
         definition = revision.definition if isinstance(revision.definition, dict) else {}
         internal_graph = definition.get("graph") if isinstance(definition.get("graph"), dict) else {}
+        expanded_internal = expand_graph_components(
+            internal_graph,
+            component_store=component_store,
+            max_depth=max_depth,
+            _depth=_depth + 1,
+            _component_stack=stack + [component_id],
+        )
         internal_nodes = [
             copy.deepcopy(n)
-            for n in (internal_graph.get("nodes", []) if isinstance(internal_graph, dict) else [])
+            for n in (expanded_internal.graph.get("nodes", []) if isinstance(expanded_internal.graph, dict) else [])
             if isinstance(n, dict)
         ]
-        internal_edges = [copy.deepcopy(e) for e in _edge_list(internal_graph)]
-
-        if any(str(((n.get("data") or {}).get("kind") or "")) == "component" for n in internal_nodes):
-            raise ComponentExpansionError(
-                f"Nested component nodes are not supported in v1 for component '{component_id}'",
-                code="COMPONENT_NESTING_UNSUPPORTED",
-                details={"componentId": component_id, "revisionId": revision_id},
-            )
+        internal_edges = [
+            copy.deepcopy(e)
+            for e in _edge_list(expanded_internal.graph if isinstance(expanded_internal.graph, dict) else {})
+        ]
         if not internal_nodes:
             raise ComponentExpansionError(
                 f"Component definition has no internal nodes: {component_id}@{revision_id}",
@@ -220,6 +223,8 @@ def expand_graph_components(
         component_clone["data"] = component_clone_data
         out_nodes.append(component_clone)
 
+        nested_internal_node_ids: Set[str] = set(expanded_internal.internal_to_parent.keys())
+
         for internal_node in internal_nodes:
             internal_id = str(internal_node.get("id") or "").strip()
             if not internal_id:
@@ -236,7 +241,8 @@ def expand_graph_components(
                     details={"nodeId": prefixed},
                 )
             id_map[internal_id] = prefixed
-            internal_to_parent[prefixed] = instance_node_id
+            if internal_id not in nested_internal_node_ids:
+                internal_to_parent[prefixed] = instance_node_id
             parent_to_internal.setdefault(instance_node_id, []).append(prefixed)
 
             node_clone = copy.deepcopy(internal_node)
@@ -256,6 +262,24 @@ def expand_graph_components(
             }
             node_clone["data"] = data_clone
             out_nodes.append(node_clone)
+
+        for nested_internal_id, nested_parent_id in expanded_internal.internal_to_parent.items():
+            pref_internal = id_map.get(str(nested_internal_id))
+            pref_parent = id_map.get(str(nested_parent_id))
+            if not pref_internal or not pref_parent:
+                continue
+            internal_to_parent[pref_internal] = pref_parent
+            targets = parent_to_internal.setdefault(pref_parent, [])
+            if pref_internal not in targets:
+                targets.append(pref_internal)
+
+        for nested_parent_id, nested_meta in expanded_internal.parent_component_meta.items():
+            pref_parent = id_map.get(str(nested_parent_id))
+            if not pref_parent:
+                continue
+            meta_copy = copy.deepcopy(nested_meta if isinstance(nested_meta, dict) else {})
+            meta_copy["instanceNodeId"] = pref_parent
+            parent_component_meta[pref_parent] = meta_copy
 
         for idx, internal_edge in enumerate(internal_edges):
             src_internal = str(internal_edge.get("source") or "")

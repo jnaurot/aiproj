@@ -8,8 +8,10 @@ from app.runner.components import ComponentExpansionError, expand_graph_componen
 class _ComponentStoreStub:
     def __init__(self, revisions):
         self._revisions = revisions
+        self.calls = []
 
     def get_revision(self, component_id: str, revision_id: str):
+        self.calls.append((component_id, revision_id))
         return self._revisions.get((component_id, revision_id))
 
 
@@ -114,8 +116,24 @@ def test_expand_component_rejects_missing_revision():
     assert ex.value.code == "COMPONENT_REVISION_NOT_FOUND"
 
 
-def test_expand_component_rejects_nested_component_nodes():
+def test_expand_component_supports_nested_component_nodes():
     nested_definition = {
+        "graph": {
+            "nodes": [
+                {
+                    "id": "deep_tool",
+                    "data": {
+                        "kind": "tool",
+                        "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                        "ports": {"in": "json", "out": "json"},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {"inputs": [], "outputs": []},
+    }
+    parent_definition = {
         "graph": {
             "nodes": [
                 {
@@ -142,7 +160,18 @@ def test_expand_component_rejects_nested_component_nodes():
         ],
         "edges": [],
     }
-    store = _ComponentStoreStub({("cmp_parent", "rev_1"): SimpleNamespace(definition=nested_definition)})
-    with pytest.raises(ComponentExpansionError) as ex:
-        expand_graph_components(graph, component_store=store)
-    assert ex.value.code == "COMPONENT_NESTING_UNSUPPORTED"
+    store = _ComponentStoreStub(
+        {
+            ("cmp_parent", "rev_1"): SimpleNamespace(definition=parent_definition),
+            ("cmp_nested", "rev_nested"): SimpleNamespace(definition=nested_definition),
+        }
+    )
+    expanded = expand_graph_components(graph, component_store=store)
+    node_ids = {str(n.get("id")) for n in expanded.graph["nodes"]}
+    assert "cmp_node" in node_ids
+    assert "cmp:cmp_node:inner_component" in node_ids
+    assert "cmp:cmp_node:cmp:inner_component:deep_tool" in node_ids
+    assert expanded.internal_to_parent["cmp:cmp_node:inner_component"] == "cmp_node"
+    assert expanded.internal_to_parent["cmp:cmp_node:cmp:inner_component:deep_tool"] == "cmp:cmp_node:inner_component"
+    assert ("cmp_parent", "rev_1") in store.calls
+    assert ("cmp_nested", "rev_nested") in store.calls
