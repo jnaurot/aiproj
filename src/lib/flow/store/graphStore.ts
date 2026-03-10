@@ -2169,7 +2169,7 @@ function buildSavePreflightDiagnostics(
 				diagnostics.push({
 					code: 'CONTRACT_EDGE_PORT_TYPE_UNRESOLVED',
 					path: `edges.${String(edge.id ?? '')}.data.contract`,
-					message: `Edge has unresolved port types (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
+					message: `Edge has unresolved schema compatibility (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
 					severity: 'error'
 				});
 			}
@@ -2914,20 +2914,26 @@ type EdgeCheck =
 			adapterKind?: AdapterTransformKind | null;
 	  };
 
+function normalizeHintPortType(raw: unknown): PortType | undefined {
+	const t = normalizeHintType(raw);
+	return isPortType(t) ? t : undefined;
+}
+
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const outPort = sourcePortTypeForEdge(nodes, e);
 	const inPort = getPortType(nodes, e.target, 'in');
-
-	if (outPort == null || inPort == null) {
-		return { ok: false, reason: 'missing_port_type' };
-	}
-
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
+	if (!sourceNode || !targetNode) {
+		return { ok: false, reason: 'missing_port_type' };
+	}
 	const sourcePayload = sourceNode
 		? sourcePayloadHint(sourceNode as any, 'out', String((e as any).sourceHandle ?? 'out'))
 		: undefined;
 	const targetPayload = targetNode ? targetPayloadHint(targetNode as any) : undefined;
+	if (!sourcePayload || !targetPayload) {
+		return { ok: false, reason: 'missing_port_type' };
+	}
 	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any);
 	if (!schemaCheck.ok) {
 		if (schemaCheck.reason === 'missing_typed_schema') {
@@ -2952,7 +2958,11 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 		};
 	}
 
-	return { ok: true, out: outPort, in: inPort };
+	return {
+		ok: true,
+		out: normalizeHintPortType((sourcePayload as any)?.type ?? outPort ?? null) ?? outPort ?? undefined,
+		in: normalizeHintPortType((targetPayload as any)?.type ?? inPort ?? null) ?? inPort ?? undefined
+	};
 }
 
 function resetEdgesExec(edges: Edge<PipelineEdgeData>[]): Edge<PipelineEdgeData>[] {
@@ -3007,7 +3017,7 @@ function pruneAndRecontractEdgesStrict(
 			// NOT allowed to silently prune: graph invariants broken
 			return {
 				ok: false,
-				error: `Edge ${e.id} has unresolved port types (source=${e.source}:${e.sourceHandle ?? 'out'} target=${e.target}:${e.targetHandle ?? 'in'})`
+				error: `Edge ${e.id} has unresolved schema compatibility (source=${e.source}:${e.sourceHandle ?? 'out'} target=${e.target}:${e.targetHandle ?? 'in'})`
 			};
 		}
 
@@ -4309,7 +4319,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					sourceHandle: canonicalSourceHandle
 				};
 
-				// validate port types + refresh contract
+				// Validate schema compatibility and refresh edge contract metadata.
 				const chk = isEdgeStillValid(s.nodes, edgeForValidation);
 				if (chk.ok === false) {
 					out = {
@@ -4323,7 +4333,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 									? `Missing required typed schema coverage: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
 								: chk.reason === 'schema_mismatch'
 									? `Missing required columns: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
-								: 'Cannot resolve port types for this connection'
+								: 'Cannot resolve schema compatibility for this connection'
 					};
 					return logPush(
 						s,

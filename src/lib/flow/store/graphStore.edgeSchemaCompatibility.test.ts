@@ -67,4 +67,69 @@ describe('graphStore edge schema compatibility', () => {
 		expect(added.ok).toBe(false);
 		expect(String(added.error ?? '')).toContain('Missing required columns');
 	});
+
+	it('uses schema solver compatibility even when source port metadata is absent', () => {
+		graphStore.hardResetGraph();
+		const applied = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'cmp_json',
+						type: 'default',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'component',
+							label: 'Component',
+							componentKind: 'graph_component',
+							ports: { in: null, out: null },
+							params: {
+								componentRef: {
+									componentId: 'cmp_test',
+									revisionId: 'crev_1',
+									apiVersion: 'v1'
+								},
+								api: {
+									inputs: [],
+									outputs: [
+										{
+											name: 'default',
+											portType: 'json',
+											required: true,
+											typedSchema: { type: 'json', fields: [] }
+										}
+									]
+								},
+								bindings: { inputs: {}, config: {}, outputs: {} }
+							},
+							status: 'idle'
+						}
+					},
+					{
+						id: 'xfm_json_to_table',
+						type: 'default',
+						position: { x: 220, y: 0 },
+						data: {
+							kind: 'transform',
+							transformKind: 'json_to_table',
+							params: { op: 'json_to_table' },
+							status: 'idle'
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_schema_connect_without_ports'
+		);
+		expect(applied.ok).toBe(true);
+
+		const added = graphStore.addEdge({
+			id: 'e_schema_no_ports',
+			source: 'cmp_json',
+			sourceHandle: 'default',
+			target: 'xfm_json_to_table',
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		expect(added.ok).toBe(true);
+	});
 });
