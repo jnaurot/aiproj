@@ -1,4 +1,5 @@
 import type { Node, Edge } from "@xyflow/svelte";
+import type { NodeSchemaEnvelope } from "$lib/flow/schema/schemaContract";
 
 export const PORT_TYPES = ["table", "text", "json", "binary", "embeddings"];
 export type PortType = typeof PORT_TYPES[number];
@@ -59,6 +60,7 @@ export type BaseNodeData<K extends NodeKind, P> = {
 
   // typing/contracts (optional but useful)
   ports?: { in?: PortType | null; out?: PortType | null };
+  schema?: NodeSchemaEnvelope;
 
   meta?: NodeMeta;
 };

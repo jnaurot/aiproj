@@ -416,3 +416,67 @@ def test_graph_create_revision_rejects_ambiguous_multi_output_component_source_h
 		assert created.status_code == 422, created.text
 		detail = created.json().get("detail", {})
 		assert str(detail.get("code") or "") == "COMPONENT_OUTPUT_HANDLE_UNRESOLVED"
+
+
+def test_canonicalize_graph_payload_canonicalizes_node_schema_contract_channels():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "src1",
+				"type": "source",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "source",
+					"sourceKind": "file",
+					"params": {"output": {"mode": "json"}},
+					"schema": {
+						"inferredSchema": {
+							"source": "sample",
+							"state": "fresh",
+							"typedSchema": {
+								"type": "json",
+								"fields": [{"name": "id", "type": "json", "nullable": False}],
+							},
+							"extraKey": "drop",
+						},
+						"expectedSchema": {"source": "declared", "typedSchema": {"type": "json", "fields": []}},
+						"unknownChannel": {},
+					},
+				},
+			}
+		],
+		"edges": [],
+	}
+	next_graph, notes = canonicalize_graph_payload(graph)
+	assert isinstance(notes, list)
+	assert any(str(note.get("code") or "") == "NODE_SCHEMA_CONTRACT_CANONICALIZED" for note in notes)
+	schema = (((next_graph["nodes"][0].get("data") or {}).get("schema") or {}))
+	assert "unknownChannel" not in schema
+	assert "extraKey" not in ((schema.get("inferredSchema") or {}))
+	assert str((((schema.get("inferredSchema") or {}).get("source")) or "")) == "sample"
+	assert str((((schema.get("expectedSchema") or {}).get("source")) or "")) == "declared"
+
+
+def test_canonicalize_graph_payload_drops_invalid_node_schema_contract():
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "src1",
+				"type": "source",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "source",
+					"sourceKind": "file",
+					"params": {"output": {"mode": "json"}},
+					"schema": ["invalid"],
+				},
+			}
+		],
+		"edges": [],
+	}
+	next_graph, notes = canonicalize_graph_payload(graph)
+	assert isinstance(notes, list)
+	assert any(str(note.get("code") or "") == "NODE_SCHEMA_CONTRACT_DROPPED" for note in notes)
+	assert "schema" not in ((next_graph["nodes"][0].get("data") or {}))

@@ -8,6 +8,12 @@ import type {
 	ComponentTypedField as CanonicalComponentTypedField,
 	ComponentTypedSchema as CanonicalComponentTypedSchema
 } from "$lib/flow/schema/component";
+import type {
+	NodeSchemaEnvelope as CanonicalNodeSchemaEnvelope,
+	NodeSchemaObservation as CanonicalNodeSchemaObservation,
+	NodeSchemaSource as CanonicalNodeSchemaSource,
+	NodeSchemaState as CanonicalNodeSchemaState
+} from "$lib/flow/schema/schemaContract";
 
 export type ViewportDTO = {
   x: number;
@@ -42,3 +48,8 @@ export type ComponentApiContractDTO = {
 	inputs: ComponentApiPortDTO[];
 	outputs: ComponentApiPortDTO[];
 };
+
+export type NodeSchemaStateDTO = CanonicalNodeSchemaState;
+export type NodeSchemaSourceDTO = CanonicalNodeSchemaSource;
+export type NodeSchemaObservationDTO = CanonicalNodeSchemaObservation;
+export type NodeSchemaEnvelopeDTO = CanonicalNodeSchemaEnvelope;

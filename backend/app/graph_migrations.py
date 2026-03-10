@@ -4,6 +4,7 @@ import copy
 from typing import Any, Dict, List, Optional, Tuple
 
 from .runner.capabilities import allowed_port_types, allowed_ports
+from .schema_contracts import canonicalize_schema_envelope
 
 
 def _normalize_port_type(value: Any) -> Optional[str]:
@@ -36,6 +37,33 @@ def _node_data(node: Dict[str, Any]) -> Dict[str, Any]:
 		data = {}
 		node["data"] = data
 	return data
+
+
+def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	raw_schema = data.get("schema")
+	canonical_schema, changed = canonicalize_schema_envelope(raw_schema)
+	if raw_schema is None:
+		return
+	if canonical_schema is None:
+		data.pop("schema", None)
+		notes.append(
+			{
+				"code": "NODE_SCHEMA_CONTRACT_DROPPED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Dropped invalid node.data.schema payload (must be an object).",
+			}
+		)
+		return
+	data["schema"] = canonical_schema
+	if changed:
+		notes.append(
+			{
+				"code": "NODE_SCHEMA_CONTRACT_CANONICALIZED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Canonicalized node.data.schema payload.",
+			}
+		)
 
 
 def _component_output_decls(node: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -295,6 +323,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		if nid:
 			node_map[nid] = next_node
 		_canonicalize_builtin_tool_params(next_node, notes)
+		_canonicalize_node_schema_contract(next_node, notes)
 		canonical_nodes.append(next_node)
 	graph["nodes"] = canonical_nodes
 
