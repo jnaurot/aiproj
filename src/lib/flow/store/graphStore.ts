@@ -16,6 +16,7 @@ import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
 import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
 import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
 import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
+import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
 import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
 import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
@@ -2402,7 +2403,7 @@ export type EdgeSchemaConstraint = {
 
 export type EdgeSchemaDiagnostic = {
 	edgeId: string;
-	code: 'EDGE_SCHEMA_TYPE_MISMATCH' | 'EDGE_SCHEMA_MISSING_COLUMNS';
+	code: SchemaDiagnosticCode;
 	severity: 'error' | 'warning';
 	message: string;
 	details: {
@@ -2515,7 +2516,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 			if (constraint.warning === 'lossy_coercion') {
 				out[edgeId] = {
 					edgeId,
-					code: 'EDGE_SCHEMA_TYPE_MISMATCH',
+					code: 'TYPE_MISMATCH',
 					severity: 'warning',
 					message: `Lossy coercion: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 					details: {
@@ -2532,7 +2533,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 		if (constraint.reason === 'missing_required_columns') {
 			out[edgeId] = {
 				edgeId,
-				code: 'EDGE_SCHEMA_MISSING_COLUMNS',
+				code: 'PAYLOAD_SCHEMA_MISMATCH',
 				severity: 'error',
 				message: `Missing required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
 				details: {
@@ -2546,7 +2547,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 		}
 		out[edgeId] = {
 			edgeId,
-			code: 'EDGE_SCHEMA_TYPE_MISMATCH',
+			code: 'TYPE_MISMATCH',
 			severity: 'error',
 			message: `Incompatible schema types: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 			details: {

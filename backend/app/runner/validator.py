@@ -1,8 +1,14 @@
 # backend/app/runner/validator.py
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
+import json
 from .schemas import validate_node_params  # Import schema validation
 from .capabilities import allowed_port_types, allowed_ports
+from .schema_diagnostics import (
+    SCHEMA_DIAGNOSTIC_CODES,
+    TYPE_MISMATCH,
+    PAYLOAD_SCHEMA_MISMATCH,
+)
 
 from pprint import pformat
 from typing import Set
@@ -13,6 +19,8 @@ class ValidationError:
     message: str
     node_id: Optional[str] = None
     edge_id: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    suggestions: Optional[List[str]] = None
 
 @dataclass
 class ValidationResult:
@@ -22,6 +30,9 @@ class ValidationResult:
 
 class GraphValidator:
     """Pre-execution and runtime validation"""
+    def __init__(self) -> None:
+        self._schema_diagnostic_codes = set(SCHEMA_DIAGNOSTIC_CODES)
+
     def validate_pre_execution(self, graph: Dict[str, Any]) -> ValidationResult:
         """Comprehensive validation before execution starts"""
         errors = []
@@ -47,6 +58,58 @@ class GraphValidator:
             errors=errors,
             warnings=warnings
         )
+
+    def _schema_code(self, code: str) -> str:
+        return code if code in self._schema_diagnostic_codes else code
+
+    @staticmethod
+    def _stable_json(value: Any) -> str:
+        try:
+            return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except Exception:
+            return str(value)
+
+    @staticmethod
+    def _normalize_port_type(raw: Any) -> Optional[str]:
+        if raw is None:
+            return None
+        value = str(raw).strip().lower()
+        return value or None
+
+    def _adapter_suggestions(
+        self,
+        source_type: Optional[str],
+        target_type: Optional[str],
+        target_node: Dict[str, Any],
+    ) -> List[str]:
+        src = self._normalize_port_type(source_type)
+        tgt = self._normalize_port_type(target_type)
+        if not src or not tgt or src == tgt:
+            return []
+        if src == "text" and tgt == "table":
+            return [
+                "Insert a Transform node with op='text_to_table' between source and target.",
+            ]
+        if src == "json" and tgt == "table":
+            return [
+                "Insert a Transform node with op='json_to_table' between source and target.",
+            ]
+        if src == "table" and tgt == "json":
+            return [
+                "Insert a Transform node with op='table_to_json' between source and target.",
+            ]
+        if src == "table" and tgt == "text":
+            return [
+                "Convert table to json first (op='table_to_json'), then map json to text in downstream node.",
+            ]
+        target_kind = str((target_node.get("data", {}) or {}).get("kind") or "").strip().lower()
+        if target_kind == "transform":
+            return [
+                "Use an adapter transform (text_to_table/json_to_table/table_to_json) to satisfy this edge contract.",
+            ]
+        return [
+            f"Insert an adapter node to convert '{src}' -> '{tgt}' before this target.",
+        ]
     
     def _validate_node_params_schema(self, graph: Dict[str, Any]) -> List[ValidationError]:
         """Validate using Pydantic schemas"""
@@ -339,31 +402,76 @@ class GraphValidator:
                 ))
                 continue
             
-            # Check type compatibility
-            if source_type != target_type:
-                errors.append(ValidationError(
-                    code="TYPE_MISMATCH",
-                    message=f"Incompatible types: {source_type} -> {target_type} (from '{source_node['data'].get('label')}' to '{target_node['data'].get('label')}')",
-                    edge_id=edge_id
-                ))
-                continue
-
             # Optional payload schema compatibility (forward path)
             contract = (edge.get("data", {}) or {}).get("contract", {}) or {}
             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
             src_payload = payload.get("source", {}) if isinstance(payload, dict) else {}
             tgt_payload = payload.get("target", {}) if isinstance(payload, dict) else {}
 
+            provided_schema = {
+                "portType": self._normalize_port_type(source_type),
+                "payload": src_payload if isinstance(src_payload, dict) else {},
+            }
+            required_schema = {
+                "portType": self._normalize_port_type(target_type),
+                "payload": tgt_payload if isinstance(tgt_payload, dict) else {},
+            }
+
             src_cols = src_payload.get("columns") if isinstance(src_payload, dict) else None
             req_cols = tgt_payload.get("required_columns") if isinstance(tgt_payload, dict) else None
             if isinstance(src_cols, list) and isinstance(req_cols, list) and req_cols:
                 missing = [c for c in req_cols if c not in src_cols]
                 if missing:
+                    suggestions = self._adapter_suggestions(source_type, target_type, target_node)
+                    suggestion_suffix = (
+                        f" Auto-adapter suggestion: {' | '.join(suggestions)}"
+                        if suggestions
+                        else ""
+                    )
                     errors.append(ValidationError(
-                        code="PAYLOAD_SCHEMA_MISMATCH",
-                        message=f"Missing required columns on edge: {missing}",
-                        edge_id=edge_id
+                        code=self._schema_code(PAYLOAD_SCHEMA_MISMATCH),
+                        message=(
+                            f"Missing required columns on edge: {missing}. "
+                            f"provided_schema={self._stable_json(provided_schema)} "
+                            f"required_schema={self._stable_json(required_schema)}."
+                            f"{suggestion_suffix}"
+                        ),
+                        edge_id=edge_id,
+                        details={
+                            "provided_schema": provided_schema,
+                            "required_schema": required_schema,
+                            "missing_columns": missing,
+                        },
+                        suggestions=suggestions or None,
                     ))
+                    continue
+
+            # Schema constraint solver (compile-time): port compatibility + actionable adapter hints.
+            if source_type != target_type:
+                suggestions = self._adapter_suggestions(source_type, target_type, target_node)
+                suggestion_suffix = (
+                    f" Auto-adapter suggestion: {' | '.join(suggestions)}"
+                    if suggestions
+                    else ""
+                )
+                errors.append(
+                    ValidationError(
+                        code=self._schema_code(TYPE_MISMATCH),
+                        message=(
+                            f"Incompatible schemas on edge '{edge_id}': "
+                            f"provided_schema={self._stable_json(provided_schema)} "
+                            f"required_schema={self._stable_json(required_schema)}."
+                            f"{suggestion_suffix}"
+                        ),
+                        edge_id=edge_id,
+                        details={
+                            "provided_schema": provided_schema,
+                            "required_schema": required_schema,
+                        },
+                        suggestions=suggestions or None,
+                    )
+                )
+                continue
         
         return errors
 

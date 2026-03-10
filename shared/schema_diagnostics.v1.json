@@ -1,0 +1,15 @@
+{
+	"version": 1,
+	"codes": [
+		"TYPE_MISMATCH",
+		"PAYLOAD_SCHEMA_MISMATCH"
+	],
+	"shape": {
+		"code": "string",
+		"message": "string",
+		"edgeId": "string|null",
+		"nodeId": "string|null",
+		"details": "object|null",
+		"suggestions": "string[]|null"
+	}
+}

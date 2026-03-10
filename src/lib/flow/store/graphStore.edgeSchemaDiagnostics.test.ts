@@ -34,7 +34,7 @@ describe('graphStore edge schema diagnostics', () => {
 		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
 		const diagnostics = __computeEdgeSchemaDiagnosticsForTest(constraints);
 		expect(diagnostics.e1).toBeTruthy();
-		expect(diagnostics.e1?.code).toBe('EDGE_SCHEMA_TYPE_MISMATCH');
+		expect(diagnostics.e1?.code).toBe('TYPE_MISMATCH');
 		expect(diagnostics.e1?.severity).toBe('error');
 		expect(diagnostics.e1?.details?.providedSchema?.type).toBe('string');
 		expect(diagnostics.e1?.details?.requiredSchema?.type).toBe('binary');
