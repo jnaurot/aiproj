@@ -66,4 +66,35 @@ describe('graphStore schema solver', () => {
 		expect(constraints.e1.compatible).toBe(true);
 		expect(constraints.e1.suggestions).toEqual([]);
 	});
+
+	it('fails when required typed schema exists but source cannot emit typed coverage', () => {
+		const nodes: any[] = [
+			{
+				id: 'n_source',
+				data: {
+					kind: 'source',
+					sourceKind: 'file',
+					ports: { in: null, out: 'table' },
+					params: { file_format: 'csv' }
+				}
+			},
+			{
+				id: 'n_transform',
+				data: {
+					kind: 'transform',
+					transformKind: 'select',
+					ports: { in: 'table', out: 'table' },
+					params: {
+						op: 'select',
+						select: { mode: 'include', columns: ['id'] }
+					}
+				}
+			}
+		];
+		const edges: any[] = [{ id: 'e1', source: 'n_source', target: 'n_transform' }];
+		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
+		expect(constraints.e1.compatible).toBe(false);
+		expect(constraints.e1.reason).toBe('missing_typed_schema');
+		expect(constraints.e1.missingColumns).toEqual(['id']);
+	});
 });

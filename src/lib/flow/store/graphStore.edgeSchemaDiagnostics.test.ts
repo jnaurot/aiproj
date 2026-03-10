@@ -66,4 +66,33 @@ describe('graphStore edge schema diagnostics', () => {
 		expect(diagnostics.e2).toBeTruthy();
 		expect(diagnostics.e2?.severity).toBe('warning');
 	});
+
+	it('emits payload diagnostics when required typed coverage is missing', () => {
+		const nodes: any[] = [
+			{
+				id: 'n_source',
+				data: {
+					kind: 'source',
+					sourceKind: 'file',
+					ports: { in: null, out: 'table' },
+					params: { file_format: 'csv' }
+				}
+			},
+			{
+				id: 'n_transform',
+				data: {
+					kind: 'transform',
+					transformKind: 'select',
+					ports: { in: 'table', out: 'table' },
+					params: { op: 'select', select: { mode: 'include', columns: ['id'] } }
+				}
+			}
+		];
+		const edges: any[] = [{ id: 'e3', source: 'n_source', target: 'n_transform' }];
+		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
+		const diagnostics = __computeEdgeSchemaDiagnosticsForTest(constraints);
+		expect(diagnostics.e3).toBeTruthy();
+		expect(diagnostics.e3?.code).toBe('PAYLOAD_SCHEMA_MISMATCH');
+		expect(String(diagnostics.e3?.message ?? '')).toContain('Required typed schema coverage is missing');
+	});
 });

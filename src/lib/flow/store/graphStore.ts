@@ -1996,6 +1996,13 @@ function buildSavePreflightDiagnostics(
 					message: `Edge has incompatible schemas (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')})${edgeCheck.suggestion ? ` ${edgeCheck.suggestion}` : ''}.`,
 					severity: 'error'
 				});
+			} else if (edgeCheck.reason === 'typed_schema_missing') {
+				diagnostics.push({
+					code: 'CONTRACT_EDGE_TYPED_SCHEMA_MISSING',
+					path: `edges.${String(edge.id ?? '')}.data.contract.payload.source`,
+					message: `Edge is missing required typed schema coverage. Required columns: ${(edgeCheck.missingColumns ?? []).join(', ') || '(unknown)'}.`,
+					severity: 'error'
+				});
 			} else if (edgeCheck.reason === 'schema_mismatch') {
 				diagnostics.push({
 					code: 'CONTRACT_EDGE_SCHEMA_MISMATCH',
@@ -2329,7 +2336,7 @@ type SchemaCompatibility =
 	| { ok: true; warning?: 'lossy_coercion'; suggestion?: string | null; adapterKind?: AdapterTransformKind | null }
 	| {
 			ok: false;
-			reason: 'type_mismatch' | 'missing_required_columns';
+			reason: 'type_mismatch' | 'missing_required_columns' | 'missing_typed_schema';
 			missingColumns?: string[];
 			suggestion?: string | null;
 			adapterKind?: AdapterTransformKind | null;
@@ -2369,6 +2376,9 @@ function isSchemaCompatible(
 						.map((c: unknown) => String(c ?? '').trim())
 						.filter((c: string) => c.length > 0)
 				: [];
+	if (requiredColumns.length > 0 && providedColumns.length === 0) {
+		return { ok: false, reason: 'missing_typed_schema', missingColumns: requiredColumns };
+	}
 	if (requiredColumns.length > 0 && providedColumns.length > 0) {
 		const missing = requiredColumns.filter((c) => !providedColumns.includes(c));
 		if (missing.length > 0) {
@@ -2396,7 +2406,7 @@ export type EdgeSchemaConstraint = {
 	compatible: boolean;
 	warning?: 'lossy_coercion';
 	adapterKind?: AdapterTransformKind | null;
-	reason?: 'type_mismatch' | 'missing_required_columns';
+	reason?: 'type_mismatch' | 'missing_required_columns' | 'missing_typed_schema';
 	missingColumns?: string[];
 	suggestions: string[];
 };
@@ -2545,6 +2555,21 @@ function computeEdgeSchemaDiagnosticsInternal(
 			};
 			continue;
 		}
+		if (constraint.reason === 'missing_typed_schema') {
+			out[edgeId] = {
+				edgeId,
+				code: 'PAYLOAD_SCHEMA_MISMATCH',
+				severity: 'error',
+				message: `Required typed schema coverage is missing. Required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
+				details: {
+					providedSchema: constraint.providedSchema,
+					requiredSchema: constraint.requiredSchema,
+					missingColumns: constraint.missingColumns
+				},
+				suggestions: constraint.suggestions ?? []
+			};
+			continue;
+		}
 		out[edgeId] = {
 			edgeId,
 			code: 'TYPE_MISMATCH',
@@ -2569,7 +2594,8 @@ export function __computeEdgeSchemaDiagnosticsForTest(
 type EdgeInvalidReason =
 	| 'missing_port_type' // couldn't resolve out/in
 	| 'type_mismatch'
-	| 'schema_mismatch';
+	| 'schema_mismatch'
+	| 'typed_schema_missing';
 type EdgeCheck =
 	| { ok: true; out?: PortType; in?: PortType }
 	| {
@@ -2601,6 +2627,13 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	const targetPayload = targetNode ? targetPayloadHint(targetNode as any) : undefined;
 	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any);
 	if (!schemaCheck.ok) {
+		if (schemaCheck.reason === 'missing_typed_schema') {
+			return {
+				ok: false,
+				reason: 'typed_schema_missing',
+				missingColumns: schemaCheck.missingColumns
+			};
+		}
 		if (schemaCheck.reason === 'missing_required_columns') {
 			return {
 				ok: false,

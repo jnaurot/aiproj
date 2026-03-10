@@ -76,6 +76,31 @@ class GraphValidator:
         value = str(raw).strip().lower()
         return value or None
 
+    @staticmethod
+    def _schema_columns(
+        payload: Any,
+        *,
+        fields_key: str = "fields",
+        columns_key: str = "columns",
+    ) -> List[str]:
+        if not isinstance(payload, dict):
+            return []
+        out: List[str] = []
+        fields = payload.get(fields_key)
+        if isinstance(fields, list):
+            for f in fields:
+                if not isinstance(f, dict):
+                    continue
+                name = str(f.get("name") or "").strip()
+                if name:
+                    out.append(name)
+        if out:
+            return out
+        cols = payload.get(columns_key)
+        if isinstance(cols, list):
+            return [str(c).strip() for c in cols if str(c).strip()]
+        return []
+
     def _adapter_suggestions(
         self,
         source_type: Optional[str],
@@ -417,9 +442,38 @@ class GraphValidator:
                 "payload": tgt_payload if isinstance(tgt_payload, dict) else {},
             }
 
-            src_cols = src_payload.get("columns") if isinstance(src_payload, dict) else None
-            req_cols = tgt_payload.get("required_columns") if isinstance(tgt_payload, dict) else None
-            if isinstance(src_cols, list) and isinstance(req_cols, list) and req_cols:
+            src_cols = self._schema_columns(src_payload, fields_key="fields", columns_key="columns")
+            req_cols = self._schema_columns(
+                tgt_payload,
+                fields_key="required_fields",
+                columns_key="required_columns",
+            )
+            if req_cols and not src_cols:
+                errors.append(
+                    ValidationError(
+                        code="CONTRACT_EDGE_TYPED_SCHEMA_MISSING",
+                        message=(
+                            "Required typed schema coverage is missing on edge. "
+                            f"provided_schema={self._stable_json(provided_schema)} "
+                            f"required_schema={self._stable_json(required_schema)}."
+                        ),
+                        edge_id=edge_id,
+                        details={
+                            "expected": {
+                                "portType": self._normalize_port_type(target_type),
+                                "typedSchema": {"fields": "non-empty"},
+                            },
+                            "actual": {
+                                "portType": self._normalize_port_type(source_type),
+                                "typedSchema": {"fields": src_cols},
+                            },
+                            "provided_schema": provided_schema,
+                            "required_schema": required_schema,
+                        },
+                    )
+                )
+                continue
+            if req_cols:
                 missing = [c for c in req_cols if c not in src_cols]
                 if missing:
                     suggestions = self._adapter_suggestions(source_type, target_type, target_node)

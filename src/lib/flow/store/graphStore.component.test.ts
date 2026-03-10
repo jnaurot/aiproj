@@ -1448,6 +1448,34 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_PORT_TYPE_MISMATCH');
 	});
 
+	it('blocks save preflight when edge is missing required typed schema coverage', async () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 10, y: 10 });
+		const transformId = graphStore.addNode('transform', { x: 280, y: 20 });
+		graphStore.updateNodeConfig(sourceId, {
+			ports: { in: null, out: 'table' },
+			params: { source_type: 'file', file_format: 'csv' }
+		});
+		graphStore.updateNodeConfig(transformId, {
+			ports: { in: 'table', out: 'table' },
+			params: { op: 'select', select: { mode: 'include', columns: ['id'] } }
+		});
+		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
+			{
+				id: 'e_typed_schema_missing',
+				source: sourceId,
+				sourceHandle: 'out',
+				target: transformId,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			}
+		] as any);
+		const result = await graphStore.saveGraph('save');
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
+		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_TYPED_SCHEMA_MISSING');
+	});
+
 	it('blocks save preflight when tool builtin profile is invalid in loaded graph data', async () => {
 		graphStore.hardResetGraph();
 		const toolId = graphStore.addNode('tool', { x: 10, y: 10 });
