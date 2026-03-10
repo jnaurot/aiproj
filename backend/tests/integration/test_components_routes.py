@@ -50,6 +50,59 @@ def _component_payload(label: str):
     }
 
 
+def _nested_component_payload(label: str):
+    return {
+        "graph": {
+            "version": 1,
+            "nodes": [
+                {
+                    "id": "cmp_child_node",
+                    "type": "component",
+                    "position": {"x": 0, "y": 0},
+                    "data": {
+                        "kind": "component",
+                        "label": f"{label}-child",
+                        "ports": {"in": None, "out": None},
+                        "params": {
+                            "componentRef": {
+                                "componentId": "cmp_child",
+                                "revisionId": "rev_child_1",
+                                "apiVersion": "v1",
+                            },
+                            "api": {
+                                "inputs": [],
+                                "outputs": [
+                                    {
+                                        "name": "out_data",
+                                        "portType": "json",
+                                        "required": True,
+                                        "typedSchema": {"type": "json", "fields": []},
+                                    }
+                                ],
+                            },
+                            "bindings": {"inputs": {}, "config": {}, "outputs": {}},
+                            "config": {},
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        "api": {
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "out_data",
+                    "portType": "json",
+                    "required": True,
+                    "typedSchema": {"type": "json", "fields": []},
+                }
+            ],
+        },
+        "configSchema": {},
+    }
+
+
 def test_component_routes_create_list_get():
     component_id = "cmp_route_test"
     with TestClient(app) as client:
@@ -85,6 +138,31 @@ def test_component_routes_create_list_get():
         assert detail["definition"]["graph"]["nodes"][0]["data"]["label"] == "v1"
         assert isinstance(detail["definition"].get("contractSnapshot"), dict)
         assert detail["contractSnapshot"]["outputs"][0]["name"] == "out_data"
+
+
+def test_component_routes_create_supports_nested_component_nodes():
+    component_id = f"cmp_nested_route_{uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        res = client.post(
+            "/components",
+            json={
+                "componentId": component_id,
+                "message": "nested-v1",
+                **_nested_component_payload("nested-v1"),
+            },
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["componentId"] == component_id
+        revision_id = str(body["revisionId"] or "")
+        assert revision_id
+
+        fetched = client.get(f"/components/{component_id}/revisions/{revision_id}")
+        assert fetched.status_code == 200, fetched.text
+        definition = fetched.json()["definition"]
+        nodes = definition["graph"]["nodes"]
+        assert len(nodes) == 1
+        assert str((nodes[0].get("data") or {}).get("kind") or "") == "component"
 
 
 def test_component_routes_reject_invalid_payload():

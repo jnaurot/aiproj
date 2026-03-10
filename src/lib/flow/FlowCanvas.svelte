@@ -1605,10 +1605,6 @@ async function scrollToBottom() {
 			showToast('Save as Component failed: graph is empty.', 'warn');
 			return;
 		}
-		if (currentNodes.some((n) => n.data?.kind === 'component')) {
-			showToast('Save as Component failed: nested components are not supported in v1.', 'warn');
-			return;
-		}
 
 		const requestedSuggestion = String(options?.suggestedComponentId ?? '').trim();
 		const suggestedId =
