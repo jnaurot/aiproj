@@ -9,7 +9,7 @@
 	import { nodeTypes } from '$lib/flow/nodeTypes';
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
-	import { graphStore, selectedNode } from '$lib/flow/store/graphStore';
+	import { graphStore, selectedNode, edgeSchemaDiagnostics } from '$lib/flow/store/graphStore';
 	import type { GraphState, InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
@@ -137,10 +137,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		scrollToBottom();
 	}
 
-	$: displayEdges = edges.map((e) => ({
-		...e,
-		class: `edge edge-${e.data?.exec ?? 'idle'}`
-	}));
+	$: displayEdges = edges.map((e) => {
+		const diag = ($edgeSchemaDiagnostics as Record<string, any> | undefined)?.[String(e.id ?? '')] ?? null;
+		const schemaClass =
+			diag?.severity === 'error'
+				? 'edge-schema-error'
+				: diag?.severity === 'warning'
+					? 'edge-schema-warning'
+					: '';
+		const title = diag
+			? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
+			: undefined;
+		return {
+			...e,
+			class: `edge edge-${e.data?.exec ?? 'idle'} ${schemaClass}`.trim(),
+			title
+		};
+	});
 
 	function applyCanvasSelection(
 		seedNodes: Node<PipelineNodeData>[],
@@ -2881,6 +2894,12 @@ async function scrollToBottom() {
 		stroke: #7ee787;
 		stroke-width: 3;
 		filter: drop-shadow(0 0 4px rgba(126, 231, 135, 0.4));
+	}
+	:global(.edge.edge-schema-error path) {
+		stroke: #ff6b6b;
+	}
+	:global(.edge.edge-schema-warning path) {
+		stroke: #ffcc66;
 	}
 	@keyframes dashmove {
 		to {

@@ -2278,6 +2278,19 @@ export type EdgeSchemaConstraint = {
 	suggestions: string[];
 };
 
+export type EdgeSchemaDiagnostic = {
+	edgeId: string;
+	code: 'EDGE_SCHEMA_TYPE_MISMATCH' | 'EDGE_SCHEMA_MISSING_COLUMNS';
+	severity: 'error' | 'warning';
+	message: string;
+	details: {
+		providedSchema: Record<string, any>;
+		requiredSchema: Record<string, any>;
+		missingColumns?: string[];
+	};
+	suggestions: string[];
+};
+
 function inferredTransformOutputHint(node: Node<PipelineNodeData>): Record<string, any> | undefined {
 	if (node.data.kind !== 'transform') return undefined;
 	const params: any = node.data.params ?? {};
@@ -2361,6 +2374,51 @@ export function __computeEdgeSchemaConstraintsForTest(
 	edges: Edge<PipelineEdgeData>[]
 ): Record<string, EdgeSchemaConstraint> {
 	return computeEdgeSchemaConstraintsInternal(nodes, edges);
+}
+
+function computeEdgeSchemaDiagnosticsInternal(
+	constraints: Record<string, EdgeSchemaConstraint>
+): Record<string, EdgeSchemaDiagnostic | null> {
+	const out: Record<string, EdgeSchemaDiagnostic | null> = {};
+	for (const [edgeId, constraint] of Object.entries(constraints ?? {})) {
+		if (constraint.compatible) {
+			out[edgeId] = null;
+			continue;
+		}
+		if (constraint.reason === 'missing_required_columns') {
+			out[edgeId] = {
+				edgeId,
+				code: 'EDGE_SCHEMA_MISSING_COLUMNS',
+				severity: 'error',
+				message: `Missing required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
+				details: {
+					providedSchema: constraint.providedSchema,
+					requiredSchema: constraint.requiredSchema,
+					missingColumns: constraint.missingColumns
+				},
+				suggestions: constraint.suggestions ?? []
+			};
+			continue;
+		}
+		out[edgeId] = {
+			edgeId,
+			code: 'EDGE_SCHEMA_TYPE_MISMATCH',
+			severity: 'error',
+			message: `Incompatible schema types: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
+			details: {
+				providedSchema: constraint.providedSchema,
+				requiredSchema: constraint.requiredSchema
+			},
+			suggestions: constraint.suggestions ?? []
+		};
+	}
+	return out;
+}
+
+export function __computeEdgeSchemaDiagnosticsForTest(
+	constraints: Record<string, EdgeSchemaConstraint>
+): Record<string, EdgeSchemaDiagnostic | null> {
+	return computeEdgeSchemaDiagnosticsInternal(constraints);
 }
 
 type EdgeInvalidReason =
@@ -4791,4 +4849,8 @@ export const selectedNode = derived(graphStore, ($s) =>
 
 export const edgeSchemaConstraints = derived(graphStore, ($s) =>
 	computeEdgeSchemaConstraintsInternal($s.nodes as any, $s.edges as any)
+);
+
+export const edgeSchemaDiagnostics = derived(edgeSchemaConstraints, ($constraints) =>
+	computeEdgeSchemaDiagnosticsInternal($constraints as any)
 );
