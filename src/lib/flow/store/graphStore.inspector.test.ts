@@ -20,19 +20,17 @@ function sourceNodeParams(nodeId: string): Record<string, any> {
 }
 
 describe('graphStore snapshot scoped commit', () => {
-	it('source output port change syncs params.output.mode and marks node stale', () => {
+	it('rejects authored port changes because ports are derived metadata', () => {
 		const nodeId = setupSourceNode();
 		const initial = sourceNodeParams(nodeId);
 		expect(initial.output?.mode).toBeTruthy();
 
 		const result = graphStore.updateNodeConfig(nodeId, { ports: { out: 'json' } });
-		expect(result.ok).toBe(true);
+		expect(result.ok).toBe(false);
+		expect(String(result.error ?? '')).toContain('Ports are derived metadata');
 
-		const state = get(graphStore);
 		const params = sourceNodeParams(nodeId);
-		expect(params.output?.mode).toBe('json');
-		expect(state.nodeBindings[nodeId]?.staleReason).toBe('PORTS_CHANGED');
-		expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('stale');
+		expect(params.output?.mode).toBe(initial.output?.mode);
 	});
 
 	it('selecting_previous_upload_commits_snapshot_without_dirty_state', async () => {

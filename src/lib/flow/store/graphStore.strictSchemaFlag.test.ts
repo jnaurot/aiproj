@@ -10,12 +10,10 @@ describe('graphStore strict schema v2 rollout flag', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 220, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'txt', output_mode: 'text' },
-			ports: { in: null, out: 'text' }
+			params: { file_format: 'txt', output: { mode: 'text' } }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'filter', filter: { expr: '' } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'filter', filter: { expr: '' } }
 		});
 		const added = graphStore.addEdge({
 			id: 'e_flag_legacy',
@@ -33,12 +31,10 @@ describe('graphStore strict schema v2 rollout flag', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 220, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'txt', output_mode: 'text' },
-			ports: { in: null, out: 'text' }
+			params: { file_format: 'txt', output: { mode: 'text' } }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'filter', filter: { expr: '' } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'filter', filter: { expr: '' } }
 		});
 		const added = graphStore.addEdge({
 			id: 'e_flag_v2',

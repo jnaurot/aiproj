@@ -11,12 +11,10 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 280, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'txt', output_mode: 'text' },
-			ports: { in: null, out: 'text' }
+			params: { file_format: 'txt', output: { mode: 'text' } }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'filter', filter: { expr: '' } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'filter', filter: { expr: '' } }
 		});
 		const added = graphStore.addEdge({
 			id: 'e_text_table',
@@ -41,7 +39,6 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 		const toolId = graphStore.addNode('tool', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 280, y: 0 });
 		graphStore.updateNodeConfig(toolId, {
-			ports: { in: null, out: 'json' },
 			params: {
 				provider: 'builtin',
 				builtin: {
@@ -52,8 +49,7 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			}
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'filter', filter: { expr: '' } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'filter', filter: { expr: '' } }
 		});
 		const added = graphStore.addEdge({
 			id: 'e_json_table',
@@ -79,12 +75,10 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 		const transformId = graphStore.addNode('transform', { x: 220, y: 0 });
 		const toolId = graphStore.addNode('tool', { x: 460, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'csv', output_mode: 'table' },
-			ports: { in: null, out: 'table' }
+			params: { file_format: 'csv', output: { mode: 'table' } }
 		});
 		graphStore.setTransformKind(transformId, 'table_to_json');
 		graphStore.updateNodeConfig(toolId, {
-			ports: { in: 'json', out: 'json' },
 			params: {
 				provider: 'builtin',
 				builtin: {

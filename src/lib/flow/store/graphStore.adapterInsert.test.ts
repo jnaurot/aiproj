@@ -12,9 +12,8 @@ describe('graphStore schema adapter insertion', () => {
 		const sourcePatch = graphStore.updateNodeConfig(sourceId, {
 			params: {
 				file_format: 'txt',
-				output_mode: 'text'
-			},
-			ports: { in: null, out: 'text' }
+				output: { mode: 'text' }
+			}
 		});
 		expect(sourcePatch.ok).toBe(true);
 
@@ -22,8 +21,7 @@ describe('graphStore schema adapter insertion', () => {
 			params: {
 				op: 'filter',
 				filter: { expr: '' }
-			},
-			ports: { in: 'table', out: 'table' }
+			}
 		});
 		expect(transformPatch.ok).toBe(true);
 

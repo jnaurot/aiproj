@@ -9,12 +9,10 @@ describe('graphStore schema contract snapshot', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 200, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'csv', output_mode: 'table' },
-			ports: { in: null, out: 'table' }
+			params: { file_format: 'csv', output: { mode: 'table' } }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'filter', filter: { expr: '' } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'filter', filter: { expr: '' } }
 		});
 		const added = graphStore.addEdge({
 			id: 'e_clean',
@@ -32,10 +30,9 @@ describe('graphStore schema contract snapshot', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const llmId = graphStore.addNode('llm', { x: 220, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { output_mode: 'json' },
-			ports: { in: null, out: 'json' }
+			params: { output: { mode: 'json' } }
 		});
-		graphStore.updateNodeConfig(llmId, { ports: { in: 'text', out: 'text' } });
+		graphStore.updateNodeConfig(llmId, { params: { output: { mode: 'text' } } });
 		const added = graphStore.addEdge({
 			id: 'e_warn',
 			source: sourceId,
@@ -52,12 +49,10 @@ describe('graphStore schema contract snapshot', () => {
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
 		const transformId = graphStore.addNode('transform', { x: 220, y: 0 });
 		graphStore.updateNodeConfig(sourceId, {
-			params: { file_format: 'txt', output_mode: 'table' },
-			ports: { in: null, out: 'table' }
+			params: { file_format: 'txt', output: { mode: 'table' } }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			params: { op: 'select', select: { mode: 'include', columns: ['id'] } },
-			ports: { in: 'table', out: 'table' }
+			params: { op: 'select', select: { mode: 'include', columns: ['id'] } }
 		});
 		const state = get(graphStore);
 		const synthetic = {

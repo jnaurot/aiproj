@@ -11,9 +11,8 @@ describe('graphStore edge schema compatibility', () => {
 		const sourcePatch = graphStore.updateNodeConfig(sourceId, {
 			params: {
 				file_format: 'txt',
-				output_mode: 'text'
-			},
-			ports: { in: null, out: 'text' }
+				output: { mode: 'text' }
+			}
 		});
 		expect(sourcePatch.ok).toBe(true);
 
@@ -21,8 +20,7 @@ describe('graphStore edge schema compatibility', () => {
 			params: {
 				op: 'filter',
 				filter: { expr: '' }
-			},
-			ports: { in: 'table', out: 'table' }
+			}
 		});
 		expect(transformPatch.ok).toBe(true);
 
@@ -43,9 +41,8 @@ describe('graphStore edge schema compatibility', () => {
 		const sourcePatch = graphStore.updateNodeConfig(sourceId, {
 			params: {
 				file_format: 'txt',
-				output_mode: 'text'
-			},
-			ports: { in: null, out: 'table' }
+				output: { mode: 'table' }
+			}
 		});
 		expect(sourcePatch.ok).toBe(true);
 
@@ -57,8 +54,7 @@ describe('graphStore edge schema compatibility', () => {
 					columns: ['id'],
 					strict: true
 				}
-			},
-			ports: { in: 'table', out: 'table' }
+			}
 		});
 		expect(transformPatch.ok).toBe(true);
 

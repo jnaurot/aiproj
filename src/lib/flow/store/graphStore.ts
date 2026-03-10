@@ -237,6 +237,82 @@ function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?
 	return { in: inPort, out: null };
 }
 
+function deriveSourceOutPort(params: Record<string, any>, sourceKindRaw: unknown): PortType {
+	const output = params?.output && typeof params.output === 'object' ? params.output : {};
+	const mode = String(params?.output_mode ?? (output as any)?.mode ?? '').trim().toLowerCase();
+	if (mode === 'text') return 'text';
+	if (mode === 'json') return 'json';
+	if (mode === 'binary') return 'binary';
+	if (mode === 'embeddings') return 'embeddings';
+	if (mode === 'table') return 'table';
+	const sourceKind = String(sourceKindRaw ?? '').trim().toLowerCase();
+	return sourceKind === 'api' ? 'json' : 'table';
+}
+
+function deriveLlmOutPort(params: Record<string, any>): PortType {
+	const output = params?.output && typeof params.output === 'object' ? params.output : {};
+	const mode = String((output as any)?.mode ?? '').trim().toLowerCase();
+	if (mode === 'json') return 'json';
+	if (mode === 'binary') return 'binary';
+	if (mode === 'embeddings') return 'embeddings';
+	return 'text';
+}
+
+function deriveTransformPorts(params: Record<string, any>, transformKindRaw: unknown): { in: PortType; out: PortType } {
+	const op = String(params?.op ?? transformKindRaw ?? '').trim().toLowerCase();
+	if (op === 'json_to_table') return { in: 'json', out: 'table' };
+	if (op === 'text_to_table') return { in: 'text', out: 'table' };
+	if (op === 'table_to_json') return { in: 'table', out: 'json' };
+	return { in: 'table', out: 'table' };
+}
+
+function deriveToolPorts(_params: Record<string, any>): { in: PortType; out: PortType } {
+	return { in: 'json', out: 'json' };
+}
+
+function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; out: PortType | null } {
+	const params = ((data as any)?.params ?? {}) as Record<string, any>;
+	if (data.kind === 'source') {
+		return { in: null, out: deriveSourceOutPort(params, (data as any)?.sourceKind) };
+	}
+	if (data.kind === 'llm') {
+		return { in: 'text', out: deriveLlmOutPort(params) };
+	}
+	if (data.kind === 'transform') {
+		return deriveTransformPorts(params, (data as any)?.transformKind);
+	}
+	if (data.kind === 'tool') {
+		return deriveToolPorts(params);
+	}
+	if (data.kind === 'component') {
+		const componentPorts = derivePortsFromComponentApi((params as any)?.api);
+		return {
+			in: (componentPorts.in ?? null) as PortType | null,
+			out: (componentPorts.out ?? null) as PortType | null
+		};
+	}
+	return {
+		in: (data.ports?.in ?? null) as PortType | null,
+		out: (data.ports?.out ?? null) as PortType | null
+	};
+}
+
+function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
+	return nodes.map((node) => {
+		const derived = derivePortsForNodeData(node.data);
+		return {
+			...node,
+			data: {
+				...node.data,
+				ports: {
+					in: derived.in,
+					out: derived.out
+				}
+			}
+		};
+	});
+}
+
 function sanitizeComponentDraftParams(params: Record<string, any>): Record<string, any> {
 	const api = params?.api;
 	const bindings = params?.bindings;
@@ -1090,12 +1166,6 @@ function stableJson(value: unknown): string {
 	}
 }
 
-function sourceOutputModeForPort(port: PortType | null | undefined): 'table' | 'text' | 'json' | 'binary' | null {
-	if (!port) return null;
-	if (port === 'table' || port === 'text' || port === 'json' || port === 'binary') return port;
-	return null;
-}
-
 function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
 	const out = new Set<string>([nodeId]);
 	const q = [nodeId];
@@ -1894,10 +1964,11 @@ function normalizeGraphForComponentMigration(
 			sourceHandle: canonicalHandle
 		};
 	});
+	const canonicalNodes = canonicalizeNodePorts(normalizedNodes);
 
 	return {
-		nodes: normalizedNodes,
-		edges: recomputeEdgeContractsBestEffort(normalizedNodes, normalizedEdges)
+		nodes: canonicalNodes,
+		edges: recomputeEdgeContractsBestEffort(canonicalNodes, normalizedEdges)
 	};
 }
 
@@ -2866,19 +2937,20 @@ const loadedNodes = Array.isArray((loaded as any)?.nodes)
 const loadedEdgesRaw = Array.isArray((loaded as any)?.edges)
 	? ((loaded as any).edges as Edge<PipelineEdgeData>[])
 	: [];
+const loadedNormalized = normalizeGraphForComponentMigration(loadedNodes, loadedEdgesRaw);
 const loadedCanonicalized = canonicalizeComponentEdgeSourceHandles(
-	loadedNodes,
-	loadedEdgesRaw,
+	loadedNormalized.nodes,
+	loadedNormalized.edges,
 	'best_effort'
 );
 const loadedEdges = recomputeEdgeContractsBestEffort(
-	loadedNodes,
-	loadedCanonicalized.ok ? loadedCanonicalized.edges : loadedEdgesRaw
+	loadedNormalized.nodes,
+	loadedCanonicalized.ok ? loadedCanonicalized.edges : loadedNormalized.edges
 );
 
 const initialState: GraphState = {
 	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
-	nodes: loadedNodes,
+	nodes: loadedNormalized.nodes,
 	edges: loadedEdges,
 	selectedNodeId: null,
 	inspector: initialInspector,
@@ -2891,7 +2963,7 @@ const initialState: GraphState = {
 	activeRunFrom: null,
 	activeRunNodeSet: new Set<string>(),
 	nodeOutputs: {},
-	nodeBindings: ensureNormalizedBindingsForNodes(loadedNodes, {}),
+	nodeBindings: ensureNormalizedBindingsForNodes(loadedNormalized.nodes, {}),
 	activeRunId: null,
 	editingContext: 'graph',
 	componentEditSession: null
@@ -2942,126 +3014,110 @@ export const graphStore = (() => {
 			}
 
 			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
-			const componentDerivedPorts =
-				currentNode.data.kind === 'component' ? derivePortsFromComponentApi((currentNode.data as any)?.params?.api) : null;
-			const effectivePorts = config.ports ?? componentDerivedPorts ?? undefined;
-			const previousOutPort = (currentNode.data.ports?.out ?? null) as PortType | null;
+			if (config.ports !== undefined) {
+				out = {
+					ok: false,
+					error: 'Ports are derived metadata. Change node subtype/params instead of editing ports directly.'
+				};
+				return logPush(s, 'warn', out.error, nodeId);
+			}
+			const previousPorts = {
+				in: (currentNode.data.ports?.in ?? null) as PortType | null,
+				out: (currentNode.data.ports?.out ?? null) as PortType | null
+			};
+			const effectivePorts = derivePortsForNodeData(currentNode.data);
+			const { in: inPort, out: outPort } = effectivePorts;
+			if (inPort !== null && !isPortType(inPort)) {
+				out = { ok: false, error: `Invalid derived input port type: ${String(inPort)}` };
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
+			if (outPort !== null && !isPortType(outPort)) {
+				out = { ok: false, error: `Invalid derived output port type: ${String(outPort)}` };
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
 
-			// ---- 2) ports (must be valid to commit) ----
-			if (effectivePorts) {
-				const { in: inPort, out: outPort } = effectivePorts;
+			const allowedIn = getAllowedPortsForNode(currentNode as any, 'in');
+			const allowedOut = getAllowedPortsForNode(currentNode as any, 'out');
+			if (inPort !== null && !allowedIn.includes(inPort)) {
+				out = {
+					ok: false,
+					error: `${currentNode.data.kind} derived input port '${String(inPort)}' is not supported`
+				};
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
+			if (outPort !== null && !allowedOut.includes(outPort)) {
+				out = {
+					ok: false,
+					error: `${currentNode.data.kind} derived output port '${String(outPort)}' is not supported`
+				};
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
 
-				if (inPort !== undefined && inPort !== null && !isPortType(inPort)) {
-					out = { ok: false, error: `Invalid input port type: ${String(inPort)}` };
-					return logPush(s, 'warn', out.error!, nodeId);
-				}
-				if (outPort !== undefined && outPort !== null && !isPortType(outPort)) {
-					out = { ok: false, error: `Invalid output port type: ${String(outPort)}` };
-					return logPush(s, 'warn', out.error!, nodeId);
-				}
+			// capture connectivity BEFORE changes
+			const incoming = edges.filter((e) => e.target === nodeId);
+			const outgoing = edges.filter((e) => e.source === nodeId);
 
-				const allowedIn = getAllowedPortsForNode(node as any, 'in');
-				const allowedOut = getAllowedPortsForNode(node as any, 'out');
-				if (inPort !== undefined && inPort !== null && !allowedIn.includes(inPort)) {
-					out = {
-						ok: false,
-						error: `${node.data.kind} input port '${String(inPort)}' is not supported`
-					};
-					return logPush(s, 'warn', out.error!, nodeId);
-				}
-				if (outPort !== undefined && outPort !== null && !allowedOut.includes(outPort)) {
-					out = {
-						ok: false,
-						error: `${node.data.kind} output port '${String(outPort)}' is not supported`
-					};
-					return logPush(s, 'warn', out.error!, nodeId);
-				}
-
-				// capture connectivity BEFORE changes
-				const incoming = edges.filter((e) => e.target === nodeId);
-				const outgoing = edges.filter((e) => e.source === nodeId);
-
-				nodes = nodes.map((n) => {
-					if (n.id !== nodeId) return n;
-
-					const curPorts = n.data.ports ?? {};
-					const mergedPorts = {
-						in: inPort !== undefined ? inPort : (curPorts.in ?? null),
-						out: outPort !== undefined ? outPort : (curPorts.out ?? null)
-					};
-
-					return {
-						...n,
-						data: {
-							...n.data,
-							ports: mergedPorts,
-							meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-						}
-					};
-				});
-
-				// NOW read what we actually set
-				const updatedNode = nodes.find((n) => n.id === nodeId)!;
-				const pin = updatedNode.data.ports?.in ?? null;
-				const pout = updatedNode.data.ports?.out ?? null;
-				const outPortChanged = previousOutPort !== (pout as PortType | null);
-
-				if (updatedNode.data.kind === 'component') {
-					const reconciled = reconcileComponentOutgoingEdges(
-						nodeId,
-						updatedNode as Node<PipelineNodeData>,
-						edges,
-						previousComponentOutputNames
-					);
-					edges = reconciled.edges;
-					if (reconciled.removedIds.length) {
-						removedEdgeIds = [...removedEdgeIds, ...reconciled.removedIds];
+			nodes = nodes.map((n) => {
+				if (n.id !== nodeId) return n;
+				return {
+					...n,
+					data: {
+						...n.data,
+						ports: {
+							in: inPort,
+							out: outPort
+						},
+						meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 					}
-				}
+				};
+			});
 
-				// Source output port controls execution output mode and must stay in sync with params.
-				if (outPortChanged && updatedNode.data.kind === 'source') {
-					const nextMode = sourceOutputModeForPort(pout as PortType | null);
-					if (!nextMode) {
-						out = { ok: false, error: `Unsupported source output port '${String(pout)}'` };
-						return logPush(s, 'warn', out.error!, nodeId);
-					}
-					const existingOutput = ((updatedNode.data.params as any)?.output ?? {}) as Record<string, unknown>;
-					const paramsPatch = { output: { ...existingOutput, mode: nextMode } };
-					const paramsRes = updateNodeParamsValidated(nodes, nodeId, paramsPatch);
-					if (paramsRes.error) {
-						out = { ok: false, error: paramsRes.error };
-						return logPush(s, 'error', paramsRes.error, nodeId);
-					}
-					nodes = paramsRes.nodes;
-					invalidateFromPortChange = true;
-				}
+			// NOW read what we actually set
+			const updatedNode = nodes.find((n) => n.id === nodeId)!;
+			const pin = updatedNode.data.ports?.in ?? null;
+			const pout = updatedNode.data.ports?.out ?? null;
+			const portsChanged = previousPorts.in !== pin || previousPorts.out !== pout;
 
-				// Invariant: cannot null a port that is currently used by edges
-				if (incoming.length > 0 && pin == null) {
-					out = {
-						ok: false,
-						error: 'Cannot set input port to null while node has incoming edges.'
-					};
-					return logPush(s, 'warn', out.error!, nodeId);
+			if (updatedNode.data.kind === 'component') {
+				const reconciled = reconcileComponentOutgoingEdges(
+					nodeId,
+					updatedNode as Node<PipelineNodeData>,
+					edges,
+					previousComponentOutputNames
+				);
+				edges = reconciled.edges;
+				if (reconciled.removedIds.length) {
+					removedEdgeIds = [...removedEdgeIds, ...reconciled.removedIds];
 				}
-				if (outgoing.length > 0 && pout == null && updatedNode.data.kind !== 'component') {
-					out = {
-						ok: false,
-						error: 'Cannot set output port to null while node has outgoing edges.'
-					};
-					return logPush(s, 'warn', out.error!, nodeId);
-				}
+			}
 
-				const pr = pruneAndRecontractEdgesStrict(nodes, edges);
-				if (pr.ok === false) {
-					out = { ok: false, error: pr.error };
-					return logPush(s, 'warn', pr.error, nodeId);
-				}
-				edges = pr.edges;
-				if (pr.prunedIds?.length) {
-					removedEdgeIds = [...removedEdgeIds, ...pr.prunedIds];
-				}
+			// Invariant: cannot null a port that is currently used by edges
+			if (incoming.length > 0 && pin == null) {
+				out = {
+					ok: false,
+					error: 'Cannot set input port to null while node has incoming edges.'
+				};
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
+			if (outgoing.length > 0 && pout == null && updatedNode.data.kind !== 'component') {
+				out = {
+					ok: false,
+					error: 'Cannot set output port to null while node has outgoing edges.'
+				};
+				return logPush(s, 'warn', out.error!, nodeId);
+			}
+
+			const pr = pruneAndRecontractEdgesStrict(nodes, edges);
+			if (pr.ok === false) {
+				out = { ok: false, error: pr.error };
+				return logPush(s, 'warn', pr.error, nodeId);
+			}
+			edges = pr.edges;
+			if (pr.prunedIds?.length) {
+				removedEdgeIds = [...removedEdgeIds, ...pr.prunedIds];
+			}
+			if (portsChanged) {
+				invalidateFromPortChange = true;
 			}
 			if (removedEdgeIds.length) {
 				const uniq = Array.from(new Set(removedEdgeIds.filter((id) => id.length > 0)));
@@ -3697,14 +3753,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		// graphStore.ts (inside your graphStore object)
 		setTransformKind(nodeId: string, nextKind: TransformKind) {
 			const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
-			const nextPorts: { in: PortType; out: PortType } =
-				nextKind === 'json_to_table'
-					? { in: 'json', out: 'table' }
-					: nextKind === 'text_to_table'
-						? { in: 'text', out: 'table' }
-						: nextKind === 'table_to_json'
-							? { in: 'table', out: 'json' }
-							: { in: 'table', out: 'table' };
 
 			// 1) update structural subtype on the node
 			update((s) => {
@@ -3718,7 +3766,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							data: {
 								...n.data,
 								transformKind: nextKind, // âœ… structural
-								ports: nextPorts,
 								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 							}
 						}
@@ -3788,13 +3835,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		syncFromCanvas(nodes: Node<PipelineNodeData>[], edges: Edge<PipelineEdgeData>[]) {
 			update((s) => {
 				const nextEdges = shouldPreserveStoreEdgesOnCanvasSync(s.edges, edges) ? s.edges : edges;
+				const normalized = normalizeGraphForComponentMigration(nodes, nextEdges);
 				// avoid needless churn if same references
-				if (s.nodes === nodes && s.edges === nextEdges) return s;
+				if (s.nodes === normalized.nodes && s.edges === normalized.edges) return s;
 				const next = {
 					...s,
-					nodes,
-					edges: nextEdges,
-					nodeBindings: ensureNormalizedBindingsForNodes(nodes, s.nodeBindings ?? {})
+					nodes: normalized.nodes,
+					edges: normalized.edges,
+					nodeBindings: ensureNormalizedBindingsForNodes(normalized.nodes, s.nodeBindings ?? {})
 				};
 				persist(next);
 				return next;
@@ -4936,10 +4984,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					},
 					api
 				};
-				const portsPatch = derivePortsFromComponentApi(api);
 				const result = updateNodeConfigImpl(nodeId, {
-					params: paramsPatch,
-					ports: portsPatch
+					params: paramsPatch
 				});
 				if (!result.ok) return { ok: false, reason: 'update_failed' as const, error: result.error };
 				const revisions = await listComponentRevisions(cid, 20, 0);
