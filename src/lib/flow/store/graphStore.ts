@@ -51,7 +51,7 @@ import {
 } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
-import { getAllowedPortsForNode, getStrictSchemaFeatureFlags } from '$lib/flow/portCapabilities';
+import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
 import {
 	buildRunCreateRequest,
 	computeGraphFreshness,
@@ -2613,11 +2613,6 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	if (outPort == null || inPort == null) {
 		return { ok: false, reason: 'missing_port_type' };
 	}
-	const strictV2 = Boolean(getStrictSchemaFeatureFlags().STRICT_SCHEMA_EDGE_CHECKS_V2 ?? true);
-	if (!strictV2) {
-		if (outPort !== inPort) return { ok: false, reason: 'type_mismatch' };
-		return { ok: true, out: outPort, in: inPort };
-	}
 
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
@@ -3898,7 +3893,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				adapterKind?: AdapterTransformKind | null;
 			} = { ok: true };
 			update((s) => {
-				const strictV2 = Boolean(getStrictSchemaFeatureFlags().STRICT_SCHEMA_EDGE_CHECKS_V2 ?? true);
 				// basic sanity checks
 				const sourceExists = s.nodes.some((n) => n.id === edge.source);
 				const targetExists = s.nodes.some((n) => n.id === edge.target);
@@ -3974,11 +3968,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						error:
 							chk.reason === 'type_mismatch'
 								? `Incompatible schemas${chk.suggestion ? `. ${chk.suggestion}` : ''}`
+								: chk.reason === 'typed_schema_missing'
+									? `Missing required typed schema coverage: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
 								: chk.reason === 'schema_mismatch'
 									? `Missing required columns: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
 								: 'Cannot resolve port types for this connection'
 					};
-					if (!strictV2) return s;
 					return logPush(
 						s,
 						'info',
@@ -4022,13 +4017,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 				const decision = adapterKind ? 'adapter' : coercion.mode === 'native' ? 'native' : 'coerced';
 				let nextState: GraphState = { ...s, edges: [...s.edges, nextEdge] };
-				if (strictV2) {
-					nextState = logPush(
-						nextState,
-						'info',
-						`[schema-edge-checks-v2] decision=${decision} edge=${id} source=${providedType} target=${requiredType}`
-					);
-				}
+				nextState = logPush(
+					nextState,
+					'info',
+					`[schema-edge-checks-v2] decision=${decision} edge=${id} source=${providedType} target=${requiredType}`
+				);
 				const next = logPush(nextState, 'info', `Added edge ${id}`);
 				persist(next);
 				out.id = id;

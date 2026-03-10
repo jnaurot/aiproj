@@ -4,7 +4,7 @@ import { __setStrictSchemaFeatureFlagsForTest } from '$lib/flow/portCapabilities
 import { graphStore } from './graphStore';
 
 describe('graphStore strict schema v2 rollout flag', () => {
-	it('uses legacy strict port equality when STRICT_SCHEMA_EDGE_CHECKS_V2 is disabled', () => {
+	it('uses schema-first compatibility when STRICT_SCHEMA_EDGE_CHECKS_V2 is disabled', () => {
 		__setStrictSchemaFeatureFlagsForTest({ STRICT_SCHEMA_EDGE_CHECKS_V2: false });
 		graphStore.hardResetGraph();
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
@@ -23,7 +23,7 @@ describe('graphStore strict schema v2 rollout flag', () => {
 			target: transformId,
 			data: { exec: 'idle' }
 		} as any);
-		expect(added.ok).toBe(false);
+		expect(added.ok).toBe(true);
 		__setStrictSchemaFeatureFlagsForTest({ STRICT_SCHEMA_EDGE_CHECKS_V2: true });
 	});
 

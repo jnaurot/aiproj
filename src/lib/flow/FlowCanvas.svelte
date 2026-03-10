@@ -1217,27 +1217,6 @@ async function scrollToBottom() {
 		}
 	}
 
-	function coercePortType(t: any): PortType | null {
-		// normalize anything that might exist in params (e.g., markdown)
-		if (t === 'markdown') return 'text';
-		if (t === 'table' || t === 'text' || t === 'json' || t === 'binary' || t === 'embeddings')
-			return t;
-		return null;
-	}
-
-	function getComponentOutputType(nodeId: string, sourceHandle?: string | null): PortType | null {
-		const n = nodes.find((x) => x.id === nodeId);
-		if (!n || n.data.kind !== 'component') return null;
-		const handle = String(sourceHandle ?? 'out').trim() || 'out';
-		if (handle === 'out') return n.data.ports?.out ?? null;
-		const outputs = Array.isArray((n.data as any)?.params?.api?.outputs)
-			? ((n.data as any).params.api.outputs as any[])
-			: [];
-		const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
-		const pt = String((decl as any)?.portType ?? '').trim().toLowerCase();
-		return coercePortType(pt);
-	}
-
 	function componentOutputCount(nodeId: string): number {
 		const n = nodes.find((x) => x.id === nodeId);
 		if (!n || n.data.kind !== 'component') return 0;
@@ -1247,18 +1226,6 @@ async function scrollToBottom() {
 		return outputs
 			.map((o) => String((o as any)?.name ?? '').trim())
 			.filter((name) => name.length > 0).length;
-	}
-
-	function getType(nodeId: string, whichPort: string, handleId?: string | null): PortType | null {
-		const n = nodes.find((x) => x.id === nodeId);
-		if (!n) return null;
-		if (whichPort === 'out' && n.data.kind === 'component') {
-			return getComponentOutputType(nodeId, handleId);
-		}
-
-		// const hid = handleId ?? 'in';
-		// const t = (n.data as any)?.ports?.[in] ?? (n.data as any)?.inputs?.in;
-		return n.data.ports[whichPort];
 	}
 
 	function isValidConnection(conn: Connection) {
@@ -1285,20 +1252,11 @@ async function scrollToBottom() {
 		}
 		if (reaches(conn.target, conn.source)) return false;
 
-		//port checking out === in
-		const outPort = getType(conn.source, 'out', conn.sourceHandle);
-		const inPort = getType(conn.target, 'in', conn.targetHandle);
-		if (!outPort || !inPort) return false;
-
 		return true;
 	}
 
 	function onconnect(conn: Connection) {
 		if (!isValidConnection(conn)) return;
-
-		const outPort = getType(conn.source, 'out', conn.sourceHandle);
-		const inPort = getType(conn.target, 'in', conn.targetHandle);
-		if (!outPort || !inPort) return;
 
 		const e: Edge<PipelineEdgeData> = {
 			id: `e_${crypto.randomUUID()}`,
@@ -1309,7 +1267,7 @@ async function scrollToBottom() {
 			markerEnd: { type: MarkerType.ArrowClosed },
 			data: {
 				exec: 'idle',
-				contract: { in: inPort, out: outPort } // ✅ persisted here
+				contract: {} // graphStore.addEdge computes schema contract
 			}
 		};
 
