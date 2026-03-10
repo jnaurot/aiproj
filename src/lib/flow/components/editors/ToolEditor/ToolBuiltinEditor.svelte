@@ -261,6 +261,24 @@
 
 	.operationSelect {
 		width: 100%;
+		border-color: rgba(59, 130, 246, 0.45);
+		background:
+			linear-gradient(180deg, rgba(59, 130, 246, 0.16), rgba(14, 23, 44, 0.72)),
+			rgba(0, 0, 0, 0.2);
+		box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.16);
+	}
+
+	.operationSelect:focus {
+		outline: none;
+		border-color: rgba(96, 165, 250, 0.8);
+		box-shadow:
+			0 0 0 2px rgba(37, 99, 235, 0.28),
+			inset 0 0 0 1px rgba(96, 165, 250, 0.22);
+	}
+
+	.operationSelect option {
+		background: #0b1220;
+		color: #e5edff;
 	}
 
 	.includedLibsBlock {
