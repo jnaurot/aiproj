@@ -2656,7 +2656,10 @@ function isSchemaCompatible(
 ): SchemaCompatibility {
 	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
 	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
-	const coercion = evaluateSchemaCoercion(providedType, requiredType);
+	const coercionPolicy = String(requiredSchema?.coercion_policy ?? 'safe_widening')
+		.trim()
+		.toLowerCase();
+	const coercion = evaluateSchemaCoercion(providedType, requiredType, coercionPolicy);
 	if (!coercion.allowed) {
 		const adapterKind = adapterKindForTypes(providedType, requiredType);
 		return {
@@ -2771,7 +2774,24 @@ function buildProvidedSchema(
 }
 
 function buildRequiredSchema(node: Node<PipelineNodeData>): Record<string, any> {
-	return (targetPayloadHint(node as any) as Record<string, any> | undefined) ?? { type: 'unknown' };
+	const payload = (targetPayloadHint(node as any) as Record<string, any> | undefined) ?? { type: 'unknown' };
+	const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
+	const policyRaw =
+		params?.coercion_policy ??
+		params?.coercionPolicy ??
+		(params?.coercion && typeof params.coercion === 'object' ? (params.coercion as any).policy : undefined) ??
+		'safe_widening';
+	const policy =
+		String(policyRaw ?? 'safe_widening').trim().toLowerCase() === 'allow_lossy'
+			? 'allow_lossy'
+			: String(policyRaw ?? 'safe_widening').trim().toLowerCase() === 'strict' ||
+				  String(policyRaw ?? 'safe_widening').trim().toLowerCase() === 'forbid'
+				? 'strict'
+				: 'safe_widening';
+	return {
+		...payload,
+		coercion_policy: policy
+	};
 }
 
 function computeEdgeSchemaConstraintsInternal(
@@ -2930,7 +2950,7 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	const sourcePayload = sourceNode
 		? sourcePayloadHint(sourceNode as any, 'out', String((e as any).sourceHandle ?? 'out'))
 		: undefined;
-	const targetPayload = targetNode ? targetPayloadHint(targetNode as any) : undefined;
+	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any) : undefined;
 	if (!sourcePayload || !targetPayload) {
 		return { ok: false, reason: 'missing_port_type' };
 	}

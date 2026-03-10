@@ -132,4 +132,68 @@ describe('graphStore edge schema compatibility', () => {
 		} as any);
 		expect(added.ok).toBe(true);
 	});
+
+	it('respects coercion policy by blocking lossy conversions unless allow_lossy is set', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
+		const llmId = graphStore.addNode('llm', { x: 240, y: 0 });
+
+		const sourcePatch = graphStore.setSourceKind(sourceId, 'api');
+		expect(sourcePatch.ok).toBe(true);
+
+		const llmPatch = graphStore.updateNodeConfig(llmId, {
+			params: {
+				output: { mode: 'text' }
+			}
+		});
+		expect(llmPatch.ok).toBe(true);
+
+		const blocked = graphStore.addEdge({
+			id: 'e_lossy_blocked',
+			source: sourceId,
+			target: llmId,
+			data: { exec: 'idle' }
+		} as any);
+		expect(blocked.ok).toBe(false);
+
+		const reload = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: sourceId,
+						type: 'default',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'source',
+							sourceKind: 'api',
+							params: {},
+							status: 'idle'
+						}
+					},
+					{
+						id: llmId,
+						type: 'default',
+						position: { x: 240, y: 0 },
+						data: {
+							kind: 'llm',
+							llmKind: 'openai',
+							params: { output: { mode: 'text' }, coercion_policy: 'allow_lossy' },
+							status: 'idle'
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_lossy_policy'
+		);
+		expect(reload.ok).toBe(true);
+
+		const allowed = graphStore.addEdge({
+			id: 'e_lossy_allowed',
+			source: sourceId,
+			target: llmId,
+			data: { exec: 'idle' }
+		} as any);
+		expect(allowed.ok).toBe(true);
+	});
 });

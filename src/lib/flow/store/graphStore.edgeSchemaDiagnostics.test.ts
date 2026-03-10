@@ -56,7 +56,7 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'llm',
 					ports: { in: 'text', out: 'text' },
-					params: {}
+					params: { coercion_policy: 'allow_lossy' }
 				}
 			}
 		];
