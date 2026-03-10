@@ -1,3 +1,5 @@
+import base64
+import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -462,6 +464,19 @@ async def test_exec_tool_builtin_ml_sklearn_train_classifier():
 	assert isinstance(payload.get("metrics_train"), dict)
 	assert "accuracy" in payload.get("metrics_train", {})
 	assert isinstance(payload.get("model_spec"), dict)
+	model_package = payload.get("model_package")
+	assert isinstance(model_package, dict)
+	assert model_package.get("format") == "aip.model_package.v1"
+	files = model_package.get("files") or {}
+	assert isinstance(files, dict)
+	assert {"model.bin", "signature.json", "env_lock.json"}.issubset(set(files.keys()))
+	model_bin = files.get("model.bin") or {}
+	assert isinstance(model_bin, dict)
+	model_bytes = base64.b64decode(str(model_bin.get("content_b64") or "").encode("ascii"), validate=False)
+	assert len(model_bytes) > 0
+	signature_file = files.get("signature.json") or {}
+	assert isinstance((signature_file.get("content") or {}), dict)
+	assert ((signature_file.get("content") or {}).get("format")) == "aip.model_signature.v1"
 	analysis_artifacts = payload.get("analysis_artifacts") or []
 	assert isinstance(analysis_artifacts, list)
 	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
@@ -511,6 +526,16 @@ async def test_exec_tool_builtin_ml_sklearn_train_regressor():
 	assert isinstance(payload.get("metrics_train"), dict)
 	assert "rmse" in payload.get("metrics_train", {})
 	assert isinstance(payload.get("model_spec"), dict)
+	model_package = payload.get("model_package")
+	assert isinstance(model_package, dict)
+	files = model_package.get("files") or {}
+	assert isinstance(files, dict)
+	assert {"model.bin", "signature.json", "env_lock.json"}.issubset(set(files.keys()))
+	signature_file = files.get("signature.json") or {}
+	assert isinstance(signature_file, dict)
+	signature_content = signature_file.get("content") or {}
+	assert isinstance(signature_content, dict)
+	assert signature_content.get("task") == "regression"
 	analysis_artifacts = payload.get("analysis_artifacts") or []
 	assert isinstance(analysis_artifacts, list)
 	artifact_names = {str(a.get("name")) for a in analysis_artifacts if isinstance(a, dict)}
@@ -643,6 +668,130 @@ async def test_exec_tool_builtin_ml_sklearn_evaluate_with_calibration():
 	calib_rows = calibration.get("rows") or []
 	assert isinstance(calib_rows, list)
 	assert len(calib_rows) == 4
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_package_predict_roundtrip():
+	pytest.importorskip("sklearn")
+	pytest.importorskip("joblib")
+	train_node = {
+		"id": "n_builtin_ml_train_pkg_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.train_classifier",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 0.1, "x2": 1.1, "label": "A"},
+							{"x1": 0.2, "x2": 1.0, "label": "A"},
+							{"x1": 1.2, "x2": 0.1, "label": "B"},
+							{"x1": 1.1, "x2": 0.2, "label": "B"},
+						],
+						"label_col": "label",
+						"feature_cols": ["x1", "x2"],
+					},
+				},
+			}
+		},
+	}
+	train_result = await exec_tool("run_ml_train_pkg_cls", train_node, _ctx())
+	assert train_result.status == "succeeded"
+	train_payload = (train_result.data or {}).get("payload")
+	assert isinstance(train_payload, dict)
+	model_package = train_payload.get("model_package")
+	assert isinstance(model_package, dict)
+
+	files = model_package.get("files") or {}
+	model_bin = files.get("model.bin") or {}
+	model_bytes = base64.b64decode(str(model_bin.get("content_b64") or "").encode("ascii"), validate=False)
+	assert len(model_bytes) > 0
+	assert io.BytesIO(model_bytes).getbuffer().nbytes > 0
+
+	predict_node = {
+		"id": "n_builtin_ml_predict_pkg_cls",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.package_predict",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 0.12, "x2": 1.05},
+							{"x1": 1.18, "x2": 0.12},
+						],
+						"model_package": model_package,
+					},
+				},
+			}
+		},
+	}
+	predict_result = await exec_tool("run_ml_predict_pkg_cls", predict_node, _ctx())
+	assert predict_result.status == "succeeded"
+	predict_payload = (predict_result.data or {}).get("payload")
+	assert isinstance(predict_payload, dict)
+	assert predict_payload.get("task") == "classification"
+	predictions = predict_payload.get("predictions") or []
+	assert isinstance(predictions, list)
+	assert len(predictions) == 2
+	assert all("prediction" in row for row in predictions if isinstance(row, dict))
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_ml_sklearn_package_predict_signature_mismatch_fails():
+	pytest.importorskip("sklearn")
+	train_node = {
+		"id": "n_builtin_ml_train_pkg_reg",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.train_regressor",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 1, "x2": 2, "y": 5},
+							{"x1": 2, "x2": 1, "y": 5},
+							{"x1": 3, "x2": 4, "y": 11},
+							{"x1": 4, "x2": 3, "y": 11},
+						],
+						"label_col": "y",
+						"feature_cols": ["x1", "x2"],
+					},
+				},
+			}
+		},
+	}
+	train_result = await exec_tool("run_ml_train_pkg_reg", train_node, _ctx())
+	assert train_result.status == "succeeded"
+	train_payload = (train_result.data or {}).get("payload")
+	assert isinstance(train_payload, dict)
+	model_package = train_payload.get("model_package")
+	assert isinstance(model_package, dict)
+
+	predict_node = {
+		"id": "n_builtin_ml_predict_pkg_reg_fail",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "ml.sklearn.package_predict",
+					"profileId": "ml",
+					"args": {
+						"rows": [
+							{"x1": 1.5},
+						],
+						"model_package": model_package,
+					},
+				},
+			}
+		},
+	}
+	predict_result = await exec_tool("run_ml_predict_pkg_reg_fail", predict_node, _ctx())
+	assert predict_result.status == "failed"
+	assert "signature mismatch" in str(predict_result.error or "").lower()
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import importlib
 import io
 import json
@@ -9,6 +10,7 @@ import os
 import re
 import subprocess
 import shutil
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -670,6 +672,231 @@ def _ml_prediction_vector(args: Dict[str, Any], rows: list[dict[str, Any]], pred
     return values
 
 
+def _sha256_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _safe_pkg_version(module_name: str) -> Optional[str]:
+    if not module_name:
+        return None
+    try:
+        return str(importlib.metadata.version(module_name))
+    except Exception:
+        return None
+
+
+def _build_env_lock(*, package_hints: list[str]) -> Dict[str, Any]:
+    versions: Dict[str, str] = {}
+    for module_name in package_hints:
+        ver = _safe_pkg_version(module_name)
+        if ver:
+            versions[module_name] = ver
+    return {
+        "format": "aip.env_lock.v1",
+        "python_version": sys.version.split(" ")[0],
+        "packages": versions,
+    }
+
+
+def _feature_value_type(rows: list[dict[str, Any]], feature_col: str) -> str:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if feature_col not in row:
+            continue
+        value = row.get(feature_col)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return "number"
+        return "string"
+    return "number"
+
+
+def _build_model_signature(
+    *,
+    task: str,
+    algorithm: str,
+    feature_cols: list[str],
+    label_col: str,
+    rows: list[dict[str, Any]],
+    classes: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    input_schema = [
+        {
+            "name": str(col),
+            "type": _feature_value_type(rows, str(col)),
+            "required": True,
+        }
+        for col in feature_cols
+    ]
+    output_schema = [{"name": "prediction", "type": "number" if task == "regression" else "string"}]
+    if task == "classification":
+        output_schema.append({"name": "pred_proba", "type": "number"})
+    signature: Dict[str, Any] = {
+        "format": "aip.model_signature.v1",
+        "task": task,
+        "algorithm": algorithm,
+        "feature_cols": [str(col) for col in feature_cols],
+        "label_col": str(label_col),
+        "inputs": input_schema,
+        "outputs": output_schema,
+    }
+    if classes:
+        signature["classes"] = [str(c) for c in classes]
+    return signature
+
+
+def _build_standard_model_package(
+    *,
+    model: Any,
+    task: str,
+    algorithm: str,
+    feature_cols: list[str],
+    label_col: str,
+    rows: list[dict[str, Any]],
+    classes: Optional[list[str]] = None,
+) -> Dict[str, Any]:
+    import joblib
+
+    model_bytes_io = io.BytesIO()
+    joblib.dump(model, model_bytes_io)
+    model_bytes = model_bytes_io.getvalue()
+    signature = _build_model_signature(
+        task=task,
+        algorithm=algorithm,
+        feature_cols=feature_cols,
+        label_col=label_col,
+        rows=rows,
+        classes=classes,
+    )
+    env_lock = _build_env_lock(package_hints=["numpy", "scikit-learn", "joblib"])
+    files: Dict[str, Any] = {
+        "model.bin": {
+            "encoding": "base64",
+            "serializer": "joblib",
+            "mime_type": "application/octet-stream",
+            "sha256": _sha256_bytes(model_bytes),
+            "content_b64": base64.b64encode(model_bytes).decode("ascii"),
+        },
+        "signature.json": {
+            "mime_type": "application/json",
+            "sha256": _sha256_bytes(_canonical_json_bytes(signature)),
+            "content": signature,
+        },
+        "env_lock.json": {
+            "mime_type": "application/json",
+            "sha256": _sha256_bytes(_canonical_json_bytes(env_lock)),
+            "content": env_lock,
+        },
+    }
+    available_formats = ["joblib"]
+    try:
+        from skl2onnx import convert_sklearn
+        from skl2onnx.common.data_types import FloatTensorType
+
+        onnx_model = convert_sklearn(
+            model,
+            initial_types=[("input", FloatTensorType([None, max(1, len(feature_cols))]))],
+        )
+        onnx_bytes = onnx_model.SerializeToString()
+        files["model.onnx"] = {
+            "encoding": "base64",
+            "mime_type": "application/octet-stream",
+            "sha256": _sha256_bytes(onnx_bytes),
+            "content_b64": base64.b64encode(onnx_bytes).decode("ascii"),
+        }
+        available_formats.append("onnx")
+    except Exception:
+        pass
+    return {
+        "format": "aip.model_package.v1",
+        "primary_model_file": "model.bin",
+        "available_formats": available_formats,
+        "files": files,
+    }
+
+
+def _extract_model_package_payload(args: Dict[str, Any], input_value: Any) -> Dict[str, Any]:
+    direct = args.get("model_package")
+    if isinstance(direct, dict):
+        return direct
+    package = args.get("package")
+    if isinstance(package, dict):
+        return package
+    if isinstance(input_value, dict):
+        if isinstance(input_value.get("model_package"), dict):
+            return input_value.get("model_package")
+        if str(input_value.get("format") or "").startswith("aip.model_package"):
+            return input_value
+    raise ValueError("ml.sklearn.package_predict requires args.model_package or args.package")
+
+
+def _load_model_and_signature_from_package(model_package: Dict[str, Any]) -> tuple[Any, Dict[str, Any]]:
+    import joblib
+
+    files = model_package.get("files") if isinstance(model_package.get("files"), dict) else {}
+    model_bin = files.get("model.bin") if isinstance(files.get("model.bin"), dict) else {}
+    model_b64 = str(model_bin.get("content_b64") or "").strip()
+    if not model_b64:
+        raise ValueError("model package missing files['model.bin'].content_b64")
+    try:
+        model_bytes = base64.b64decode(model_b64.encode("ascii"), validate=False)
+    except Exception as exc:
+        raise ValueError("model package model.bin is not valid base64") from exc
+    expected_hash = str(model_bin.get("sha256") or "").strip()
+    if expected_hash and _sha256_bytes(model_bytes) != expected_hash:
+        raise ValueError("model package model.bin sha256 mismatch")
+    model = joblib.load(io.BytesIO(model_bytes))
+
+    sig_entry = files.get("signature.json") if isinstance(files.get("signature.json"), dict) else {}
+    signature = sig_entry.get("content") if isinstance(sig_entry.get("content"), dict) else None
+    if not isinstance(signature, dict):
+        raise ValueError("model package missing files['signature.json'].content")
+    sig_hash = str(sig_entry.get("sha256") or "").strip()
+    if sig_hash and _sha256_bytes(_canonical_json_bytes(signature)) != sig_hash:
+        raise ValueError("model package signature.json sha256 mismatch")
+    return model, signature
+
+
+def _validate_rows_against_signature(rows: list[dict[str, Any]], signature: Dict[str, Any]) -> list[str]:
+    feature_cols = signature.get("feature_cols") if isinstance(signature.get("feature_cols"), list) else []
+    normalized_cols = [str(col) for col in feature_cols]
+    missing = [col for col in normalized_cols if any(not isinstance(r, dict) or col not in r for r in rows)]
+    if missing:
+        missing_sorted = ", ".join(sorted(set(missing)))
+        raise ValueError(f"Signature mismatch: missing required feature columns: {missing_sorted}")
+    expected_types: Dict[str, str] = {}
+    for spec in signature.get("inputs") if isinstance(signature.get("inputs"), list) else []:
+        if not isinstance(spec, dict):
+            continue
+        col_name = str(spec.get("name") or "").strip()
+        if not col_name:
+            continue
+        expected_types[col_name] = str(spec.get("type") or "").strip().lower()
+    for row_idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"Input row {row_idx} is not an object")
+        for col in normalized_cols:
+            expected = expected_types.get(col)
+            if expected != "number":
+                continue
+            value = row.get(col)
+            try:
+                float(value)
+            except Exception as exc:
+                raise ValueError(
+                    f"Signature mismatch: feature '{col}' at row {row_idx} must be numeric"
+                ) from exc
+    return normalized_cols
+
+
 def _analysis_table_artifact(
     *,
     name: str,
@@ -991,13 +1218,24 @@ async def _exec_builtin_ml_tool(
                 bins=int(args.get("calibration_bins") or 10),
             ),
         ]
+        algorithm = "sklearn.linear_model.LogisticRegression"
+        classes = [str(c) for c in list(model.classes_)]
+        model_package = _build_standard_model_package(
+            model=model,
+            task="classification",
+            algorithm=algorithm,
+            feature_cols=feature_cols,
+            label_col=label_col,
+            rows=rows,
+            classes=classes,
+        )
         return {
             "task": "classification",
             "model": "LogisticRegression",
             "row_count": len(rows),
             "feature_cols": feature_cols,
             "label_col": label_col,
-            "classes": [str(c) for c in list(model.classes_)],
+            "classes": classes,
             "metrics_train": {
                 "accuracy": float(accuracy_score(y, pred)),
                 "precision": float(precision_score(y, pred, average=average, zero_division=0)),
@@ -1005,15 +1243,16 @@ async def _exec_builtin_ml_tool(
                 "f1": float(f1_score(y, pred, average=average, zero_division=0)),
             },
             "model_spec": {
-                "algorithm": "sklearn.linear_model.LogisticRegression",
+                "algorithm": algorithm,
                 "params": {"max_iter": int(args.get("max_iter") or 200)},
                 "feature_cols": feature_cols,
                 "label_col": label_col,
-                "classes": [str(c) for c in list(model.classes_)],
+                "classes": classes,
                 "coef": coef.tolist() if hasattr(coef, "tolist") else None,
                 "intercept": intercept.tolist() if hasattr(intercept, "tolist") else None,
             },
             "analysis_artifacts": analysis_artifacts,
+            "model_package": model_package,
         }
 
     if tool_id == "ml.sklearn.train_regressor":
@@ -1042,6 +1281,15 @@ async def _exec_builtin_ml_tool(
             _feature_importance_artifact(feature_cols=feature_cols, importances=coef_for_importance),
             _regression_residuals_artifact(y_true=[float(v) for v in y], y_pred=[float(v) for v in pred_list]),
         ]
+        algorithm = "sklearn.linear_model.LinearRegression"
+        model_package = _build_standard_model_package(
+            model=model,
+            task="regression",
+            algorithm=algorithm,
+            feature_cols=feature_cols,
+            label_col=label_col,
+            rows=rows,
+        )
         return {
             "task": "regression",
             "model": "LinearRegression",
@@ -1055,7 +1303,7 @@ async def _exec_builtin_ml_tool(
                 "rmse": float(mse**0.5),
             },
             "model_spec": {
-                "algorithm": "sklearn.linear_model.LinearRegression",
+                "algorithm": algorithm,
                 "params": {},
                 "feature_cols": feature_cols,
                 "label_col": label_col,
@@ -1063,6 +1311,50 @@ async def _exec_builtin_ml_tool(
                 "intercept": float(intercept) if intercept is not None else None,
             },
             "analysis_artifacts": analysis_artifacts,
+            "model_package": model_package,
+        }
+
+    if tool_id == "ml.sklearn.package_predict":
+        model_package = _extract_model_package_payload(args, input_value)
+        model, signature = _load_model_and_signature_from_package(model_package)
+        feature_cols = _validate_rows_against_signature(rows, signature)
+        x = _ml_feature_matrix(rows, feature_cols)
+        predictions = model.predict(x)
+        prediction_values = predictions.tolist() if hasattr(predictions, "tolist") else list(predictions)
+        task = str(signature.get("task") or "unknown").strip().lower()
+        result_rows: list[dict[str, Any]] = []
+        probs: list[float] = []
+        if task == "classification" and hasattr(model, "predict_proba"):
+            try:
+                raw_proba = model.predict_proba(x)
+                proba_list = raw_proba.tolist() if hasattr(raw_proba, "tolist") else list(raw_proba)
+                classes = signature.get("classes") if isinstance(signature.get("classes"), list) else []
+                pos_class = str(classes[-1]) if classes else ""
+                class_to_idx: Dict[str, int] = {}
+                model_classes = getattr(model, "classes_", None)
+                if model_classes is not None:
+                    for idx, cls in enumerate(list(model_classes)):
+                        class_to_idx[str(cls)] = idx
+                pos_idx = class_to_idx.get(pos_class, len(class_to_idx) - 1 if class_to_idx else 0)
+                for row in proba_list:
+                    if not isinstance(row, list) or not row:
+                        probs.append(0.0)
+                        continue
+                    idx = min(max(0, int(pos_idx)), len(row) - 1)
+                    probs.append(float(row[idx]))
+            except Exception:
+                probs = []
+        for idx, pred in enumerate(prediction_values):
+            row_out: Dict[str, Any] = {"prediction": pred}
+            if idx < len(probs):
+                row_out["pred_proba"] = probs[idx]
+            result_rows.append(row_out)
+        return {
+            "task": task,
+            "row_count": len(result_rows),
+            "feature_cols": feature_cols,
+            "signature": signature,
+            "predictions": result_rows,
         }
 
     if tool_id == "ml.sklearn.cross_validate":

@@ -151,7 +151,7 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 		id: 'ml.sklearn.train_classifier',
 		label: 'Train Classifier',
 		description:
-			'Train LogisticRegression and emit metrics + model spec + typed analysis artifacts (feature importance, confusion matrix, calibration).',
+			'Train LogisticRegression and emit metrics + model spec + typed analysis artifacts + deployment-ready model_package (model.bin/signature/env_lock).',
 		profiles: ['ml', 'full', 'custom'],
 		defaultArgs: {
 			rows: [
@@ -169,7 +169,7 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 		id: 'ml.sklearn.train_regressor',
 		label: 'Train Regressor',
 		description:
-			'Train LinearRegression and emit metrics + model spec + typed analysis artifacts (feature importance, residuals).',
+			'Train LinearRegression and emit metrics + model spec + typed analysis artifacts + deployment-ready model_package (model.bin/signature/env_lock).',
 		profiles: ['ml', 'full', 'custom'],
 		defaultArgs: {
 			rows: [
@@ -180,6 +180,20 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 			],
 			label_col: 'y',
 			feature_cols: ['x1', 'x2']
+		}
+	},
+	{
+		id: 'ml.sklearn.package_predict',
+		label: 'Package Predict',
+		description:
+			'Load a standardized model_package (joblib/optional onnx) and run signature-enforced inference on input rows.',
+		profiles: ['ml', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ x1: 0.1, x2: 1.1 },
+				{ x1: 1.2, x2: 0.1 }
+			],
+			model_package: {}
 		}
 	},
 	{
