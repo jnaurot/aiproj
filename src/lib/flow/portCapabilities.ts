@@ -17,10 +17,12 @@ let activeFlags: {
 	STRICT_SCHEMA_EDGE_CHECKS: boolean;
 	STRICT_SCHEMA_EDGE_CHECKS_V2: boolean;
 	STRICT_COERCION_POLICY: boolean;
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED: boolean;
 } = {
 	STRICT_SCHEMA_EDGE_CHECKS: true,
 	STRICT_SCHEMA_EDGE_CHECKS_V2: true,
-	STRICT_COERCION_POLICY: true
+	STRICT_COERCION_POLICY: true,
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED: false
 };
 
 function getNodesMap(): Record<string, any> {
@@ -81,10 +83,28 @@ export function getStrictSchemaFeatureFlags(): {
 	return { ...activeFlags };
 }
 
+export function getGraphPersistenceFeatureFlags(): {
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED: boolean;
+} {
+	return {
+		GRAPH_PERSIST_DERIVED_PORTS_OMITTED: Boolean(activeFlags.GRAPH_PERSIST_DERIVED_PORTS_OMITTED)
+	};
+}
+
 export function __setStrictSchemaFeatureFlagsForTest(flags: {
 	STRICT_SCHEMA_EDGE_CHECKS?: boolean;
 	STRICT_SCHEMA_EDGE_CHECKS_V2?: boolean;
 	STRICT_COERCION_POLICY?: boolean;
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED?: boolean;
+}): void {
+	activeFlags = {
+		...activeFlags,
+		...flags
+	};
+}
+
+export function __setGraphPersistenceFeatureFlagsForTest(flags: {
+	GRAPH_PERSIST_DERIVED_PORTS_OMITTED?: boolean;
 }): void {
 	activeFlags = {
 		...activeFlags,
@@ -101,7 +121,10 @@ export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
 		activeFlags = {
 			STRICT_SCHEMA_EDGE_CHECKS: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS ?? true),
 			STRICT_SCHEMA_EDGE_CHECKS_V2: Boolean(response?.featureFlags?.STRICT_SCHEMA_EDGE_CHECKS_V2 ?? true),
-			STRICT_COERCION_POLICY: Boolean(response?.featureFlags?.STRICT_COERCION_POLICY ?? true)
+			STRICT_COERCION_POLICY: Boolean(response?.featureFlags?.STRICT_COERCION_POLICY ?? true),
+			GRAPH_PERSIST_DERIVED_PORTS_OMITTED: Boolean(
+				response?.featureFlags?.GRAPH_PERSIST_DERIVED_PORTS_OMITTED ?? false
+			)
 		};
 		NODE_CAPABILITIES = buildNodeCapabilities();
 	} catch {

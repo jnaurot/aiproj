@@ -51,7 +51,7 @@ import {
 } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
-import { getAllowedPortsForNode } from '$lib/flow/portCapabilities';
+import { getAllowedPortsForNode, getGraphPersistenceFeatureFlags } from '$lib/flow/portCapabilities';
 import {
 	buildRunCreateRequest,
 	computeGraphFreshness,
@@ -1725,15 +1725,47 @@ function stripToDTO(
 	edges: Edge<PipelineEdgeData>[],
 	graphId?: string
 ): PipelineGraphDTO {
+	const shouldOmitPorts = Boolean(
+		getGraphPersistenceFeatureFlags().GRAPH_PERSIST_DERIVED_PORTS_OMITTED
+	);
+	const persistedNodes = shouldOmitPorts
+		? nodes.map((node) => {
+			const data = (node as any)?.data;
+			if (!data || typeof data !== 'object') return node;
+			const nextData = { ...data } as Record<string, unknown>;
+			delete (nextData as any).ports;
+			return {
+				...node,
+				data: nextData as PipelineNodeData & Record<string, unknown>
+			};
+		})
+		: nodes;
 	const dto: PipelineGraphDTO = {
 		version: 1,
-		nodes,
+		nodes: persistedNodes as any,
 		edges: recomputeEdgeContractsBestEffort(nodes, edges)
 	};
 	if (graphId) {
 		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
 	}
+	if (shouldOmitPorts) {
+		dto.meta = {
+			...(dto.meta ?? {}),
+			migrations: {
+				...(((dto.meta ?? {}) as any).migrations ?? {}),
+				OMIT_NODE_PORTS_V1: true
+			}
+		} as any;
+	}
 	return dto;
+}
+
+export function __stripToDTOForTest(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[],
+	graphId?: string
+): PipelineGraphDTO {
+	return stripToDTO(nodes, edges, graphId);
 }
 
 function edgeStructuralSignature(edge: Edge<PipelineEdgeData>): string {
