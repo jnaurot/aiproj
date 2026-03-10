@@ -494,6 +494,104 @@ async def _exec_builtin_core_tool(
     raise ValueError(f"Unsupported core builtin toolId: {tool_id}")
 
 
+def _rows_from_value(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        rows: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                rows.append(item)
+            else:
+                rows.append({"value": item})
+        return rows
+    if isinstance(value, dict):
+        if isinstance(value.get("rows"), list):
+            rows = value.get("rows") or []
+            return [r for r in rows if isinstance(r, dict)]
+        if isinstance(value.get("payload"), dict) and isinstance(value.get("payload", {}).get("rows"), list):
+            rows = value.get("payload", {}).get("rows") or []
+            return [r for r in rows if isinstance(r, dict)]
+        return [value]
+    return [{"value": value}]
+
+
+def _rows_from_data_input(args: Dict[str, Any], input_value: Any) -> list[dict[str, Any]]:
+    if "rows" in args:
+        return _rows_from_value(args.get("rows"))
+    return _rows_from_value(input_value)
+
+
+async def _exec_builtin_data_tool(
+    tool_id: str,
+    args: Dict[str, Any],
+    input_value: Any,
+) -> Dict[str, Any]:
+    rows = _rows_from_data_input(args, input_value)
+
+    if tool_id in {"data.pandas.profile", "data.pandas.select_columns"}:
+        import pandas as pd
+
+        df = pd.DataFrame(rows)
+        if tool_id == "data.pandas.profile":
+            sample_size = int(args.get("sample_size") or 5)
+            sample_size = max(0, sample_size)
+            return {
+                "row_count": int(len(df.index)),
+                "columns": [str(c) for c in list(df.columns)],
+                "dtypes": {str(k): str(v) for k, v in df.dtypes.astype(str).to_dict().items()},
+                "null_count": {str(k): int(v) for k, v in df.isna().sum().to_dict().items()},
+                "sample_rows": _jsonable(df.head(sample_size).to_dict(orient="records")),
+            }
+        raw_cols = args.get("columns")
+        if not isinstance(raw_cols, list) or not raw_cols:
+            raise ValueError("data.pandas.select_columns requires args.columns array")
+        columns = [str(c) for c in raw_cols]
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            raise ValueError(f"Columns not found: {', '.join(missing)}")
+        out_df = df[columns]
+        return {
+            "row_count": int(len(out_df.index)),
+            "columns": columns,
+            "rows": _jsonable(out_df.to_dict(orient="records")),
+        }
+
+    if tool_id == "data.polars.profile":
+        import polars as pl
+
+        pl_df = pl.DataFrame(rows)
+        sample_size = int(args.get("sample_size") or 5)
+        sample_size = max(0, sample_size)
+        head_rows = pl_df.head(sample_size).to_dicts()
+        null_counts = {}
+        for name in pl_df.columns:
+            null_counts[str(name)] = int(pl_df.select(pl.col(name).null_count()).item())
+        return {
+            "row_count": int(pl_df.height),
+            "columns": [str(c) for c in pl_df.columns],
+            "dtypes": {str(name): str(dtype) for name, dtype in zip(pl_df.columns, pl_df.dtypes)},
+            "null_count": null_counts,
+            "sample_rows": _jsonable(head_rows),
+        }
+
+    if tool_id == "data.pyarrow.schema":
+        import pyarrow as pa
+
+        table = pa.Table.from_pylist(rows)
+        fields = [
+            {"name": str(field.name), "type": str(field.type), "nullable": bool(field.nullable)}
+            for field in table.schema
+        ]
+        return {
+            "row_count": int(table.num_rows),
+            "column_count": int(table.num_columns),
+            "fields": fields,
+        }
+
+    raise ValueError(f"Unsupported data builtin toolId: {tool_id}")
+
+
 async def exec_tool(
     run_id: str,
     node: Dict[str, Any],
@@ -1314,6 +1412,8 @@ async def exec_tool(
                 result = {"valid": isinstance(payload, (dict, list))}
             elif tool_id.startswith("core."):
                 result = await _exec_builtin_core_tool(tool_id, args, input_value, input_ctx, perms)
+            elif tool_id.startswith("data."):
+                result = await _exec_builtin_data_tool(tool_id, args, input_value)
             else:
                 return NodeOutput(
                     status="failed",

@@ -241,3 +241,111 @@ async def test_exec_tool_builtin_core_http_json_success(monkeypatch):
 	assert isinstance(payload, dict)
 	assert payload.get("status_code") == 200
 	assert payload.get("payload", {}).get("ok") is True
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_data_pandas_profile():
+	node = {
+		"id": "n_builtin_data_pd_profile",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "data.pandas.profile",
+					"profileId": "data",
+					"args": {
+						"rows": [{"id": 1, "city": "Boston"}, {"id": 2, "city": "Austin"}],
+						"sample_size": 2,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_data_pd_profile", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("row_count") == 2
+	assert "city" in (payload.get("columns") or [])
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_data_pandas_select_columns():
+	node = {
+		"id": "n_builtin_data_pd_select",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "data.pandas.select_columns",
+					"profileId": "data",
+					"args": {
+						"rows": [{"id": 1, "city": "Boston", "score": 0.8}],
+						"columns": ["id", "score"],
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_data_pd_select", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("columns") == ["id", "score"]
+	rows = payload.get("rows") or []
+	assert isinstance(rows, list)
+	assert rows and "city" not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_data_polars_profile():
+	pytest.importorskip("polars")
+	node = {
+		"id": "n_builtin_data_pl_profile",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "data.polars.profile",
+					"profileId": "data",
+					"args": {
+						"rows": [{"id": 1, "city": "Boston"}, {"id": 2, "city": None}],
+						"sample_size": 2,
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_data_pl_profile", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	assert payload.get("row_count") == 2
+	assert "city" in (payload.get("null_count") or {})
+
+
+@pytest.mark.asyncio
+async def test_exec_tool_builtin_data_pyarrow_schema():
+	pytest.importorskip("pyarrow")
+	node = {
+		"id": "n_builtin_data_pa_schema",
+		"data": {
+			"params": {
+				"provider": "builtin",
+				"builtin": {
+					"toolId": "data.pyarrow.schema",
+					"profileId": "data",
+					"args": {
+						"rows": [{"id": 1, "city": "Boston"}, {"id": 2, "city": "Austin"}],
+					},
+				},
+			}
+		},
+	}
+	result = await exec_tool("run_data_pa_schema", node, _ctx())
+	assert result.status == "succeeded"
+	payload = (result.data or {}).get("payload")
+	assert isinstance(payload, dict)
+	fields = payload.get("fields") or []
+	assert isinstance(fields, list)
+	assert any(isinstance(f, dict) and f.get("name") == "city" for f in fields)

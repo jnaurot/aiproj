@@ -95,6 +95,57 @@ export const TOOL_BUILTIN_OPERATIONS: ToolBuiltinOperation[] = [
 			method: 'GET',
 			headers: {}
 		}
+	},
+	{
+		id: 'data.pandas.profile',
+		label: 'Pandas Profile',
+		description: 'Summarize rows with columns, dtypes, null counts, and sample rows.',
+		profiles: ['data', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ id: 1, city: 'Boston', score: 0.8 },
+				{ id: 2, city: 'Austin', score: 0.6 }
+			],
+			sample_size: 5
+		}
+	},
+	{
+		id: 'data.pandas.select_columns',
+		label: 'Pandas Select Columns',
+		description: 'Project only selected columns from tabular rows.',
+		profiles: ['data', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ id: 1, city: 'Boston', score: 0.8 },
+				{ id: 2, city: 'Austin', score: 0.6 }
+			],
+			columns: ['id', 'score']
+		}
+	},
+	{
+		id: 'data.polars.profile',
+		label: 'Polars Profile',
+		description: 'Summarize rows using Polars typing/null-count semantics.',
+		profiles: ['data', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ id: 1, city: 'Boston', score: 0.8 },
+				{ id: 2, city: null, score: 0.6 }
+			],
+			sample_size: 5
+		}
+	},
+	{
+		id: 'data.pyarrow.schema',
+		label: 'PyArrow Schema',
+		description: 'Infer Arrow schema fields (name/type/nullable) from rows.',
+		profiles: ['data', 'full', 'custom'],
+		defaultArgs: {
+			rows: [
+				{ id: 1, city: 'Boston', score: 0.8 },
+				{ id: 2, city: 'Austin', score: 0.6 }
+			]
+		}
 	}
 ];
 
