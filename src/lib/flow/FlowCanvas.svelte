@@ -62,7 +62,6 @@ import {
 		type GuidedRecommendation
 	} from './components/dsmlGuidedUx';
 	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
-	import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
@@ -252,6 +251,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let toastMessage: string | null = null;
 	let toastLevel: 'info' | 'warn' | 'error' = 'info';
 	let toastTimer: ReturnType<typeof setTimeout> | null = null;
+	let toastActionLabel: string | null = null;
+	let toastAction: (() => void) | null = null;
 	let lastSavedGraphSnapshotKey: string | null = null;
 	let currentGraphName = 'unnamed';
 	const DRAFT_RECOVERY_PROMPT_SESSION_KEY = 'graph_draft_recovery_prompted_at';
@@ -936,14 +937,34 @@ async function scrollToBottom() {
 		}
 	}
 
-	function showToast(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+	function showToast(
+		message: string,
+		level: 'info' | 'warn' | 'error' = 'info',
+		action?: { label: string; onClick: () => void }
+	): void {
 		toastMessage = message;
 		toastLevel = level;
+		toastActionLabel = action?.label ?? null;
+		toastAction = action?.onClick ?? null;
 		if (toastTimer) clearTimeout(toastTimer);
 		toastTimer = setTimeout(() => {
 			toastMessage = null;
+			toastActionLabel = null;
+			toastAction = null;
 			toastTimer = null;
-		}, 2600);
+		}, action ? 6000 : 2600);
+	}
+
+	function runToastAction(): void {
+		const action = toastAction;
+		toastMessage = null;
+		toastActionLabel = null;
+		toastAction = null;
+		if (toastTimer) {
+			clearTimeout(toastTimer);
+			toastTimer = null;
+		}
+		if (action) action();
 	}
 
 	function computeComponentSaveApplyCounts(
@@ -1240,11 +1261,6 @@ async function scrollToBottom() {
 		return n.data.ports[whichPort];
 	}
 
-	function isSchemaCompatibleConnection(outPort: PortType, inPort: PortType): boolean {
-		const decision = evaluateSchemaCoercion(outPort, inPort);
-		return decision.allowed;
-	}
-
 	function isValidConnection(conn: Connection) {
 		if (!conn.source || !conn.target) return false;
 		if (conn.source === conn.target) return false;
@@ -1272,14 +1288,7 @@ async function scrollToBottom() {
 		//port checking out === in
 		const outPort = getType(conn.source, 'out', conn.sourceHandle);
 		const inPort = getType(conn.target, 'in', conn.targetHandle);
-
-		// if you can't resolve types, fail closed (or choose fail open)
 		if (!outPort || !inPort) return false;
-
-		if (!isSchemaCompatibleConnection(outPort, inPort)) {
-			console.log('out: ' + outPort + ', in: ' + inPort);
-			return false;
-		}
 
 		return true;
 	}
@@ -1309,8 +1318,52 @@ async function scrollToBottom() {
 		if (!r.ok) {
 			const msg = String(r.error ?? 'Failed to add edge');
 			console.warn('Failed to add edge:', msg);
+			if (r.adapterKind) {
+				showToast(msg, 'warn', {
+					label: 'Insert adapter',
+					onClick: () => {
+						const inserted = graphStore.insertSchemaAdapterForEdgeConnection({
+							source: conn.source!,
+							target: conn.target!,
+							sourceHandle: conn.sourceHandle ?? null,
+							targetHandle: conn.targetHandle ?? null,
+							adapterKind: r.adapterKind ?? null
+						});
+						if (!inserted.ok) {
+							showToast(String(inserted.error ?? 'Failed to insert adapter'), 'error');
+							return;
+						}
+						showToast('Inserted schema adapter.', 'info');
+					}
+				});
+				return;
+			}
 			showToast(msg, 'warn');
 			return;
+		}
+		if (r.adapterKind && r.id) {
+			showToast(
+				'Connection added via coercion. Insert explicit adapter for deterministic schema flow?',
+				'info',
+				{
+					label: 'Insert adapter',
+					onClick: () => {
+						graphStore.deleteEdge(r.id as string);
+						const inserted = graphStore.insertSchemaAdapterForEdgeConnection({
+							source: conn.source!,
+							target: conn.target!,
+							sourceHandle: conn.sourceHandle ?? null,
+							targetHandle: conn.targetHandle ?? null,
+							adapterKind: r.adapterKind ?? null
+						});
+						if (!inserted.ok) {
+							showToast(String(inserted.error ?? 'Failed to insert adapter'), 'error');
+							return;
+						}
+						showToast('Inserted schema adapter.', 'info');
+					}
+				}
+			);
 		}
 	}
 
@@ -2180,7 +2233,12 @@ async function scrollToBottom() {
 <div class="layout">
 	<div class="flow">
 		{#if toastMessage}
-			<div class={`toast toast-${toastLevel}`} role="status" aria-live="polite">{toastMessage}</div>
+			<div class={`toast toast-${toastLevel}`} role="status" aria-live="polite">
+				<span>{toastMessage}</span>
+				{#if toastActionLabel}
+					<button type="button" class="toastAction" on:click={runToastAction}>{toastActionLabel}</button>
+				{/if}
+			</div>
 		{/if}
 		<div class="topbar" role="toolbar" aria-label="Graph toolbar">
 			<div class="toolbarZone projectActions">
@@ -2926,6 +2984,18 @@ async function scrollToBottom() {
 		background: #0f1626;
 		color: #e6e6e6;
 		box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28);
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.toastAction {
+		padding: 3px 8px;
+		border-radius: 8px;
+		font-size: 11px;
+		border: 1px solid #3b82f6;
+		background: #133061;
+		color: #dbeafe;
 	}
 
 	.toast-info {

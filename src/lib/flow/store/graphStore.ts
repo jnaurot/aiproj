@@ -2211,17 +2211,33 @@ function normalizeHintType(raw: unknown): string {
 	return value;
 }
 
-function adapterSuggestionForTypes(providedType: string, requiredType: string): string | null {
+type AdapterTransformKind = 'text_to_table' | 'json_to_table' | 'table_to_json';
+
+function adapterKindForTypes(providedType: string, requiredType: string): AdapterTransformKind | null {
 	const key = `${providedType}->${requiredType}`;
-	if (key === 'text->table') return "Insert Transform adapter: op='text_to_table'.";
-	if (key === 'json->table') return "Insert Transform adapter: op='json_to_table'.";
-	if (key === 'table->json') return "Insert Transform adapter: op='table_to_json'.";
+	if (key === 'text->table') return 'text_to_table';
+	if (key === 'json->table') return 'json_to_table';
+	if (key === 'table->json') return 'table_to_json';
+	return null;
+}
+
+function adapterSuggestionForTypes(providedType: string, requiredType: string): string | null {
+	const adapterKind = adapterKindForTypes(providedType, requiredType);
+	if (adapterKind === 'text_to_table') return "Insert Transform adapter: op='text_to_table'.";
+	if (adapterKind === 'json_to_table') return "Insert Transform adapter: op='json_to_table'.";
+	if (adapterKind === 'table_to_json') return "Insert Transform adapter: op='table_to_json'.";
 	return null;
 }
 
 type SchemaCompatibility =
-	| { ok: true; warning?: 'lossy_coercion'; suggestion?: string | null }
-	| { ok: false; reason: 'type_mismatch' | 'missing_required_columns'; missingColumns?: string[]; suggestion?: string | null };
+	| { ok: true; warning?: 'lossy_coercion'; suggestion?: string | null; adapterKind?: AdapterTransformKind | null }
+	| {
+			ok: false;
+			reason: 'type_mismatch' | 'missing_required_columns';
+			missingColumns?: string[];
+			suggestion?: string | null;
+			adapterKind?: AdapterTransformKind | null;
+	  };
 
 function isSchemaCompatible(
 	providedSchema: Record<string, any> | undefined,
@@ -2231,10 +2247,12 @@ function isSchemaCompatible(
 	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
 	const coercion = evaluateSchemaCoercion(providedType, requiredType);
 	if (!coercion.allowed) {
+		const adapterKind = adapterKindForTypes(providedType, requiredType);
 		return {
 			ok: false,
 			reason: 'type_mismatch',
-			suggestion: adapterSuggestionForTypes(providedType, requiredType)
+			suggestion: adapterSuggestionForTypes(providedType, requiredType),
+			adapterKind
 		};
 	}
 	const providedColumns = Array.isArray(providedSchema?.columns)
@@ -2252,10 +2270,12 @@ function isSchemaCompatible(
 		}
 	}
 	if (coercion.lossy) {
+		const adapterKind = adapterKindForTypes(providedType, requiredType);
 		return {
 			ok: true,
 			warning: 'lossy_coercion',
-			suggestion: adapterSuggestionForTypes(providedType, requiredType)
+			suggestion: adapterSuggestionForTypes(providedType, requiredType),
+			adapterKind
 		};
 	}
 	return { ok: true };
@@ -2440,7 +2460,13 @@ type EdgeInvalidReason =
 	| 'schema_mismatch';
 type EdgeCheck =
 	| { ok: true; out?: PortType; in?: PortType }
-	| { ok: false; reason: EdgeInvalidReason; missingColumns?: string[]; suggestion?: string | null };
+	| {
+			ok: false;
+			reason: EdgeInvalidReason;
+			missingColumns?: string[];
+			suggestion?: string | null;
+			adapterKind?: AdapterTransformKind | null;
+	  };
 
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const outPort = sourcePortTypeForEdge(nodes, e);
@@ -2468,7 +2494,8 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 		return {
 			ok: false,
 			reason: 'type_mismatch',
-			suggestion: schemaCheck.suggestion
+			suggestion: schemaCheck.suggestion,
+			adapterKind: schemaCheck.adapterKind
 		};
 	}
 
@@ -3713,7 +3740,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		addEdge(edge: Edge<PipelineEdgeData>) {
-			let out: { ok: boolean; id?: string; error?: string } = { ok: true };
+			let out: {
+				ok: boolean;
+				id?: string;
+				error?: string;
+				suggestion?: string | null;
+				adapterKind?: AdapterTransformKind | null;
+			} = { ok: true };
 			update((s) => {
 				// basic sanity checks
 				const sourceExists = s.nodes.some((n) => n.id === edge.source);
@@ -3785,6 +3818,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (chk.ok === false) {
 					out = {
 						ok: false,
+						suggestion: chk.suggestion,
+						adapterKind: chk.adapterKind,
 						error:
 							chk.reason === 'type_mismatch'
 								? `Incompatible schemas${chk.suggestion ? `. ${chk.suggestion}` : ''}`
@@ -3796,6 +3831,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				}
 				const sourceNode = s.nodes.find((n) => n.id === edgeForValidation.source)!;
 				const targetNode = s.nodes.find((n) => n.id === edgeForValidation.target)!;
+				const sourceHint = sourcePayloadHint(
+					sourceNode as any,
+					'out',
+					String((edgeForValidation as any).sourceHandle ?? 'out')
+				);
+				const targetHint = targetPayloadHint(targetNode as any);
+				const providedType = normalizeHintType(sourceHint?.type ?? chk.out ?? 'unknown');
+				const requiredType = normalizeHintType(targetHint?.type ?? chk.in ?? 'unknown');
+				const adapterKind = adapterKindForTypes(providedType, requiredType);
+				if (adapterKind) {
+					out.adapterKind = adapterKind;
+					out.suggestion = adapterSuggestionForTypes(providedType, requiredType);
+				}
 
 				const nextEdge: Edge<PipelineEdgeData> = {
 					...edgeForValidation,
@@ -3807,12 +3855,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							out: chk.out,
 							in: chk.in,
 							payload: {
-								source: sourcePayloadHint(
-									sourceNode as any,
-									'out',
-									String((edgeForValidation as any).sourceHandle ?? 'out')
-								),
-								target: targetPayloadHint(targetNode as any)
+								source: sourceHint,
+								target: targetHint
 							}
 						}
 					}
@@ -3825,6 +3869,98 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			});
 
 			return out;
+		},
+
+		insertSchemaAdapterForEdgeConnection(input: {
+			source: string;
+			target: string;
+			sourceHandle?: string | null;
+			targetHandle?: string | null;
+			adapterKind?: AdapterTransformKind | null;
+		}) {
+			const source = String(input?.source ?? '').trim();
+			const target = String(input?.target ?? '').trim();
+			if (!source || !target) {
+				return { ok: false as const, error: 'Missing source or target for adapter insertion' };
+			}
+
+			const state = get({ subscribe } as any) as GraphState;
+			const sourceNode = state.nodes.find((n) => n.id === source);
+			const targetNode = state.nodes.find((n) => n.id === target);
+			if (!sourceNode || !targetNode) {
+				return { ok: false as const, error: 'Source or target node not found' };
+			}
+
+			const sourceHandleRaw = String(input?.sourceHandle ?? '').trim();
+			const sourceHandle = sourceHandleRaw.length > 0 ? sourceHandleRaw : undefined;
+			const targetHandleRaw = String(input?.targetHandle ?? '').trim();
+			const targetHandle = targetHandleRaw.length > 0 ? targetHandleRaw : undefined;
+			const sourceHint = sourcePayloadHint(sourceNode as any, 'out', sourceHandle ?? 'out');
+			const targetHint = targetPayloadHint(targetNode as any);
+			const providedType = normalizeHintType(sourceHint?.type ?? sourceNode.data?.ports?.out ?? 'unknown');
+			const requiredType = normalizeHintType(targetHint?.type ?? targetNode.data?.ports?.in ?? 'unknown');
+			const adapterKind = (input?.adapterKind ?? adapterKindForTypes(providedType, requiredType)) as
+				| AdapterTransformKind
+				| null;
+			if (!adapterKind) {
+				return {
+					ok: false as const,
+					error: `No adapter available for ${providedType}->${requiredType}`
+				};
+			}
+
+			const midX = (Number(sourceNode.position?.x ?? 0) + Number(targetNode.position?.x ?? 0)) / 2;
+			const midY = (Number(sourceNode.position?.y ?? 0) + Number(targetNode.position?.y ?? 0)) / 2;
+			const adapterNodeId = this.addNode('transform', { x: midX, y: midY });
+			const subtypeRes = this.setTransformKind(adapterNodeId, adapterKind);
+			if (!subtypeRes.ok) {
+				this.deleteNode(adapterNodeId);
+				return {
+					ok: false as const,
+					error: String(subtypeRes.error ?? 'Failed to configure adapter node')
+				};
+			}
+
+			const incomingRes = this.addEdge({
+				id: `e_${crypto.randomUUID()}`,
+				source,
+				target: adapterNodeId,
+				sourceHandle,
+				targetHandle: 'in',
+				data: { exec: 'idle' }
+			} as Edge<PipelineEdgeData>);
+			if (!incomingRes.ok) {
+				this.deleteNode(adapterNodeId);
+				return {
+					ok: false as const,
+					error: String(incomingRes.error ?? 'Failed to connect source to adapter')
+				};
+			}
+
+			const outgoingRes = this.addEdge({
+				id: `e_${crypto.randomUUID()}`,
+				source: adapterNodeId,
+				target,
+				sourceHandle: 'out',
+				targetHandle,
+				data: { exec: 'idle' }
+			} as Edge<PipelineEdgeData>);
+			if (!outgoingRes.ok) {
+				if (incomingRes.id) this.deleteEdge(incomingRes.id);
+				this.deleteNode(adapterNodeId);
+				return {
+					ok: false as const,
+					error: String(outgoingRes.error ?? 'Failed to connect adapter to target')
+				};
+			}
+
+			return {
+				ok: true as const,
+				adapterKind,
+				adapterNodeId,
+				incomingEdgeId: incomingRes.id ?? null,
+				outgoingEdgeId: outgoingRes.id ?? null
+			};
 		},
 
 		updateNodeTitle(nodeId: string, label: string) {
