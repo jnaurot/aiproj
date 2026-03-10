@@ -394,6 +394,32 @@ def _tool_builtin_env_preflight_error(
                 },
             ),
         )
+    explicit_lock = str(resolved_env.get("locked") or "").strip()
+    if explicit_lock:
+        expected_locks = _expected_tool_profile_locks(resolved_env)
+        if explicit_lock not in {expected_locks["canonical"], expected_locks["sha256"]}:
+            return ContractMismatchError(
+                "Tool builtin environment profile lock mismatch",
+                code="ENV_PROFILE_LOCK_MISMATCH",
+                details=_contract_details(
+                    expected={
+                        "profileId": str(resolved_env.get("profileId") or "core"),
+                        "installTarget": str(
+                            resolved_env.get("installTarget")
+                            or BUILTIN_PROFILE_INSTALL_TARGETS.get(
+                                str(resolved_env.get("profileId") or "core"),
+                                "cpu_dev",
+                            )
+                        ),
+                        "lock": expected_locks["canonical"],
+                        "alternateLock": expected_locks["sha256"],
+                    },
+                    actual={
+                        "profileId": str(resolved_env.get("profileId") or "core"),
+                        "lock": explicit_lock,
+                    },
+                ),
+            )
     return None
 
 
@@ -548,6 +574,15 @@ def _env_profile_log_guidance(
         return f"Environment profile '{profile_id}' includes blocked packages."
     if code == "ENV_PROFILE_INVALID":
         return f"Environment profile '{profile_id}' is invalid; update profile selection in the tool editor."
+    if code == "ENV_PROFILE_LOCK_MISMATCH":
+        expected_lock = str(expected.get("lock") or "").strip()
+        actual_lock = str(actual.get("lock") or "").strip()
+        if expected_lock and actual_lock:
+            return (
+                f"Environment profile '{profile_id}' lock mismatch. "
+                f"Expected '{expected_lock}', got '{actual_lock}'."
+            )
+        return f"Environment profile '{profile_id}' lock mismatch."
     if code == "ENV_PROFILE_INSTALL_FAILED":
         return (
             f"Environment profile '{profile_id}' install failed. "
@@ -1619,6 +1654,17 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return max(minimum, val)
 
 
+def _env_int_allow_zero(name: str, default: int) -> int:
+    raw = str(__import__("os").environ.get(name, "")).strip()
+    if not raw:
+        return max(0, int(default))
+    try:
+        val = int(raw)
+    except Exception:
+        return max(0, int(default))
+    return max(0, val)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = str(__import__("os").environ.get(name, "")).strip().lower()
     if not raw:
@@ -1703,9 +1749,6 @@ def _tool_profile_lock(params: Dict[str, Any]) -> Optional[str]:
     except Exception:
         profile_id = str((builtin_cfg or {}).get("profileId") or "core").strip() or "core"
         return f"invalid:{profile_id}"
-    explicit_lock = str(resolved.get("locked") or "").strip()
-    if explicit_lock:
-        return explicit_lock
     profile_id = str(resolved.get("profileId") or "core").strip() or "core"
     install_target = str(
         resolved.get("installTarget")
@@ -1718,6 +1761,24 @@ def _tool_profile_lock(params: Dict[str, Any]) -> Optional[str]:
     ]
     packages_key = "|".join(sorted(packages))
     return f"profile:{profile_id}:{install_target}:{_sha256_text(packages_key)}"
+
+
+def _expected_tool_profile_locks(resolved_env: Dict[str, Any]) -> Dict[str, str]:
+    profile_id = str(resolved_env.get("profileId") or "core").strip() or "core"
+    install_target = str(
+        resolved_env.get("installTarget")
+        or BUILTIN_PROFILE_INSTALL_TARGETS.get(profile_id, "cpu_dev")
+    ).strip() or "cpu_dev"
+    packages = [
+        str(pkg).strip()
+        for pkg in (resolved_env.get("packages") if isinstance(resolved_env.get("packages"), list) else [])
+        if str(pkg).strip()
+    ]
+    lock_hash = _sha256_text("|".join(sorted(packages)))
+    return {
+        "canonical": f"profile:{profile_id}:{install_target}:{lock_hash}",
+        "sha256": f"sha256:{lock_hash}",
+    }
 
 
 def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1961,6 +2022,40 @@ async def run_graph(
     strict_coercion_policy = bool(feature_flags.get("STRICT_COERCION_POLICY", True))
     schema_stats_start = get_schema_infer_stats()
     run_started_t = asyncio.get_running_loop().time()
+    max_nodes_per_run = _env_int("RUNNER_MAX_NODES", 2000, minimum=1)
+    max_edges_per_run = _env_int_allow_zero("RUNNER_MAX_EDGES", 5000)
+    max_runtime_ms = _env_int_allow_zero("RUNNER_MAX_RUNTIME_MS", 0)
+    max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
+    max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
+    max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
+    max_llm = _env_int("RUNNER_MAX_LLM", 2, minimum=1)
+    max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
+    node_retry_max_attempts = _env_int_allow_zero("RUNNER_NODE_MAX_RETRIES", 0)
+    node_retry_backoff_ms = _env_int_allow_zero("RUNNER_NODE_RETRY_BACKOFF_MS", 0)
+    reproducibility_metadata = {
+        "schemaVersion": 1,
+        "executionVersion": str(context.execution_version or ""),
+        "featureFlags": {
+            "strictSchemaEdgeChecks": strict_schema_edge_checks,
+            "strictCoercionPolicy": strict_coercion_policy,
+        },
+        "guardrails": {
+            "maxNodes": int(max_nodes_per_run),
+            "maxEdges": int(max_edges_per_run),
+            "maxRuntimeMs": int(max_runtime_ms),
+            "concurrencyCaps": {
+                "global": int(max_inflight),
+                "source": int(max_source),
+                "transform": int(max_transform),
+                "llm": int(max_llm),
+                "tool": int(max_tool),
+            },
+            "retryPolicy": {
+                "maxAttempts": int(node_retry_max_attempts),
+                "backoffMs": int(node_retry_backoff_ms),
+            },
+        },
+    }
     peak_concurrency = 0
     total_cached = 0
     total_succeeded = 0
@@ -1994,6 +2089,7 @@ async def run_graph(
             "schema_infer": schema_delta,
             "strict_schema_edge_checks": strict_schema_edge_checks,
             "strict_coercion_policy": strict_coercion_policy,
+            "reproducibility": reproducibility_metadata,
         })
 
     async def _emit_cache_decision(
@@ -2146,6 +2242,53 @@ async def run_graph(
         await _emit_cache_summary_once()
         return
 
+    node_count = len(execution_graph.get("nodes", []) if isinstance(execution_graph, dict) else [])
+    edge_count = len(execution_graph.get("edges", []) if isinstance(execution_graph, dict) else [])
+    if node_count > max_nodes_per_run:
+        msg = (
+            f"RESOURCE_LIMIT_NODES: graph has {node_count} nodes, "
+            f"limit is {max_nodes_per_run}"
+        )
+        await _emit({
+            "type": "log",
+            "runId": run_id,
+            "at": iso_now(),
+            "level": "error",
+            "message": msg,
+        })
+        await _emit({
+            "type": "run_finished",
+            "runId": run_id,
+            "at": iso_now(),
+            "status": "failed",
+            "error": msg,
+            "errorCode": "RESOURCE_LIMIT_NODES",
+        })
+        await _emit_cache_summary_once()
+        return
+    if max_edges_per_run > 0 and edge_count > max_edges_per_run:
+        msg = (
+            f"RESOURCE_LIMIT_EDGES: graph has {edge_count} edges, "
+            f"limit is {max_edges_per_run}"
+        )
+        await _emit({
+            "type": "log",
+            "runId": run_id,
+            "at": iso_now(),
+            "level": "error",
+            "message": msg,
+        })
+        await _emit({
+            "type": "run_finished",
+            "runId": run_id,
+            "at": iso_now(),
+            "status": "failed",
+            "error": msg,
+            "errorCode": "RESOURCE_LIMIT_EDGES",
+        })
+        await _emit_cache_summary_once()
+        return
+
     # ===== PHASE 2: EXECUTION =====
     try:
         raw_hints = graph.get("__executionHints") if isinstance(graph, dict) else None
@@ -2177,6 +2320,7 @@ async def run_graph(
             "runFrom": run_from,
             "runMode": effective_run_mode,
             "plannedNodeIds": planned_node_ids,
+            "reproducibility": reproducibility_metadata,
         })
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
@@ -4765,11 +4909,6 @@ async def run_graph(
 
         levels = _plan_levels(plan, edges)
         run_t0 = asyncio.get_running_loop().time()
-        max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
-        max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
-        max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
-        max_llm = _env_int("RUNNER_MAX_LLM", 2, minimum=1)
-        max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
         global_sem = asyncio.Semaphore(max_inflight)
         kind_sems = {
             "source": asyncio.Semaphore(max_source),
@@ -4886,6 +5025,29 @@ async def run_graph(
 
         run_failed = False
         for level_idx, level_nodes in enumerate(levels, start=1):
+            elapsed_before_level_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
+            if max_runtime_ms > 0 and elapsed_before_level_ms > max_runtime_ms:
+                timeout_msg = (
+                    f"RUN_TIMEOUT: runtime exceeded {max_runtime_ms}ms "
+                    f"before level {level_idx} (elapsed={elapsed_before_level_ms}ms)"
+                )
+                await _emit({
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "error",
+                    "message": timeout_msg,
+                })
+                await _emit({
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "failed",
+                    "error": timeout_msg,
+                    "errorCode": "RUN_TIMEOUT",
+                })
+                await _emit_cache_summary_once()
+                return
             if cancel_event and cancel_event.is_set():
                 await _emit({
                     "type": "scheduler_cancelled",
@@ -5043,6 +5205,29 @@ async def run_graph(
             if level_failed > 0:
                 run_failed = True
                 break
+            elapsed_after_level_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
+            if max_runtime_ms > 0 and elapsed_after_level_ms > max_runtime_ms:
+                timeout_msg = (
+                    f"RUN_TIMEOUT: runtime exceeded {max_runtime_ms}ms "
+                    f"after level {level_idx} (elapsed={elapsed_after_level_ms}ms)"
+                )
+                await _emit({
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "error",
+                    "message": timeout_msg,
+                })
+                await _emit({
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "failed",
+                    "error": timeout_msg,
+                    "errorCode": "RUN_TIMEOUT",
+                })
+                await _emit_cache_summary_once()
+                return
 
         total_runtime_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
         await _emit({
