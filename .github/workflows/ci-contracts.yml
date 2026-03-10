@@ -143,6 +143,23 @@ jobs:
 					cd backend
 					python -m pytest tests/contracts tests/property tests/e2e
 
+	backend-dsml-golden-regression-gate:
+		name: Backend DSML Golden Pipeline Regression Gate
+		runs-on: ubuntu-latest
+		steps:
+			- uses: actions/checkout@v4
+			- uses: actions/setup-python@v5
+				with:
+					python-version: '3.11'
+					cache: 'pip'
+					cache-dependency-path: backend/requirements.txt
+			- name: Install backend deps
+				run: python -m pip install -r backend/requirements.txt
+			- name: Run DSML golden pipeline e2e suite
+				run: |
+					cd backend
+					python -m pytest tests/e2e/test_dsml_golden_pipelines.py --maxfail=1
+
 	perf-regression-smoke:
 		name: Regression And Perf Smoke
 		runs-on: ubuntu-latest
