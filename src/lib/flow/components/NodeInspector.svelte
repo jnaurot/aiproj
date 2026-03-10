@@ -11,7 +11,11 @@
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import { graphStore } from '$lib/flow/store/graphStore';
+	import {
+		graphStore,
+		__buildNodeSchemaContractSnapshotForTest,
+		type NodeSchemaContractEdge
+	} from '$lib/flow/store/graphStore';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
@@ -44,6 +48,9 @@
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
 	$: schemaProps = buildTransformSchemaProps(transformKind as TransformKind, inputSchemas);
+	$: schemaContract = selectedNode
+		? __buildNodeSchemaContractSnapshotForTest($graphStore as any, selectedNode.id)
+		: { nodeId: '', status: 'clean', edges: [] as NodeSchemaContractEdge[] };
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
@@ -164,6 +171,35 @@
 	function onJoinCommit(patch: Record<string, any>) {
 		onCommit(toJoinPatch(patch));
 	}
+
+	function schemaTypeLabel(schema: Record<string, any> | undefined): string {
+		return String(schema?.type ?? 'unknown');
+	}
+
+	function schemaFieldSummary(schema: Record<string, any> | undefined, key: 'fields' | 'required_fields'): string {
+		const fields = Array.isArray(schema?.[key]) ? (schema?.[key] as Array<Record<string, unknown>>) : [];
+		if (fields.length === 0) return '-';
+		return fields
+			.map((field) => {
+				const name = String(field?.name ?? '').trim();
+				const type = String(field?.type ?? 'unknown').trim();
+				return name.length > 0 ? `${name}:${type}` : '';
+			})
+			.filter((value) => value.length > 0)
+			.join(', ');
+	}
+
+	function applySchemaSuggestion(edge: NodeSchemaContractEdge): void {
+		if (!edge?.adapterKind) return;
+		graphStore.deleteEdge(edge.edgeId);
+		graphStore.insertSchemaAdapterForEdgeConnection({
+			source: edge.sourceNodeId,
+			target: edge.targetNodeId,
+			sourceHandle: edge.sourceHandle,
+			targetHandle: edge.targetHandle,
+			adapterKind: edge.adapterKind
+		});
+	}
 </script>
 
 {#if selectedNode}
@@ -219,6 +255,38 @@
 				/>
 			{/if}
 		{/if}
+		<div class={`schemaContract schemaContract-${schemaContract.status}`}>
+			<div class="schemaHead">Schema Contract</div>
+			<div class="schemaStatus">Status: {schemaContract.status}</div>
+			{#if schemaContract.edges.length === 0}
+				<div class="schemaEmpty">No connected edges.</div>
+			{:else}
+				{#each schemaContract.edges as edge (edge.edgeId)}
+					<div class={`schemaEdge schemaEdge-${edge.severity}`}>
+						<div class="schemaEdgeHead">
+							<span>{edge.direction === 'incoming' ? 'in' : 'out'}: {edge.edgeId}</span>
+							<span>{edge.severity}</span>
+						</div>
+						<div class="schemaRow">
+							<span class="schemaLabel">provided</span>
+							<span>{schemaTypeLabel(edge.providedSchema)} [{schemaFieldSummary(edge.providedSchema, 'fields')}]</span>
+						</div>
+						<div class="schemaRow">
+							<span class="schemaLabel">required</span>
+							<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
+						</div>
+						{#if edge.suggestions.length > 0}
+							<div class="schemaSuggestions">{edge.suggestions.join(' ')}</div>
+						{/if}
+						{#if edge.adapterKind}
+							<button type="button" class="schemaApplyBtn" on:click={() => applySchemaSuggestion(edge)}>
+								Apply {edge.adapterKind} adapter
+							</button>
+						{/if}
+					</div>
+				{/each}
+			{/if}
+		</div>
 	</div>
 {/if}
 
@@ -280,5 +348,75 @@
 	:global(.nodeInspectorTheme .v select option) {
 		background: var(--ni-control-bg);
 		color: var(--ni-control-text);
+	}
+
+	.schemaContract {
+		margin-top: 10px;
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px;
+		background: var(--ni-card);
+		display: grid;
+		gap: 6px;
+	}
+
+	.schemaContract-warning {
+		border-color: #f59e0b;
+	}
+
+	.schemaContract-error {
+		border-color: #ef4444;
+	}
+
+	.schemaHead {
+		font-size: 12px;
+		font-weight: 700;
+	}
+
+	.schemaStatus,
+	.schemaEmpty,
+	.schemaSuggestions {
+		font-size: 11px;
+		opacity: 0.86;
+	}
+
+	.schemaEdge {
+		border: 1px solid var(--ni-border);
+		border-radius: 8px;
+		padding: 6px;
+		display: grid;
+		gap: 4px;
+	}
+
+	.schemaEdge-warning {
+		border-color: #f59e0b;
+	}
+
+	.schemaEdge-error {
+		border-color: #ef4444;
+	}
+
+	.schemaEdgeHead {
+		display: flex;
+		justify-content: space-between;
+		font-size: 11px;
+		font-weight: 600;
+	}
+
+	.schemaRow {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 6px;
+		font-size: 11px;
+	}
+
+	.schemaLabel {
+		color: var(--ni-muted);
+	}
+
+	.schemaApplyBtn {
+		justify-self: start;
+		font-size: 11px;
+		padding: 4px 8px;
 	}
 </style>

@@ -2394,6 +2394,7 @@ export type EdgeSchemaConstraint = {
 	requiredSchema: Record<string, any>;
 	compatible: boolean;
 	warning?: 'lossy_coercion';
+	adapterKind?: AdapterTransformKind | null;
 	reason?: 'type_mismatch' | 'missing_required_columns';
 	missingColumns?: string[];
 	suggestions: string[];
@@ -2480,6 +2481,7 @@ function computeEdgeSchemaConstraintsInternal(
 			requiredSchema,
 			compatible: check.ok,
 			warning: check.ok ? check.warning : undefined,
+			adapterKind: check.adapterKind ?? null,
 			reason: check.ok ? undefined : check.reason,
 			missingColumns: check.ok ? undefined : check.missingColumns,
 			suggestions:
@@ -5112,3 +5114,70 @@ export const edgeSchemaConstraints = derived(graphStore, ($s) =>
 export const edgeSchemaDiagnostics = derived(edgeSchemaConstraints, ($constraints) =>
 	computeEdgeSchemaDiagnosticsInternal($constraints as any)
 );
+
+export type NodeSchemaContractEdge = {
+	edgeId: string;
+	direction: 'incoming' | 'outgoing';
+	sourceNodeId: string;
+	targetNodeId: string;
+	sourceHandle: string | null;
+	targetHandle: string | null;
+	providedSchema: Record<string, any>;
+	requiredSchema: Record<string, any>;
+	severity: 'clean' | 'warning' | 'error';
+	suggestions: string[];
+	adapterKind: AdapterTransformKind | null;
+};
+
+export type NodeSchemaContractSnapshot = {
+	nodeId: string;
+	status: 'clean' | 'warning' | 'error';
+	edges: NodeSchemaContractEdge[];
+};
+
+function buildNodeSchemaContractSnapshotInternal(
+	state: GraphState,
+	nodeIdRaw: string
+): NodeSchemaContractSnapshot {
+	const nodeId = String(nodeIdRaw ?? '').trim();
+	if (!nodeId) return { nodeId: '', status: 'clean', edges: [] };
+	const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
+	const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
+	const edges: NodeSchemaContractEdge[] = [];
+	for (const edge of state.edges ?? []) {
+		const edgeId = String(edge.id ?? '');
+		if (!edgeId) continue;
+		if (String(edge.source ?? '') !== nodeId && String(edge.target ?? '') !== nodeId) continue;
+		const constraint = constraints[edgeId];
+		if (!constraint) continue;
+		const diag = diagnostics[edgeId];
+		const severity: 'clean' | 'warning' | 'error' =
+			diag?.severity === 'error' ? 'error' : diag?.severity === 'warning' ? 'warning' : 'clean';
+		edges.push({
+			edgeId,
+			direction: String(edge.target ?? '') === nodeId ? 'incoming' : 'outgoing',
+			sourceNodeId: String(edge.source ?? ''),
+			targetNodeId: String(edge.target ?? ''),
+			sourceHandle: String((edge as any).sourceHandle ?? '').trim() || null,
+			targetHandle: String((edge as any).targetHandle ?? '').trim() || null,
+			providedSchema: constraint.providedSchema,
+			requiredSchema: constraint.requiredSchema,
+			severity,
+			suggestions: constraint.suggestions ?? [],
+			adapterKind: constraint.adapterKind ?? null
+		});
+	}
+	const status: 'clean' | 'warning' | 'error' = edges.some((edge) => edge.severity === 'error')
+		? 'error'
+		: edges.some((edge) => edge.severity === 'warning')
+			? 'warning'
+			: 'clean';
+	return { nodeId, status, edges };
+}
+
+export function __buildNodeSchemaContractSnapshotForTest(
+	state: GraphState,
+	nodeId: string
+): NodeSchemaContractSnapshot {
+	return buildNodeSchemaContractSnapshotInternal(state, nodeId);
+}
