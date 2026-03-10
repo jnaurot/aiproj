@@ -1,5 +1,6 @@
 import asyncio, time
 import os
+import json
 import traceback
 import logging
 from dataclasses import dataclass, field
@@ -14,6 +15,20 @@ from .runner.run import run_graph
 from .feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
+
+
+_EXPERIMENT_SENSITIVE_KEYS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "token",
+    "password",
+    "secret",
+    "access_token",
+    "refresh_token",
+    "credentials",
+    "connection_string",
+}
 
 
 def datetime_from_ts(ts: float) -> str:
@@ -596,6 +611,148 @@ class RuntimeManager:
             )
         )
 
+    def _sanitize_experiment_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            out: Dict[str, Any] = {}
+            for key, raw in value.items():
+                k = str(key or "")
+                lower = k.lower()
+                if any(s in lower for s in _EXPERIMENT_SENSITIVE_KEYS):
+                    out[k] = "***REDACTED***"
+                else:
+                    out[k] = self._sanitize_experiment_value(raw)
+            return out
+        if isinstance(value, list):
+            return [self._sanitize_experiment_value(v) for v in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        try:
+            return json.loads(json.dumps(value, ensure_ascii=False))
+        except Exception:
+            return str(value)
+
+    def _flatten_numeric_metrics(self, value: Any, *, prefix: str = "") -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        if isinstance(value, dict):
+            for key, raw in value.items():
+                k = str(key or "").strip()
+                if not k:
+                    continue
+                next_prefix = f"{prefix}.{k}" if prefix else k
+                out.update(self._flatten_numeric_metrics(raw, prefix=next_prefix))
+            return out
+        if isinstance(value, list):
+            if value and all(isinstance(v, (int, float)) for v in value):
+                key = prefix or "value"
+                out[key] = float(sum(float(v) for v in value) / len(value))
+            return out
+        if isinstance(value, (int, float)):
+            key = prefix or "value"
+            out[key] = float(value)
+        return out
+
+    async def _capture_run_experiment_summary(self, handle: RunHandle) -> None:
+        upsert_fn = getattr(self.artifact_store, "upsert_run_experiment", None)
+        if not callable(upsert_fn):
+            return
+        graph = handle.graph if isinstance(handle.graph, dict) else {}
+        nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+        params_by_node: Dict[str, Dict[str, Any]] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            if not node_id:
+                continue
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            params = data.get("params") if isinstance(data.get("params"), dict) else {}
+            params_by_node[node_id] = {
+                "kind": str(data.get("kind") or ""),
+                "params": self._sanitize_experiment_value(params),
+            }
+
+        artifact_refs: list[Dict[str, Any]] = []
+        artifact_ids = sorted(
+            {
+                str(aid).strip()
+                for aid in (handle.node_outputs or {}).values()
+                if isinstance(aid, str) and str(aid).strip()
+            }
+        )
+        metrics_by_node: Dict[str, Dict[str, Any]] = {}
+        metrics_flat: Dict[str, float] = {}
+        profile_ids: set[str] = set()
+        locks: set[str] = set()
+
+        for artifact_id in artifact_ids:
+            try:
+                art = await self.artifact_store.get(artifact_id)
+            except Exception:
+                continue
+            payload_schema = art.payload_schema if isinstance(art.payload_schema, dict) else {}
+            builtin_env = payload_schema.get("builtin_environment") if isinstance(payload_schema.get("builtin_environment"), dict) else {}
+            profile_id = str(builtin_env.get("profileId") or "").strip()
+            if profile_id:
+                profile_ids.add(profile_id)
+            lock_value = str(builtin_env.get("locked") or "").strip()
+            if lock_value:
+                locks.add(lock_value)
+            artifact_refs.append(
+                {
+                    "artifactId": str(art.artifact_id),
+                    "nodeId": str(art.node_id or ""),
+                    "nodeKind": str(art.node_kind or ""),
+                    "portType": str(art.port_type or ""),
+                    "mimeType": str(art.mime_type or ""),
+                }
+            )
+
+            node_id = str(art.node_id or "")
+            if not node_id:
+                continue
+            metrics_payload: Dict[str, Any] = {}
+            if "json" in str(art.mime_type or "").lower():
+                try:
+                    raw = await self.artifact_store.read(artifact_id)
+                    parsed = json.loads(raw.decode("utf-8", errors="replace"))
+                except Exception:
+                    parsed = None
+                if isinstance(parsed, dict):
+                    body = parsed.get("payload") if isinstance(parsed.get("payload"), dict) else parsed
+                    if isinstance(body, dict):
+                        for metric_key in ("metrics", "metrics_train", "metrics_cv"):
+                            if isinstance(body.get(metric_key), dict):
+                                metrics_payload[metric_key] = body.get(metric_key)
+                        if not metrics_payload:
+                            # fallback: capture any numeric structure in payload root
+                            fallback = self._flatten_numeric_metrics(body)
+                            if fallback:
+                                metrics_payload["payload"] = body
+            flattened = self._flatten_numeric_metrics(metrics_payload)
+            if flattened:
+                metrics_by_node[node_id] = {
+                    "artifactId": artifact_id,
+                    "metrics": flattened,
+                }
+                for metric_key, metric_value in flattened.items():
+                    metrics_flat[f"{node_id}.{metric_key}"] = float(metric_value)
+
+        summary = {
+            "runId": str(handle.run_id),
+            "graphId": str(handle.graph_id or ""),
+            "createdAt": datetime_from_ts(handle.created_at),
+            "status": str(handle.status or "unknown"),
+            "params": {"nodes": params_by_node},
+            "metrics": {"byNode": metrics_by_node, "flat": metrics_flat},
+            "environment": {
+                "builtinProfiles": sorted(profile_ids),
+                "locks": sorted(locks),
+            },
+            "artifacts": artifact_refs,
+            "artifactIds": artifact_ids,
+        }
+        await upsert_fn(summary)
+
     def _apply_event_to_state(self, handle, ev: dict) -> None:
         t = ev.get("type")
         if handle.status == "deleted":
@@ -631,6 +788,7 @@ class RuntimeManager:
             handle.status = ev.get("status", "finished")
             handle.active_run_planned = set()
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
+            asyncio.create_task(self._capture_run_experiment_summary(handle))
             return
         
         if t == "run_telemetry":

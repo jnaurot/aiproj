@@ -162,6 +162,15 @@ class ArtifactStore(Protocol):
         node_id: str,
         exclude_artifact_id: Optional[str] = None,
     ) -> Optional[str]: ...
+    async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None: ...
+    async def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]: ...
+    async def list_run_experiments(
+        self,
+        *,
+        graph_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]: ...
 
 
 # ----------------------------
@@ -180,6 +189,7 @@ class MemoryArtifactStore:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._consumers: Dict[str, List[Dict[str, Any]]] = {}
         self._snapshots: Dict[str, Dict[str, Any]] = {}
+        self._experiments: Dict[str, Dict[str, Any]] = {}
         self._meta_cache: Dict[str, Artifact] = {}
         self._blob_cache: Dict[str, bytes] = {}
         self._memo_stats: Dict[str, int] = {
@@ -344,6 +354,9 @@ class MemoryArtifactStore:
                 return {"runDeleted": False, "mode": "soft", "artifactsRemoved": 0, "cacheRowsRemoved": 0, "blobsDeleted": 0, "artifactIdsRemoved": []}
             rec["status"] = "deleted"
             rec["deleted_at"] = datetime.now(timezone.utc).isoformat()
+            exp = self._experiments.get(run_id)
+            if isinstance(exp, dict):
+                exp["status"] = "deleted"
             return {"runDeleted": True, "mode": "soft", "artifactsRemoved": 0, "cacheRowsRemoved": 0, "blobsDeleted": 0, "artifactIdsRemoved": []}
 
         artifact_ids = []
@@ -363,6 +376,7 @@ class MemoryArtifactStore:
             if not self._consumers[input_id]:
                 self._consumers.pop(input_id, None)
         run_deleted = (self._runs.pop(run_id, None) is not None) or bool(artifact_ids)
+        self._experiments.pop(run_id, None)
         return {
             "runDeleted": run_deleted,
             "mode": "hard",
@@ -511,6 +525,50 @@ class MemoryArtifactStore:
         rows.sort(key=lambda x: x[1].created_at, reverse=True)
         return str(rows[0][0])
 
+    async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
+        if not isinstance(summary, dict):
+            raise ValueError("summary must be a dict")
+        run_id = str(summary.get("runId") or "").strip()
+        if not run_id:
+            raise ValueError("summary.runId is required")
+        graph_id = str(summary.get("graphId") or "").strip()
+        created_at = str(summary.get("createdAt") or datetime.now(timezone.utc).isoformat())
+        status = str(summary.get("status") or "unknown")
+        self._experiments[run_id] = {
+            "runId": run_id,
+            "graphId": graph_id,
+            "createdAt": created_at,
+            "status": status,
+            "params": summary.get("params") if isinstance(summary.get("params"), dict) else {},
+            "metrics": summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {},
+            "environment": summary.get("environment") if isinstance(summary.get("environment"), dict) else {},
+            "artifacts": summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else [],
+            "artifactIds": summary.get("artifactIds") if isinstance(summary.get("artifactIds"), list) else [],
+        }
+
+    async def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        row = self._experiments.get(rid)
+        return dict(row) if isinstance(row, dict) else None
+
+    async def list_run_experiments(
+        self,
+        *,
+        graph_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        gid = str(graph_id or "").strip()
+        rows = list(self._experiments.values())
+        if gid:
+            rows = [r for r in rows if str(r.get("graphId") or "") == gid]
+        rows.sort(key=lambda r: str(r.get("createdAt") or ""), reverse=True)
+        start = max(0, int(offset))
+        end = start + max(1, int(limit))
+        return [dict(r) for r in rows[start:end]]
+
     def get_memo_stats(self) -> Dict[str, int]:
         return {
             **self._memo_stats,
@@ -647,6 +705,22 @@ class _SqliteArtifactIndex:
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_created_at ON snapshots(created_at)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_experiments (
+                    run_id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    metrics_json TEXT NOT NULL,
+                    environment_json TEXT NOT NULL,
+                    artifacts_json TEXT NOT NULL,
+                    artifact_ids_json TEXT NOT NULL
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_run_experiments_graph_created ON run_experiments(graph_id, created_at DESC)")
             self._conn.commit()
 
     def exists(self, artifact_id: str) -> bool:
@@ -901,6 +975,132 @@ class _SqliteArtifactIndex:
             for r in rows
         ]
 
+    def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
+        if not isinstance(summary, dict):
+            raise ValueError("summary must be a dict")
+        run_id = str(summary.get("runId") or "").strip()
+        graph_id = str(summary.get("graphId") or "").strip()
+        if not run_id:
+            raise ValueError("summary.runId is required")
+        if not graph_id:
+            raise ValueError("summary.graphId is required")
+        created_at = str(summary.get("createdAt") or datetime.now(timezone.utc).isoformat())
+        status = str(summary.get("status") or "unknown")
+        params = summary.get("params") if isinstance(summary.get("params"), dict) else {}
+        metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+        environment = summary.get("environment") if isinstance(summary.get("environment"), dict) else {}
+        artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else []
+        artifact_ids = summary.get("artifactIds") if isinstance(summary.get("artifactIds"), list) else []
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO run_experiments (
+                    run_id, graph_id, created_at, status,
+                    params_json, metrics_json, environment_json, artifacts_json, artifact_ids_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    graph_id=excluded.graph_id,
+                    created_at=excluded.created_at,
+                    status=excluded.status,
+                    params_json=excluded.params_json,
+                    metrics_json=excluded.metrics_json,
+                    environment_json=excluded.environment_json,
+                    artifacts_json=excluded.artifacts_json,
+                    artifact_ids_json=excluded.artifact_ids_json
+                """,
+                (
+                    run_id,
+                    graph_id,
+                    created_at,
+                    status,
+                    json.dumps(params, ensure_ascii=False),
+                    json.dumps(metrics, ensure_ascii=False),
+                    json.dumps(environment, ensure_ascii=False),
+                    json.dumps(artifacts, ensure_ascii=False),
+                    json.dumps(artifact_ids, ensure_ascii=False),
+                ),
+            )
+            self._conn.commit()
+
+    def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        with self._lock:
+            cur = self._conn.cursor()
+            row = cur.execute(
+                """
+                SELECT run_id, graph_id, created_at, status, params_json, metrics_json, environment_json, artifacts_json, artifact_ids_json
+                FROM run_experiments
+                WHERE run_id=?
+                """,
+                (rid,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "runId": str(row[0]),
+            "graphId": str(row[1]),
+            "createdAt": str(row[2]),
+            "status": str(row[3]),
+            "params": json.loads(row[4] or "{}"),
+            "metrics": json.loads(row[5] or "{}"),
+            "environment": json.loads(row[6] or "{}"),
+            "artifacts": json.loads(row[7] or "[]"),
+            "artifactIds": json.loads(row[8] or "[]"),
+        }
+
+    def list_run_experiments(
+        self,
+        *,
+        graph_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        gid = str(graph_id or "").strip()
+        lim = max(1, int(limit))
+        off = max(0, int(offset))
+        with self._lock:
+            cur = self._conn.cursor()
+            if gid:
+                rows = cur.execute(
+                    """
+                    SELECT run_id, graph_id, created_at, status, params_json, metrics_json, environment_json, artifacts_json, artifact_ids_json
+                    FROM run_experiments
+                    WHERE graph_id=?
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (gid, lim, off),
+                ).fetchall()
+            else:
+                rows = cur.execute(
+                    """
+                    SELECT run_id, graph_id, created_at, status, params_json, metrics_json, environment_json, artifacts_json, artifact_ids_json
+                    FROM run_experiments
+                    ORDER BY created_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (lim, off),
+                ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            out.append(
+                {
+                    "runId": str(row[0]),
+                    "graphId": str(row[1]),
+                    "createdAt": str(row[2]),
+                    "status": str(row[3]),
+                    "params": json.loads(row[4] or "{}"),
+                    "metrics": json.loads(row[5] or "{}"),
+                    "environment": json.loads(row[6] or "{}"),
+                    "artifacts": json.loads(row[7] or "[]"),
+                    "artifactIds": json.loads(row[8] or "[]"),
+                }
+            )
+        return out
+
     def record_consumers(
         self,
         *,
@@ -979,6 +1179,10 @@ class _SqliteArtifactIndex:
                     "UPDATE runs SET status='deleted', deleted_at=? WHERE run_id=?",
                     (datetime.now(timezone.utc).isoformat(), run_id),
                 )
+                cur.execute(
+                    "UPDATE run_experiments SET status='deleted' WHERE run_id=?",
+                    (run_id,),
+                )
                 changed = cur.rowcount
                 self._conn.commit()
             return {
@@ -1008,6 +1212,7 @@ class _SqliteArtifactIndex:
             cur.execute("DELETE FROM artifacts WHERE run_id=?", (run_id,))
             artifacts_removed = cur.rowcount
             cur.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+            cur.execute("DELETE FROM run_experiments WHERE run_id=?", (run_id,))
             run_deleted = (cur.rowcount > 0) or bool(artifacts_removed)
             self._conn.commit()
 
@@ -1333,6 +1538,21 @@ class DiskArtifactStore:
 
     async def list_runs(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
         return self._index.list_runs(include_deleted=include_deleted)
+
+    async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
+        self._index.upsert_run_experiment(summary)
+
+    async def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._index.get_run_experiment(run_id)
+
+    async def list_run_experiments(
+        self,
+        *,
+        graph_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        return self._index.list_run_experiments(graph_id=graph_id, limit=limit, offset=offset)
 
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         out = self._index.delete_run(run_id, mode=mode, gc=gc)
