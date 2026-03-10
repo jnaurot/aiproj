@@ -82,6 +82,9 @@ const OP_TO_BLOCK: Record<string, string> = {
   split: "split",
   quality_gate: "quality_gate",
   sql: "sql",
+  json_to_table: "json_to_table",
+  text_to_table: "text_to_table",
+  table_to_json: "table_to_json",
 };
 
 const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
@@ -110,6 +113,9 @@ const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   ],
   quality_gate: ["checks", "stopOnFail"],
   sql: ["dialect", "query"],
+  json_to_table: ["orient", "rowsKey"],
+  text_to_table: ["mode", "column", "delimiter", "hasHeader"],
+  table_to_json: ["orient", "pretty"],
 };
 
 function normalizeTransformPatch(

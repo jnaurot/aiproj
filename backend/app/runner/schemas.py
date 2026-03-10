@@ -433,6 +433,9 @@ class TransformParamsCurrent(NodeParamSchema):
         "split",
         "quality_gate",
         "sql",
+        "json_to_table",
+        "text_to_table",
+        "table_to_json",
     ]
     enabled: bool = True
     notes: str = ""
@@ -449,6 +452,9 @@ class TransformParamsCurrent(NodeParamSchema):
     split: Optional[Dict[str, Any]] = None
     quality_gate: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
+    json_to_table: Optional[Dict[str, Any]] = None
+    text_to_table: Optional[Dict[str, Any]] = None
+    table_to_json: Optional[Dict[str, Any]] = None
 
     def validate_required(self) -> List[str]:
         op_to_payload = {
@@ -464,6 +470,9 @@ class TransformParamsCurrent(NodeParamSchema):
             "split": "split",
             "quality_gate": "quality_gate",
             "sql": "sql",
+            "json_to_table": "json_to_table",
+            "text_to_table": "text_to_table",
+            "table_to_json": "table_to_json",
         }
         payload_key = op_to_payload.get(self.op)
         payload = getattr(self, payload_key, None) if payload_key else None
@@ -882,6 +891,9 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "split": "split",
                 "quality_gate": "quality_gate",
                 "sql": "sql",
+                "json_to_table": "json_to_table",
+                "text_to_table": "text_to_table",
+                "table_to_json": "table_to_json",
             }.get(op)
             payload = norm.get(payload_key) if payload_key else None
             if not isinstance(payload, dict):
@@ -1018,6 +1030,26 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("dedupe.keep must be 'first'")
                 elif op == "sql" and not str(payload.get("query") or "").strip():
                     errors.append("sql.query is required")
+                elif op == "json_to_table":
+                    orient = str(payload.get("orient") or "records").strip().lower()
+                    if orient not in {"records", "object"}:
+                        errors.append("json_to_table.orient must be one of: records, object")
+                    if not str(payload.get("rowsKey") or "rows").strip():
+                        errors.append("json_to_table.rowsKey is required")
+                elif op == "text_to_table":
+                    mode = str(payload.get("mode") or "lines").strip().lower()
+                    if mode not in {"lines", "csv", "tsv"}:
+                        errors.append("text_to_table.mode must be one of: lines, csv, tsv")
+                    if not str(payload.get("column") or "text").strip():
+                        errors.append("text_to_table.column is required")
+                    if mode == "csv" and not str(payload.get("delimiter") or ","):
+                        errors.append("text_to_table.delimiter is required when mode=csv")
+                elif op == "table_to_json":
+                    orient = str(payload.get("orient") or "records").strip().lower()
+                    if orient not in {"records", "split"}:
+                        errors.append("table_to_json.orient must be one of: records, split")
+                    if "pretty" in payload and not isinstance(payload.get("pretty"), bool):
+                        errors.append("table_to_json.pretty must be boolean")
                 elif op == "split":
                     source_col = str(payload.get("sourceColumn") or "").strip()
                     out_col = str(payload.get("outColumn") or "").strip()

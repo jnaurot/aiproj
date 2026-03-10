@@ -13,7 +13,10 @@ const TransformKindSchema = z.enum(["filter",
   "dedupe",
   "split",
   "quality_gate",
-  "sql"]);
+  "sql",
+  "json_to_table",
+  "text_to_table",
+  "table_to_json"]);
 
 // ─────────────────────────────────────────────
 // Per-operation parameter schemas
@@ -192,6 +195,29 @@ export const TransformSqlParamsSchema = z.object({
   query: z.string().min(1, "SQL query cannot be empty"),
 }).strip();
 
+export const TransformJsonToTableParamsSchema = z
+  .object({
+    orient: z.enum(["records", "object"]).default("records"),
+    rowsKey: z.string().min(1).default("rows")
+  })
+  .strip();
+
+export const TransformTextToTableParamsSchema = z
+  .object({
+    mode: z.enum(["lines", "csv", "tsv"]).default("lines"),
+    column: z.string().min(1).default("text"),
+    delimiter: z.string().optional().default(","),
+    hasHeader: z.boolean().default(true),
+  })
+  .strip();
+
+export const TransformTableToJsonParamsSchema = z
+  .object({
+    orient: z.enum(["records", "split"]).default("records"),
+    pretty: z.boolean().default(false),
+  })
+  .strip();
+
 export const TransformSplitParamsSchema = z
 	.object({
 		sourceColumn: z.string().min(1, 'Source column is required').default('text'),
@@ -308,7 +334,10 @@ export const TransformParamsSchemaByKind = {
   dedupe: TransformDedupeParamsSchema,
   split: TransformSplitParamsSchema,
   quality_gate: TransformQualityGateParamsSchema,
-  sql: TransformSqlParamsSchema
+  sql: TransformSqlParamsSchema,
+  json_to_table: TransformJsonToTableParamsSchema,
+  text_to_table: TransformTextToTableParamsSchema,
+  table_to_json: TransformTableToJsonParamsSchema,
 } as const
 
 // ---- inferred types (single source of truth) ----
@@ -324,6 +353,9 @@ export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchem
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
 export type TransformSplitParams = z.infer<typeof TransformSplitParamsSchema>;
 export type TransformQualityGateParams = z.infer<typeof TransformQualityGateParamsSchema>;
+export type TransformJsonToTableParams = z.infer<typeof TransformJsonToTableParamsSchema>;
+export type TransformTextToTableParams = z.infer<typeof TransformTextToTableParamsSchema>;
+export type TransformTableToJsonParams = z.infer<typeof TransformTableToJsonParamsSchema>;
 
 
 // ---- common params (shared across all ops) ----
@@ -402,6 +434,21 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("sql"),
     sql: TransformSqlParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("json_to_table"),
+    json_to_table: TransformJsonToTableParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("text_to_table"),
+    text_to_table: TransformTextToTableParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("table_to_json"),
+    table_to_json: TransformTableToJsonParamsSchema
   }).strip()
 ]);
 

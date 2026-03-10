@@ -8,6 +8,7 @@ python-dateutil==2.8.2
 orjson==3.10.7
 tenacity==9.0.0
 fastmcp==2.0.0
+duckdb==1.1.3
 
 # Core data stack (small default path)
 polars==1.8.2

@@ -3249,6 +3249,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		// graphStore.ts (inside your graphStore object)
 		setTransformKind(nodeId: string, nextKind: TransformKind) {
 			const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
+			const nextPorts: { in: PortType; out: PortType } =
+				nextKind === 'json_to_table'
+					? { in: 'json', out: 'table' }
+					: nextKind === 'text_to_table'
+						? { in: 'text', out: 'table' }
+						: nextKind === 'table_to_json'
+							? { in: 'table', out: 'json' }
+							: { in: 'table', out: 'table' };
 
 			// 1) update structural subtype on the node
 			update((s) => {
@@ -3262,6 +3270,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							data: {
 								...n.data,
 								transformKind: nextKind, // âœ… structural
+								ports: nextPorts,
 								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 							}
 						}

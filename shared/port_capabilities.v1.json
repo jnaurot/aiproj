@@ -7,8 +7,8 @@
       "out": ["text", "json", "embeddings"]
     },
     "transform": {
-      "in": ["table"],
-      "out": ["table"]
+      "in": ["table", "json", "text"],
+      "out": ["table", "json"]
     },
     "source": {
       "in": [],

@@ -2544,6 +2544,9 @@ async function scrollToBottom() {
 											<option value="split">split</option>
 											<option value="quality_gate">quality_gate</option>
 											<option value="sql">sql</option>
+											<option value="json_to_table">json_to_table</option>
+											<option value="text_to_table">text_to_table</option>
+											<option value="table_to_json">table_to_json</option>
 										{:else if $selectedNode.data.kind === 'tool'}
 											<option value="mcp">mcp</option>
 											<option value="http">http</option>

@@ -18,6 +18,9 @@
 		if (op === 'dedupe') return 'Deduplicate';
 		if (op === 'quality_gate') return (params.quality_gate?.checks || []).length > 0 ? 'Quality gate' : '-';
 		if (op === 'sql') return params.sql?.query ? 'SQL Query' : '-';
+		if (op === 'json_to_table') return 'JSON to table';
+		if (op === 'text_to_table') return 'Text to table';
+		if (op === 'table_to_json') return 'Table to JSON';
 		return '-';
 	}
 

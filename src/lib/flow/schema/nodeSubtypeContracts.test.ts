@@ -78,6 +78,29 @@ describe('node subtype contract schemas', () => {
 				],
 			}).success
 		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.json_to_table.safeParse({
+				orient: 'records',
+				rowsKey: 'rows',
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.text_to_table.safeParse({
+				mode: 'csv',
+				column: 'text',
+				delimiter: ',',
+				hasHeader: true,
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.table_to_json.safeParse({
+				orient: 'records',
+				pretty: false,
+			}).success
+		).toBe(true);
 	});
 
 	it('accepts valid tool providers and component params', () => {

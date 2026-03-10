@@ -29,6 +29,9 @@ OP_KEYS = {
     "split": "split",
     "quality_gate": "quality_gate",
     "sql": "sql",
+    "json_to_table": "json_to_table",
+    "text_to_table": "text_to_table",
+    "table_to_json": "table_to_json",
 }
 
 JOIN_HOWS = {"inner", "left", "right", "full"}
@@ -109,7 +112,7 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
     # keep only the active op payload
     keep_key = OP_KEYS[op]
-    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","quality_gate","sql","code"):
+    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","quality_gate","sql","json_to_table","text_to_table","table_to_json","code"):
         if k != keep_key:
             p.pop(k, None)
 
@@ -356,6 +359,41 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
             "stopOnFail": bool(raw.get("stopOnFail", True)),
         }
 
+    if op == "json_to_table":
+        raw = p.get("json_to_table") if isinstance(p.get("json_to_table"), dict) else {}
+        orient = str(raw.get("orient") or "records").strip().lower()
+        if orient not in {"records", "object"}:
+            orient = "records"
+        rows_key = str(raw.get("rowsKey") or "rows").strip() or "rows"
+        p["json_to_table"] = {
+            "orient": orient,
+            "rowsKey": rows_key,
+        }
+
+    if op == "text_to_table":
+        raw = p.get("text_to_table") if isinstance(p.get("text_to_table"), dict) else {}
+        mode = str(raw.get("mode") or "lines").strip().lower()
+        if mode not in {"lines", "csv", "tsv"}:
+            mode = "lines"
+        column = str(raw.get("column") or "text").strip() or "text"
+        delimiter = str(raw.get("delimiter") or ",")
+        p["text_to_table"] = {
+            "mode": mode,
+            "column": column,
+            "delimiter": delimiter,
+            "hasHeader": bool(raw.get("hasHeader", True)),
+        }
+
+    if op == "table_to_json":
+        raw = p.get("table_to_json") if isinstance(p.get("table_to_json"), dict) else {}
+        orient = str(raw.get("orient") or "records").strip().lower()
+        if orient not in {"records", "split"}:
+            orient = "records"
+        p["table_to_json"] = {
+            "orient": orient,
+            "pretty": bool(raw.get("pretty", False)),
+        }
+
     return p
 
 def inputs_fingerprint(inputs: List[Tuple[str, str]]) -> List[Dict[str, str]]:
@@ -443,6 +481,20 @@ def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
     out = io.StringIO()
     df.to_csv(out, index=False, lineterminator="\n")
     return out.getvalue().encode("utf-8")
+
+
+def df_to_json_bytes(df: pd.DataFrame, *, orient: str = "records", pretty: bool = False) -> bytes:
+    if orient == "split":
+        payload = {
+            "columns": [str(c) for c in list(df.columns)],
+            "index": [int(i) for i in range(len(df))],
+            "data": df.values.tolist(),
+        }
+    else:
+        payload = df.to_dict(orient="records")
+    if pretty:
+        return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _execute_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
@@ -934,6 +986,23 @@ def execute_transform_op(
     if op == "quality_gate":
         spec = params["quality_gate"]
         return _execute_quality_gate_op(primary_df, spec)
+    if op == "json_to_table":
+        return primary_df
+    if op == "text_to_table":
+        spec = params.get("text_to_table") if isinstance(params.get("text_to_table"), dict) else {}
+        mode = str(spec.get("mode") or "lines").strip().lower()
+        if mode == "lines":
+            column = str(spec.get("column") or "text").strip() or "text"
+            if list(primary_df.columns) == [column]:
+                return primary_df
+            if "text" in primary_df.columns:
+                return primary_df.rename(columns={"text": column})
+            if len(primary_df.columns) == 1:
+                return primary_df.rename(columns={str(primary_df.columns[0]): column})
+            return primary_df
+        return primary_df
+    if op == "table_to_json":
+        return primary_df
 
     if duckdb is None:
         raise ModuleNotFoundError("duckdb is required for non-split transform operations")
@@ -1134,12 +1203,29 @@ def run_transform(
     else:
         out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
 
+    if op == "table_to_json":
+        spec = params.get("table_to_json") if isinstance(params.get("table_to_json"), dict) else {}
+        orient = str(spec.get("orient") or "records").strip().lower()
+        pretty = bool(spec.get("pretty", False))
+        payload = df_to_json_bytes(out_df, orient=orient, pretty=pretty)
+        meta = {
+            "row_count": int(len(out_df)),
+            "columns": list(out_df.columns),
+            "content_hash": sha256_hex(payload),
+            "format": "json",
+            "port_type": "json",
+        }
+        if quality_gate_report is not None:
+            meta["quality_gate"] = quality_gate_report
+        return TransformResult(payload_bytes=payload, mime_type="application/json; charset=utf-8", meta=meta)
+
     payload = df_to_csv_bytes(out_df)
     meta = {
         "row_count": int(len(out_df)),
         "columns": list(out_df.columns),
         "content_hash": sha256_hex(payload),
         "format": "csv",
+        "port_type": "table",
     }
     if quality_gate_report is not None:
         meta["quality_gate"] = quality_gate_report

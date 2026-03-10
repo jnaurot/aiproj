@@ -11,7 +11,10 @@ import type {
 	TransformDedupeParams,
 	TransformQualityGateParams,
 	TransformSqlParams,
-	TransformSplitParams
+	TransformSplitParams,
+	TransformJsonToTableParams,
+	TransformTextToTableParams,
+	TransformTableToJsonParams
 } from '$lib/flow/schema/transform';
 
 export const defaultTransformFilterParams: TransformFilterParams = {
@@ -78,6 +81,23 @@ export const defaultTransformDedupeParams: TransformDedupeParams = {
 export const defaultTransformSqlParams: TransformSqlParams = {
 	dialect: 'duckdb',
 	query: 'SELECT * FROM input LIMIT 10'
+};
+
+export const defaultTransformJsonToTableParams: TransformJsonToTableParams = {
+	orient: 'records',
+	rowsKey: 'rows'
+};
+
+export const defaultTransformTextToTableParams: TransformTextToTableParams = {
+	mode: 'lines',
+	column: 'text',
+	delimiter: ',',
+	hasHeader: true
+};
+
+export const defaultTransformTableToJsonParams: TransformTableToJsonParams = {
+	orient: 'records',
+	pretty: false
 };
 
 export const defaultTransformSplitParams: TransformSplitParams = {
@@ -184,6 +204,27 @@ export const defaultTransformParamsByKind = {
 		notes: '',
 		cache: { enabled: false },
 		sql: defaultTransformSqlParams
+	},
+	json_to_table: {
+		op: 'json_to_table',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		json_to_table: defaultTransformJsonToTableParams
+	},
+	text_to_table: {
+		op: 'text_to_table',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		text_to_table: defaultTransformTextToTableParams
+	},
+	table_to_json: {
+		op: 'table_to_json',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		table_to_json: defaultTransformTableToJsonParams
 	}
 } as const;
 

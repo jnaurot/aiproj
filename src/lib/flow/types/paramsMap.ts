@@ -38,7 +38,10 @@ import type {
 	TransformDedupeParams,
 	TransformSplitParams,
 	TransformQualityGateParams,
-	TransformSqlParams
+	TransformSqlParams,
+	TransformJsonToTableParams,
+	TransformTextToTableParams,
+	TransformTableToJsonParams
 } from '$lib/flow/schema/transform';
 export type TransformKind =
 	| 'filter'
@@ -52,7 +55,10 @@ export type TransformKind =
 	| 'dedupe'
 	| 'split'
 	| 'quality_gate'
-	| 'sql';
+	| 'sql'
+	| 'json_to_table'
+	| 'text_to_table'
+	| 'table_to_json';
 
 export type TransformParamsByKind = {
 	filter: TransformFilterParams;
@@ -67,6 +73,9 @@ export type TransformParamsByKind = {
 	split: TransformSplitParams;
 	quality_gate: TransformQualityGateParams;
 	sql: TransformSqlParams;
+	json_to_table: TransformJsonToTableParams;
+	text_to_table: TransformTextToTableParams;
+	table_to_json: TransformTableToJsonParams;
 };
 
 export type ToolProvider = 'mcp' | 'http' | 'function' | 'python' | 'js' | 'shell' | 'db' | 'builtin';

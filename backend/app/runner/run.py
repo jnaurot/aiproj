@@ -909,7 +909,7 @@ def _transform_output_columns(
         if emit_source_row:
             out.append({"name": "source_row", "type": "int"})
         return canonical_table_columns(out)
-    if op_l in {"sort", "limit", "dedupe", "filter", "quality_gate", "sql"}:
+    if op_l in {"sort", "limit", "dedupe", "filter", "quality_gate", "sql", "json_to_table", "text_to_table"}:
         # sql may differ but keep deterministic fallback if no parser.
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
     return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
@@ -3076,19 +3076,35 @@ async def run_graph(
                     ports = (n.get("data", {}).get("ports", {}) or {})
                     in_contract = ports.get("in") or "table"
                     out_contract = ports.get("out") or "table"
-                    if in_contract != "table":
+                    transform_kind = str((n.get("data", {}) or {}).get("transformKind") or "").lower()
+                    op_hint = str((params or {}).get("op") or "").lower()
+                    transform_op = op_hint or transform_kind
+                    allowed_in_contracts = (
+                        {"json"} if transform_op == "json_to_table"
+                        else {"text"} if transform_op == "text_to_table"
+                        else {"table"} if transform_op == "table_to_json"
+                        else {"table", "json", "text"}
+                    )
+                    expected_out_contract = "json" if transform_op == "table_to_json" else "table"
+                    if in_contract not in allowed_in_contracts:
                         raise ContractMismatchError(
-                            f"Transform output contract mismatch: in must be 'table', got '{in_contract}'",
+                            (
+                                "Transform output contract mismatch: "
+                                f"in must be one of {sorted(allowed_in_contracts)}, got '{in_contract}'"
+                            ),
                             details=_contract_details(
-                                expected={"portType": "table"},
+                                expected={"portTypes": sorted(allowed_in_contracts)},
                                 actual={"portType": str(in_contract)},
                             ),
                         )
-                    if out_contract != "table":
+                    if out_contract != expected_out_contract:
                         raise ContractMismatchError(
-                            f"Transform output contract mismatch: out must be 'table', got '{out_contract}'",
+                            (
+                                "Transform output contract mismatch: "
+                                f"out must be '{expected_out_contract}', got '{out_contract}'"
+                            ),
                             details=_contract_details(
-                                expected={"portType": "table"},
+                                expected={"portType": expected_out_contract},
                                 actual={"portType": str(out_contract)},
                             ),
                         )
@@ -3101,8 +3117,6 @@ async def run_graph(
                         "message": "transform: start",
                         "nodeId": node_id,
                     })
-                    transform_kind = str((n.get("data", {}) or {}).get("transformKind") or "").lower()
-                    op_hint = str((params or {}).get("op") or "").lower()
                     is_join_transform = transform_kind == "join" or op_hint == "join"
                     if is_join_transform:
                         join_edges = [e for e in edges.values() if e.get("target") == node_id]
@@ -3199,6 +3213,13 @@ async def run_graph(
                         required_cols_by_artifact: dict[str, list[str]] = {}
                         upstream_source_by_artifact: dict[str, str] = {}
                         upstream_port_by_artifact: dict[str, str] = {}
+                        norm = _normalized_params_for_exec_key(kind=kind, node=n, params=params)
+                        op = str(norm.get("op") or "").lower()
+                        expected_payload_type = (
+                            "json" if op == "json_to_table"
+                            else "text" if op == "text_to_table"
+                            else str(in_contract or "table")
+                        )
 
                         for e in edges.values():
                             if e.get("target") != node_id:
@@ -3225,15 +3246,15 @@ async def run_graph(
                             ps_type = str(ps_type_raw or "").lower()
                             if ps_type == "string":
                                 ps_type = "text"
-                            if ps_type and ps_type != "table":
+                            if ps_type and ps_type != expected_payload_type:
                                 raise ContractMismatchError(
                                     (
                                         "Transform payload schema mismatch: "
-                                        f"expected table input but got '{ps_type}'"
+                                        f"expected {expected_payload_type} input but got '{ps_type}'"
                                     ),
                                     code="PAYLOAD_SCHEMA_MISMATCH",
                                     details=_contract_details(
-                                        expected={"payloadType": "table"},
+                                        expected={"payloadType": expected_payload_type},
                                         actual={
                                             "payloadType": ps_type,
                                             "artifactId": upstream_artifact_id,
@@ -3241,7 +3262,7 @@ async def run_graph(
                                     ),
                                 )
                             req_cols = required_cols_by_artifact.get(upstream_artifact_id)
-                            if req_cols:
+                            if req_cols and expected_payload_type == "table":
                                 payload_schema = getattr(art, "payload_schema", None) or {}
                                 src_cols = _extract_table_columns_from_payload_schema(payload_schema)
                                 src_col_names = []
@@ -3282,7 +3303,7 @@ async def run_graph(
                                 },
                             }
 
-                        op_preview = str((_normalized_params_for_exec_key(kind=kind, node=n, params=params).get("op") or "")).lower()
+                        op_preview = op
                         input_schema_summary = [
                             {
                                 "port": port,
@@ -3317,9 +3338,6 @@ async def run_graph(
                                 join_lookup[upstream_node_id] = load_table_from_artifact_bytes(art.mime_type or "", b)
                             except Exception:
                                 pass
-
-                        # Reuse the same normalized transform params contract used for hashing.
-                        norm = _normalized_params_for_exec_key(kind=kind, node=n, params=params)
 
                         # 3) execute (cache resolve already happened before node execution)
                         op = str(norm.get("op") or "")
@@ -3762,165 +3780,193 @@ async def run_graph(
                         elif llm_output_mode == "embeddings":
                             llm_port_type = "embeddings"
                         created_at_dt = datetime.now(timezone.utc)
-                        primary_cols_for_schema = input_columns.get(primary_port, [])
-                        other_cols_for_schema: list[str] = []
-                        if op == "join":
-                            join_spec = norm.get("join") or {}
-                            clauses = join_spec.get("clauses") or []
-                            seen_nodes: list[str] = []
-                            if isinstance(clauses, list):
-                                for clause in clauses:
-                                    if not isinstance(clause, dict):
-                                        continue
-                                    ln = str(clause.get("leftNodeId") or "")
-                                    rn = str(clause.get("rightNodeId") or "")
-                                    if ln and ln not in seen_nodes:
-                                        seen_nodes.append(ln)
-                                    if rn and rn not in seen_nodes:
-                                        seen_nodes.append(rn)
-                            merged_cols: list[str] = []
-                            for nid in seen_nodes:
-                                df = join_lookup.get(nid)
-                                if df is None:
-                                    continue
-                                merged_cols.extend([str(c) for c in list(getattr(df, "columns", []))])
-                            other_cols_for_schema = _stable_unique_strings(merged_cols)
-                        output_cols_core = _transform_output_columns(
-                            op=op,
-                            norm=norm,
-                            primary_cols=primary_cols_for_schema,
-                            other_cols=other_cols_for_schema,
-                        )
-                        runtime_cols = canonical_table_columns(
-                            [{"name": c, "type": "unknown"} for c in (res.meta.get("columns") or [])]
-                        )
-                        # Prefer runtime columns when available; deterministic fallback otherwise.
-                        output_cols = runtime_cols if runtime_cols else output_cols_core
+                        transform_port_type = str(
+                            (
+                                (res.meta.get("port_type") if isinstance(res.meta, dict) else None)
+                                or "table"
+                            )
+                        ).strip().lower() or "table"
+                        table_schema_env: Optional[Dict[str, Any]] = None
+                        schema_for_metadata: Optional[Dict[str, Any]] = None
 
-                        # Preserve input schema types for transforms where output columns are structurally derived
-                        # from known input columns.
-                        primary_type_by_name: dict[str, str] = {
-                            str(c.get("name") or ""): str(c.get("type") or "unknown")
-                            for c in (input_schema_cols_by_port.get(primary_port) or [])
-                            if isinstance(c, dict) and str(c.get("name") or "").strip()
-                        }
-                        all_name_counts: dict[str, int] = {}
-                        all_name_type: dict[str, str] = {}
-                        for cols in input_schema_cols_by_port.values():
-                            for c in cols or []:
+                        if transform_port_type == "table":
+                            primary_cols_for_schema = input_columns.get(primary_port, [])
+                            other_cols_for_schema: list[str] = []
+                            if op == "join":
+                                join_spec = norm.get("join") or {}
+                                clauses = join_spec.get("clauses") or []
+                                seen_nodes: list[str] = []
+                                if isinstance(clauses, list):
+                                    for clause in clauses:
+                                        if not isinstance(clause, dict):
+                                            continue
+                                        ln = str(clause.get("leftNodeId") or "")
+                                        rn = str(clause.get("rightNodeId") or "")
+                                        if ln and ln not in seen_nodes:
+                                            seen_nodes.append(ln)
+                                        if rn and rn not in seen_nodes:
+                                            seen_nodes.append(rn)
+                                merged_cols: list[str] = []
+                                for nid in seen_nodes:
+                                    df = join_lookup.get(nid)
+                                    if df is None:
+                                        continue
+                                    merged_cols.extend([str(c) for c in list(getattr(df, "columns", []))])
+                                other_cols_for_schema = _stable_unique_strings(merged_cols)
+                            output_cols_core = _transform_output_columns(
+                                op=op,
+                                norm=norm,
+                                primary_cols=primary_cols_for_schema,
+                                other_cols=other_cols_for_schema,
+                            )
+                            runtime_cols = canonical_table_columns(
+                                [{"name": c, "type": "unknown"} for c in (res.meta.get("columns") or [])]
+                            )
+                            output_cols = runtime_cols if runtime_cols else output_cols_core
+
+                            primary_type_by_name: dict[str, str] = {
+                                str(c.get("name") or ""): str(c.get("type") or "unknown")
+                                for c in (input_schema_cols_by_port.get(primary_port) or [])
+                                if isinstance(c, dict) and str(c.get("name") or "").strip()
+                            }
+                            all_name_counts: dict[str, int] = {}
+                            all_name_type: dict[str, str] = {}
+                            for cols in input_schema_cols_by_port.values():
+                                for c in cols or []:
+                                    if not isinstance(c, dict):
+                                        continue
+                                    ncol = str(c.get("name") or "").strip()
+                                    if not ncol:
+                                        continue
+                                    all_name_counts[ncol] = int(all_name_counts.get(ncol, 0)) + 1
+                                    if ncol not in all_name_type:
+                                        all_name_type[ncol] = str(c.get("type") or "unknown")
+
+                            rename_map = ((norm.get("rename") or {}).get("map") or {}) if op == "rename" else {}
+                            rename_inv: dict[str, str] = {}
+                            if isinstance(rename_map, dict):
+                                for src in primary_cols_for_schema:
+                                    dst = str(rename_map.get(src, src))
+                                    rename_inv[dst] = str(src)
+
+                            derive_names = set()
+                            if op == "derive":
+                                for d in ((norm.get("derive") or {}).get("columns") or []):
+                                    if isinstance(d, dict):
+                                        name = str(d.get("name") or "").strip()
+                                        if name:
+                                            derive_names.add(name)
+
+                            aggregate_group_by = set()
+                            if op == "aggregate":
+                                aggregate_group_by = {
+                                    str(c).strip()
+                                    for c in (((norm.get("aggregate") or {}).get("groupBy") or []))
+                                    if str(c).strip()
+                                }
+
+                            enriched_cols: list[dict[str, str]] = []
+                            passthrough_ops = {"filter", "sort", "limit", "dedupe", "quality_gate", "sql", "select"}
+                            for c in output_cols:
                                 if not isinstance(c, dict):
                                     continue
-                                ncol = str(c.get("name") or "").strip()
-                                if not ncol:
-                                    continue
-                                all_name_counts[ncol] = int(all_name_counts.get(ncol, 0)) + 1
-                                if ncol not in all_name_type:
-                                    all_name_type[ncol] = str(c.get("type") or "unknown")
-
-                        rename_map = ((norm.get("rename") or {}).get("map") or {}) if op == "rename" else {}
-                        rename_inv: dict[str, str] = {}
-                        if isinstance(rename_map, dict):
-                            for src in primary_cols_for_schema:
-                                dst = str(rename_map.get(src, src))
-                                rename_inv[dst] = str(src)
-
-                        derive_names = set()
-                        if op == "derive":
-                            for d in ((norm.get("derive") or {}).get("columns") or []):
-                                if isinstance(d, dict):
-                                    name = str(d.get("name") or "").strip()
-                                    if name:
-                                        derive_names.add(name)
-
-                        aggregate_group_by = set()
-                        if op == "aggregate":
-                            aggregate_group_by = {
-                                str(c).strip()
-                                for c in (((norm.get("aggregate") or {}).get("groupBy") or []))
-                                if str(c).strip()
-                            }
-
-                        enriched_cols: list[dict[str, str]] = []
-                        passthrough_ops = {"filter", "sort", "limit", "dedupe", "quality_gate", "sql", "select"}
-                        for c in output_cols:
-                            if not isinstance(c, dict):
-                                continue
-                            col_name = str(c.get("name") or "").strip()
-                            col_type = str(c.get("type") or "unknown").strip() or "unknown"
-                            next_type = col_type
-                            if col_name and col_type == "unknown":
-                                if op == "rename":
-                                    src = rename_inv.get(col_name, col_name)
-                                    next_type = primary_type_by_name.get(src, "unknown")
-                                elif op == "derive":
-                                    if col_name not in derive_names:
+                                col_name = str(c.get("name") or "").strip()
+                                col_type = str(c.get("type") or "unknown").strip() or "unknown"
+                                next_type = col_type
+                                if col_name and col_type == "unknown":
+                                    if op == "rename":
+                                        src = rename_inv.get(col_name, col_name)
+                                        next_type = primary_type_by_name.get(src, "unknown")
+                                    elif op == "derive":
+                                        if col_name not in derive_names:
+                                            next_type = primary_type_by_name.get(col_name, "unknown")
+                                    elif op == "aggregate":
+                                        if col_name in aggregate_group_by:
+                                            next_type = primary_type_by_name.get(col_name, "unknown")
+                                    elif op in passthrough_ops:
                                         next_type = primary_type_by_name.get(col_name, "unknown")
-                                elif op == "aggregate":
-                                    if col_name in aggregate_group_by:
-                                        next_type = primary_type_by_name.get(col_name, "unknown")
-                                elif op in passthrough_ops:
-                                    next_type = primary_type_by_name.get(col_name, "unknown")
-                                # generic fallback: if a column name is unique across all inputs, preserve its type
-                                if next_type == "unknown" and all_name_counts.get(col_name, 0) == 1:
-                                    next_type = all_name_type.get(col_name, "unknown")
-                            enriched_cols.append({"name": col_name, "type": next_type})
-                        output_cols = canonical_table_columns(enriched_cols if enriched_cols else output_cols)
-                        upstream_refs = [
-                            {
-                                "nodeId": input_provenance_by_port.get(port, {})
-                                .get("upstream", {})
-                                .get("nodeId"),
-                                "port": input_provenance_by_port.get(port, {})
-                                .get("upstream", {})
-                                .get("port", port),
-                            }
-                            for port, _ in input_refs
-                        ]
-                        dedupe_provenance: dict[str, Any] = {}
-                        if op == "dedupe":
-                            dedupe_spec = norm.get("dedupe") or {}
-                            by_cols = dedupe_spec.get("by") if isinstance(dedupe_spec.get("by"), list) else []
-                            dedupe_provenance = {
-                                "op": "dedupe",
-                                "by": [str(c) for c in by_cols if str(c).strip()],
-                                "allColumns": len([str(c) for c in by_cols if str(c).strip()]) == 0,
-                                "keep": "first",
-                            }
+                                    if next_type == "unknown" and all_name_counts.get(col_name, 0) == 1:
+                                        next_type = all_name_type.get(col_name, "unknown")
+                                enriched_cols.append({"name": col_name, "type": next_type})
+                            output_cols = canonical_table_columns(enriched_cols if enriched_cols else output_cols)
+                            upstream_refs = [
+                                {
+                                    "nodeId": input_provenance_by_port.get(port, {})
+                                    .get("upstream", {})
+                                    .get("nodeId"),
+                                    "port": input_provenance_by_port.get(port, {})
+                                    .get("upstream", {})
+                                    .get("port", port),
+                                }
+                                for port, _ in input_refs
+                            ]
+                            dedupe_provenance: dict[str, Any] = {}
+                            if op == "dedupe":
+                                dedupe_spec = norm.get("dedupe") or {}
+                                by_cols = dedupe_spec.get("by") if isinstance(dedupe_spec.get("by"), list) else []
+                                dedupe_provenance = {
+                                    "op": "dedupe",
+                                    "by": [str(c) for c in by_cols if str(c).strip()],
+                                    "allColumns": len([str(c) for c in by_cols if str(c).strip()]) == 0,
+                                    "keep": "first",
+                                }
 
-                        table_schema_env = _table_schema_envelope(
-                            columns=output_cols,
-                            row_count=(res.meta.get("row_count") if isinstance(res.meta, dict) else None),
-                            provenance={
-                                "sourceKind": "transform",
-                                "upstream": upstream_refs,
-                                **dedupe_provenance,
-                            },
-                        )
-                        output_schema_cols = _compact_typed_columns((table_schema_env.get("table", {}) or {}).get("columns") or [])
-                        output_row_count = (
-                            ((table_schema_env.get("stats") or {}).get("rowCount"))
-                            if isinstance(table_schema_env, dict)
-                            else None
-                        )
-                        output_schema_msg = (
-                            f"transform: output-schema op={op} rowCount={output_row_count if output_row_count is not None else 'unknown'} "
-                            f"columns={output_schema_cols}"
-                        )
-                        await _emit({
-                            "type": "log",
-                            "runId": run_id,
-                            "at": iso_now(),
-                            "level": "info",
-                            "message": output_schema_msg,
-                            "nodeId": node_id,
-                        })
-                        print(f"[transform-output-schema] runId={run_id} nodeId={node_id} {output_schema_msg}")
-                        base_payload_schema = {
-                            "schema_version": 1,
-                            "type": "table",
-                            "columns": output_cols,
-                            "schema": table_schema_env,
-                        }
+                            table_schema_env = _table_schema_envelope(
+                                columns=output_cols,
+                                row_count=(res.meta.get("row_count") if isinstance(res.meta, dict) else None),
+                                provenance={
+                                    "sourceKind": "transform",
+                                    "upstream": upstream_refs,
+                                    **dedupe_provenance,
+                                },
+                            )
+                            output_schema_cols = _compact_typed_columns((table_schema_env.get("table", {}) or {}).get("columns") or [])
+                            output_row_count = (
+                                ((table_schema_env.get("stats") or {}).get("rowCount"))
+                                if isinstance(table_schema_env, dict)
+                                else None
+                            )
+                            output_schema_msg = (
+                                f"transform: output-schema op={op} rowCount={output_row_count if output_row_count is not None else 'unknown'} "
+                                f"columns={output_schema_cols}"
+                            )
+                            await _emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": output_schema_msg,
+                                "nodeId": node_id,
+                            })
+                            print(f"[transform-output-schema] runId={run_id} nodeId={node_id} {output_schema_msg}")
+                            base_payload_schema = {
+                                "schema_version": 1,
+                                "type": "table",
+                                "columns": output_cols,
+                                "schema": table_schema_env,
+                            }
+                            schema_for_metadata = table_schema_env
+                        else:
+                            decoded = res.payload_bytes.decode("utf-8", errors="replace")
+                            try:
+                                parsed = json.loads(decoded)
+                            except Exception:
+                                parsed = decoded
+                            json_schema = _json_payload_value_schema(parsed)
+                            base_payload_schema = {
+                                "schema_version": 1,
+                                "type": "json",
+                                "schema": json_schema,
+                            }
+                            schema_for_metadata = base_payload_schema
+                            await _emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": f"transform: output-schema op={op} type={transform_port_type}",
+                                "nodeId": node_id,
+                            })
                         schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
                         if not schema_fp:
                             schema_fp = contract_schema_fingerprint(
@@ -3947,8 +3993,8 @@ async def run_graph(
                             contract_fingerprint=contract_fingerprint,
                             schema_fingerprint=schema_fp,
                             mime_type=res.mime_type,
-                            port_type="table",
-                            schema=table_schema_env,
+                            port_type=transform_port_type,
+                            schema=schema_for_metadata,
                             created_at_iso=created_at_dt.isoformat(),
                             run_id=run_id,
                             graph_id=context.graph_id,
@@ -3970,7 +4016,7 @@ async def run_graph(
                             created_at=created_at_dt,
                             execution_version=context.execution_version,
                             mime_type=res.mime_type,
-                            port_type="table",
+                            port_type=transform_port_type,
                             size_bytes=len(res.payload_bytes),
                             storage_uri=f"artifact://{artifact_id}",
                             payload_schema=base_payload_schema,
@@ -4011,7 +4057,7 @@ async def run_graph(
                             "at": iso_now(),
                             "artifactId": committed_artifact_id,
                             "mimeType": res.mime_type,
-                            "portType": "table",
+                            "portType": transform_port_type,
                         })
 
                         # return a NodeOutput for legacy metadata flow

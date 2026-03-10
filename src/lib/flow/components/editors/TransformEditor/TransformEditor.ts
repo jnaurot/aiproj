@@ -11,8 +11,11 @@ import TransformDedupeEditor from './TransformDedupeEditor.svelte';
 import TransformSplitEditor from './TransformSplitEditor.svelte';
 import TransformQualityGateEditor from './TransformQualityGateEditor.svelte';
 import TransformSqlEditor from './TransformSqlEditor.svelte';
+import TransformJsonToTableEditor from './TransformJsonToTableEditor.svelte';
+import TransformTextToTableEditor from './TransformTextToTableEditor.svelte';
+import TransformTableToJsonEditor from './TransformTableToJsonEditor.svelte';
 
-// filter, select, rename, derive, aggregate, join, sort, limit, dedupe, split, quality_gate, sql
+// filter, select, rename, derive, aggregate, join, sort, limit, dedupe, split, quality_gate, sql, json_to_table, text_to_table, table_to_json
 
 export type EditorCommitMode = 'draft' | 'immediate';
 
@@ -28,7 +31,10 @@ export const TransformEditorCommitModeByKind = {
 	dedupe: 'immediate',
 	split: 'draft',
 	quality_gate: 'immediate',
-	sql: 'draft'
+	sql: 'draft',
+	json_to_table: 'immediate',
+	text_to_table: 'immediate',
+	table_to_json: 'immediate',
 } as const satisfies Record<string, EditorCommitMode>;
 
 export const TransformEditorByKind = {
@@ -43,5 +49,8 @@ export const TransformEditorByKind = {
     dedupe: TransformDedupeEditor,
     split: TransformSplitEditor,
     quality_gate: TransformQualityGateEditor,
-    sql: TransformSqlEditor
+    sql: TransformSqlEditor,
+	json_to_table: TransformJsonToTableEditor,
+	text_to_table: TransformTextToTableEditor,
+	table_to_json: TransformTableToJsonEditor,
 } as const;
