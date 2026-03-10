@@ -4,12 +4,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from .component_revisions import ComponentRevisionStore
 from .feature_flags import get_feature_flags
 from .graph_revisions import GraphRevisionStore
+from .model_registry import ModelRegistryStore
 from .runner.capabilities import capabilities_response, capability_signature
 from .routes.components import router as components_router
 from .routes.env_profiles import router as env_profiles_router
 from .routes.experiments import router as experiments_router
 from .routes.graphs import router as graphs_router
 from .routes.maintenance import router as maintenance_router
+from .routes.models import router as models_router
 from .routes.runs import router as runs_router
 from .routes.snapshots import router as snapshots_router
 from .runtime import RuntimeManager
@@ -23,6 +25,7 @@ async def startup():
     app.state.runtime = RuntimeManager()
     app.state.graph_revisions = GraphRevisionStore("./data/graphs/graphs.sqlite")
     app.state.component_revisions = ComponentRevisionStore("./data/components/components.sqlite")
+    app.state.model_registry = ModelRegistryStore("./data/models/models.sqlite")
     # Runner expansion reads component revisions from runtime_ref (RuntimeManager).
     # Keep app.state and runtime_ref aligned.
     app.state.runtime.component_revisions = app.state.component_revisions
@@ -41,6 +44,7 @@ app.add_middleware(
 
 app.include_router(runs_router, prefix="/runs")
 app.include_router(experiments_router, prefix="/experiments")
+app.include_router(models_router, prefix="/models")
 app.include_router(graphs_router, prefix="/graphs")
 app.include_router(components_router, prefix="/components")
 app.include_router(env_profiles_router, prefix="/env")

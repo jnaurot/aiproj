@@ -281,6 +281,9 @@ async def reset_storage_maintenance(
         rt.runs.clear()
     if hasattr(rt, "_artifact_owner") and isinstance(rt._artifact_owner, dict):
         rt._artifact_owner.clear()
+    model_registry = getattr(request.app.state, "model_registry", None)
+    if model_registry is not None and hasattr(model_registry, "clear_all"):
+        model_registry.clear_all()
 
     response = {
         "ok": True,
