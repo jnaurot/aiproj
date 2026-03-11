@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 
-import { __setStrictSchemaFeatureFlagsForTest } from '$lib/flow/portCapabilities';
+import { __setStrictSchemaFeatureFlagsForTest } from '$lib/flow/schemaCapabilities';
 import { graphStore } from './graphStore';
 
 describe('schema-first mixed-format pipeline scenarios', () => {

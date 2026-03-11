@@ -35,7 +35,6 @@ async def test_run_events_persist_and_replay_after_restart(monkeypatch, tmp_path
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],

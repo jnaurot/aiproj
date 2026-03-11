@@ -28,10 +28,10 @@
 	let discoveredTables: DbSchemaTable[] = [];
 	let inputTablesFromLastRun: Array<{
 		table: string;
-		artifact_id: string;
+		artifactId: string;
 		rows: number;
 		columns: string[];
-		typed_columns: Array<{ name: string; type: string; nativeType: string }>;
+		typedColumns: Array<{ name: string; type: string; nativeType: string }>;
 	}> = [];
 	let inputTablesError: string | null = null;
 	let lastInputTablesSignature = '';
@@ -149,17 +149,17 @@
 			const body = await res.json();
 			const payload = (body?.payload ?? {}) as Record<string, unknown>;
 			const result = (payload?.result ?? {}) as Record<string, unknown>;
-			const raw = Array.isArray(result?.input_tables) ? result.input_tables : [];
+			const raw = Array.isArray(result?.inputTables) ? result.inputTables : [];
 			inputTablesFromLastRun = raw
 				.map((entry) => {
 					const row = entry as Record<string, unknown>;
 					return {
 						table: String(row.table ?? '').trim(),
-						artifact_id: String(row.artifact_id ?? '').trim(),
+						artifactId: String(row.artifactId ?? '').trim(),
 						rows: Number(row.rows ?? 0),
 						columns: Array.isArray(row.columns) ? row.columns.map((c) => String(c)) : [],
-						typed_columns: Array.isArray(row.typed_columns)
-							? row.typed_columns
+						typedColumns: Array.isArray(row.typedColumns)
+							? row.typedColumns
 									.map((tc) => {
 										const t = tc as Record<string, unknown>;
 										return {
@@ -256,7 +256,7 @@
 									<div class="schemaHint">No columns.</div>
 								{:else}
 									{#each table.columns as column}
-										{@const typed = table.typed_columns.find((tc) => tc.name === column)}
+										{@const typed = table.typedColumns.find((tc) => tc.name === column)}
 										<div class="colRow">
 											<span class="colName">{column}</span>
 											<span class="colType">{typed?.type ?? 'unknown'}</span>

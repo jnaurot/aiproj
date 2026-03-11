@@ -16,7 +16,7 @@
    typography, colors, borders, radius, focus, box-sizing.
 5. `inspectorForm.css` must not set `.field/.k/.v` display/layout/positioning.
 6. Editor-specific CSS stays in each editor component and must be namespaced by an editor root class.
-7. Global overrides are allowed only when namespaced (for example `.inspector`, `.portsTheme`).
+7. Global overrides are allowed only when namespaced (for example `.inspector`).
 
 ## Primitive Contracts
 

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
-_PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
+_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
 _ARTIFACT_METADATA_VERSION = 1
 _REQUIRED_ARTIFACT_META_KEYS = {
     "metadataVersion",
@@ -29,7 +29,7 @@ _REQUIRED_ARTIFACT_META_KEYS = {
     "contractFingerprint",
     "schemaFingerprint",
     "mimeType",
-    "portType",
+    "payloadType",
     "createdAt",
 }
 
@@ -45,7 +45,7 @@ def _normalize_payload_schema(payload_schema: Optional[Dict[str, Any]]) -> Optio
     return out
 
 
-def _infer_port_type(
+def _infer_payload_type(
     *,
     payload_schema: Optional[Dict[str, Any]],
     mime_type: Optional[str],
@@ -54,7 +54,7 @@ def _infer_port_type(
     ps = _normalize_payload_schema(payload_schema)
     if isinstance(ps, dict):
         t = str(ps.get("type") or "").lower()
-        if t in _PORT_TYPES:
+        if t in _PAYLOAD_TYPES:
             return t
     mt = str(mime_type or "").lower()
     if "json" in mt:
@@ -95,7 +95,7 @@ class Artifact(BaseModel):
     execution_version: str
 
     mime_type: str
-    port_type: Optional[str] = None
+    payload_type: Optional[str] = None
     size_bytes: int
 
     storage_uri: str  # memory://<id>, file://..., s3://...
@@ -479,7 +479,7 @@ class MemoryArtifactStore:
             created_at=datetime.now(timezone.utc),
             execution_version="snapshot_v1",
             mime_type=mime_type or str(metadata.get("mimeType") or "application/octet-stream"),
-            port_type="binary",
+            payload_type="binary",
             size_bytes=len(data),
             storage_uri=f"memory://snapshots/{sid}",
             payload_schema={"schema_version": 1, "type": "binary", "snapshot": True},
@@ -608,7 +608,7 @@ class _SqliteArtifactIndex:
                     created_at TEXT NOT NULL,
                     execution_version TEXT NOT NULL,
                     mime_type TEXT,
-                    port_type TEXT,
+                    payload_type TEXT,
                     size_bytes INTEGER NOT NULL,
                     storage_uri TEXT NOT NULL,
                     payload_schema_json TEXT,
@@ -619,10 +619,10 @@ class _SqliteArtifactIndex:
                 )
                 """
             )
-            # Migration: older DBs won't have port_type.
+            # Migration: older DBs won't have payload_type.
             cols = [r[1] for r in cur.execute("PRAGMA table_info(artifacts)").fetchall()]
-            if "port_type" not in cols:
-                cur.execute("ALTER TABLE artifacts ADD COLUMN port_type TEXT")
+            if "payload_type" not in cols:
+                cur.execute("ALTER TABLE artifacts ADD COLUMN payload_type TEXT")
             if "graph_id" not in cols:
                 cur.execute("ALTER TABLE artifacts ADD COLUMN graph_id TEXT")
             if "node_id" not in cols:
@@ -636,13 +636,13 @@ class _SqliteArtifactIndex:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_graph_node_created ON artifacts(graph_id, node_id, created_at DESC)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_exec_key ON artifacts(exec_key)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_content_hash ON artifacts(content_hash)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_port_type ON artifacts(port_type)")
-            # Backfill legacy rows with null port_type.
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_artifacts_payload_type ON artifacts(payload_type)")
+            # Backfill legacy rows with null payload_type.
             null_rows = cur.execute(
                 """
                 SELECT artifact_id, mime_type, payload_schema_json, node_kind
                 FROM artifacts
-                WHERE port_type IS NULL OR TRIM(port_type) = ''
+                WHERE payload_type IS NULL OR TRIM(payload_type) = ''
                 """
             ).fetchall()
             for aid, mime_type, payload_schema_json, node_kind in null_rows:
@@ -652,13 +652,13 @@ class _SqliteArtifactIndex:
                         payload_schema = json.loads(payload_schema_json)
                     except Exception:
                         payload_schema = None
-                inferred = _infer_port_type(
+                inferred = _infer_payload_type(
                     payload_schema=payload_schema,
                     mime_type=mime_type,
                     node_kind=node_kind,
                 )
                 cur.execute(
-                    "UPDATE artifacts SET port_type=? WHERE artifact_id=?",
+                    "UPDATE artifacts SET payload_type=? WHERE artifact_id=?",
                     (inferred, aid),
                 )
             cur.execute(
@@ -737,7 +737,7 @@ class _SqliteArtifactIndex:
             row = cur.execute(
                 """
                 SELECT artifact_id, content_hash, node_kind, params_hash, upstream_ids_json,
-                       created_at, execution_version, mime_type, port_type, size_bytes, storage_uri,
+                       created_at, execution_version, mime_type, payload_type, size_bytes, storage_uri,
                        payload_schema_json, run_id, graph_id, node_id, exec_key
                 FROM artifacts
                 WHERE artifact_id=?
@@ -752,7 +752,7 @@ class _SqliteArtifactIndex:
         created_at = datetime.fromisoformat(row[5])
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        inferred_port = _infer_port_type(payload_schema=payload_schema, mime_type=row[7], node_kind=row[2])
+        inferred_payload_type = _infer_payload_type(payload_schema=payload_schema, mime_type=row[7], node_kind=row[2])
 
         return Artifact(
             artifact_id=row[0],
@@ -763,7 +763,7 @@ class _SqliteArtifactIndex:
             created_at=created_at,
             execution_version=row[6],
             mime_type=row[7] or "application/octet-stream",
-            port_type=row[8] or inferred_port,
+            payload_type=row[8] or inferred_payload_type,
             size_bytes=int(row[9]),
             storage_uri=row[10],
             payload_schema=payload_schema,
@@ -780,7 +780,7 @@ class _SqliteArtifactIndex:
                 """
                 INSERT OR IGNORE INTO artifacts (
                     artifact_id, content_hash, node_kind, params_hash, upstream_ids_json,
-                    created_at, execution_version, mime_type, port_type, size_bytes, storage_uri,
+                    created_at, execution_version, mime_type, payload_type, size_bytes, storage_uri,
                     payload_schema_json, run_id, graph_id, node_id, exec_key
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -793,7 +793,7 @@ class _SqliteArtifactIndex:
                     artifact.created_at.isoformat(),
                     artifact.execution_version,
                     artifact.mime_type,
-                    artifact.port_type,
+                    artifact.payload_type,
                     int(artifact.size_bytes),
                     artifact.storage_uri,
                     json.dumps(artifact.payload_schema, ensure_ascii=False)
@@ -1625,7 +1625,7 @@ class DiskArtifactStore:
             created_at=datetime.now(timezone.utc),
             execution_version="snapshot_v1",
             mime_type=mime_type or str(metadata.get("mimeType") or "application/octet-stream"),
-            port_type="binary",
+            payload_type="binary",
             size_bytes=int(size_bytes),
             storage_uri=str(blob_path),
             payload_schema={"schema_version": 1, "type": "binary", "snapshot": True},
@@ -1711,3 +1711,4 @@ class RunBindings:
 
     def all(self) -> List[RunArtifactBinding]:
         return list(self._bindings.values())
+

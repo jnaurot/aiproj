@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Set
 
 _DEFAULT_CAPABILITIES: Dict[str, Any] = {
     "schemaVersion": 1,
-    "allowedPortTypes": ["table", "json", "text", "binary", "embeddings"],
+    "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings"],
     "nodes": {
         "llm": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "transform": {"in": ["table"], "out": ["table"]},
@@ -27,11 +27,11 @@ _DEFAULT_CAPABILITIES: Dict[str, Any] = {
 
 def _shared_caps_path() -> Path:
     # backend/app/runner -> repo root
-    return Path(__file__).resolve().parents[3] / "shared" / "port_capabilities.v1.json"
+    return Path(__file__).resolve().parents[3] / "shared" / "schema_capabilities.v1.json"
 
 
 @lru_cache(maxsize=1)
-def load_port_capabilities() -> Dict[str, Any]:
+def load_schema_capabilities() -> Dict[str, Any]:
     path = _shared_caps_path()
     if not path.exists():
         return dict(_DEFAULT_CAPABILITIES)
@@ -44,16 +44,16 @@ def load_port_capabilities() -> Dict[str, Any]:
         return dict(_DEFAULT_CAPABILITIES)
 
 
-def allowed_port_types() -> Set[str]:
-    caps = load_port_capabilities()
-    values = caps.get("allowedPortTypes")
+def allowed_payload_types() -> Set[str]:
+    caps = load_schema_capabilities()
+    values = caps.get("allowedPayloadTypes")
     if not isinstance(values, list):
-        return set(_DEFAULT_CAPABILITIES["allowedPortTypes"])
+        return set(_DEFAULT_CAPABILITIES["allowedPayloadTypes"])
     return {str(v) for v in values}
 
 
 def _node_caps(kind: str) -> Dict[str, Any]:
-    caps = load_port_capabilities()
+    caps = load_schema_capabilities()
     nodes = caps.get("nodes")
     if not isinstance(nodes, dict):
         return {}
@@ -81,13 +81,13 @@ def allowed_ports(kind: str, direction: str, provider: str | None = None) -> Set
 
 
 def capabilities_response() -> Dict[str, Any]:
-    caps = load_port_capabilities()
+    caps = load_schema_capabilities()
     # Return parsed JSON as-is for FE parity checks.
     return caps
 
 
 def capability_signature() -> str:
-    caps = load_port_capabilities()
+    caps = load_schema_capabilities()
     payload = json.dumps(caps, sort_keys=True, separators=(",", ":")).encode("utf-8")
     import hashlib
 

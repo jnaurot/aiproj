@@ -83,7 +83,6 @@ async def test_event_schema_smoke(monkeypatch, tmp_path):
                         "label": "Source",
                         "sourceKind": "file",
                         "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                        "ports": {"in": None, "out": "text"},
                     },
                 },
                 {
@@ -92,7 +91,6 @@ async def test_event_schema_smoke(monkeypatch, tmp_path):
                         "kind": "tool",
                         "label": "Tool",
                         "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                        "ports": {"in": "text", "out": "json"},
                     },
                 },
             ],

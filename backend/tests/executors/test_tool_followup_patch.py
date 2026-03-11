@@ -69,7 +69,6 @@ async def test_tool_binary_mime_propagates_to_artifact(monkeypatch):
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "binary"},
                 },
             }
         ],

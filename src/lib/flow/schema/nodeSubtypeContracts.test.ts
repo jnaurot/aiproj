@@ -179,7 +179,7 @@ describe('node subtype contract schemas', () => {
 					outputs: [
 						{
 							name: 'out_data',
-							portType: 'json',
+							payloadType: 'json',
 							required: true,
 							typedSchema: {
 								type: 'json',
@@ -193,3 +193,4 @@ describe('node subtype contract schemas', () => {
 		).toBe(true);
 	});
 });
+

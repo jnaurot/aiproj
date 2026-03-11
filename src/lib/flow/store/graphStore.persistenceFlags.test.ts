@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { __stripToDTOForTest } from './graphStore';
 
-describe('graphStore persisted graph payload flags', () => {
-	it('always omits node data.ports in persisted payload', () => {
+describe('graphStore persisted graph payload', () => {
+	it('preserves canonical node schema payload in persisted output', () => {
 		const node = {
 			id: 'n1',
 			type: 'source',
@@ -13,14 +13,12 @@ describe('graphStore persisted graph payload flags', () => {
 				label: 'Source',
 				sourceKind: 'file',
 				params: { file_format: 'csv', output: { mode: 'table' } },
-				status: 'idle',
-				ports: { in: null, out: 'table' }
+				status: 'idle'
 			}
 		} as any;
 		const dto = __stripToDTOForTest([node], [], 'graph_persist_ports');
 		const persistedNode = (dto.nodes ?? [])[0] as any;
 		expect(node).toBeTruthy();
-		expect(Object.prototype.hasOwnProperty.call(persistedNode?.data ?? {}, 'ports')).toBe(false);
-		expect(Boolean((dto.meta as any)?.migrations?.OMIT_NODE_PORTS_V1)).toBe(true);
+		expect(String(persistedNode?.data?.kind ?? '')).toBe('source');
 	});
 });

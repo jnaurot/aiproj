@@ -43,7 +43,7 @@ class ExecutionCache:
         normalized_params: Dict[str, Any],
         upstream_artifact_ids: Optional[List[str]],
         execution_version: str,
-        input_bindings: Optional[List[Tuple[str, str]]] = None,
+        input_handles: Optional[List[Tuple[str, str]]] = None,
         determinism_env: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
@@ -52,16 +52,16 @@ class ExecutionCache:
         Note: upstream ids must be sorted to avoid nondeterminism due to edge ordering.
         """
         upstream_sorted = sorted(upstream_artifact_ids or [])
-        bindings_sorted = sorted(
-            [(str(p), str(aid)) for (p, aid) in (input_bindings or [])],
+        handles_sorted = sorted(
+            [(str(h), str(aid)) for (h, aid) in (input_handles or [])],
             key=lambda x: (x[0], x[1]),
         )
         key_obj = {
             "build_version": execution_version,
             "node_kind": node_kind,
             "normalized_params": normalized_params,
-            "input_artifact_ids": upstream_sorted,
-            "input_bindings": [{"port": p, "artifact_id": aid} for p, aid in bindings_sorted],
+            "inputArtifactIds": upstream_sorted,
+            "inputHandles": [{"inputHandle": h, "artifactId": aid} for h, aid in handles_sorted],
             "determinism_env": determinism_env or {},
         }
         return sha256_hex(_canon_json(key_obj))

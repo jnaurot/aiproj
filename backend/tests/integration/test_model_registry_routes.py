@@ -23,7 +23,6 @@ def _graph_for_metric(metric_value: float) -> dict:
 							"args": {"metric_value": metric_value},
 						},
 					},
-					"ports": {"in": None, "out": "json"},
 				},
 			}
 		],

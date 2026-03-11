@@ -29,7 +29,6 @@ def _graph_with_expected_schema(expected_fields: list[dict[str, Any]]) -> dict[s
 					"label": "Source",
 					"sourceKind": "file",
 					"status": "idle",
-					"ports": {"in": None, "out": "table"},
 					"params": {
 						"source_type": "file",
 						"rel_path": ".",

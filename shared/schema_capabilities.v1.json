@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "allowedPortTypes": ["table", "json", "text", "binary", "embeddings"],
+  "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings"],
   "nodes": {
     "llm": {
       "in": ["text", "json", "table"],

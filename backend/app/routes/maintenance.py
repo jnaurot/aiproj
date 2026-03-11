@@ -37,7 +37,7 @@ async def _write_maintenance_audit_artifact(request: Request, payload: dict) -> 
     payload_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
     graph_id = "maintenance"
     node_id = "maintenance.gc"
-    node = {"data": {"kind": "maintenance", "ports": {}, "schema": {}, "settings": {}}}
+    node = {"data": {"kind": "maintenance", "schema": {}, "settings": {}}}
     node_state_hash = build_node_state_hash(
         node=node,
         params=payload,
@@ -62,7 +62,7 @@ async def _write_maintenance_audit_artifact(request: Request, payload: dict) -> 
         created_at=datetime.now(timezone.utc),
         execution_version="v1",
         mime_type="application/json",
-        port_type="json",
+        payload_type="json",
         size_bytes=len(payload_bytes),
         storage_uri=f"artifact://{artifact_id}",
         payload_schema={"type": "maintenance_audit"},
@@ -292,3 +292,4 @@ async def reset_storage_maintenance(
     }
     print("[maintenance-reset-storage]", response)
     return response
+

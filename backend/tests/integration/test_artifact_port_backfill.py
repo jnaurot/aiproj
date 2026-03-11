@@ -60,7 +60,7 @@ def _init_legacy_db(db_path: Path) -> None:
     conn.close()
 
 
-def test_port_type_backfill_and_legacy_payload_schema_normalization(tmp_path):
+def test_payload_type_backfill_and_legacy_payload_schema_normalization(tmp_path):
     root = tmp_path / "artifact-root"
     db_path = root / "meta" / "artifacts.sqlite"
     _init_legacy_db(db_path)
@@ -69,12 +69,13 @@ def test_port_type_backfill_and_legacy_payload_schema_normalization(tmp_path):
     store = DiskArtifactStore(root)
 
     conn = sqlite3.connect(str(db_path))
-    row = conn.execute("SELECT port_type FROM artifacts WHERE artifact_id=?", ("legacy-artifact-1",)).fetchone()
+    row = conn.execute("SELECT payload_type FROM artifacts WHERE artifact_id=?", ("legacy-artifact-1",)).fetchone()
     conn.close()
     assert row is not None
     assert row[0] == "text"
 
     art = asyncio.run(store.get("legacy-artifact-1"))
-    assert art.port_type == "text"
+    assert art.payload_type == "text"
     assert isinstance(art.payload_schema, dict)
     assert art.payload_schema.get("type") == "text"
+

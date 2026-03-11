@@ -33,8 +33,7 @@ describe('graphStore schema inference envelope', () => {
 		expect(node).toBeTruthy();
 		expect((node?.data as any)?.schema?.inferredSchema?.source).toBe('sample');
 		expect((node?.data as any)?.schema?.inferredSchema?.state).toBe('fresh');
-		expect((node?.data as any)?.schema?.inferredSchema?.typedSchema?.type).toBe('table');
-		expect((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields?.[0]?.name).toBe('text');
+		expect((node?.data as any)?.schema?.inferredSchema?.typedSchema?.type).toBe('text');
 	});
 
 	it('refreshes observed schema on successive node_output runtime events', () => {
@@ -50,7 +49,7 @@ describe('graphStore schema inference envelope', () => {
 				at: '2026-03-10T12:00:00Z',
 				nodeId,
 				artifactId: 'artifact_text',
-				portType: 'text',
+				payloadType: 'text',
 				mimeType: 'text/plain',
 				preview: 'hello'
 			},
@@ -68,7 +67,7 @@ describe('graphStore schema inference envelope', () => {
 				at: '2026-03-10T12:00:05Z',
 				nodeId,
 				artifactId: 'artifact_json',
-				portType: 'json',
+				payloadType: 'json',
 				mimeType: 'application/json',
 				preview: '{"ok":true}'
 			},
@@ -80,3 +79,4 @@ describe('graphStore schema inference envelope', () => {
 		expect(observed?.typedSchema?.type).toBe('json');
 	});
 });
+

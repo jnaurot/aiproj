@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { BaseNodeDataSchema, PortTypeSchema } from "./base";
+import { BaseNodeDataSchema } from "./base";
 
 export const ComponentKindSchema = z.literal("graph_component");
 
-export const ComponentTypedPrimitiveSchema = z.enum([
+const CanonicalComponentTypedPrimitiveSchema = z.enum([
 	"table",
 	"json",
 	"text",
@@ -11,6 +11,12 @@ export const ComponentTypedPrimitiveSchema = z.enum([
 	"embeddings",
 	"unknown"
 ]);
+
+export const ComponentTypedPrimitiveSchema = z.preprocess((value) => {
+	const normalized = String(value ?? "").trim().toLowerCase();
+	if (normalized === "string") return "text";
+	return value;
+}, CanonicalComponentTypedPrimitiveSchema);
 
 export const ComponentTypedFieldSchema = z
 	.object({
@@ -31,7 +37,6 @@ export const ComponentTypedSchemaSchema = z
 export const ComponentApiPortSchema = z
 	.object({
 		name: z.string().min(1),
-		portType: PortTypeSchema.optional(),
 		required: z.boolean().optional().default(true),
 		typedSchema: ComponentTypedSchemaSchema
 	})

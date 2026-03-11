@@ -46,6 +46,7 @@ def test_table_to_json_emits_json_artifact():
 
 	res = run_transform(params=params, input_tables={"in": df}, join_lookup=None)
 	assert res.mime_type.startswith("application/json")
-	assert res.meta.get("port_type") == "json"
+	assert res.meta.get("payloadType") == "json"
 	parsed = json.loads(res.payload_bytes.decode("utf-8"))
 	assert parsed == [{"id": 1, "value": "x"}, {"id": 2, "value": "y"}]
+

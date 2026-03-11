@@ -21,7 +21,6 @@ def _minimal_graph():
 					"label": "src",
 					"sourceKind": "file",
 					"status": "idle",
-					"ports": {"in": None, "out": "table"},
 					"params": {"source_type": "text", "text": "hello", "output_mode": "rows"},
 				},
 			}
@@ -160,6 +159,4 @@ def test_create_run_canonicalizes_graph_ports_before_runtime(monkeypatch):
 		assert res.status_code == 200, res.text
 		canonical = captured_graph.get("value") or {}
 		node = (canonical.get("nodes") or [{}])[0]
-		ports = ((node.get("data") or {}).get("ports") or {})
-		assert ports.get("in") is None
-		assert str(ports.get("out") or "") == "text"
+		assert "ports" not in ((node.get("data") or {}))

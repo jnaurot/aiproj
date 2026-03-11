@@ -33,7 +33,7 @@ describe('graphStore cache pill transitions around snapshot uploads', () => {
 						execKey: 'exec_a',
 						artifactId: 'artifact_a',
 						cacheHit: true,
-						artifact: { artifactId: 'artifact_a', mimeType: 'text/plain', portType: 'text' }
+						artifact: { artifactId: 'artifact_a', mimeType: 'text/plain', payloadType: 'text' }
 					}),
 					{ status: 200 }
 				);
@@ -100,3 +100,4 @@ describe('graphStore cache pill transitions around snapshot uploads', () => {
 		}
 	});
 });
+

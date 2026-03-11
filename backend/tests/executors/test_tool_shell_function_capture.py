@@ -265,7 +265,7 @@ async def test_db_can_create_table_from_upstream_input(tmp_path):
             created_at=datetime.now(timezone.utc),
             execution_version="v1",
             mime_type="text/csv; charset=utf-8",
-            port_type="table",
+            payload_type="table",
             size_bytes=len(csv_bytes),
             storage_uri=f"memory://{upstream_artifact_id}",
         ),
@@ -338,7 +338,7 @@ async def test_db_dedupes_duplicate_upstream_artifact_ids():
             created_at=datetime.now(timezone.utc),
             execution_version="v1",
             mime_type="text/csv; charset=utf-8",
-            port_type="table",
+            payload_type="table",
             size_bytes=len(csv_bytes),
             storage_uri=f"memory://{aid}",
         ),
@@ -365,7 +365,7 @@ async def test_db_dedupes_duplicate_upstream_artifact_ids():
     assert out.status == "succeeded"
     payload = (out.data or {}).get("payload") or {}
     result = payload.get("result") or {}
-    input_tables = result.get("input_tables") or []
+    input_tables = result.get("inputTables") or []
     assert len(input_tables) == 1
     rows = result.get("rows") or []
     assert len(rows) == 1
@@ -393,7 +393,7 @@ async def test_db_materializes_table_port_from_plain_text_csv():
             created_at=datetime.now(timezone.utc),
             execution_version="v1",
             mime_type="text/plain; charset=utf-8",
-            port_type="table",
+            payload_type="table",
             size_bytes=len(raw),
             storage_uri=f"memory://{aid}",
         ),
@@ -423,3 +423,4 @@ async def test_db_materializes_table_port_from_plain_text_csv():
     rows = result.get("rows") or []
     assert len(rows) == 1
     assert int(rows[0].get("n")) == 4
+

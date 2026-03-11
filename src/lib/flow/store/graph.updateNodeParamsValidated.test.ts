@@ -13,7 +13,6 @@ function toolNodeWithArgs(args: Record<string, unknown>): Node<PipelineNodeData>
 		data: {
 			kind: 'tool',
 			label: 'Tool',
-			ports: { in: null, out: 'json' },
 			params: {
 				provider: 'builtin',
 				builtin: {
@@ -59,4 +58,3 @@ describe('updateNodeParamsValidated builtin args replacement', () => {
 		expect(Object.prototype.hasOwnProperty.call(nextArgs, 'values')).toBe(false);
 	});
 });
-

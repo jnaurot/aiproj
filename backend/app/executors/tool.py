@@ -115,10 +115,10 @@ def _table_df_from_tool_artifact(artifact: Dict[str, Any]):
     except Exception:
         return None
 
-    mime_type = str(artifact.get("mime_type") or "").lower()
-    port_type = str(artifact.get("port_type") or "").lower()
+    mime_type = str(artifact.get("mimeType") or "").lower()
+    payload_type = str(artifact.get("payloadType") or "").lower()
     text_value = artifact.get("text")
-    bytes_b64 = artifact.get("bytes_b64")
+    bytes_b64 = artifact.get("bytesB64")
     raw_bytes: Optional[bytes] = None
     if isinstance(bytes_b64, str) and bytes_b64:
         try:
@@ -138,7 +138,7 @@ def _table_df_from_tool_artifact(artifact: Dict[str, Any]):
 
     # If the artifact is explicitly typed as table, try delimited parsing even when
     # mime type is generic text/plain or unset.
-    if port_type == "table" and isinstance(text_value, str) and text_value.strip():
+    if payload_type == "table" and isinstance(text_value, str) and text_value.strip():
         try:
             return pd.read_csv(io.StringIO(text_value), sep=None, engine="python")
         except Exception:
@@ -224,15 +224,15 @@ async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids:
             text_value = b.decode("utf-8", errors="replace")
         artifacts.append(
             {
-                "artifact_id": aid,
-                "mime_type": art.mime_type,
-                "port_type": art.port_type,
-                "payload_schema": art.payload_schema if isinstance(art.payload_schema, dict) else None,
-                "typed_columns": _extract_typed_columns_from_payload_schema(art.payload_schema),
-                "size_bytes": len(b),
+                "artifactId": aid,
+                "mimeType": art.mime_type,
+                "payloadType": art.payload_type,
+                "payloadSchema": art.payload_schema if isinstance(art.payload_schema, dict) else None,
+                "typedColumns": _extract_typed_columns_from_payload_schema(art.payload_schema),
+                "sizeBytes": len(b),
                 "text": text_value,
                 "json": json_value,
-                "bytes_b64": base64.b64encode(b).decode("ascii"),
+                "bytesB64": base64.b64encode(b).decode("ascii"),
             }
         )
 
@@ -240,9 +240,9 @@ async def _materialize_tool_inputs(context: GraphContext, upstream_artifact_ids:
     return {
         "artifacts": artifacts,
         "primary": primary,
-        "input_text": (primary or {}).get("text") if primary else None,
-        "input_json": (primary or {}).get("json") if primary else None,
-        "input_b64": (primary or {}).get("bytes_b64") if primary else None,
+        "inputText": (primary or {}).get("text") if primary else None,
+        "inputJson": (primary or {}).get("json") if primary else None,
+        "inputB64": (primary or {}).get("bytesB64") if primary else None,
     }
 
 
@@ -420,7 +420,7 @@ async def _exec_builtin_core_tool(
     if tool_id == "core.json.validate_schema":
         payload = args.get("payload", input_value)
         if payload is None and isinstance(input_ctx, dict):
-            payload = input_ctx.get("input_json")
+            payload = input_ctx.get("inputJson")
         model_cls = _builtin_dynamic_model_from_args(args)
         try:
             model = model_cls.model_validate(payload)
@@ -1648,11 +1648,11 @@ async def exec_tool(
 
             def _run_python() -> Any:
                 scope: Dict[str, Any] = {
-                    "input": input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text"),
+                    "input": input_ctx.get("inputJson") if input_ctx.get("inputJson") is not None else input_ctx.get("inputText"),
                     "inputs": input_ctx.get("artifacts"),
-                    "input_text": input_ctx.get("input_text"),
-                    "input_json": input_ctx.get("input_json"),
-                    "input_b64": input_ctx.get("input_b64"),
+                    "inputText": input_ctx.get("inputText"),
+                    "inputJson": input_ctx.get("inputJson"),
+                    "inputB64": input_ctx.get("inputB64"),
                     "raw_input": input_ctx,
                     "args": py_args,
                     "result": None,
@@ -1760,7 +1760,7 @@ async def exec_tool(
                 "const code=fs.readFileSync(0,'utf8');"
                 "(async()=>{"
                 "const context={"
-                "input:(input&&input.input_json!==undefined&&input.input_json!==null)?input.input_json:((input&&input.input_text!==undefined)?input.input_text:null),"
+                "input:(input&&input.inputJson!==undefined&&input.inputJson!==null)?input.inputJson:((input&&input.inputText!==undefined)?input.inputText:null),"
                 "inputs:(input&&Array.isArray(input.artifacts))?input.artifacts:[],"
                 "raw_input:input,"
                 "args,"
@@ -1893,7 +1893,7 @@ async def exec_tool(
             mod = importlib.import_module(module_name)
             fn = getattr(mod, export_name)
             call_input = {
-                "input": input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text"),
+                "input": input_ctx.get("inputJson") if input_ctx.get("inputJson") is not None else input_ctx.get("inputText"),
                 "inputs": input_ctx.get("artifacts"),
             }
             result = fn(call_input, call_args)
@@ -2131,9 +2131,9 @@ async def exec_tool(
                         if not isinstance(artifact, dict):
                             continue
                         diag = {
-                            "artifact_id": str(artifact.get("artifact_id") or ""),
-                            "mime_type": str(artifact.get("mime_type") or ""),
-                            "size_bytes": int(artifact.get("size_bytes") or 0),
+                            "artifactId": str(artifact.get("artifactId") or ""),
+                            "mimeType": str(artifact.get("mimeType") or ""),
+                            "sizeBytes": int(artifact.get("sizeBytes") or 0),
                             "table": f"input_{idx}",
                         }
                         try:
@@ -2160,11 +2160,7 @@ async def exec_tool(
                         diag["parsed"] = True
                         diag["rows"] = int(len(df.index))
                         diag["columns"] = [str(c) for c in list(df.columns)]
-                        typed_from_artifact = (
-                            artifact.get("typed_columns")
-                            if isinstance(artifact.get("typed_columns"), list)
-                            else []
-                        )
+                        typed_from_artifact = artifact.get("typedColumns") if isinstance(artifact.get("typedColumns"), list) else []
                         typed_map = {
                             str(c.get("name") or ""): str(c.get("type") or "unknown")
                             for c in typed_from_artifact
@@ -2184,15 +2180,15 @@ async def exec_tool(
                                     "nativeType": native,
                                 }
                             )
-                        diag["typed_columns"] = typed_columns
+                        diag["typedColumns"] = typed_columns
                         input_diagnostics.append(diag)
                         registered_inputs.append(
                             {
                                 "table": table_name,
-                                "artifact_id": str(artifact.get("artifact_id") or ""),
+                                "artifactId": str(artifact.get("artifactId") or ""),
                                 "rows": int(len(df.index)),
                                 "columns": [str(c) for c in list(df.columns)],
-                                "typed_columns": typed_columns,
+                                "typedColumns": typed_columns,
                             }
                         )
                     if (not registered_inputs) and re.search(r"\binput\b", sql, flags=re.IGNORECASE):
@@ -2261,13 +2257,13 @@ async def exec_tool(
                     conn.commit()
                     return {
                         "rows": rows,
-                        "row_count": len(rows),
+                        "rowCount": len(rows),
                         "columns": cols,
-                        "affected_rows": affected_rows,
-                        "is_query": is_query,
-                        "resolved_sql": resolved_sql,
-                        "input_tables": registered_inputs,
-                        "input_artifacts": input_diagnostics,
+                        "affectedRows": affected_rows,
+                        "isQuery": is_query,
+                        "resolvedSql": resolved_sql,
+                        "inputTables": registered_inputs,
+                        "inputArtifacts": input_diagnostics,
                     }
                 finally:
                     conn.close()
@@ -2353,7 +2349,7 @@ async def exec_tool(
             resolved_env = resolve_builtin_environment(bi_cfg)
             tool_id = str(bi_cfg.get("toolId") or "").strip()
             args = bi_cfg.get("args") if isinstance(bi_cfg.get("args"), dict) else {}
-            input_value = input_ctx.get("input_json") if input_ctx.get("input_json") is not None else input_ctx.get("input_text")
+            input_value = input_ctx.get("inputJson") if input_ctx.get("inputJson") is not None else input_ctx.get("inputText")
             perms = _permissions(params)
 
             if tool_id == "noop":
@@ -2475,7 +2471,7 @@ async def exec_tool(
                         metadata=None,
                         execution_time_ms=elapsed_ms,
                         error=_contract_mismatch(
-                            "outPort=json but response is not valid JSON"
+                            "outputType=json but response is not valid JSON"
                         ),
                     )
                 envelope = {"kind": "json", "payload": _redact_value(payload)}
@@ -2516,3 +2512,4 @@ async def exec_tool(
         execution_time_ms=(time.perf_counter() - started) * 1000.0,
         error=f"Unsupported tool provider: {provider}",
     )
+

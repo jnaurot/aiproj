@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 
-import { graphStore, derivePortsForNodeData } from './graphStore';
+import { graphStore, deriveNodeIoForData } from './graphStore';
 
 describe('graphStore schema adapter insertion', () => {
 	it('inserts text_to_table adapter between incompatible source and transform nodes', () => {
@@ -47,8 +47,8 @@ describe('graphStore schema adapter insertion', () => {
 		expect(adapterNode).toBeTruthy();
 		expect(adapterNode?.data.kind).toBe('transform');
 		expect(adapterNode?.data.transformKind).toBe('text_to_table');
-		expect(adapterNode ? derivePortsForNodeData(adapterNode.data).in : null).toBe('text');
-		expect(adapterNode ? derivePortsForNodeData(adapterNode.data).out : null).toBe('table');
+		expect(adapterNode ? deriveNodeIoForData(adapterNode.data).in : null).toBe('text');
+		expect(adapterNode ? deriveNodeIoForData(adapterNode.data).out : null).toBe('table');
 
 		const incoming = state.edges.find((e) => e.id === inserted.incomingEdgeId);
 		const outgoing = state.edges.find((e) => e.id === inserted.outgoingEdgeId);

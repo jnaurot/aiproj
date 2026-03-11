@@ -10,9 +10,9 @@
 		ComponentRevisionSummary,
 		ComponentTypedField
 	} from '$lib/flow/client/components';
-	import type { PortType } from '$lib/flow/types';
+	import type { PayloadType } from '$lib/flow/types';
 	import {
-		applyDerivedOutputPortTypes,
+		applyDerivedOutputPayloadTypes,
 		syncOutputBindings,
 		validateComponentOutputs
 	} from './validation';
@@ -36,8 +36,8 @@ export let onDraft: (
 	let configParseError = '';
 	let lastSelectedNodeId = '';
 	let lastRevisionDetailKey = '';
-	let internalNodeOptions: Array<{ id: string; label: string }> = [];
-	let internalNodeMetaById: Record<string, { outPortType?: PortType }> = {};
+	let internalNodeOptions: Array<{ ref: string; label: string }> = [];
+	let internalNodeMetaByRef: Record<string, { outPayloadType?: PayloadType }> = {};
 
 	$: componentRef = (params?.componentRef ?? {}) as {
 		componentId?: string;
@@ -53,9 +53,9 @@ export let onDraft: (
 	};
 	$: inputs = Array.isArray(api.inputs) ? api.inputs : [];
 	$: outputs = Array.isArray(api.outputs) ? api.outputs : [];
-	const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
+	const PAYLOAD_TYPE_OPTIONS: PayloadType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 	const TYPED_TYPE_OPTIONS = ['table', 'json', 'text', 'binary', 'embeddings', 'unknown'] as const;
-	const STRUCTURED_OUTPUT_TYPES = new Set<PortType>(['table', 'json']);
+	const STRUCTURED_OUTPUT_TYPES = new Set<PayloadType>(['table', 'json']);
 	type TypedFieldType = ComponentTypedField['type'];
 	let outputFieldsJsonErrors: Record<number, string> = {};
 	let outputAdvancedOpen: Record<number, boolean> = {};
@@ -73,16 +73,16 @@ export let onDraft: (
 	$: bindings = (params?.bindings ?? { inputs: {}, config: {} }) as {
 		inputs?: Record<string, string>;
 		config?: Record<string, string>;
-		outputs?: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+		outputs?: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 	};
-	$: outputBindings = (bindings?.outputs ?? {}) as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+	$: outputBindings = (bindings?.outputs ?? {}) as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 	$: outputValidation = validateComponentOutputs(
 		outputs,
 		outputBindings,
 		{
-			internalNodeIds: internalNodeOptions
-				.map((n) => String(n.id ?? '').trim())
-				.filter((id) => id.length > 0)
+			availableOutputRefs: internalNodeOptions
+				.map((n) => String(n.ref ?? '').trim())
+				.filter((ref) => ref.length > 0)
 		}
 	);
 	$: outputValidationSummary = outputValidation.hasErrors
@@ -93,7 +93,7 @@ export let onDraft: (
 		const synced = syncOutputBindings(
 			outputs,
 			outputBindings,
-			internalNodeOptions.map((n) => String(n.id ?? '').trim()).filter((id) => id.length > 0)
+			internalNodeOptions.map((n) => String(n.ref ?? '').trim()).filter((ref) => ref.length > 0)
 		);
 		if (synced.changed) {
 			const nextSignature = JSON.stringify(synced.next);
@@ -114,10 +114,10 @@ export let onDraft: (
 	}
 
 	$: {
-		const derivedOutputs = applyDerivedOutputPortTypes(
+		const derivedOutputs = applyDerivedOutputPayloadTypes(
 			outputs as ComponentApiPort[],
 			outputBindings,
-			internalNodeMetaById
+			internalNodeMetaByRef
 		);
 		const canonicalOutputs = derivedOutputs.map((out) => canonicalizeOutputPort(out as ComponentApiPort));
 		const nextSignature = JSON.stringify(canonicalOutputs);
@@ -144,7 +144,7 @@ export let onDraft: (
 		void ensureRevisionDetailLoaded(componentId, revisionId);
 	} else {
 		internalNodeOptions = [];
-		internalNodeMetaById = {};
+		internalNodeMetaByRef = {};
 		lastRevisionDetailKey = '';
 	}
 
@@ -218,7 +218,7 @@ export let onDraft: (
 		const key = `${cid}@${rid}`;
 		if (!cid || !rid) {
 			internalNodeOptions = [];
-			internalNodeMetaById = {};
+			internalNodeMetaByRef = {};
 			lastRevisionDetailKey = '';
 			return;
 		}
@@ -229,38 +229,51 @@ export let onDraft: (
 		loadingRevisionDetail = false;
 		if (!(res as any)?.ok) {
 			internalNodeOptions = [];
-			internalNodeMetaById = {};
+			internalNodeMetaByRef = {};
 			lastRevisionDetailKey = '';
 			return;
 		}
 		const detail = (res as any).detail ?? {};
 		const graph = (detail?.definition?.graph ?? {}) as { nodes?: any[] };
 		const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
-		const nextMeta: Record<string, { outPortType?: PortType }> = {};
-		internalNodeOptions = nodes
-			.map((n) => {
+		const nextMeta: Record<string, { outPayloadType?: PayloadType }> = {};
+		const nextOptions: Array<{ ref: string; label: string }> = [];
+		for (const n of nodes) {
 				const id = String(n?.id ?? '').trim();
-				if (!id) return null;
-				const kind = String(n?.data?.kind ?? 'node').trim();
+				if (!id) continue;
+				const kind = String(n?.data?.kind ?? 'node').trim().toLowerCase() || 'node';
 				const name = String(n?.data?.label ?? id).trim() || id;
-					const outSchemaType = String(
-						n?.data?.schema?.observedSchema?.typedSchema?.type ??
-							n?.data?.schema?.inferredSchema?.typedSchema?.type ??
-							''
-					)
-						.trim()
-						.toLowerCase();
-					if (PORT_TYPE_OPTIONS.includes(outSchemaType as PortType)) {
-						nextMeta[id] = { outPortType: outSchemaType as PortType };
+				const baseRef = `${kind}:${name}`;
+				const fallbackOutType = normalizePayloadType(
+					n?.data?.schema?.observedSchema?.typedSchema?.type ??
+						n?.data?.schema?.inferredSchema?.typedSchema?.type ??
+						'json'
+				);
+				const outputs = Array.isArray(n?.data?.params?.api?.outputs) ? (n.data.params.api.outputs as any[]) : [];
+				if (kind === 'component' && outputs.length > 0) {
+					for (const out of outputs) {
+						const outName = String(out?.name ?? '').trim();
+						if (!outName) continue;
+						const outputRef = `${baseRef}|${outName}`;
+						const outType = normalizePayloadType(out?.typedSchema?.type ?? fallbackOutType);
+						nextOptions.push({
+							ref: outputRef,
+							label: `${kind}: ${name}|${outName}`
+						});
+						nextMeta[outputRef] = { outPayloadType: outType };
 					}
-				return {
-					id,
+					continue;
+				}
+				nextOptions.push({
+					ref: baseRef,
 					label: `${kind}: ${name}`
-				};
-			})
-			.filter((x): x is { id: string; label: string } => Boolean(x))
+				});
+				nextMeta[baseRef] = { outPayloadType: fallbackOutType };
+		}
+		internalNodeOptions = nextOptions
+			.filter((opt, idx, arr) => arr.findIndex((x) => x.ref === opt.ref) === idx)
 			.sort((a, b) => a.label.localeCompare(b.label));
-		internalNodeMetaById = nextMeta;
+		internalNodeMetaByRef = nextMeta;
 		lastRevisionDetailKey = key;
 	}
 
@@ -295,10 +308,10 @@ export let onDraft: (
 		});
 	}
 
-	function onOutputBindingNodeIdChange(name: string, nodeId: string): void {
-		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+	function onOutputBindingOutputRefChange(name: string, outputRef: string): void {
+		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 		const current = nextOutputs[name] ?? { artifact: 'current' as const };
-		nextOutputs[name] = { ...current, nodeId: String(nodeId ?? '').trim() };
+		nextOutputs[name] = { ...current, outputRef: String(outputRef ?? '').trim() };
 		onDraft({
 			bindings: {
 				inputs: { ...(bindings?.inputs ?? {}) },
@@ -310,7 +323,7 @@ export let onDraft: (
 
 	function onOutputBindingArtifactChange(name: string, artifact: string): void {
 		const mode = artifact === 'last' ? 'last' : 'current';
-		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 		const current = nextOutputs[name] ?? {};
 		nextOutputs[name] = { ...current, artifact: mode };
 		onDraft({
@@ -350,7 +363,7 @@ export let onDraft: (
 		if (previousName && nextName && previousName !== nextName) {
 			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<
 				string,
-				{ nodeId?: string; artifact?: 'current' | 'last' }
+				{ outputRef?: string; artifact?: 'current' | 'last' }
 			>;
 			const moved = nextBindings[previousName];
 			if (moved) {
@@ -401,17 +414,16 @@ export let onDraft: (
 		errorMessage = '';
 		outputNameDraftByIndex = {};
 		const nextName = outputs.length === 0 ? 'default' : `out_${outputs.length + 1}`;
-		const fallbackNodeId = String(internalNodeOptions[0]?.id ?? '').trim() || undefined;
-		const initialPortType = normalizePortType(
-			(fallbackNodeId ? internalNodeMetaById[fallbackNodeId]?.outPortType : undefined) ?? 'json'
+		const fallbackOutputRef = String(internalNodeOptions[0]?.ref ?? '').trim() || undefined;
+		const initialOutputType = normalizePayloadType(
+			(fallbackOutputRef ? internalNodeMetaByRef[fallbackOutputRef]?.outPayloadType : undefined) ?? 'json'
 		);
 		const next = [
 			...outputs,
 			{
 				name: nextName,
-				portType: initialPortType,
 				required: true,
-				typedSchema: { type: initialPortType, fields: [] }
+				typedSchema: { type: initialOutputType, fields: [] }
 			}
 		];
 		draftApiOutputs(next as ComponentApiPort[]);
@@ -419,14 +431,14 @@ export let onDraft: (
 			bindings: {
 				inputs: { ...(bindings?.inputs ?? {}) },
 				config: { ...(bindings?.config ?? {}) },
-				outputs: {
-					...(bindings?.outputs ?? {}),
-					[nextName]: {
-						nodeId: fallbackNodeId,
-						artifact: 'current'
+					outputs: {
+						...(bindings?.outputs ?? {}),
+						[nextName]: {
+							outputRef: fallbackOutputRef,
+							artifact: 'current'
+						}
 					}
 				}
-			}
 		});
 	}
 
@@ -441,10 +453,10 @@ export let onDraft: (
 	function resetOutputSchema(index: number): void {
 		const output = outputs[index];
 		if (!output) return;
-		const portType = normalizePortType(output.portType);
+		const outputType = normalizePayloadType(output?.typedSchema?.type);
 		updateApiOutput(index, {
 			typedSchema: {
-				type: portType as TypedFieldType,
+				type: outputType as TypedFieldType,
 				fields: []
 			}
 		});
@@ -456,7 +468,7 @@ export let onDraft: (
 		const next = outputs.filter((_, i) => i !== index);
 		draftApiOutputs(next as ComponentApiPort[]);
 		if (removed?.name) {
-			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 			delete nextBindings[String(removed.name)];
 			onDraft({
 				bindings: {
@@ -504,20 +516,21 @@ export let onDraft: (
 		return (TYPED_TYPE_OPTIONS as readonly string[]).includes(t) ? (t as TypedFieldType) : 'unknown';
 	}
 
-	function normalizePortType(value: unknown): PortType {
+	function normalizePayloadType(value: unknown): PayloadType {
 		const v = String(value ?? '').trim().toLowerCase();
-		return PORT_TYPE_OPTIONS.includes(v as PortType) ? (v as PortType) : 'json';
+		if (v === 'string') return 'text';
+		return PAYLOAD_TYPE_OPTIONS.includes(v as PayloadType) ? (v as PayloadType) : 'json';
 	}
 
-	function shouldShowStructuredFieldsEditor(portType: unknown): boolean {
-		return STRUCTURED_OUTPUT_TYPES.has(normalizePortType(portType));
+	function shouldShowStructuredFieldsEditor(outputType: unknown): boolean {
+		return STRUCTURED_OUTPUT_TYPES.has(normalizePayloadType(outputType));
 	}
 
-	function canonicalizeFieldsForPortType(
-		portType: PortType,
+	function canonicalizeFieldsForPayloadType(
+		outputType: PayloadType,
 		fieldsRaw: unknown
 	): ComponentTypedField[] {
-		if (!shouldShowStructuredFieldsEditor(portType)) return [];
+		if (!shouldShowStructuredFieldsEditor(outputType)) return [];
 		if (!Array.isArray(fieldsRaw)) return [];
 		return fieldsRaw
 			.filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === 'object')
@@ -530,23 +543,22 @@ export let onDraft: (
 	}
 
 	function canonicalizeOutputPort(port: ComponentApiPort): ComponentApiPort {
-		const normalizedPortType = normalizePortType((port as any)?.portType);
+		const normalizedOutputType = normalizePayloadType((port as any)?.typedSchema?.type);
 		const typedSchema = (port as any)?.typedSchema ?? {};
 		return {
 			...port,
-			portType: normalizedPortType,
 			required: Boolean((port as any)?.required ?? true),
 			typedSchema: {
-				type: normalizedPortType as TypedFieldType,
-				fields: canonicalizeFieldsForPortType(normalizedPortType, (typedSchema as any)?.fields)
+				type: normalizedOutputType as TypedFieldType,
+				fields: canonicalizeFieldsForPayloadType(normalizedOutputType, (typedSchema as any)?.fields)
 			}
 		};
 	}
 
 	function getOutputFields(index: number): ComponentTypedField[] {
-		const portType = normalizePortType(outputs[index]?.portType ?? 'json');
+		const outputType = normalizePayloadType(outputs[index]?.typedSchema?.type ?? 'json');
 		const fields = outputs[index]?.typedSchema?.fields;
-		return canonicalizeFieldsForPortType(portType, fields);
+		return canonicalizeFieldsForPayloadType(outputType, fields);
 	}
 
 	function updateOutputField(
@@ -554,20 +566,20 @@ export let onDraft: (
 		fieldIndex: number,
 		patch: Partial<ComponentTypedField>
 	): void {
-		const portType = normalizePortType(outputs[outputIndex]?.portType);
+		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.map((field, i) => (i === fieldIndex ? { ...field, ...patch } : field));
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				type: portType as TypedFieldType,
+				type: outputType as TypedFieldType,
 				fields: nextFields
 			}
 		});
 	}
 
 	function addOutputField(outputIndex: number): void {
-		const portType = normalizePortType(outputs[outputIndex]?.portType);
-		if (!shouldShowStructuredFieldsEditor(portType)) return;
+		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
+		if (!shouldShowStructuredFieldsEditor(outputType)) return;
 		const fields = getOutputFields(outputIndex);
 		const newField: ComponentTypedField = {
 			name: `field_${fields.length + 1}`,
@@ -577,19 +589,19 @@ export let onDraft: (
 		const nextFields = [...fields, newField];
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				type: portType as TypedFieldType,
+				type: outputType as TypedFieldType,
 				fields: nextFields
 			}
 		});
 	}
 
 	function removeOutputField(outputIndex: number, fieldIndex: number): void {
-		const portType = normalizePortType(outputs[outputIndex]?.portType);
+		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.filter((_, i) => i !== fieldIndex);
 		updateApiOutput(outputIndex, {
 			typedSchema: {
-				type: portType as TypedFieldType,
+				type: outputType as TypedFieldType,
 				fields: nextFields
 			}
 		});
@@ -631,10 +643,10 @@ export let onDraft: (
 					(f as any)?.nativeType == null ? undefined : String((f as any).nativeType),
 				nullable: Boolean((f as any)?.nullable ?? false)
 			}));
-			const portType = normalizePortType(outputs[index]?.portType);
+			const outputType = normalizePayloadType(outputs[index]?.typedSchema?.type);
 			updateApiOutput(index, {
 				typedSchema: {
-					type: portType as TypedFieldType,
+					type: outputType as TypedFieldType,
 					fields: normalized
 				}
 			});
@@ -896,12 +908,12 @@ export let onDraft: (
 		<div class="contractGroup">
 			<div class="groupTitle">Inputs</div>
 			{#if inputs.length === 0}
-				<div class="muted">No input ports</div>
+				<div class="muted">No declared inputs</div>
 			{:else}
 				{#each inputs as port (port.name)}
 					<div class="portRow">
 						<span class="mono">{port.name}</span>
-						<span class="pill">{port.portType}</span>
+						<span class="pill">{String(port.typedSchema?.type ?? 'json')}</span>
 						<span class="muted">{typedSchemaSummary(port)}</span>
 					</div>
 				{/each}
@@ -924,7 +936,7 @@ export let onDraft: (
 				<div class="validationSummary">Resolve output/binding issues before Accept: {outputValidationSummary}</div>
 			{/if}
 			{#if outputs.length === 0}
-				<div class="muted">No output ports</div>
+				<div class="muted">No declared outputs</div>
 			{:else}
 				{#each outputs as port, index (`${index}:${port.name}`)}
 					<div class="outputCard">
@@ -949,7 +961,7 @@ export let onDraft: (
 								}}
 							/>
 							<div class="readonlyField outputTypeReadonly" title="Derived from bound internal node">
-								{String(port.portType ?? 'json')}
+								{String(port.typedSchema?.type ?? 'json')}
 							</div>
 							<div class="outputActions">
 								<button class="tabBtn small danger" type="button" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
@@ -957,17 +969,17 @@ export let onDraft: (
 						</div>
 						<div class="outputEditorRow outputEditorRowSecondary">
 							<select
-								value={String(outputBindings?.[port.name]?.nodeId ?? '')}
-								on:change={(e) => onOutputBindingNodeIdChange(port.name, (e.currentTarget as HTMLSelectElement).value)}
+								value={String(outputBindings?.[port.name]?.outputRef ?? '')}
+								on:change={(e) => onOutputBindingOutputRefChange(port.name, (e.currentTarget as HTMLSelectElement).value)}
 							>
-								<option value="">internal node</option>
-								{#if String(outputBindings?.[port.name]?.nodeId ?? '').trim() && !internalNodeOptions.some((n) => n.id === String(outputBindings?.[port.name]?.nodeId ?? '').trim())}
-									<option value={String(outputBindings?.[port.name]?.nodeId ?? '').trim()}>
-										missing: {String(outputBindings?.[port.name]?.nodeId ?? '').trim()}
+								<option value="">internal output</option>
+								{#if String(outputBindings?.[port.name]?.outputRef ?? '').trim() && !internalNodeOptions.some((n) => n.ref === String(outputBindings?.[port.name]?.outputRef ?? '').trim())}
+									<option value={String(outputBindings?.[port.name]?.outputRef ?? '').trim()}>
+										missing: {String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
 									</option>
 								{/if}
-								{#each internalNodeOptions as opt (opt.id)}
-									<option value={opt.id}>{opt.label}</option>
+								{#each internalNodeOptions as opt (opt.ref)}
+									<option value={opt.ref}>{opt.label}</option>
 								{/each}
 							</select>
 							<button
@@ -999,13 +1011,13 @@ export let onDraft: (
 							<div class="outputSchemaRow">
 								<div class="schemaType">
 									<span class="k">typedSchema.type</span>
-									<div class="readonlyField">{String(port.portType ?? 'json')}</div>
+									<div class="readonlyField">{String(port.typedSchema?.type ?? 'json')}</div>
 								</div>
 								<div class="schemaFields">
 									<div class="schemaFieldsHeader">
 										<span class="k">typedSchema.fields</span>
 										<div class="schemaFieldActions">
-											{#if shouldShowStructuredFieldsEditor(port.portType)}
+											{#if shouldShowStructuredFieldsEditor(port.typedSchema?.type)}
 												<button
 													class="tabBtn small"
 													type="button"
@@ -1020,7 +1032,7 @@ export let onDraft: (
 											<button class="tabBtn small" type="button" on:click={() => resetOutputSchema(index)}>Reset</button>
 										</div>
 									</div>
-									{#if shouldShowStructuredFieldsEditor(port.portType)}
+									{#if shouldShowStructuredFieldsEditor(port.typedSchema?.type)}
 										{#if getFieldsEditorMode(index) === 'structured'}
 											{#if getOutputFields(index).length === 0}
 												<div class="muted">No fields</div>
@@ -1068,7 +1080,7 @@ export let onDraft: (
 											{/if}
 										{/if}
 									{:else}
-										<div class="muted">No schema fields for {String(port.portType ?? 'json')} outputs.</div>
+										<div class="muted">No schema fields for {String(port.typedSchema?.type ?? 'json')} outputs.</div>
 									{/if}
 								</div>
 							</div>
@@ -1080,8 +1092,8 @@ export let onDraft: (
 								</div>
 							{/if}
 						{/if}
-						{#if !String(outputBindings?.[port.name]?.nodeId ?? '').trim()}
-							<div class="bindingErr">bindings.outputs.{port.name}.nodeId is required</div>
+						{#if !String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
+							<div class="bindingErr">bindings.outputs.{port.name}.outputRef is required</div>
 						{/if}
 						{#if outputValidation.bindingErrors[port.name]?.length}
 							<div class="bindingErr">

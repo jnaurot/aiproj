@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PORT_TYPES } from "../types";
+import { PAYLOAD_TYPES } from "../types";
 
 export const NodeTypesSchema = z.enum(["source", "transform", "llm", "tool", "component"]);
 
@@ -13,11 +13,7 @@ export const NodeStatusSchema = z.enum([
   "canceled"
 ]);
 
-export const PortTypeSchema = z.enum(PORT_TYPES);
-export const PortsSchema = z.object({
-  in: PortTypeSchema.nullable(),  // source nodes can be null/undefined
-  out: PortTypeSchema.nullable() // require out for everyone (Phase 1)
-});
+export const PayloadTypeSchema = z.enum(PAYLOAD_TYPES);
 
 
 
@@ -49,7 +45,5 @@ export const BaseNodeDataSchema = <K extends string, P extends z.ZodTypeAny>(
       })
       .optional(),
       
-    ports: PortsSchema,
-
     meta: NodeMetaSchema.optional()
   });

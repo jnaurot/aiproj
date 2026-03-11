@@ -37,8 +37,6 @@ Required fields:
 Optional fields:
 
 - `artifactId`
-- `expectedPortType`
-- `actualPortType`
 - `producerExecKey`
 
 ### `cache_summary` (schema_version=1)

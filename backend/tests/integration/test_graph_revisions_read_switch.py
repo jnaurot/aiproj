@@ -18,7 +18,6 @@ def _graph_payload(label: str):
 					"label": label,
 					"sourceKind": "file",
 					"status": "idle",
-					"ports": {"in": None, "out": "table"},
 					"params": {"source_type": "text", "text": "x", "output_mode": "rows"},
 				},
 			}
@@ -38,7 +37,6 @@ def _graph_with_builtin_tool(profile_id: str = "core"):
 				"data": {
 					"kind": "tool",
 					"label": "Tool Builtin",
-					"ports": {"in": None, "out": "text"},
 					"params": {
 						"provider": "builtin",
 						"builtin": {
@@ -174,7 +172,6 @@ def test_graph_export_import_reports_component_dependencies():
 							"data": {
 								"kind": "component",
 								"label": "Component",
-								"ports": {"in": "json", "out": "json"},
 								"params": {
 									"componentRef": {
 										"componentId": "cmp_dep_test",

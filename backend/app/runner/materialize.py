@@ -98,7 +98,7 @@ async def materialize_text(context: GraphContext, artifact_id: str) -> str:
     mime = str(getattr(art, "mime_type", "") or "")
     payload_schema: Any = getattr(art, "payload_schema", None) or {}
     payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
-    port_type = str(getattr(art, "port_type", "") or "").lower()
+    payload_type = str(getattr(art, "payload_type", "") or "").lower()
 
     max_rows = _env_int("LLM_TABLE_MAX_ROWS", 200)
     max_cols = _env_int("LLM_TABLE_MAX_COLS", 50)
@@ -106,7 +106,7 @@ async def materialize_text(context: GraphContext, artifact_id: str) -> str:
     sort_rows = _env_bool("LLM_TABLE_SORT_ROWS", True)
 
     is_table = (
-        port_type == "table"
+        payload_type == "table"
         or payload_type == "table"
         or "csv" in mime.lower()
         or "tab-separated-values" in mime.lower()
@@ -121,3 +121,4 @@ async def materialize_text(context: GraphContext, artifact_id: str) -> str:
             sort_rows=sort_rows,
         )
     return _clip_chars(_decode_bytes(b, mime), max_chars)
+

@@ -15,13 +15,13 @@ Where `canonical_json` uses:
 
 ## Inputs By Node Kind
 
-`exec_key` MUST depend only on determinism inputs:
+`exec_key` MUST depend only on deterministic inputs:
 
 - `node_kind`
 - canonical/normalized params
 - ordered input artifact identity:
   - generic path: sorted `input_artifact_ids`
-  - transform/tool path: stable `port -> artifact_id` ordering via `input_refs`
+  - transform/tool path: stable `input_handle -> artifact_id` ordering via `input_refs`
 - `build_version` / `execution_version`
 
 Optional (only if intentionally desired): engine/runtime version for explicit cache busting.
@@ -99,7 +99,7 @@ Behavioral invariants (covered by tests):
 
 - same params + same inputs => same key
 - same params with key reordering => same key
-- input-to-port swap (transform/tool) => different key
+- input-handle swap (transform/tool) => different key
 - build version change => different key
 - join `withNodeId` change => different key
 - transform op list reorder => different key (current policy)

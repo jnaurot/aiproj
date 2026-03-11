@@ -703,7 +703,7 @@ class RuntimeManager:
                     "artifactId": str(art.artifact_id),
                     "nodeId": str(art.node_id or ""),
                     "nodeKind": str(art.node_kind or ""),
-                    "portType": str(art.port_type or ""),
+                    "payloadType": str(getattr(art, "payload_type", "") or (art.payload_schema or {}).get("type") or ""),
                     "mimeType": str(art.mime_type or ""),
                 }
             )

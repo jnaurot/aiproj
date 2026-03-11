@@ -137,7 +137,6 @@ def test_resolve_source_exec_key_and_cache_hit_by_snapshot(monkeypatch, tmp_path
 						"kind": "source",
 						"sourceKind": "file",
 						"params": {"snapshotId": sid_a, "file_format": "txt", "encoding": "utf-8"},
-						"ports": {"in": None, "out": "text"},
 					},
 				}
 			],
@@ -230,7 +229,6 @@ async def test_source_file_node_uses_snapshot_id_and_caches(monkeypatch, tmp_pat
 					"label": "Source",
 					"sourceKind": "file",
 					"params": {"snapshotId": snapshot_id, "file_format": "txt", "encoding": "utf-8"},
-					"ports": {"in": None, "out": "text"},
 				},
 			}
 		],

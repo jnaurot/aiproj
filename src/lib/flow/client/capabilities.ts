@@ -1,4 +1,4 @@
-import type { PortType } from '$lib/flow/types';
+import type { PayloadType } from '$lib/flow/types';
 import { backendUrl } from '$lib/flow/client/backend';
 
 export type BackendCapabilitiesResponse = {
@@ -11,8 +11,8 @@ export type BackendCapabilitiesResponse = {
 	};
 	capabilities: {
 		schemaVersion?: number;
-		allowedPortTypes?: PortType[];
-		nodes?: Record<string, { in?: PortType[]; out?: PortType[]; byProvider?: Record<string, { in?: PortType[]; out?: PortType[] }> }>;
+		allowedPayloadTypes?: PayloadType[];
+		nodes?: Record<string, { in?: PayloadType[]; out?: PayloadType[]; byProvider?: Record<string, { in?: PayloadType[]; out?: PayloadType[] }> }>;
 	};
 };
 

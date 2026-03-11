@@ -81,7 +81,6 @@ describe('graphStore edge schema compatibility', () => {
 							kind: 'component',
 							label: 'Component',
 							componentKind: 'graph_component',
-							ports: { in: null, out: null },
 							params: {
 								componentRef: {
 									componentId: 'cmp_test',
@@ -93,7 +92,7 @@ describe('graphStore edge schema compatibility', () => {
 									outputs: [
 										{
 											name: 'default',
-											portType: 'json',
+											payloadType: 'json',
 											required: true,
 											typedSchema: { type: 'json', fields: [] }
 										}
@@ -197,3 +196,4 @@ describe('graphStore edge schema compatibility', () => {
 		expect(allowed.ok).toBe(true);
 	});
 });
+

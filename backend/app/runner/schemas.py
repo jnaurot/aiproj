@@ -541,7 +541,7 @@ class LLMParams(NodeParamSchema):
     max_retries: int = Field(3, ge=0, le=10)
     timeout_seconds: int = Field(60, ge=1)
     
-    input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/ports
+    input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/handles
 
     @model_validator(mode="after")
     def _validate_contract(self):
@@ -739,15 +739,36 @@ class ComponentTypedField(NodeParamSchema):
     nativeType: Optional[str] = None
     nullable: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        next_data = dict(data)
+        raw_type = str(next_data.get("type") or "").strip().lower()
+        if raw_type == "string":
+            next_data["type"] = "text"
+        return next_data
+
 
 class ComponentTypedSchema(NodeParamSchema):
     type: Literal["table", "json", "text", "binary", "embeddings", "unknown"]
     fields: List[ComponentTypedField] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        next_data = dict(data)
+        raw_type = str(next_data.get("type") or "").strip().lower()
+        if raw_type == "string":
+            next_data["type"] = "text"
+        return next_data
+
 
 class ComponentApiPort(NodeParamSchema):
     name: str
-    portType: Literal["table", "json", "text", "binary", "embeddings"]
     required: bool = True
     typedSchema: ComponentTypedSchema
 
@@ -1164,17 +1185,17 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                                 )
                             )
                             continue
-                        for idx, port in enumerate(section):
-                            if not isinstance(port, dict):
+                        for idx, entry in enumerate(section):
+                            if not isinstance(entry, dict):
                                 errors.append(
                                     _machine_error(
-                                        "INVALID_COMPONENT_PORT",
+                                        "INVALID_COMPONENT_API_ENTRY",
                                         f"params.api.{section_name}[{idx}]",
-                                        "port definition must be an object",
+                                        "entry definition must be an object",
                                     )
                                 )
                                 continue
-                            typed_schema = port.get("typedSchema")
+                            typed_schema = entry.get("typedSchema")
                             if not isinstance(typed_schema, dict):
                                 errors.append(
                                     _machine_error(

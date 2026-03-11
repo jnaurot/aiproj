@@ -15,7 +15,7 @@ For `sourceKind=file` snapshot-backed nodes, deterministic inputs are:
 
 - `snapshotId`
 - parse params (`file_format`, `delimiter`, `encoding`, `sheet_name`)
-- output contract (`output_mode` / port contract)
+- output contract (`output_mode` / payload contract)
 
 The following are explicitly excluded from cache identity / exec inputs:
 

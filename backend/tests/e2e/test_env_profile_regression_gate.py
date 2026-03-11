@@ -16,7 +16,6 @@ def _graph_with_builtin_profile(profile_id: str) -> dict:
 				"data": {
 					"kind": "tool",
 					"label": "Tool Python",
-					"ports": {"in": None, "out": "text"},
 					"params": {
 						"provider": "python",
 						"builtin": {"profileId": profile_id, "customPackages": []},

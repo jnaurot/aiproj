@@ -30,9 +30,7 @@
 
 - Graph export includes component dependencies in:
 	- `manifest.dependencies.components[]`
-- Import validates dependency presence against local component store and reports:
-	- `migrationReport.componentDependencies`
-	- `migrationReport.unresolvedComponentDependencies` (when missing)
+- Import validates dependency presence against local component store.
 
 ## Known Limits (v1)
 

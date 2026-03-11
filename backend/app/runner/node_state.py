@@ -67,9 +67,9 @@ def _normalize_determinism_env(obj: Any) -> Any:
 
 def _normalize_input_refs(input_refs: Optional[list[tuple[str, str]]]) -> list[dict[str, str]]:
     refs = input_refs or []
-    norm = [(str(port), str(aid)) for port, aid in refs]
+    norm = [(str(input_handle), str(aid)) for input_handle, aid in refs]
     norm.sort(key=lambda x: (x[0], x[1]))
-    return [{"port": port, "artifact_id": aid} for port, aid in norm]
+    return [{"inputHandle": input_handle, "artifactId": aid} for input_handle, aid in norm]
 
 
 def _sorted_string_map(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -343,8 +343,8 @@ def build_exec_key(
         "node_kind": str(node_kind or ""),
         "node_impl_version": str(node_impl_version or "1"),
         "node_state_hash": str(node_state_hash or ""),
-        "upstream_artifact_keys": sorted(str(aid) for aid in (upstream_artifact_ids or [])),
-        "input_bindings": _normalize_input_refs(input_refs),
+        "upstreamArtifactKeys": sorted(str(aid) for aid in (upstream_artifact_ids or [])),
+        "inputBindings": _normalize_input_refs(input_refs),
         "determinism_env": _normalize_determinism_env(determinism_env or {}),
     }
     return _sha256_text(_canon_json(payload))

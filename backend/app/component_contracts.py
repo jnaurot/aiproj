@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from .graph_migrations import canonicalize_graph_payload
 
 COMPONENT_SCHEMA_VERSION = 1
-ALLOWED_PORT_TYPES = {"table", "json", "text", "binary", "embeddings"}
+ALLOWED_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
 ALLOWED_TYPED_TYPES = {"table", "json", "text", "binary", "embeddings", "unknown"}
 
 
@@ -63,16 +63,13 @@ def _canonical_typed_schema(raw: Optional[Dict[str, Any]], fallback_type: str) -
     return {"type": typed, "fields": fields}
 
 
-def _canonical_api_port(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _canonical_api_entry(raw: Dict[str, Any]) -> Dict[str, Any]:
     fallback = "json"
     typed_schema = _canonical_typed_schema(
         raw.get("typedSchema") if isinstance(raw, dict) else None, fallback
     )
-    typed_type = str(typed_schema.get("type") or "").strip().lower()
-    port_type = typed_type if typed_type in ALLOWED_PORT_TYPES else fallback
     return {
         "name": str(raw.get("name") or "").strip(),
-        "portType": port_type,
         "required": bool(raw.get("required", True)),
         "typedSchema": typed_schema,
     }
@@ -87,11 +84,11 @@ def _canonical_api_contract(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(inputs_in, list):
         for item in inputs_in:
             if isinstance(item, dict):
-                inputs.append(_canonical_api_port(item))
+                inputs.append(_canonical_api_entry(item))
     if isinstance(outputs_in, list):
         for item in outputs_in:
             if isinstance(item, dict):
-                outputs.append(_canonical_api_port(item))
+                outputs.append(_canonical_api_entry(item))
     return {"inputs": inputs, "outputs": outputs}
 
 
@@ -153,31 +150,21 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
                 ContractDiagnostic("INVALID_API_SECTION", f"api.{section}", f"api.{section} must be an array")
             )
             continue
-        for idx, port in enumerate(entries):
+        for idx, entry in enumerate(entries):
             path = f"api.{section}[{idx}]"
-            if not isinstance(port, dict):
-                diagnostics.append(ContractDiagnostic("INVALID_API_PORT", path, "port must be an object"))
+            if not isinstance(entry, dict):
+                diagnostics.append(ContractDiagnostic("INVALID_API_ENTRY", path, "entry must be an object"))
                 continue
-            name = str(port.get("name") or "").strip()
+            name = str(entry.get("name") or "").strip()
             if not name:
-                diagnostics.append(ContractDiagnostic("MISSING_PORT_NAME", f"{path}.name", "name is required"))
+                diagnostics.append(ContractDiagnostic("MISSING_ENTRY_NAME", f"{path}.name", "name is required"))
             elif section == "outputs":
                 if name in seen_names:
                     diagnostics.append(
                         ContractDiagnostic("DUPLICATE_OUTPUT_NAME", f"{path}.name", f"duplicate output name '{name}'")
                     )
                 seen_names.add(name)
-            port_type = str(port.get("portType") or "").strip().lower()
-            if port_type and port_type not in ALLOWED_PORT_TYPES:
-                diagnostics.append(
-                    ContractDiagnostic(
-                        "PORT_TYPE_IGNORED",
-                        f"{path}.portType",
-                        "portType is non-authoritative metadata; invalid value will be ignored in favor of typedSchema.type",
-                        severity="warning",
-                    )
-                )
-            typed_schema = port.get("typedSchema")
+            typed_schema = entry.get("typedSchema")
             if not isinstance(typed_schema, dict):
                 diagnostics.append(ContractDiagnostic("MISSING_TYPED_SCHEMA", f"{path}.typedSchema", "typedSchema is required"))
                 continue
@@ -192,15 +179,6 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
                 )
             if typed == "string":
                 typed = "text"
-            if port_type and typed in ALLOWED_PORT_TYPES and typed != port_type:
-                diagnostics.append(
-                    ContractDiagnostic(
-                        "PORT_TYPE_DERIVED_FROM_TYPED_SCHEMA",
-                        f"{path}.portType",
-                        "portType differs from typedSchema.type; canonicalization will derive portType from typedSchema.type",
-                        severity="warning",
-                    )
-                )
             fields = typed_schema.get("fields", [])
             if fields is not None and not isinstance(fields, list):
                 diagnostics.append(

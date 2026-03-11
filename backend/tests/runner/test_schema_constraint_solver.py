@@ -4,13 +4,12 @@ from app.runner.schema_diagnostics import SCHEMA_DIAGNOSTIC_CODES
 from app.runner.validator import GraphValidator
 
 
-def _node(node_id: str, *, kind: str, label: str, ports: dict, params: dict | None = None) -> dict:
+def _node(node_id: str, *, kind: str, label: str, params: dict | None = None) -> dict:
 	return {
 		"id": node_id,
 		"data": {
 			"kind": kind,
 			"label": label,
-			"ports": ports,
 			"params": params or {},
 		},
 	}
@@ -23,14 +22,12 @@ def test_schema_constraint_solver_emits_adapter_suggestion_for_type_mismatch() -
 				"n_source",
 				kind="source",
 				label="Source",
-				ports={"in": None, "out": "text"},
 				params={"sourceKind": "file", "snapshot_id": "a" * 64, "file_format": "txt"},
 			),
 			_node(
 				"n_transform",
 				kind="transform",
 				label="Transform",
-				ports={"in": "table", "out": "table"},
 				params={"op": "filter", "filter": {"expr": ""}},
 			),
 		],
@@ -69,14 +66,12 @@ def test_schema_constraint_solver_emits_required_provided_payload_mismatch() -> 
 				"n_source",
 				kind="source",
 				label="Source",
-				ports={"in": None, "out": "table"},
 				params={"sourceKind": "file", "snapshot_id": "b" * 64, "file_format": "csv"},
 			),
 			_node(
 				"n_transform",
 				kind="transform",
 				label="Transform",
-				ports={"in": "table", "out": "table"},
 				params={"op": "select", "select": {"mode": "include", "columns": ["id"]}},
 			),
 		],
@@ -114,14 +109,12 @@ def test_schema_constraint_solver_requires_typed_schema_coverage() -> None:
 				"n_source",
 				kind="source",
 				label="Source",
-				ports={"in": None, "out": "table"},
 				params={"sourceKind": "file", "snapshot_id": "c" * 64, "file_format": "csv"},
 			),
 			_node(
 				"n_transform",
 				kind="transform",
 				label="Transform",
-				ports={"in": "table", "out": "table"},
 				params={"op": "select", "select": {"mode": "include", "columns": ["id"]}},
 			),
 		],

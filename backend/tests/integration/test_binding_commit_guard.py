@@ -36,7 +36,6 @@ async def test_binding_cannot_change_during_execution(monkeypatch, tmp_path):
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],

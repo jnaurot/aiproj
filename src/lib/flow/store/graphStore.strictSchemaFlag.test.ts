@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { __setStrictSchemaFeatureFlagsForTest } from '$lib/flow/portCapabilities';
+import { __setStrictSchemaFeatureFlagsForTest } from '$lib/flow/schemaCapabilities';
 import { graphStore } from './graphStore';
 
 describe('graphStore strict schema v2 rollout flag', () => {

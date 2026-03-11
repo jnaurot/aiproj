@@ -166,6 +166,29 @@
 		}
 		return issues.length > 0 ? issues.join(' | ') : null;
 	})();
+	$: expectedInputSchemaDraft = (() => {
+		if (!selectedNode || !schemaContract?.edges?.length) return '';
+		const incoming = (schemaContract.edges as NodeSchemaContractEdge[])
+			.filter((edge) => edge.direction === 'incoming' && edge.requiredSchema)
+			.map((edge) => ({
+				edgeId: edge.edgeId,
+				sourceNodeId: edge.sourceNodeId,
+				sourceHandle: edge.sourceHandle,
+				requiredSchema: edge.requiredSchema
+			}));
+		if (incoming.length === 0) return '';
+		if (incoming.length === 1) {
+			return JSON.stringify(incoming[0].requiredSchema ?? { type: 'unknown', fields: [] }, null, 2);
+		}
+		return JSON.stringify(
+			{
+				type: 'multi_input',
+				inputs: incoming
+			},
+			null,
+			2
+		);
+	})();
 	let expectedSchemaDraft = '';
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
@@ -434,6 +457,16 @@
 			{/if}
 		{/if}
 		{#if !isComponent}
+			<div class="expectedSchemaEditor">
+				<div class="expectedSchemaHead">Expected Input Schema</div>
+				<textarea
+					class="expectedSchemaTextarea"
+					rows="7"
+					value={expectedInputSchemaDraft || JSON.stringify({ type: 'none' }, null, 2)}
+					readonly
+					spellcheck="false"
+				/>
+			</div>
 			<div class="expectedSchemaEditor">
 				<div class="expectedSchemaHead">Expected Output Schema</div>
 				<textarea

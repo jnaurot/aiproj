@@ -22,8 +22,8 @@ def _graph() -> dict:
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -32,7 +32,6 @@ def _graph() -> dict:
                     "kind": "tool",
                     "label": "Mid",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
             {
@@ -41,7 +40,6 @@ def _graph() -> dict:
                     "kind": "tool",
                     "label": "End",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "json", "out": "json"},
                 },
             },
         ],
@@ -59,7 +57,12 @@ async def test_run_from_selected_resolves_ancestors_from_cache(monkeypatch, tmp_
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
         calls["source"] += 1
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         calls["tool"] += 1
@@ -120,7 +123,12 @@ async def test_run_selected_only_executes_selected_and_uses_cached_ancestors(mon
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
         calls["source"] += 1
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         calls["tool"] += 1

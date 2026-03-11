@@ -49,7 +49,6 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],
@@ -100,7 +99,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
         for key in (
             "artifactId",
             "nodeKind",
-            "portType",
+            "payloadType",
             "mimeType",
             "payloadSchema",
             "producerNodeId",
@@ -160,7 +159,6 @@ async def test_create_run_without_runmode_or_runfrom_executes_full_graph(monkeyp
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],
@@ -215,7 +213,6 @@ async def test_create_run_requires_graph_id(monkeypatch):
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],

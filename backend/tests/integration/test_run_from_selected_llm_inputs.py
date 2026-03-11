@@ -23,7 +23,6 @@ def _graph() -> dict:
                     "label": "Source",
                     "sourceKind": "file",
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -38,7 +37,6 @@ def _graph() -> dict:
                         "user_prompt": "summarize",
                         "output_mode": "text",
                     },
-                    "ports": {"in": "text", "out": "text"},
                 },
             },
         ],

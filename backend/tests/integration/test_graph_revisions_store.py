@@ -13,7 +13,7 @@ def _sample_graph(label: str):
                 "id": "n1",
                 "type": "source",
                 "position": {"x": 0, "y": 0},
-                "data": {"kind": "source", "label": label, "params": {}, "ports": {"in": None, "out": "table"}},
+                "data": {"kind": "source", "label": label, "params": {}},
             }
         ],
         "edges": [],

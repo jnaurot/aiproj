@@ -10,7 +10,7 @@ export type InputSchemaProvenance = {
 	tableName?: string;
 	query?: string;
 	endpoint?: string;
-	upstream?: { nodeId?: string; port?: string } | Array<{ nodeId?: string; port?: string }>;
+	upstream?: { nodeId?: string; sourceHandle?: string } | Array<{ nodeId?: string; sourceHandle?: string }>;
 };
 
 export type InputSchemaEnvelope = {

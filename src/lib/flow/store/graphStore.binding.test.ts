@@ -41,8 +41,8 @@ describe('graphStore binding normalization', () => {
 			activeRunFrom: null,
 			activeRunNodeSet: new Set<string>(),
 			nodeOutputs: {
-				live: { portType: 'json' },
-				ghost: { portType: 'json' }
+				live: { payloadType: 'json' },
+				ghost: { payloadType: 'json' }
 			},
 			nodeBindings: {
 				live: __normalizeBindingForTest({ status: 'succeeded_up_to_date', isUpToDate: true }, 'live'),
@@ -58,3 +58,4 @@ describe('graphStore binding normalization', () => {
 		expect(next.freshness).toBe('never_run');
 	});
 });
+

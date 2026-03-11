@@ -9,7 +9,6 @@ def test_cached_contract_mismatch_includes_fingerprints():
         "id": "n1",
         "data": {
             "kind": "tool",
-            "ports": {"out": "json"},
             "params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
         },
     }
@@ -21,7 +20,7 @@ def test_cached_contract_mismatch_includes_fingerprints():
         created_at=datetime.now(timezone.utc),
         execution_version="v1",
         mime_type="text/plain; charset=utf-8",
-        port_type="text",
+        payload_type="text",
         size_bytes=4,
         storage_uri="artifact://a",
         payload_schema={"schema_version": 1, "type": "text"},
@@ -41,3 +40,4 @@ def test_cached_contract_mismatch_includes_fingerprints():
     assert mismatch["mismatchKind"] == "schema_fingerprint"
     assert isinstance(mismatch.get("expectedContractFingerprint"), str)
     assert isinstance(mismatch.get("actualContractFingerprint"), str)
+

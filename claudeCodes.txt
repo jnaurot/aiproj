@@ -101,7 +101,7 @@ Calls tool, returns output.
 Important: define one internal runtime type:
 
 ```ts
-type Artifact = { type: PortType; value: unknown; meta?: Record<string, unknown> };
+type Artifact = { type: PayloadType; value: unknown; meta?: Record<string, unknown> };
 type RuntimeState = { outputsByNode: Map<string, Artifact> };
 ```
 

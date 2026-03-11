@@ -8,9 +8,9 @@ import type {
 	PipelineNodeData,
 	PipelineEdgeData,
 	PipelineGraphDTO,
-	PortType
+	PayloadType
 } from '$lib/flow/types';
-import { isPortType } from '$lib/flow/types/base';
+import { isPayloadType } from '$lib/flow/types/base';
 import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
 import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
@@ -69,7 +69,7 @@ import {
 
 type NodeOutputInfo = {
 	mimeType?: string;
-	portType?: string;
+	payloadType?: string;
 	preview?: string;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
@@ -225,31 +225,32 @@ function defaultApiEditorUiState(params?: Record<string, any>): ApiEditorUiState
 	};
 }
 
-function normalizeComponentPortType(value: unknown): PortType | null {
+function normalizeComponentPayloadType(value: unknown): PayloadType | null {
 	const t = String(value ?? '').trim().toLowerCase();
+	if (t === 'string') return 'text';
 	if (t === 'table' || t === 'text' || t === 'json' || t === 'binary' || t === 'embeddings') {
-		return t as PortType;
+		return t as PayloadType;
 	}
 	return null;
 }
 
-function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?: PortType | null } {
+function deriveIoFromComponentApi(api: unknown): { in?: PayloadType | null; out?: PayloadType | null } {
 	const contract = (api ?? {}) as ComponentApiContract;
 	const inputs = Array.isArray(contract?.inputs) ? contract.inputs : [];
 	const inTyped = (inputs[0] as any)?.typedSchema?.type;
-	const inPort = normalizeComponentPortType(inTyped ?? inputs[0]?.portType ?? null);
-	// Component output routing/type comes from API outputs + sourceHandle, not ports.out.
-	return { in: inPort, out: null };
+	const inputType = normalizeComponentPayloadType(inTyped ?? null);
+	// Component output routing/type comes from API outputs + sourceHandle.
+	return { in: inputType, out: null };
 }
 
-function deriveSourceOutPort(data: PipelineNodeData): PortType {
+function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 	const schema = (data as any)?.schema ?? {};
 	const expectedType = normalizeTypedSchemaPrimitive(schema?.expectedSchema?.typedSchema?.type);
-	if (isPortType(expectedType)) return expectedType;
+	if (isPayloadType(expectedType)) return expectedType;
 	const inferredType = normalizeTypedSchemaPrimitive(schema?.inferredSchema?.typedSchema?.type);
-	if (isPortType(inferredType)) return inferredType;
+	if (isPayloadType(inferredType)) return inferredType;
 	const observedType = normalizeTypedSchemaPrimitive(schema?.observedSchema?.typedSchema?.type);
-	if (isPortType(observedType)) return observedType;
+	if (isPayloadType(observedType)) return observedType;
 	const params = (((data as any)?.params ?? {}) as Record<string, any>);
 	const sourceKind = String((data as any)?.sourceKind ?? '').trim().toLowerCase();
 	if (sourceKind === 'api') return 'json';
@@ -271,7 +272,7 @@ function deriveSourceOutPort(data: PipelineNodeData): PortType {
 	return 'text';
 }
 
-function deriveLlmOutPort(params: Record<string, any>): PortType {
+function deriveLlmOutPort(params: Record<string, any>): PayloadType {
 	const output = params?.output && typeof params.output === 'object' ? params.output : {};
 	const mode = String((output as any)?.mode ?? '').trim().toLowerCase();
 	if (mode === 'json') return 'json';
@@ -280,7 +281,7 @@ function deriveLlmOutPort(params: Record<string, any>): PortType {
 	return 'text';
 }
 
-function deriveTransformPorts(params: Record<string, any>, transformKindRaw: unknown): { in: PortType; out: PortType } {
+function deriveTransformIo(params: Record<string, any>, transformKindRaw: unknown): { in: PayloadType; out: PayloadType } {
 	const op = String(params?.op ?? transformKindRaw ?? '').trim().toLowerCase();
 	if (op === 'json_to_table') return { in: 'json', out: 'table' };
 	if (op === 'text_to_table') return { in: 'text', out: 'table' };
@@ -288,11 +289,11 @@ function deriveTransformPorts(params: Record<string, any>, transformKindRaw: unk
 	return { in: 'table', out: 'table' };
 }
 
-function deriveToolPorts(_params: Record<string, any>): { in: PortType; out: PortType } {
+function deriveToolIo(_params: Record<string, any>): { in: PayloadType; out: PayloadType } {
 	return { in: 'json', out: 'json' };
 }
 
-export function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; out: PortType | null } {
+export function deriveNodeIoForData(data: PipelineNodeData): { in: PayloadType | null; out: PayloadType | null } {
 	if (data.kind === 'source') {
 		return { in: null, out: deriveSourceOutPort(data) };
 	}
@@ -301,22 +302,22 @@ export function derivePortsForNodeData(data: PipelineNodeData): { in: PortType |
 		return { in: 'text', out: deriveLlmOutPort(params) };
 	}
 	if (data.kind === 'transform') {
-		return deriveTransformPorts(params, (data as any)?.transformKind);
+		return deriveTransformIo(params, (data as any)?.transformKind);
 	}
 	if (data.kind === 'tool') {
-		return deriveToolPorts(params);
+		return deriveToolIo(params);
 	}
 	if (data.kind === 'component') {
-		const componentPorts = derivePortsFromComponentApi((params as any)?.api);
+		const componentIo = deriveIoFromComponentApi((params as any)?.api);
 		return {
-			in: (componentPorts.in ?? null) as PortType | null,
-			out: (componentPorts.out ?? null) as PortType | null
+			in: (componentIo.in ?? null) as PayloadType | null,
+			out: (componentIo.out ?? null) as PayloadType | null
 		};
 	}
 	return { in: null, out: null };
 }
 
-function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
+function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
 	return nodes.map((node) => {
 		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
@@ -399,9 +400,9 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 		}
 		seenOutputNames.add(outputNameKey);
 		const binding = outputBindings[outputName];
-		const boundNodeId = String(binding?.nodeId ?? '').trim();
-		if (!boundNodeId) {
-			errors.push(`Component output "${outputName}" requires a bound internal node before Accept.`);
+		const boundOutputRef = String(binding?.outputRef ?? '').trim();
+		if (!boundOutputRef) {
+			errors.push(`Component output "${outputName}" requires a bound internal outputRef before Accept.`);
 		}
 		const artifactMode = String(binding?.artifact ?? 'current').trim();
 		if (artifactMode !== 'current' && artifactMode !== 'last') {
@@ -409,7 +410,7 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 				`Component output "${outputName}" must set artifact mode to "current" or "last" before Accept.`
 			);
 		}
-		const typedSchemaType = normalizeComponentPortType(output?.typedSchema?.type);
+		const typedSchemaType = normalizeComponentPayloadType(output?.typedSchema?.type);
 		if (typedSchemaType == null) {
 			errors.push(`Component output "${outputName}" must declare typedSchema.type.`);
 		}
@@ -685,15 +686,15 @@ export type GraphState = {
 };
 
 export type InputResolution = {
-	inPort: string;
-	edge: { fromNodeId: string; fromPort: string } | null;
+	inputHandle: string;
+	edge: { fromNodeId: string; sourceHandle: string } | null;
 	status: 'resolved' | 'missing';
 	reason?: 'DISCONNECTED' | 'UPSTREAM_NO_ARTIFACT' | 'UPSTREAM_FAILED' | 'UNKNOWN';
 	artifactId?: string;
 	artifactSource?: 'active_run' | 'bound';
 	upstream: {
 		nodeId: string;
-		port: string;
+		sourceHandle: string;
 		status?: string;
 		isUpToDate?: boolean;
 		staleReason?: string | null;
@@ -748,38 +749,38 @@ export function resolveNodeInputsFromState(state: GraphState, nodeId: string): I
 		.filter((e) => e.target === nodeId)
 		.slice()
 		.sort((a, b) => String(a.id ?? '').localeCompare(String(b.id ?? '')));
-	const inPorts = new Set<string>();
-	if (incoming.length === 0) inPorts.add('in');
-	for (const e of incoming) inPorts.add(normalizeHandleId((e as any).targetHandle, 'in'));
-	const orderedInPorts = Array.from(inPorts).sort((a, b) => a.localeCompare(b));
+	const inputHandles = new Set<string>();
+	if (incoming.length === 0) inputHandles.add('in');
+	for (const e of incoming) inputHandles.add(normalizeHandleId((e as any).targetHandle, 'in'));
+	const orderedInputHandles = Array.from(inputHandles).sort((a, b) => a.localeCompare(b));
 	const resolutions: InputResolution[] = [];
-	for (const inPort of orderedInPorts) {
-		const edge = incoming.find((e) => normalizeHandleId((e as any).targetHandle, 'in') === inPort) ?? null;
+	for (const inputHandle of orderedInputHandles) {
+		const edge = incoming.find((e) => normalizeHandleId((e as any).targetHandle, 'in') === inputHandle) ?? null;
 		if (!edge) {
 			resolutions.push({
-				inPort,
+				inputHandle,
 				edge: null,
 				status: 'missing',
 				reason: 'DISCONNECTED',
-				upstream: { nodeId: '', port: '' }
+				upstream: { nodeId: '', sourceHandle: '' }
 			});
 			continue;
 		}
 		const fromNodeId = String(edge.source ?? '');
-		const fromPort = normalizeHandleId((edge as any).sourceHandle, 'out');
+		const sourceHandle = normalizeHandleId((edge as any).sourceHandle, 'out');
 		const upstreamBinding = state.nodeBindings?.[fromNodeId];
 		const upstreamOut = state.nodeOutputs?.[fromNodeId];
 		const resolved = resolveUpstreamArtifact(state, upstreamBinding);
 		if (resolved.artifactId) {
 			resolutions.push({
-				inPort,
-				edge: { fromNodeId, fromPort },
+				inputHandle,
+				edge: { fromNodeId, sourceHandle },
 				status: 'resolved',
 				artifactId: resolved.artifactId,
 				artifactSource: resolved.artifactSource,
 				upstream: {
 					nodeId: fromNodeId,
-					port: fromPort,
+					sourceHandle,
 					status: displayStatusFromBinding(upstreamBinding as any),
 					isUpToDate: upstreamBinding?.isUpToDate,
 					staleReason: upstreamBinding?.staleReason ?? null
@@ -787,19 +788,19 @@ export function resolveNodeInputsFromState(state: GraphState, nodeId: string): I
 				artifactSummary: {
 					mimeType: upstreamOut?.mimeType,
 					schemaFingerprint: upstreamOut?.actualContractFingerprint,
-					contract: upstreamOut?.portType
+					contract: upstreamOut?.payloadType
 				}
 			});
 			continue;
 		}
 		resolutions.push({
-			inPort,
-			edge: { fromNodeId, fromPort },
+			inputHandle,
+			edge: { fromNodeId, sourceHandle },
 			status: 'missing',
 			reason: isFailedBindingStatus(upstreamBinding) ? 'UPSTREAM_FAILED' : 'UPSTREAM_NO_ARTIFACT',
 			upstream: {
 				nodeId: fromNodeId,
-				port: fromPort,
+				sourceHandle,
 				status: displayStatusFromBinding(upstreamBinding as any),
 				isUpToDate: upstreamBinding?.isUpToDate,
 				staleReason: upstreamBinding?.staleReason ?? null
@@ -1362,7 +1363,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				...state.nodeOutputs,
 				[evt.nodeId]: {
 					mimeType: evt.mimeType,
-					portType: evt.portType,
+					payloadType: evt.payloadType,
 					preview: evt.preview ?? undefined,
 					cached: evt.cached ?? false,
 					cacheDecision: nextCacheDecision
@@ -1455,7 +1456,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const prev = state.nodeOutputs?.[evt.nodeId];
 			const nextForNode: NodeOutputInfo = {
 				mimeType: prev?.mimeType,
-				portType: prev?.portType,
+				payloadType: prev?.payloadType,
 				preview: prev?.preview,
 				cached: evt.decision === 'cache_hit',
 				cacheDecision: evt.decision,
@@ -1800,7 +1801,6 @@ function stripToDTO(
 		const data = (node as any)?.data;
 		if (!data || typeof data !== 'object') return node;
 		const nextData = { ...data } as Record<string, unknown>;
-		delete (nextData as any).ports;
 		return {
 			...node,
 			data: nextData as PipelineNodeData & Record<string, unknown>
@@ -1814,13 +1814,6 @@ function stripToDTO(
 	if (graphId) {
 		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
 	}
-	dto.meta = {
-		...(dto.meta ?? {}),
-		migrations: {
-			...(((dto.meta ?? {}) as any).migrations ?? {}),
-			OMIT_NODE_PORTS_V1: true
-		}
-	} as any;
 	return dto;
 }
 
@@ -1869,14 +1862,14 @@ function shouldPreserveStoreEdgesOnCanvasSync(
 	return true;
 }
 
-function normalizeComponentPortTypeOrDefault(value: unknown, fallback: PortType = 'json'): PortType {
-	const normalized = normalizeComponentPortType(value);
+function normalizeComponentPayloadTypeOrDefault(value: unknown, fallback: PayloadType = 'json'): PayloadType {
+	const normalized = normalizeComponentPayloadType(value);
 	return normalized ?? fallback;
 }
 
 function normalizeComponentNodeForMigration(
 	node: Node<PipelineNodeData>
-): { node: Node<PipelineNodeData>; outputNames: string[]; outputByName: Map<string, PortType>; bindingNames: string[] } {
+): { node: Node<PipelineNodeData>; outputNames: string[]; outputByName: Map<string, PayloadType>; bindingNames: string[] } {
 	if (node.data.kind !== 'component') {
 		return { node, outputNames: [], outputByName: new Map(), bindingNames: [] };
 	}
@@ -1887,22 +1880,21 @@ function normalizeComponentNodeForMigration(
 		.filter((out) => Boolean(out) && typeof out === 'object')
 		.map((out) => {
 			const outName = String((out as any)?.name ?? '').trim();
-			const portType = normalizeComponentPortTypeOrDefault((out as any)?.portType, 'json');
+			const outputType = normalizeComponentPayloadTypeOrDefault((out as any)?.typedSchema?.type, 'json');
 			const typedSchemaRaw =
 				(out as any)?.typedSchema && typeof (out as any).typedSchema === 'object'
 					? ((out as any).typedSchema as Record<string, any>)
 					: {};
 			const fieldsRaw = Array.isArray(typedSchemaRaw.fields) ? (typedSchemaRaw.fields as any[]) : [];
 			const normalizedFields =
-				portType === 'table' || portType === 'json'
+				outputType === 'table' || outputType === 'json'
 					? fieldsRaw
 					: [];
 			return {
 				...(out as any),
 				name: outName,
-				portType,
 				typedSchema: {
-					type: portType,
+					type: outputType,
 					fields: normalizedFields
 				}
 			};
@@ -1911,11 +1903,11 @@ function normalizeComponentNodeForMigration(
 
 	const outputNames = normalizedOutputs.map((out) => String((out as any)?.name ?? '').trim());
 	const outputSet = new Set(outputNames);
-	const outputByName = new Map<string, PortType>();
+	const outputByName = new Map<string, PayloadType>();
 	for (const out of normalizedOutputs) {
 		const name = String((out as any)?.name ?? '').trim();
-		const portType = normalizeComponentPortTypeOrDefault((out as any)?.portType, 'json');
-		outputByName.set(name, portType);
+		const outputType = normalizeComponentPayloadTypeOrDefault((out as any)?.typedSchema?.type, 'json');
+		outputByName.set(name, outputType);
 	}
 
 	const bindings = (params.bindings ?? {}) as Record<string, any>;
@@ -1923,12 +1915,6 @@ function normalizeComponentNodeForMigration(
 		bindings.outputs && typeof bindings.outputs === 'object'
 			? ({ ...(bindings.outputs as Record<string, any>) } as Record<string, any>)
 			: {};
-	if (outputNames.length === 1) {
-		const only = outputNames[0];
-		if (!Object.prototype.hasOwnProperty.call(outputBindingsRaw, only) && outputBindingsRaw.out_data) {
-			outputBindingsRaw[only] = structuredClone(outputBindingsRaw.out_data);
-		}
-	}
 	for (const key of Object.keys(outputBindingsRaw)) {
 		if (!outputSet.has(String(key))) delete outputBindingsRaw[key];
 	}
@@ -1962,7 +1948,7 @@ function normalizeGraphForComponentMigration(
 ): { nodes: Node<PipelineNodeData>[]; edges: Edge<PipelineEdgeData>[] } {
 	const nodeInfo = new Map<
 		string,
-		{ outputNames: string[]; outputByName: Map<string, PortType>; bindingNames: string[] }
+		{ outputNames: string[]; outputByName: Map<string, PayloadType>; bindingNames: string[] }
 	>();
 	const normalizedNodes = nodes.map((node) => {
 		if (node.data.kind === 'tool') {
@@ -2021,7 +2007,7 @@ function normalizeGraphForComponentMigration(
 			(edge as any)?.data && typeof (edge as any).data === 'object'
 				? ((edge as any).data?.contract as Record<string, any> | undefined)
 				: undefined;
-		const contractOut = normalizeComponentPortType(edgeDataContract?.out ?? null);
+		const contractOut = normalizeComponentPayloadType(edgeDataContract?.out ?? null);
 		let canonicalHandle = sourceHandle;
 		if (canonicalHandle === 'out') {
 			if (outputNames.length === 1) {
@@ -2052,7 +2038,7 @@ function normalizeGraphForComponentMigration(
 			sourceHandle: canonicalHandle
 		};
 	});
-	const canonicalNodes = canonicalizeNodePorts(normalizedNodes);
+	const canonicalNodes = canonicalizeNodeSchemas(normalizedNodes);
 
 	return {
 		nodes: canonicalNodes,
@@ -2221,16 +2207,16 @@ function buildSavePreflightDiagnostics(
 				continue;
 			}
 			const binding = outputBindings[outputName] ?? {};
-			const boundNodeId = String(binding?.nodeId ?? '').trim();
-			if (!boundNodeId) {
+			const boundOutputRef = String(binding?.outputRef ?? '').trim();
+			if (!boundOutputRef) {
 				diagnostics.push({
 					code: 'COMPONENT_OUTPUT_BINDING_MISSING',
-					path: `nodes.${String(node.id)}.params.bindings.outputs.${outputName}.nodeId`,
-					message: `Component output "${outputName}" requires a bound internal node.`,
+					path: `nodes.${String(node.id)}.params.bindings.outputs.${outputName}.outputRef`,
+					message: `Component output "${outputName}" requires a bound internal outputRef.`,
 					severity: 'error'
 				});
 			}
-			const typedSchemaType = normalizeComponentPortType(out?.typedSchema?.type);
+			const typedSchemaType = normalizeComponentPayloadType(out?.typedSchema?.type);
 			if (typedSchemaType == null) {
 				diagnostics.push({
 					code: 'COMPONENT_OUTPUT_TYPED_SCHEMA_MISSING',
@@ -2257,21 +2243,21 @@ function summarizeSavePreflightError(diagnostics: SavePreflightDiagnostic[]): st
 		.join('\n');
 }
 
-function getPortType(
+function getPayloadType(
 	nodes: Node<PipelineNodeData>[],
 	sourceId: string,
 	whichPort: 'in' | 'out'
-): PortType | null {
+): PayloadType | null {
 	const n = nodes.find((x) => x.id === sourceId);
 	if (!n) return null;
-	const derived = derivePortsForNodeData(n.data);
-	return (whichPort === 'in' ? derived.in : derived.out) as PortType | null;
+	const derived = deriveNodeIoForData(n.data);
+	return (whichPort === 'in' ? derived.in : derived.out) as PayloadType | null;
 }
 
-function componentApiOutputPortType(
+function componentApiOutputPayloadType(
 	node: Node<PipelineNodeData>,
 	sourceHandle: string
-): PortType | null {
+): PayloadType | null {
 	if (node.data.kind !== 'component') return null;
 	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
 		? ((node.data as any).params.api.outputs as any[])
@@ -2279,24 +2265,24 @@ function componentApiOutputPortType(
 	const handle = String(sourceHandle ?? '').trim();
 	if (!handle || handle === 'out') {
 		if (outputs.length === 1) {
-			return normalizeComponentPortType((outputs[0] as any)?.typedSchema?.type ?? (outputs[0] as any)?.portType ?? null);
+			return normalizeComponentPayloadType((outputs[0] as any)?.typedSchema?.type ?? null);
 		}
 		return null;
 	}
 	const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
-	return normalizeComponentPortType((decl as any)?.typedSchema?.type ?? (decl as any)?.portType ?? null);
+	return normalizeComponentPayloadType((decl as any)?.typedSchema?.type ?? null);
 }
 
-function sourcePortTypeForEdge(
+function sourcePayloadTypeForEdge(
 	nodes: Node<PipelineNodeData>[],
 	edge: Edge<PipelineEdgeData>
-): PortType | null {
+): PayloadType | null {
 	const node = nodes.find((x) => x.id === edge.source);
 	if (!node) return null;
 	if (node.data.kind === 'component') {
-		return componentApiOutputPortType(node, String((edge as any).sourceHandle ?? 'out'));
+		return componentApiOutputPayloadType(node, String((edge as any).sourceHandle ?? 'out'));
 	}
-	return derivePortsForNodeData(node.data).out;
+	return deriveNodeIoForData(node.data).out;
 }
 
 function sourcePayloadHint(
@@ -2337,7 +2323,7 @@ function sourcePayloadHint(
 		// Schema-first: component edge hints come from typedSchema only.
 		return { type: 'unknown' };
 	}
-	const derived = derivePortsForNodeData(node.data);
+	const derived = deriveNodeIoForData(node.data);
 	const fallbackType = normalizeHintType(whichPort === 'in' ? derived.in ?? 'unknown' : derived.out ?? 'unknown');
 	if (fallbackType === 'table') return { type: 'table' };
 	if (fallbackType === 'json') return { type: 'json' };
@@ -2601,7 +2587,7 @@ function deriveObservedSchemaObservationFromNodeOutput(
 	evt: Extract<KnownRunEvent, { type: 'node_output' }>,
 	node: Node<PipelineNodeData> | undefined
 ): NodeSchemaObservation | null {
-	const observedType = normalizeTypedSchemaPrimitive((evt as any)?.portType ?? '');
+	const observedType = normalizeTypedSchemaPrimitive((evt as any)?.payloadType ?? '');
 	if (observedType === 'unknown') return null;
 	const inferredFields =
 		(node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields &&
@@ -2996,7 +2982,7 @@ type EdgeInvalidReason =
 	| 'schema_mismatch'
 	| 'typed_schema_missing';
 type EdgeCheck =
-	| { ok: true; out?: PortType; in?: PortType }
+	| { ok: true; out?: PayloadType; in?: PayloadType }
 	| {
 			ok: false;
 			reason: EdgeInvalidReason;
@@ -3005,9 +2991,9 @@ type EdgeCheck =
 			adapterKind?: AdapterTransformKind | null;
 	  };
 
-function normalizeHintPortType(raw: unknown): PortType | undefined {
+function normalizeHintPayloadType(raw: unknown): PayloadType | undefined {
 	const t = normalizeHintType(raw);
-	return isPortType(t) ? t : undefined;
+	return isPayloadType(t) ? t : undefined;
 }
 
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
@@ -3049,8 +3035,8 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 
 	return {
 		ok: true,
-		out: normalizeHintPortType((sourcePayload as any)?.type ?? null) ?? undefined,
-		in: normalizeHintPortType((targetPayload as any)?.type ?? null) ?? undefined
+		out: normalizeHintPayloadType((sourcePayload as any)?.type ?? null) ?? undefined,
+		in: normalizeHintPayloadType((targetPayload as any)?.type ?? null) ?? undefined
 	};
 }
 
@@ -3320,7 +3306,7 @@ export const graphStore = (() => {
 
 	function updateNodeConfigImpl(
 		nodeId: string,
-		config: { params?: unknown; ports?: { in?: PortType | null; out?: PortType | null } }
+		config: { params?: unknown }
 	) {
 		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
 
@@ -3348,23 +3334,15 @@ export const graphStore = (() => {
 				nodes = res.nodes;
 			}
 
-				const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
-				if (config.ports !== undefined) {
-					logPush(
-						s,
-						'warn',
-						'Ports are ignored. Port contracts are derived from schema/subtype/params.',
-						nodeId
-					);
-				}
-			const effectivePorts = derivePortsForNodeData(currentNode.data);
-			const { in: inPort, out: outPort } = effectivePorts;
-			if (inPort !== null && !isPortType(inPort)) {
-				out = { ok: false, error: `Invalid derived input port type: ${String(inPort)}` };
+			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
+			const effectiveIo = deriveNodeIoForData(currentNode.data);
+			const { in: inputType, out: outputType } = effectiveIo;
+			if (inputType !== null && !isPayloadType(inputType)) {
+				out = { ok: false, error: `Invalid derived input payload type: ${String(inputType)}` };
 				return logPush(s, 'warn', out.error!, nodeId);
 			}
-			if (outPort !== null && !isPortType(outPort)) {
-				out = { ok: false, error: `Invalid derived output port type: ${String(outPort)}` };
+			if (outputType !== null && !isPayloadType(outputType)) {
+				out = { ok: false, error: `Invalid derived output payload type: ${String(outputType)}` };
 				return logPush(s, 'warn', out.error!, nodeId);
 			}
 
@@ -3491,10 +3469,6 @@ export const graphStore = (() => {
 
 	type UpdateNodeConfig = {
 		params?: unknown;
-		ports?: {
-			in?: PortType | null; // apply to all input handles
-			out?: PortType | null; // apply to all output handles
-		};
 	};
 
 	type PreviewUpdateResult =
@@ -3693,7 +3667,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 	function applySourceRehydration(nodeId: string, resolved: {
 		execKey: string;
 		artifactId: string | null;
-		artifact?: { mimeType?: string; portType?: string };
+		artifact?: { mimeType?: string; payloadType?: string };
 	}): void {
 		if (!resolved.artifactId) return;
 		update((cur) => {
@@ -3724,7 +3698,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				[nodeId]: {
 					...prevOut,
 					mimeType: resolved.artifact?.mimeType ?? prevOut.mimeType,
-					portType: resolved.artifact?.portType ?? prevOut.portType,
+					payloadType: resolved.artifact?.payloadType ?? prevOut.payloadType,
 					preview: undefined,
 					cached: true,
 					cacheDecision: 'cache_hit' as const
@@ -4711,54 +4685,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
-		// Backward-compatible aliases while UI migrates.
-		async saveGraphRevision(message?: string) {
-			return await this.saveGraph(message);
-		},
-
-		async saveAsGraphRevision(nextGraphId: string, message?: string) {
-			const targetGraphId = String(nextGraphId ?? '').trim();
-			if (!targetGraphId) return { ok: false, reason: 'missing_graph_id' as const };
-			const current = get({ subscribe } as any) as GraphState;
-			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
-			if (!preflight.ok) {
-				return {
-					ok: false,
-					reason: 'preflight_failed' as const,
-					error: summarizeSavePreflightError(preflight.diagnostics),
-					diagnostics: preflight.diagnostics
-				};
-			}
-			const strictGraph = buildPersistableGraphStrict(
-				current.nodes as any,
-				current.edges as any,
-				targetGraphId
-			);
-			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
-			const graph = strictGraph.graph;
-			try {
-				const created = await createGraphRevision({
-					graphId: targetGraphId,
-					revisionKind: 'save_graph_as',
-					message: String(message ?? '').trim() || undefined,
-					graph
-				});
-				update((s) => {
-					const next = { ...s, graphId: targetGraphId };
-					persist(next);
-					return next;
-				});
-				return {
-					ok: true,
-					graphId: String(created.graphId),
-					revisionId: String(created.revisionId),
-					createdAt: String(created.createdAt)
-				};
-			} catch (error) {
-				return { ok: false, reason: 'save_failed' as const, error: String(error) };
-			}
-		},
-
 		async listGraphs(limit = 50, offset = 0) {
 			try {
 				const listed = await listGraphsClient(limit, offset);
@@ -5311,25 +5237,51 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const leafNodeId =
 					Array.from(nodeIds).find((id) => (outDegree.get(id) ?? 0) === 0) ?? '';
 				const firstNodeId = Array.from(nodeIds)[0] ?? '';
+				const nodeById = new Map(
+					internalNodes
+						.map((n) => [String(n?.id ?? '').trim(), n] as const)
+						.filter(([id]) => id.length > 0)
+				);
+				const outputRefForNodeId = (candidateNodeId: string): string | undefined => {
+					const rawId = String(candidateNodeId ?? '').trim();
+					if (!rawId) return undefined;
+					const entry = nodeById.get(rawId) as any;
+					if (!entry) return undefined;
+					const kind = String(entry?.data?.kind ?? 'node').trim().toLowerCase() || 'node';
+					const name = String(entry?.data?.label ?? rawId).trim() || rawId;
+					const baseRef = `${kind}:${name}`;
+					const outputs = Array.isArray(entry?.data?.params?.api?.outputs)
+						? (entry.data.params.api.outputs as any[])
+						: [];
+					if (kind === 'component' && outputs.length > 0) {
+						const outName = String(outputs[0]?.name ?? '').trim();
+						return outName ? `${baseRef}|${outName}` : baseRef;
+					}
+					return baseRef;
+				};
 
 				const prevBindings = ((node.data.params as any)?.bindings ?? {}) as {
 					inputs?: Record<string, string>;
 					config?: Record<string, string>;
-					outputs?: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }>;
+					outputs?: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
 				};
 				const prevOutputs = (prevBindings.outputs ?? {}) as Record<
 					string,
-					{ nodeId?: string; artifact?: 'current' | 'last' }
+					{ outputRef?: string; artifact?: 'current' | 'last' }
 				>;
-				const nextOutputs: Record<string, { nodeId?: string; artifact?: 'current' | 'last' }> = {};
+				const nextOutputs: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }> = {};
 				const apiOutputs = Array.isArray(api.outputs) ? api.outputs : [];
 				for (const out of apiOutputs) {
 					const outName = String((out as any)?.name ?? '').trim();
 					if (!outName) continue;
 					const existing = prevOutputs[outName] ?? {};
-					const existingNodeId = String(existing?.nodeId ?? '').trim();
+					const existingOutputRef = String(existing?.outputRef ?? '').trim();
 					nextOutputs[outName] = {
-						nodeId: existingNodeId || leafNodeId || firstNodeId || undefined,
+						outputRef:
+							existingOutputRef ||
+							outputRefForNodeId(leafNodeId) ||
+							outputRefForNodeId(firstNodeId) ||
+							undefined,
 						artifact: existing?.artifact === 'last' ? 'last' : 'current'
 					};
 				}

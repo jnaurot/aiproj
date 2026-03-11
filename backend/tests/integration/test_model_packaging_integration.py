@@ -21,7 +21,6 @@ def _graph_with_packaged_predict(*, bad_rows: bool = False) -> dict:
 				"data": {
 					"kind": "tool",
 					"label": "Train",
-					"ports": {"in": None, "out": "json"},
 					"params": {
 						"provider": "builtin",
 						"builtin": {
@@ -46,7 +45,6 @@ def _graph_with_packaged_predict(*, bad_rows: bool = False) -> dict:
 				"data": {
 					"kind": "tool",
 					"label": "Predict",
-					"ports": {"in": "json", "out": "json"},
 					"params": {
 						"provider": "builtin",
 						"builtin": {

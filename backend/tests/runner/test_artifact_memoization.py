@@ -17,7 +17,7 @@ async def test_memory_artifact_store_memo_stats_track_hits():
 		created_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
 		execution_version="v1",
 		mime_type="application/json",
-		port_type="json",
+		payload_type="json",
 		size_bytes=0,
 		storage_uri="memory://aid_1",
 		payload_schema={"schema_version": 1, "type": "json"},
@@ -41,3 +41,4 @@ def test_json_schema_infer_cache_records_hits():
 	infer_json_schema_cached(payload)
 	after = get_schema_infer_stats()
 	assert int(after["hit"]) >= int(before["hit"]) + 1
+

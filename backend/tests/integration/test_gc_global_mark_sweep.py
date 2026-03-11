@@ -22,7 +22,6 @@ def _tool_graph(node_id: str = "tool_1") -> dict:
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],

@@ -93,9 +93,9 @@ def _is_table_artifact(art: Any) -> bool:
     mime = str(getattr(art, "mime_type", "") or "").lower()
     payload_schema = getattr(art, "payload_schema", None) or {}
     payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
-    port_type = str(getattr(art, "port_type", "") or "").lower()
+    payload_type = str(getattr(art, "payload_type", "") or "").lower()
     return (
-        port_type == "table"
+        payload_type == "table"
         or payload_type == "table"
         or "csv" in mime
         or "tab-separated-values" in mime
@@ -109,8 +109,8 @@ def _is_json_artifact(art: Any) -> bool:
     mime = str(getattr(art, "mime_type", "") or "").lower()
     payload_schema = getattr(art, "payload_schema", None) or {}
     payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
-    port_type = str(getattr(art, "port_type", "") or "").lower()
-    return port_type == "json" or payload_type == "json" or "application/json" in mime or "json" in mime
+    payload_type = str(getattr(art, "payload_type", "") or "").lower()
+    return payload_type == "json" or payload_type == "json" or "application/json" in mime or "json" in mime
 
 
 async def _serialize_artifact_input(context: GraphContext, artifact_id: str, input_encoding: str) -> str:
@@ -236,4 +236,5 @@ async def exec_llm(
 
 
     raise ValueError(f"Unsupported llmKind: {llm_kind}")
+
 

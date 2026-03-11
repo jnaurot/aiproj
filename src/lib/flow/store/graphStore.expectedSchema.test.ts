@@ -77,7 +77,7 @@ describe('graphStore expected schema authoring', () => {
 				at: '2026-03-10T20:00:00Z',
 				nodeId,
 				artifactId: 'artifact_drift',
-				portType: 'text',
+				payloadType: 'text',
 				mimeType: 'text/plain',
 				preview: 'hello'
 			},
@@ -88,3 +88,4 @@ describe('graphStore expected schema authoring', () => {
 		expect(String(lastLog?.message ?? '')).toContain('[schema-drift]');
 	});
 });
+

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 
-import { graphStore, derivePortsForNodeData } from './graphStore';
+import { graphStore, deriveNodeIoForData } from './graphStore';
 
 describe('graphStore component integration', () => {
 	it('applies component revision to node and derives immutable contracts from API schema', async () => {
@@ -29,7 +29,7 @@ describe('graphStore component integration', () => {
 								inputs: [
 									{
 										name: 'in_data',
-										portType: 'table',
+										payloadType: 'table',
 										required: true,
 										typedSchema: { type: 'table', fields: [] },
 									},
@@ -37,7 +37,7 @@ describe('graphStore component integration', () => {
 								outputs: [
 									{
 										name: 'out_data',
-										portType: 'text',
+										payloadType: 'text',
 										required: true,
 										typedSchema: { type: 'text', fields: [] },
 									},
@@ -79,8 +79,8 @@ describe('graphStore component integration', () => {
 			const state = get(graphStore);
 			const node = state.nodes.find((n) => n.id === nodeId);
 			expect(node).toBeTruthy();
-			expect(node ? derivePortsForNodeData(node.data).in : null).toBe('table');
-			expect(node ? derivePortsForNodeData(node.data).out : null).toBeNull();
+			expect(node ? deriveNodeIoForData(node.data).in : null).toBe('table');
+			expect(node ? deriveNodeIoForData(node.data).out : null).toBeNull();
 			expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_test');
 			expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_1');
 		} finally {
@@ -146,8 +146,8 @@ describe('graphStore component integration', () => {
 						definition: {
 							graph: { nodes: [], edges: [] },
 							api: {
-								inputs: [{ name: 'in_data', portType: 'table', required: true, typedSchema: { type: 'table', fields: [] } }],
-								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }],
+								inputs: [{ name: 'in_data', payloadType: 'table', required: true, typedSchema: { type: 'table', fields: [] } }],
+								outputs: [{ name: 'out_data', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }],
 							},
 							configSchema: {},
 						},
@@ -183,8 +183,8 @@ describe('graphStore component integration', () => {
 						definition: {
 							graph: { nodes: [], edges: [] },
 							api: {
-								inputs: [{ name: 'in_data', portType: 'table', required: true, typedSchema: { type: 'table', fields: [] } }],
-								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }],
+								inputs: [{ name: 'in_data', payloadType: 'table', required: true, typedSchema: { type: 'table', fields: [] } }],
+								outputs: [{ name: 'out_data', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }],
 							},
 							configSchema: {},
 						},
@@ -230,8 +230,8 @@ describe('graphStore component integration', () => {
 				expect(node).toBeTruthy();
 				expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_dst');
 				expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_dst');
-				expect(node ? derivePortsForNodeData(node.data).in : null).toBe('table');
-				expect(node ? derivePortsForNodeData(node.data).out : null).toBeNull();
+				expect(node ? deriveNodeIoForData(node.data).in : null).toBe('table');
+				expect(node ? deriveNodeIoForData(node.data).out : null).toBeNull();
 			} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
@@ -283,8 +283,7 @@ describe('graphStore component integration', () => {
 												snapshot_id: '',
 												output: { mode: 'text' }
 											},
-											status: 'idle',
-											ports: { in: null, out: 'text' }
+											status: 'idle'
 										}
 									}
 								],
@@ -292,7 +291,7 @@ describe('graphStore component integration', () => {
 							},
 							api: {
 								inputs: [],
-								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+								outputs: [{ name: 'out_data', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
 							},
 							configSchema: {}
 						}
@@ -369,8 +368,7 @@ describe('graphStore component integration', () => {
 												bindings: { inputs: {}, config: {}, outputs: {} },
 												config: {}
 											},
-											status: 'idle',
-											ports: { in: null, out: null }
+											status: 'idle'
 										}
 									}
 								],
@@ -415,8 +413,7 @@ describe('graphStore component integration', () => {
 												snapshot_id: '',
 												output: { mode: 'text' }
 											},
-											status: 'idle',
-											ports: { in: null, out: 'text' }
+											status: 'idle'
 										}
 									}
 								],
@@ -566,8 +563,7 @@ describe('graphStore component integration', () => {
 					api: { inputs: [], outputs: [] },
 					bindings: { inputs: {}, outputs: {}, config: {} },
 					config: {}
-				},
-				ports: { in: null, out: null }
+				}
 			});
 		expect(setRef(firstComponentNodeId, 'crev_1').ok).toBe(true);
 		expect(setRef(secondComponentNodeId, 'crev_1').ok).toBe(true);
@@ -672,8 +668,7 @@ describe('graphStore component integration', () => {
 												snapshot_id: '',
 												output: { mode: 'text' }
 											},
-											status: 'idle',
-											ports: { in: null, out: 'text' }
+											status: 'idle'
 										}
 									}
 								],
@@ -681,7 +676,7 @@ describe('graphStore component integration', () => {
 							},
 							api: {
 								inputs: [],
-								outputs: [{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+								outputs: [{ name: 'out_data', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
 							},
 							configSchema: {}
 						}
@@ -833,7 +828,7 @@ describe('graphStore component integration', () => {
 							},
 							api: {
 								inputs: [],
-								outputs: [{ name: 'out_data', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }]
+								outputs: [{ name: 'out_data', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }]
 							},
 							configSchema: {}
 						}
@@ -894,10 +889,10 @@ describe('graphStore component integration', () => {
 							api: {
 								inputs: [],
 								outputs: [
-									{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+									{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
 									{
 										name: 'out_json',
-										portType: 'json',
+										payloadType: 'json',
 										required: true,
 										typedSchema: { type: 'json', fields: [{ name: 'ok', type: 'text', nullable: false }] },
 									},
@@ -952,8 +947,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_a', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_b', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+						{ name: 'out_a', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_b', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
 					]
 				},
 				bindings: {
@@ -965,8 +960,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 
@@ -992,8 +986,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [{ name: 'value', type: 'text', nullable: false }] } }
+						{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [{ name: 'value', type: 'text', nullable: false }] } }
 					]
 				},
 				bindings: {
@@ -1005,8 +999,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 
@@ -1035,8 +1028,8 @@ describe('graphStore component integration', () => {
 			api: {
 				inputs: [],
 				outputs: [
-					{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-					{ name: 'source', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+					{ name: 'summary', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+					{ name: 'source', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
 				]
 			},
 			bindings: {
@@ -1070,7 +1063,7 @@ describe('graphStore component integration', () => {
 				outputs: [
 					{
 						name: 'summary',
-						portType: 'text',
+						payloadType: 'text',
 						required: true,
 						typedSchema: { type: 'text', fields: [] }
 					}
@@ -1101,7 +1094,7 @@ describe('graphStore component integration', () => {
 				outputs: [
 					{
 						name: 'summary',
-						portType: 'text',
+						payloadType: 'text',
 						required: false,
 						typedSchema: { type: 'text', fields: [] }
 					}
@@ -1124,7 +1117,7 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
 	});
 
-	it('allows Accept when typedSchema.type is present even if portType metadata differs', async () => {
+	it('allows Accept when typedSchema.type is present even if payloadType metadata differs', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1134,7 +1127,7 @@ describe('graphStore component integration', () => {
 				outputs: [
 					{
 						name: 'summary',
-						portType: 'text',
+						payloadType: 'text',
 						required: true,
 						typedSchema: { type: 'json', fields: [] }
 					}
@@ -1163,8 +1156,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+						{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
 				bindings: {
@@ -1176,8 +1169,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 
@@ -1225,8 +1217,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+						{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
 				bindings: {
@@ -1238,8 +1230,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 
@@ -1309,8 +1300,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+						{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
 				bindings: {
@@ -1322,8 +1313,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 		const state = get(graphStore);
@@ -1356,8 +1346,8 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'out_text', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
-						{ name: 'out_json', portType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
+						{ name: 'out_text', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } },
+						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
 				bindings: {
@@ -1369,8 +1359,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(configRes.ok).toBe(true);
 
@@ -1412,7 +1401,7 @@ describe('graphStore component integration', () => {
 				api: {
 					inputs: [],
 					outputs: [
-						{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
+						{ name: 'summary', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
 					]
 				},
 				bindings: {
@@ -1423,8 +1412,7 @@ describe('graphStore component integration', () => {
 					}
 				},
 				config: {}
-			},
-			ports: { in: null, out: 'json' }
+			}
 		});
 		expect(validRes.ok).toBe(true);
 		const withMissingBinding = get(graphStore).nodes.map((n) =>
@@ -1540,11 +1528,9 @@ describe('graphStore component integration', () => {
 		const sourceId = graphStore.addNode('source', { x: 10, y: 10 });
 		const transformId = graphStore.addNode('transform', { x: 280, y: 20 });
 		graphStore.updateNodeConfig(sourceId, {
-			ports: { in: null, out: 'table' },
 			params: { source_type: 'file', file_format: 'csv' }
 		});
 		graphStore.updateNodeConfig(transformId, {
-			ports: { in: 'table', out: 'table' },
 			params: { op: 'select', select: { mode: 'include', columns: ['id'] } }
 		});
 		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
@@ -1580,8 +1566,7 @@ describe('graphStore component integration', () => {
 								provider: 'python',
 								python: { code: 'print(1)', args: {}, capture_output: true },
 								builtin: { profileId: 'unknown_profile', customPackages: [] }
-							},
-							ports: { in: null, out: 'text' }
+							}
 						}
 					} as any
 				],
@@ -1603,149 +1588,12 @@ describe('graphStore component integration', () => {
 				provider: 'python',
 				python: { code: 'print(1)', args: {}, capture_output: true },
 				builtin: { profileId: 'custom', customPackages: ['not-allowlisted-package'] }
-			},
-			ports: { in: null, out: 'text' }
+			}
 		});
 		const result = await graphStore.saveGraph('save');
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
 		expect(String((result as any)?.error ?? '')).toContain('ENV_PROFILE_PACKAGE_BLOCKED');
-	});
-
-	it('normalizes legacy single-output component bindings/handles on load', () => {
-		graphStore.hardResetGraph();
-		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
-		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
-		const state = get(graphStore);
-		const componentNode = state.nodes.find((n) => n.id === componentId)!;
-		const llmNode = state.nodes.find((n) => n.id === llmId)!;
-		const loaded = graphStore.loadGraphDocument(
-			{
-				nodes: [
-					{
-						...componentNode,
-						data: {
-							...(componentNode.data as any),
-							kind: 'component',
-							params: {
-								componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
-								api: {
-									inputs: [],
-									outputs: [
-										{
-											name: 'summary',
-											portType: 'text',
-											required: true,
-											typedSchema: { type: 'json', fields: [{ name: 'x', type: 'text' }] }
-										}
-									]
-								},
-								bindings: {
-									inputs: {},
-									config: {},
-									outputs: {
-										out_data: { nodeId: 'n_inner', artifact: 'current' }
-									}
-								},
-								config: {}
-							},
-							ports: { in: null, out: 'json' }
-						}
-					} as any,
-					llmNode as any
-				],
-				edges: [
-					{
-						id: 'e_legacy',
-						source: componentId,
-						sourceHandle: 'out',
-						target: llmId,
-						targetHandle: 'in',
-						data: {
-							exec: 'idle',
-							contract: { out: 'text', in: 'text', payload: { source: { type: 'string' }, target: { type: 'string' } } }
-						}
-					}
-				] as any
-			},
-			null
-		);
-		expect((loaded as any)?.ok).toBe(true);
-		const after = get(graphStore);
-		const migratedNode = after.nodes.find((n) => n.id === componentId)!;
-		const bindingsOutputs = ((((migratedNode.data as any)?.params ?? {}).bindings ?? {}).outputs ?? {}) as Record<string, any>;
-		expect(bindingsOutputs.summary).toBeTruthy();
-		expect(bindingsOutputs.out_data).toBeUndefined();
-		const migratedEdge = after.edges.find((e) => e.id === 'e_legacy');
-		expect(String((migratedEdge as any)?.sourceHandle ?? '')).toBe('summary');
-		const typedSchemaType = String(
-			(((((migratedNode.data as any)?.params ?? {}).api ?? {}).outputs ?? [])[0]?.typedSchema?.type ?? '')
-		);
-		expect(typedSchemaType).toBe('text');
-	});
-
-	it('normalizes legacy single-output component sourceHandle on save', async () => {
-		graphStore.hardResetGraph();
-		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
-		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
-		const configRes = graphStore.updateNodeConfig(componentId, {
-			params: {
-				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
-				api: {
-					inputs: [],
-					outputs: [
-						{ name: 'out_data', portType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
-					]
-				},
-				bindings: {
-					inputs: {},
-					config: {},
-					outputs: {
-						out_data: { nodeId: 'n1', artifact: 'current' }
-					}
-				},
-				config: {}
-			},
-			ports: { in: null, out: 'json' }
-		});
-		expect(configRes.ok).toBe(true);
-		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
-			{
-				id: 'e_legacy_save',
-				source: componentId,
-				sourceHandle: 'summary',
-				target: llmId,
-				targetHandle: 'in',
-				data: { exec: 'idle' }
-			}
-		] as any);
-		const originalFetch = globalThis.fetch;
-		let postedGraph: any = null;
-		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = String(input);
-			if (url.includes('/api/graphs') && String(init?.method ?? 'GET').toUpperCase() === 'POST') {
-				postedGraph = JSON.parse(String(init?.body ?? '{}'))?.graph ?? null;
-				return new Response(
-					JSON.stringify({
-						graphId: 'graph_saved',
-						revisionId: 'rev_saved',
-						graphName: 'saved',
-						createdAt: '2026-03-09T00:00:00Z'
-					}),
-					{ status: 200, headers: { 'content-type': 'application/json' } }
-				);
-			}
-			return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-		};
-		try {
-			const result = await graphStore.saveGraph('save');
-			expect((result as any)?.ok).toBe(true);
-			const savedEdge = (postedGraph?.edges ?? []).find((e: any) => String(e?.id ?? '') === 'e_legacy_save');
-			expect(savedEdge).toBeTruthy();
-			expect(String(savedEdge?.sourceHandle ?? '')).toBe('out_data');
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-		}
 	});
 
 	it('preserves store edges when canvas sync sends stale edge snapshot during node-only update', () => {
@@ -1775,3 +1623,4 @@ describe('graphStore component integration', () => {
 		expect(after.edges.some((e) => e.id === 'e_keep')).toBe(true);
 	});
 });
+

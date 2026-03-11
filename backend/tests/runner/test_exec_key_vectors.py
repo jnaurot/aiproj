@@ -17,7 +17,7 @@ def test_exec_key_golden_vectors():
         upstream_artifact_ids=[],
         execution_version="v1",
     )
-    assert source_v1 == "58f056d885b23129077dc86165d2a3860f3f247d503026c7c8a526b86f021729"
+    assert source_v1 == "b55e8ea22f27a4af085cad8c5853e39579eb296b2b4cefbd75fa7305e948b1cd"
 
     llm_v1 = cache.execution_key(
         node_kind="llm",
@@ -30,7 +30,7 @@ def test_exec_key_golden_vectors():
         upstream_artifact_ids=["b" * 64],
         execution_version="v1",
     )
-    assert llm_v1 == "2f7ffd098230b7d0efcc3e3d8fed2b3a1eb33124ebd072584a3f12f855c838e6"
+    assert llm_v1 == "2ff0a076b8d0713b2b9524a26a67cf50b85fd216bf33fcab3fb10f6f4dd9679a"
 
     tool_v1 = _tool_exec_key(
         params={
@@ -41,7 +41,7 @@ def test_exec_key_golden_vectors():
         input_refs=[("in", "a" * 64)],
         execution_version="v1",
     )
-    assert tool_v1 == "887a5c5ef08cc183562126f726b0dd4003482a18ebd62667a977c33f6f0df589"
+    assert tool_v1 == "981a533fd482ba76f53a88c8fdb47f2ddf030e6cbb44b8466e4ca1d0b7c177e8"
 
     transform_v1 = _transform_exec_key(
         normalized_params={
@@ -54,7 +54,7 @@ def test_exec_key_golden_vectors():
         input_refs=[("in", "a" * 64)],
         execution_version="v1",
     )
-    assert transform_v1 == "0af644fd0fe15fb8741e8f1e0c9ccd161f412e32eb9c18ca831622b880e3f5a1"
+    assert transform_v1 == "94052788456d38d26ba1d0f69ee241a48032fa853ec265920cf7b00483149351"
 
 
 def test_exec_key_params_key_order_is_canonical():
@@ -178,7 +178,7 @@ def test_exec_key_changes_when_determinism_env_changes():
         node_kind="llm",
         normalized_params=base_params,
         upstream_artifact_ids=["a" * 64],
-        input_bindings=inputs,
+        input_handles=inputs,
         determinism_env={"llm_table_max_rows": 200, "llm_prompt_max_chars": 20000},
         execution_version="v1",
     )
@@ -186,14 +186,14 @@ def test_exec_key_changes_when_determinism_env_changes():
         node_kind="llm",
         normalized_params=base_params,
         upstream_artifact_ids=["a" * 64],
-        input_bindings=inputs,
+        input_handles=inputs,
         determinism_env={"llm_table_max_rows": 100, "llm_prompt_max_chars": 20000},
         execution_version="v1",
     )
     assert a != b
 
 
-def test_exec_key_input_bindings_insertion_order_is_canonical():
+def test_exec_key_input_handles_insertion_order_is_canonical():
     cache = ExecutionCache()
     params = {"model": "m1", "user_prompt": "hi", "output_mode": "text"}
     env = {"llm_table_max_rows": 200}
@@ -201,7 +201,7 @@ def test_exec_key_input_bindings_insertion_order_is_canonical():
         node_kind="llm",
         normalized_params=params,
         upstream_artifact_ids=["a" * 64, "b" * 64],
-        input_bindings=[("right", "b" * 64), ("left", "a" * 64)],
+        input_handles=[("right", "b" * 64), ("left", "a" * 64)],
         determinism_env=env,
         execution_version="v1",
     )
@@ -209,7 +209,7 @@ def test_exec_key_input_bindings_insertion_order_is_canonical():
         node_kind="llm",
         normalized_params=params,
         upstream_artifact_ids=["b" * 64, "a" * 64],
-        input_bindings=[("left", "a" * 64), ("right", "b" * 64)],
+        input_handles=[("left", "a" * 64), ("right", "b" * 64)],
         determinism_env=env,
         execution_version="v1",
     )

@@ -22,8 +22,8 @@ def _graph() -> dict:
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -32,7 +32,6 @@ def _graph() -> dict:
                     "kind": "tool",
                     "label": "Mid",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 1}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
             {
@@ -41,7 +40,6 @@ def _graph() -> dict:
                     "kind": "tool",
                     "label": "End",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 2}}},
-                    "ports": {"in": "json", "out": "json"},
                 },
             },
             {
@@ -50,7 +48,6 @@ def _graph() -> dict:
                     "kind": "tool",
                     "label": "Side",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 3}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
         ],
@@ -67,7 +64,12 @@ async def test_accept_params_marks_only_node_and_descendants_stale(monkeypatch):
     run_mod = importlib.import_module("app.runner.run")
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(
@@ -149,7 +151,12 @@ async def test_partial_rerun_keeps_sibling_binding_sticky(monkeypatch):
     run_mod = importlib.import_module("app.runner.run")
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(
@@ -201,7 +208,12 @@ async def test_accept_params_does_not_create_stale_binding_for_new_downstream_no
     run_mod = importlib.import_module("app.runner.run")
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(
@@ -241,7 +253,6 @@ async def test_accept_params_does_not_create_stale_binding_for_new_downstream_no
                     "kind": "tool",
                     "label": "New",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {"k": 77}}},
-                    "ports": {"in": "json", "out": "json"},
                 },
             }
         )

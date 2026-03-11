@@ -217,7 +217,6 @@ def expand_graph_components(
         )
         component_clone_params["api"] = component_api if isinstance(component_api, dict) else {}
         component_clone_data["params"] = component_clone_params
-        component_clone_data.pop("ports", None)
         component_clone["data"] = component_clone_data
         out_nodes.append(component_clone)
 

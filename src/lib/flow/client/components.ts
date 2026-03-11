@@ -22,7 +22,6 @@ export type ComponentTypedSchema = CanonicalComponentTypedSchema;
 
 export type ComponentApiPort = {
 	name: string;
-	portType: string;
 	required?: boolean;
 	typedSchema?: ComponentTypedSchema;
 };

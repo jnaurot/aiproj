@@ -1,10 +1,10 @@
 import type { Node, Edge } from "@xyflow/svelte";
 import type { NodeSchemaEnvelope } from "$lib/flow/schema/schemaContract";
 
-export const PORT_TYPES = ["table", "text", "json", "binary", "embeddings"];
-export type PortType = typeof PORT_TYPES[number];
-export function isPortType(value: unknown): value is PortType {
-  return typeof value === "string" && PORT_TYPES.includes(value as any);
+export const PAYLOAD_TYPES = ["table", "text", "json", "binary", "embeddings"];
+export type PayloadType = typeof PAYLOAD_TYPES[number];
+export function isPayloadType(value: unknown): value is PayloadType {
+  return typeof value === "string" && PAYLOAD_TYPES.includes(value as any);
 }
 export type UpdateNodeConfig = {
   params?: unknown;
@@ -62,8 +62,8 @@ export type BaseNodeData<K extends NodeKind, P> = {
 export interface PipelineEdgeData extends Record<string, any> {
   exec: EdgeExecState; // make required to simplify runtime state
   contract?: {
-    in?: PortType;
-    out?: PortType;
+    in?: PayloadType;
+    out?: PayloadType;
     payload?: {
       source?: Record<string, any>;
       target?: Record<string, any>;

@@ -25,7 +25,6 @@ describe('graphStore typed schema field propagation', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'table' },
 					params: { file_format: 'txt' }
 				}
 			},
@@ -34,7 +33,6 @@ describe('graphStore typed schema field propagation', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'select',
-					ports: { in: 'table', out: 'table' },
 					params: {
 						op: 'select',
 						select: { mode: 'include', columns: ['id'] }
@@ -45,14 +43,12 @@ describe('graphStore typed schema field propagation', () => {
 		const edges: any[] = [{ id: 'e1', source: 'n_source', target: 'n_transform' }];
 		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
 		expect(constraints.e1.compatible).toBe(false);
-		expect(constraints.e1.reason).toBe('missing_required_columns');
+		expect(constraints.e1.reason).toBe('missing_typed_schema');
 		expect(constraints.e1.requiredSchema.required_fields).toEqual([
 			{ name: 'id', type: 'unknown', nullable: true, constraints: undefined }
 		]);
 		expect(constraints.e1.requiredSchema.required_columns).toEqual(['id']);
-		expect(constraints.e1.providedSchema.fields).toEqual([
-			{ name: 'text', type: 'string', nullable: true, constraints: undefined }
-		]);
-		expect(constraints.e1.providedSchema.columns).toEqual(['text']);
+		expect(constraints.e1.providedSchema.fields).toBeUndefined();
+		expect(constraints.e1.providedSchema.columns).toBeUndefined();
 	});
 });

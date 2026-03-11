@@ -29,8 +29,8 @@ function makeState(runId = 'run-race'): GraphState {
 		activeRunFrom: 'n_transform',
 		activeRunNodeSet: new Set<string>(['n_transform', 'n_sink']),
 		nodeOutputs: {
-			n_source: { preview: 'source-preview', mimeType: 'text/plain', portType: 'text' },
-			n_transform: { preview: 'transform-preview', mimeType: 'text/plain', portType: 'text' }
+			n_source: { preview: 'source-preview', mimeType: 'text/plain', payloadType: 'text' },
+			n_transform: { preview: 'transform-preview', mimeType: 'text/plain', payloadType: 'text' }
 		},
 		nodeBindings: {
 			n_source: __normalizeBindingForTest(
@@ -212,7 +212,7 @@ describe('graphStore races', () => {
 				artifactId: 'art-transform-v3',
 				preview: 'new-preview',
 				mimeType: 'text/plain',
-				portType: 'text'
+				payloadType: 'text'
 			},
 			runId
 		);
@@ -284,7 +284,7 @@ describe('graphStore races', () => {
 				artifactId: 'art-finish-first',
 				preview: 'finish-first-preview',
 				mimeType: 'text/plain',
-				portType: 'text'
+				payloadType: 'text'
 			},
 			runId
 		);
@@ -491,7 +491,7 @@ describe('graphStore races', () => {
 					n_source: {
 						preview: 'old-preview',
 						mimeType: 'text/plain',
-						portType: 'text',
+						payloadType: 'text',
 						cached: true,
 						cacheDecision: 'cache_hit'
 					}
@@ -520,7 +520,7 @@ describe('graphStore races', () => {
 				artifactId: 'art-new',
 				preview: 'new-preview',
 				mimeType: 'text/plain',
-				portType: 'text',
+				payloadType: 'text',
 				cached: false
 			} as any,
 			runId
@@ -588,3 +588,4 @@ describe('graphStore races', () => {
 		expect(state.nodeBindings.n_transform.last.artifactId).toBe('art-transform-last');
 	});
 });
+

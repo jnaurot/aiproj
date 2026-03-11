@@ -7,13 +7,13 @@
 	import type { Node, Edge, Connection } from '@xyflow/svelte';
 
 	import { nodeTypes } from '$lib/flow/nodeTypes';
-	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
+	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PayloadType } from '$lib/flow/types';
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
 	import {
 		graphStore,
 		selectedNode,
 		edgeSchemaDiagnostics,
-		derivePortsForNodeData
+		deriveNodeIoForData
 	} from '$lib/flow/store/graphStore';
 	import type { GraphState, InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
@@ -65,7 +65,7 @@ import {
 		type GuidedOperationPreset,
 		type GuidedRecommendation
 	} from './components/dsmlGuidedUx';
-	import { refreshPortCapabilitiesFromBackend } from '$lib/flow/portCapabilities';
+	import { refreshSchemaCapabilitiesFromBackend } from '$lib/flow/schemaCapabilities';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
@@ -239,7 +239,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	let nodeInspectorCollapsed = false;
-	let environmentCollapsed = false;
+	let environmentCollapsed = true;
 	let runLogsCollapsed = false;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
@@ -376,7 +376,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$selectedNode?.data?.kind === 'component'
 			? String(($selectedNode.data.meta as any)?.componentLatestRevisionId ?? '').trim()
 			: '';
-		$: hasInputs = Boolean($selectedNode && derivePortsForNodeData($selectedNode.data).in != null);
+		$: hasInputs = Boolean($selectedNode && deriveNodeIoForData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
 	$: activeArtifactId =
@@ -643,10 +643,41 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return s ? s.slice(0, n) : '';
 	}
 
-	function upstreamLabel(fromNodeId: string, fromPort: string): string {
+	function graphCenterPoint(items: Node<PipelineNodeData>[]): { x: number; y: number } | null {
+		if (!Array.isArray(items) || items.length === 0) return null;
+		let minX = Number.POSITIVE_INFINITY;
+		let minY = Number.POSITIVE_INFINITY;
+		let maxX = Number.NEGATIVE_INFINITY;
+		let maxY = Number.NEGATIVE_INFINITY;
+		for (const node of items) {
+			const x = Number(node?.position?.x ?? 0);
+			const y = Number(node?.position?.y ?? 0);
+			const w = Number((node as any)?.width ?? 240);
+			const h = Number((node as any)?.height ?? 96);
+			minX = Math.min(minX, x);
+			minY = Math.min(minY, y);
+			maxX = Math.max(maxX, x + (Number.isFinite(w) ? w : 240));
+			maxY = Math.max(maxY, y + (Number.isFinite(h) ? h : 96));
+		}
+		if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+			return null;
+		}
+		return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+	}
+
+	async function centerGraphAfterLoad(duration = 220): Promise<void> {
+		await tick();
+		const state = get(graphStore);
+		const center = graphCenterPoint(state.nodes);
+		if (!center) return;
+		const vp = getViewport();
+		setCenter(center.x, center.y, { zoom: Number(vp.zoom ?? 1), duration });
+	}
+
+	function upstreamLabel(fromNodeId: string, sourceHandle: string): string {
 		const node = $graphStore.nodes.find((n) => n.id === fromNodeId);
 		const base = String(node?.data?.label ?? fromNodeId);
-		return `${base}.${fromPort}`;
+		return `${base}.${sourceHandle}`;
 	}
 
 	async function loadInputArtifactMetadata(
@@ -667,7 +698,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					next[artifactId] = {
 						mimeType: meta?.mimeType,
 						schemaFingerprint: meta?.schemaFingerprint ?? null,
-						contract: meta?.schema?.contract ?? meta?.payloadSchema?.contract ?? meta?.portType
+						contract: meta?.schema?.contract ?? meta?.payloadSchema?.contract
 					};
 				} catch {
 					// best effort; leave metadata blank when fetch fails
@@ -728,8 +759,114 @@ async function scrollToBottom() {
 	let lastClickAt = 0;
 	let lastClickNodeId: string | null = null;
 	const DBL_MS = 350;
+	const NODE_LONG_PRESS_MS = 500;
+	const NODE_LONG_PRESS_MOVE_PX = 8;
+	const NODE_DUPLICATE_OFFSET_X = 40;
+	const NODE_DUPLICATE_OFFSET_Y = 30;
+	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+	let longPressNodeId: string | null = null;
+	let longPressPointerId: number | null = null;
+	let longPressStartX = 0;
+	let longPressStartY = 0;
+	let suppressClickNodeId: string | null = null;
+	let suppressClickUntil = 0;
+
+	function clearLongPressState(): void {
+		if (longPressTimer) clearTimeout(longPressTimer);
+		longPressTimer = null;
+		longPressNodeId = null;
+		longPressPointerId = null;
+	}
+
+	function duplicateNodeExact(nodeId: string): string | null {
+		const state = get(graphStore);
+		const original = state.nodes.find((n) => n.id === nodeId);
+		if (!original) return null;
+		if (state.runStatus === 'running') return null;
+		const kind = original.data.kind as NodeKind;
+		const cloneId = graphStore.addNode(kind, {
+			x: Number(original.position?.x ?? 0) + NODE_DUPLICATE_OFFSET_X,
+			y: Number(original.position?.y ?? 0) + NODE_DUPLICATE_OFFSET_Y
+		});
+		if (kind === 'source') {
+			graphStore.setSourceKind(cloneId, ((original.data as any)?.sourceKind ?? 'file') as SourceKind);
+		}
+		if (kind === 'llm') {
+			graphStore.setLlmKind(cloneId, ((original.data as any)?.llmKind ?? 'ollama') as LlmKind);
+		}
+		if (kind === 'transform') {
+			graphStore.setTransformKind(cloneId, ((original.data as any)?.transformKind ?? 'select') as TransformKind);
+		}
+		if (kind === 'tool') {
+			const provider =
+				(((original.data as any)?.params ?? {}) as Record<string, unknown>)?.provider ??
+				(original.data as any)?.params?.provider ??
+				'mcp';
+			graphStore.setToolProvider(cloneId, String(provider) as ToolProvider);
+		}
+		const params = structuredClone((original.data.params ?? {}) as Record<string, unknown>);
+		graphStore.updateNodeConfig(cloneId, { params });
+		const expectedTypedSchema = ((original.data as any)?.schema?.expectedSchema?.typedSchema ?? null) as
+			| Record<string, unknown>
+			| null;
+		if (expectedTypedSchema && typeof expectedTypedSchema === 'object') {
+			graphStore.setNodeExpectedSchema(cloneId, structuredClone(expectedTypedSchema));
+		}
+		const label = String(original.data.label ?? '').trim();
+		if (label) graphStore.updateNodeTitle(cloneId, label);
+		const meta = (original.data as any)?.meta;
+		if (meta && typeof meta === 'object') {
+			graphStore.setNodeMeta(cloneId, structuredClone(meta as Record<string, unknown>));
+		}
+		graphStore.selectNode(cloneId);
+		return cloneId;
+	}
+
+	function onFlowPointerDown(event: PointerEvent): void {
+		if (event.button !== 0) return;
+		const target = event.target as HTMLElement | null;
+		const nodeEl = target?.closest?.('.svelte-flow__node') as HTMLElement | null;
+		const nodeId = String(nodeEl?.dataset?.id ?? '').trim();
+		if (!nodeId) return;
+		clearLongPressState();
+		longPressNodeId = nodeId;
+		longPressPointerId = event.pointerId;
+		longPressStartX = event.clientX;
+		longPressStartY = event.clientY;
+		longPressTimer = setTimeout(() => {
+			const id = longPressNodeId;
+			clearLongPressState();
+			if (!id) return;
+			const duplicated = duplicateNodeExact(id);
+			if (duplicated) {
+				suppressClickNodeId = id;
+				suppressClickUntil = performance.now() + 260;
+				showToast('Node duplicated', 'info');
+			}
+		}, NODE_LONG_PRESS_MS);
+	}
+
+	function onFlowPointerMove(event: PointerEvent): void {
+		if (!longPressNodeId || longPressPointerId !== event.pointerId) return;
+		const dx = event.clientX - longPressStartX;
+		const dy = event.clientY - longPressStartY;
+		if (Math.hypot(dx, dy) > NODE_LONG_PRESS_MOVE_PX) {
+			clearLongPressState();
+		}
+	}
+
+	function onFlowPointerUp(event: PointerEvent): void {
+		if (longPressPointerId !== event.pointerId) return;
+		clearLongPressState();
+	}
+
 	function onnodeclick({ node }: { node: Node<PipelineNodeData> }) {
 		const id = node.id;
+		if (suppressClickNodeId === id && performance.now() < suppressClickUntil) return;
+		if (suppressClickNodeId === id && performance.now() >= suppressClickUntil) {
+			suppressClickNodeId = null;
+			suppressClickUntil = 0;
+		}
 		const now = performance.now();
 		const isDbl = lastClickNodeId === id && now - lastClickAt < DBL_MS;
 
@@ -1517,34 +1654,32 @@ async function scrollToBottom() {
 		const leaves = graphNodes.filter((n) => (outDegree.get(String(n.id)) ?? 0) === 0);
 		const primaryRoot = roots[0];
 		const primaryLeaf = leaves[0];
-			const inputPortType = (primaryRoot ? derivePortsForNodeData(primaryRoot.data).in : null) as PortType | null;
-			const outputPortType = (primaryLeaf ? derivePortsForNodeData(primaryLeaf.data).out : null) as PortType | null;
+			const inputPayloadType = (primaryRoot ? deriveNodeIoForData(primaryRoot.data).in : null) as PayloadType | null;
+			const outputPayloadType = (primaryLeaf ? deriveNodeIoForData(primaryLeaf.data).out : null) as PayloadType | null;
 		const inputs: ComponentApiContract['inputs'] =
-			inputPortType == null
+			inputPayloadType == null
 				? []
 				: [
 						{
 							name: 'in_data',
-							portType: inputPortType,
 							required: true,
 							typedSchema: {
 								type:
-									inputPortType as ComponentApiContract['inputs'][number]['typedSchema']['type'],
+									inputPayloadType as ComponentApiContract['inputs'][number]['typedSchema']['type'],
 								fields: []
 							}
 						}
 					];
 		const outputs: ComponentApiContract['outputs'] =
-			outputPortType == null
+			outputPayloadType == null
 				? []
 				: [
 						{
 							name: 'out_data',
-							portType: outputPortType,
 							required: true,
 							typedSchema: {
 								type:
-									outputPortType as ComponentApiContract['outputs'][number]['typedSchema']['type'],
+									outputPayloadType as ComponentApiContract['outputs'][number]['typedSchema']['type'],
 								fields: []
 							}
 						}
@@ -1878,6 +2013,7 @@ async function scrollToBottom() {
 			showToast(`Load Graph failed: ${(loaded as any)?.error ?? (loaded as any)?.reason ?? 'unknown'}`, 'error');
 			return;
 		}
+		await centerGraphAfterLoad();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 		currentGraphName = String((loaded as any)?.graphName ?? pickedGraph.graphName ?? '').trim() || 'unnamed';
 		showToast('Loaded graph revision.', 'info');
@@ -1945,6 +2081,7 @@ async function scrollToBottom() {
 			showToast('Revision deleted, but reload failed; start new graph or load manually.', 'warn');
 			return;
 		}
+		await centerGraphAfterLoad();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 		showToast('Latest revision deleted and graph reloaded to previous revision.', 'info');
 	}
@@ -2002,6 +2139,7 @@ async function scrollToBottom() {
 				showToast('Import failed: invalid graph payload.', 'error');
 				return;
 			}
+			await centerGraphAfterLoad();
 			lastSavedGraphSnapshotKey = null;
 			const warnings = imported?.migrationReport?.warnings ?? [];
 			if (warnings.length > 0) {
@@ -2134,11 +2272,11 @@ async function scrollToBottom() {
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 		if (toastTimer) clearTimeout(toastTimer);
+		clearLongPressState();
 	});
 
 	onMount(async () => {
-		await refreshPortCapabilitiesFromBackend();
-		await refreshWorkspaceEnvironmentPanel();
+		await refreshSchemaCapabilitiesFromBackend();
 		try {
 			const config = await getGlobalCacheConfig();
 			globalCacheMode = (config.mode ??
@@ -2166,6 +2304,7 @@ async function scrollToBottom() {
 				if ((hydrated as any)?.ok) {
 					graphStore.clearDraft();
 					currentGraphName = String((hydrated as any)?.graphName ?? '').trim() || 'unnamed';
+					await centerGraphAfterLoad(0);
 					console.log(
 						`[graph-v2-read] hydrated graphId=${(hydrated as any).graphId} revisionId=${(hydrated as any).revisionId}`
 					);
@@ -2186,7 +2325,13 @@ async function scrollToBottom() {
 />
 
 <div class="layout">
-	<div class="flow">
+	<div
+		class="flow"
+		on:pointerdown={onFlowPointerDown}
+		on:pointermove={onFlowPointerMove}
+		on:pointerup={onFlowPointerUp}
+		on:pointercancel={onFlowPointerUp}
+	>
 		{#if toastMessage}
 			<div class={`toast toast-${toastLevel}`} role="status" aria-live="polite">
 				<span>{toastMessage}</span>
@@ -2598,12 +2743,12 @@ async function scrollToBottom() {
 								{:else if inspectorMode === 'inputs'}
 									<div class="inputsView">
 									{#if inputResolutions.length === 0}
-										<div class="inputMissing">No input ports.</div>
+										<div class="inputMissing">No declared inputs.</div>
 									{:else}
-									{#each inputResolutions as input (input.inPort)}
+									{#each inputResolutions as input (input.inputHandle)}
 										<div class="inputCard">
 											<div class="inputHead">
-												<span class="inputPort">{input.inPort}</span>
+												<span class="inputPort">{input.inputHandle}</span>
 												<span
 													class={`pill ${input.status === 'resolved'
 														? input.artifactSource === 'active_run'
@@ -2620,7 +2765,7 @@ async function scrollToBottom() {
 											</div>
 											<div class="inputUpstream">
 												{#if input.edge}
-													{upstreamLabel(input.edge.fromNodeId, input.edge.fromPort)}
+													{upstreamLabel(input.edge.fromNodeId, input.edge.sourceHandle)}
 												{:else}
 													-
 												{/if}
@@ -2670,7 +2815,7 @@ async function scrollToBottom() {
 												artifactId={inputPreviewArtifactId}
 												graphId={$graphStore.graphId}
 												mimeType={inputMetaByArtifactId[inputPreviewArtifactId]?.mimeType}
-												portType={inputMetaByArtifactId[inputPreviewArtifactId]?.contract}
+												payloadType={inputMetaByArtifactId[inputPreviewArtifactId]?.contract}
 												preview={undefined}
 												onJumpToNode={jumpToNodeFromArtifact}
 											/>
@@ -2683,7 +2828,7 @@ async function scrollToBottom() {
 										artifactId={activeArtifactId}
 										graphId={$graphStore.graphId}
 										mimeType={nodeOut.mimeType}
-										portType={nodeOut.portType}
+										payloadType={nodeOut.payloadType}
 										cached={nodeOut.cached}
 										cacheDecision={nodeOut.cacheDecision}
 										preview={nodeOut.preview}
@@ -2733,6 +2878,7 @@ async function scrollToBottom() {
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
+		{#if false}
 		<button
 			type="button"
 			class="inspectorSplitter"
@@ -2820,10 +2966,11 @@ async function scrollToBottom() {
 					{/if}
 			</div>
 		</div>
+		{/if}
 		<button
 			type="button"
 			class="inspectorSplitter"
-			aria-label="Resize Environment and Run Logs panels"
+			aria-label="Resize Node Inspector and Run Logs panels"
 			on:pointerdown={(event) => beginInspectorSplit('env_logs', event)}
 		></button>
 		<div

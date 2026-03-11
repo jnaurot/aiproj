@@ -22,7 +22,6 @@ def _single_noop_tool_graph() -> dict:
 					"kind": "tool",
 					"label": "Tool",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "profileId": "core", "args": {}}},
-					"ports": {"in": None, "out": "json"},
 				},
 			}
 		],
@@ -45,7 +44,6 @@ async def test_env_profile_lock_mismatch_fails_preflight(tmp_path):
 						"provider": "builtin",
 						"builtin": {"toolId": "noop", "profileId": "core", "locked": "sha256:deadbeef", "args": {}},
 					},
-					"ports": {"in": None, "out": "json"},
 				},
 			}
 		],
@@ -81,7 +79,6 @@ async def test_resource_limit_node_cap_fails_early(monkeypatch, tmp_path):
 					"kind": "tool",
 					"label": "Tool 1",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "profileId": "core", "args": {}}},
-					"ports": {"in": None, "out": "json"},
 				},
 			},
 			{
@@ -90,7 +87,6 @@ async def test_resource_limit_node_cap_fails_early(monkeypatch, tmp_path):
 					"kind": "tool",
 					"label": "Tool 2",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "profileId": "core", "args": {}}},
-					"ports": {"in": "json", "out": "json"},
 				},
 			},
 		],
@@ -148,7 +144,6 @@ async def test_security_disallowed_subprocess_capability(monkeypatch, tmp_path):
 						"permissions": {"subprocess": False},
 						"shell": {"command": "echo hi"},
 					},
-					"ports": {"in": None, "out": "text"},
 				},
 			}
 		],

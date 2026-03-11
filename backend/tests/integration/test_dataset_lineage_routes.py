@@ -47,13 +47,13 @@ async def test_dataset_version_lineage_and_lookup_route(monkeypatch):
 					"kind": "source",
 					"label": "Source",
 					"sourceKind": "file",
+					"schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
 					"params": {
 						"source_type": "text",
 						"text": "hello",
 						"output_mode": "json",
 						"snapshot_id": snapshot_id,
 					},
-					"ports": {"in": None, "out": "json"},
 				},
 			},
 			{
@@ -62,7 +62,6 @@ async def test_dataset_version_lineage_and_lookup_route(monkeypatch):
 					"kind": "tool",
 					"label": "Tool",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-					"ports": {"in": "json", "out": "json"},
 				},
 			},
 		],

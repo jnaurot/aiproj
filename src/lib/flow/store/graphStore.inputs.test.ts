@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Edge, Node } from '@xyflow/svelte';
 
-import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
+import type { PipelineEdgeData, PipelineNodeData, PayloadType } from '$lib/flow/types';
 import {
 	__normalizeBindingForTest,
 	resolveNodeInputsFromState,
@@ -11,7 +11,7 @@ import {
 function makeNode(
 	id: string,
 	kind: PipelineNodeData['kind'],
-	ports: { in?: PipelineNodeData['ports']['in']; out?: PipelineNodeData['ports']['out'] }
+	io: { in?: PayloadType | null; out?: PayloadType | null }
 ): Node<PipelineNodeData> {
 	return {
 		id,
@@ -22,7 +22,15 @@ function makeNode(
 			label: id,
 			params: {},
 			status: 'idle',
-			ports
+			schema: {
+				expectedSchema: {
+					type: 'typed',
+					typedSchema: {
+						type: kind === 'source' ? (io.out ?? 'text') : (io.in ?? 'text'),
+						fields: []
+					}
+				}
+			}
 		} as any
 	};
 }

@@ -13,7 +13,7 @@ from app.main import app
 
 
 def test_capabilities_endpoint_matches_shared_contract_file():
-    shared_path = Path(__file__).resolve().parents[3] / "shared" / "port_capabilities.v1.json"
+    shared_path = Path(__file__).resolve().parents[3] / "shared" / "schema_capabilities.v1.json"
     raw = shared_path.read_bytes()
     payload = json.loads(raw.decode("utf-8"))
     expected_sig = hashlib.sha256(

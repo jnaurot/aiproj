@@ -10,7 +10,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'table' },
 					params: { file_format: 'csv' }
 				}
 			},
@@ -19,7 +18,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'select',
-					ports: { in: 'table', out: 'table' },
 					params: {
 						op: 'select',
 						select: { mode: 'include', columns: ['id'], strict: true }
@@ -44,7 +42,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'text' },
 					params: { file_format: 'txt' }
 				}
 			},
@@ -53,7 +50,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'filter',
-					ports: { in: 'table', out: 'table' },
 					params: {
 						op: 'filter',
 						filter: { expr: '' }
@@ -74,7 +70,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'table' },
 					params: { file_format: 'csv' }
 				}
 			},
@@ -83,7 +78,6 @@ describe('graphStore schema solver', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'select',
-					ports: { in: 'table', out: 'table' },
 					params: {
 						op: 'select',
 						select: { mode: 'include', columns: ['id'] }

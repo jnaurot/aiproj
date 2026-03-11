@@ -146,31 +146,7 @@ def _apply_dependency_revision_overrides(
 
 
 def _post_canonical_port_schema_diagnostics(definition: Dict[str, Any]) -> list[dict[str, str]]:
-    diagnostics: list[dict[str, str]] = []
-    api = definition.get("api")
-    outputs = api.get("outputs") if isinstance(api, dict) else None
-    if not isinstance(outputs, list):
-        return diagnostics
-    for idx, output in enumerate(outputs):
-        if not isinstance(output, dict):
-            continue
-        port_type = str(output.get("portType") or "").strip().lower()
-        typed_schema = output.get("typedSchema")
-        typed_type = (
-            str(typed_schema.get("type") or "").strip().lower()
-            if isinstance(typed_schema, dict)
-            else ""
-        )
-        if port_type and typed_type and port_type != typed_type:
-            diagnostics.append(
-                {
-                    "code": "PORT_TYPE_DERIVED_FROM_TYPED_SCHEMA",
-                    "path": f"api.outputs[{idx}].portType",
-                    "message": "portType differs from typedSchema.type; typedSchema.type is authoritative",
-                    "severity": "warning",
-                }
-            )
-    return diagnostics
+    return []
 
 
 def _component_builtin_environment_diagnostics(definition: Dict[str, Any]) -> list[dict[str, Any]]:

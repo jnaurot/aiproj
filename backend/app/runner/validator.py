@@ -42,7 +42,7 @@ class GraphValidator:
         errors.extend(self._check_orphaned_nodes(graph))
         
         # 2. Type validation
-        errors.extend(self._validate_port_types(graph))
+        errors.extend(self._validate_payload_types(graph))
         errors.extend(self._validate_transform_join_arity(graph))
         
         # 3. Schema validation
@@ -69,10 +69,12 @@ class GraphValidator:
             return str(value)
 
     @staticmethod
-    def _normalize_port_type(raw: Any) -> Optional[str]:
+    def _normalize_payload_type(raw: Any) -> Optional[str]:
         if raw is None:
             return None
         value = str(raw).strip().lower()
+        if value == "string":
+            value = "text"
         return value or None
 
     @staticmethod
@@ -104,7 +106,7 @@ class GraphValidator:
     def _payload_declared_type(payload: Any) -> Optional[str]:
         if not isinstance(payload, dict):
             return None
-        return GraphValidator._normalize_port_type(payload.get("type"))
+        return GraphValidator._normalize_payload_type(payload.get("type"))
 
     @staticmethod
     def _node_schema_declared_type(node: Dict[str, Any]) -> Optional[str]:
@@ -118,7 +120,7 @@ class GraphValidator:
         if isinstance(obs, dict):
             typed = obs.get("typedSchema")
             if isinstance(typed, dict):
-                resolved = GraphValidator._normalize_port_type(typed.get("type"))
+                resolved = GraphValidator._normalize_payload_type(typed.get("type"))
                 if resolved:
                     return resolved
         return None
@@ -178,7 +180,7 @@ class GraphValidator:
         if sh == "out":
             if len(outputs) == 1 and isinstance(outputs[0], dict):
                 typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
-                resolved = self._normalize_port_type(typed.get("type"))
+                resolved = self._normalize_payload_type(typed.get("type"))
                 return resolved, None
             if len(outputs) > 1:
                 return None, ValidationError(
@@ -206,7 +208,7 @@ class GraphValidator:
                 node_id=source_id,
             )
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
-        resolved = self._normalize_port_type(typed.get("type"))
+        resolved = self._normalize_payload_type(typed.get("type"))
         return resolved, None
 
     def _component_input_type(self, node: Dict[str, Any], target_handle: Any) -> Optional[str]:
@@ -217,7 +219,7 @@ class GraphValidator:
         if th == "in":
             if len(inputs) == 1 and isinstance(inputs[0], dict):
                 typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
-                resolved = self._normalize_port_type(typed.get("type"))
+                resolved = self._normalize_payload_type(typed.get("type"))
                 return resolved
             return None
         decl = next(
@@ -231,7 +233,7 @@ class GraphValidator:
         if not isinstance(decl, dict):
             return None
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
-        resolved = self._normalize_port_type(typed.get("type"))
+        resolved = self._normalize_payload_type(typed.get("type"))
         return resolved
 
     def _adapter_suggestions(
@@ -240,8 +242,8 @@ class GraphValidator:
         target_type: Optional[str],
         target_node: Dict[str, Any],
     ) -> List[str]:
-        src = self._normalize_port_type(source_type)
-        tgt = self._normalize_port_type(target_type)
+        src = self._normalize_payload_type(source_type)
+        tgt = self._normalize_payload_type(target_type)
         if not src or not tgt or src == tgt:
             return []
         if src == "text" and tgt == "table":
@@ -407,7 +409,7 @@ class GraphValidator:
         
         return errors
     
-    def _validate_port_types(self, graph: Dict[str, Any]) -> List[ValidationError]:
+    def _validate_payload_types(self, graph: Dict[str, Any]) -> List[ValidationError]:
         """Ensure all connections have compatible schemas/types."""
         errors = []
         edges = graph.get("edges", [])
@@ -437,7 +439,7 @@ class GraphValidator:
                 ))
                 continue
             
-            # Get port types
+            # Get payload types
             source_handle = edge.get("sourceHandle", "out")
             target_handle = edge.get("targetHandle", "in")
 
@@ -471,8 +473,8 @@ class GraphValidator:
                 or self._target_default_type(target_node)
                 or target_type
             )
-            source_type = self._normalize_port_type(source_type)
-            target_type = self._normalize_port_type(target_type)
+            source_type = self._normalize_payload_type(source_type)
+            target_type = self._normalize_payload_type(target_type)
 
             normalized_src_payload = dict(src_payload) if isinstance(src_payload, dict) else {}
             normalized_tgt_payload = dict(tgt_payload) if isinstance(tgt_payload, dict) else {}
@@ -508,11 +510,11 @@ class GraphValidator:
                         edge_id=edge_id,
                         details={
                             "expected": {
-                                "type": self._normalize_port_type(target_type),
+                                "type": self._normalize_payload_type(target_type),
                                 "typedSchema": {"fields": "non-empty"},
                             },
                             "actual": {
-                                "type": self._normalize_port_type(source_type),
+                                "type": self._normalize_payload_type(source_type),
                                 "typedSchema": {"fields": src_cols},
                             },
                             "provided_schema": provided_schema,
@@ -548,7 +550,7 @@ class GraphValidator:
                     ))
                     continue
 
-            # Schema constraint solver (compile-time): port compatibility + actionable adapter hints.
+            # Schema constraint solver (compile-time): schema compatibility + actionable adapter hints.
             if source_type and target_type and source_type != target_type:
                 suggestions = self._adapter_suggestions(source_type, target_type, target_node)
                 suggestion_suffix = (
@@ -749,3 +751,4 @@ def validate_pipeline(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) 
             errors.append(f"edge target does not exist: {target}")
 
     return {"valid": len(errors) == 0, "errors": errors}
+

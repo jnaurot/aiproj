@@ -46,7 +46,6 @@ async def test_cancel_run_is_idempotent_and_marks_cancelled(monkeypatch, tmp_pat
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],
@@ -115,8 +114,8 @@ async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path)
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -125,7 +124,6 @@ async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path)
                     "kind": "tool",
                     "label": "Tool L2",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
         ],
@@ -178,8 +176,8 @@ async def test_cancel_inflight_llm_emits_node_cancelled_and_no_artifact(monkeypa
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "text", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -194,7 +192,6 @@ async def test_cancel_inflight_llm_emits_node_cancelled_and_no_artifact(monkeypa
                         "user_prompt": "summarize",
                         "output_mode": "text",
                     },
-                    "ports": {"in": "text", "out": "text"},
                 },
             },
         ],

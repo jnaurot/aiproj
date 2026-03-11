@@ -26,13 +26,13 @@ def _source_tool_graph(file_path: str) -> dict:
 					"kind": "source",
 					"label": "Source",
 					"sourceKind": "file",
+					"schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
 					"params": {
 						"rel_path": str(p.parent),
 						"filename": p.name,
 						"file_format": "txt",
 						"output_mode": "text",
 					},
-					"ports": {"in": None, "out": "text"},
 				},
 			},
 			{
@@ -41,7 +41,6 @@ def _source_tool_graph(file_path: str) -> dict:
 					"kind": "tool",
 					"label": "Tool",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "profileId": "core", "args": {}}},
-					"ports": {"in": "text", "out": "json"},
 				},
 			},
 		],
@@ -63,7 +62,12 @@ async def test_semantic_cache_reasons_for_source_and_downstream_input_change(mon
 	async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
 		params = node["data"]["params"]
 		p = (Path(params["rel_path"]) / params["filename"]).resolve()
-		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data=p.read_text(encoding="utf-8"))
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"text": p.read_text(encoding="utf-8")},
+		)
 
 	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
 		return NodeOutput(
@@ -156,7 +160,6 @@ async def test_semantic_cache_reason_build_changed(monkeypatch, tmp_path):
 					"kind": "tool",
 					"label": "Tool",
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop", "profileId": "core", "args": {}}},
-					"ports": {"in": None, "out": "json"},
 				},
 			}
 		],

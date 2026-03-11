@@ -17,7 +17,7 @@
 export let artifactId: string;
 export let graphId: string;
 export let mimeType: string | undefined;
-export let portType: string | undefined;
+export let payloadType: string | undefined;
 export let cached: boolean | undefined = undefined;
 export let cacheDecision:
 	| 'cache_hit'
@@ -31,7 +31,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 		artifactId: string;
 		nodeKind: string;
 		mimeType: string;
-		portType?: string | null;
+		payloadType?: string | null;
 		sizeBytes: number;
 		contentHash?: string | null;
 		createdAt: string;
@@ -100,8 +100,8 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	}
 
 	$: effectiveMime = meta?.mimeType ?? mimeType ?? '';
-	$: effectivePortType = meta?.portType ?? portType ?? '-';
-	$: payloadType = String((meta?.payloadSchema as any)?.type ?? '-');
+	$: effectivePayloadType = meta?.payloadType ?? payloadType ?? '-';
+	$: payloadSchemaType = String((meta?.payloadSchema as any)?.type ?? '-');
 	$: hasPayloadSchema = Boolean(meta?.payloadSchema && typeof meta.payloadSchema === 'object');
 	$: isTable =
 		((meta?.payloadSchema as any)?.type === 'table') ||
@@ -665,9 +665,9 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 {/if}
 
 <div class="chips">
-	<span class="chip"><b>port</b> {effectivePortType}</span>
+	<span class="chip"><b>type</b> {effectivePayloadType}</span>
 	<span class="chip"><b>mime</b> {effectiveMime || '-'}</span>
-	<span class="chip"><b>payload</b> {payloadType}</span>
+	<span class="chip"><b>payload</b> {payloadSchemaType}</span>
 	<span class="chip"><b>rows</b> {isTable ? totalRows || '-' : '-'}</span>
 	<span class="chip"><b>cols</b> {isTable ? colCount || '-' : '-'}</span>
 	{#if hasBuiltinEnvironment}
@@ -856,7 +856,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 					<button class="inputItem" on:click={() => openArtifact(outRef.artifactId)}>
 						<span class="inputLabel">{outRef.name}</span>
 						<span class="inputId">{shortId(outRef.artifactId)}</span>
-						<span class="inputMeta">{outRef.portType}</span>
+						<span class="inputMeta">{outRef.payloadType}</span>
 						<span class="inputMeta">{outRef.mimeType}</span>
 					</button>
 				{/each}

@@ -1,7 +1,7 @@
 export type ComponentWrapperOutputRef = {
 	name: string;
 	artifactId: string;
-	portType: string;
+	payloadType: string;
 	mimeType: string;
 };
 
@@ -13,15 +13,13 @@ export function extractComponentWrapperOutputs(value: unknown): ComponentWrapper
 	for (const [nameRaw, detailsRaw] of Object.entries(outputs as Record<string, unknown>)) {
 		const name = String(nameRaw ?? '').trim();
 		const details = (detailsRaw ?? {}) as Record<string, unknown>;
-		const artifactId = String(
-			details?.artifact_id ?? details?.artifactId ?? details?.artifactID ?? ''
-		).trim();
+		const artifactId = String(details?.artifactId ?? '').trim();
 		if (!name || !artifactId) continue;
 		refs.push({
 			name,
 			artifactId,
-			portType: String(details?.port_type ?? details?.portType ?? 'unknown').trim() || 'unknown',
-			mimeType: String(details?.mime_type ?? details?.mimeType ?? '-').trim() || '-'
+			payloadType: String(details?.payloadType ?? 'unknown').trim() || 'unknown',
+			mimeType: String(details?.mimeType ?? '-').trim() || '-'
 		});
 	}
 	return refs.sort((a, b) => a.name.localeCompare(b.name));

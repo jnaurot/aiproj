@@ -1,5 +1,5 @@
 import type { ComponentApiPort } from '$lib/flow/client/components';
-import type { PortType } from '$lib/flow/types';
+import type { PayloadType } from '$lib/flow/types';
 
 export const RESERVED_COMPONENT_OUTPUT_NAMES = new Set([
 	'component',
@@ -9,7 +9,7 @@ export const RESERVED_COMPONENT_OUTPUT_NAMES = new Set([
 ]);
 
 export type ComponentOutputBinding = {
-	nodeId?: string;
+	outputRef?: string;
 	artifact?: 'current' | 'last';
 };
 
@@ -20,42 +20,42 @@ export type ComponentOutputValidation = {
 };
 
 export type ValidateComponentOutputsOptions = {
-	internalNodeIds?: string[];
+	availableOutputRefs?: string[];
 };
 
-const PORT_TYPE_OPTIONS: PortType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
+const PAYLOAD_TYPE_OPTIONS: PayloadType[] = ['table', 'text', 'json', 'binary', 'embeddings'];
 
 const OUTPUT_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-function normalizePortType(value: unknown): PortType {
+function normalizePayloadType(value: unknown): PayloadType {
 	const v = String(value ?? '').trim().toLowerCase();
-	return PORT_TYPE_OPTIONS.includes(v as PortType) ? (v as PortType) : 'json';
+	if (v === 'string') return 'text';
+	return PAYLOAD_TYPE_OPTIONS.includes(v as PayloadType) ? (v as PayloadType) : 'json';
 }
 
-export function deriveOutputPortType(
+export function deriveOutputPayloadType(
 	output: ComponentApiPort,
 	bindingsOutputs: Record<string, ComponentOutputBinding>,
-	internalNodeMetaById: Record<string, { outPortType?: PortType }>
-): PortType {
+	internalNodeMetaByRef: Record<string, { outPayloadType?: PayloadType }>
+): PayloadType {
 	const outName = String(output?.name ?? '').trim();
-	const boundNodeId = String(bindingsOutputs?.[outName]?.nodeId ?? '').trim();
-	const inferred = internalNodeMetaById?.[boundNodeId]?.outPortType;
-	return normalizePortType(inferred ?? output?.portType ?? 'json');
+	const boundOutputRef = String(bindingsOutputs?.[outName]?.outputRef ?? '').trim();
+	const inferred = internalNodeMetaByRef?.[boundOutputRef]?.outPayloadType;
+	return normalizePayloadType(inferred ?? output?.typedSchema?.type ?? 'json');
 }
 
-export function applyDerivedOutputPortTypes(
+export function applyDerivedOutputPayloadTypes(
 	outputs: ComponentApiPort[],
 	bindingsOutputs: Record<string, ComponentOutputBinding>,
-	internalNodeMetaById: Record<string, { outPortType?: PortType }>
+	internalNodeMetaByRef: Record<string, { outPayloadType?: PayloadType }>
 ): ComponentApiPort[] {
 	return outputs.map((output) => {
-		const portType = deriveOutputPortType(output, bindingsOutputs, internalNodeMetaById);
+		const outputType = deriveOutputPayloadType(output, bindingsOutputs, internalNodeMetaByRef);
 		const typedSchema = (output?.typedSchema ?? {}) as { fields?: unknown[] };
 		return {
 			...output,
-			portType,
 			typedSchema: {
-				type: portType,
+				type: outputType,
 				fields: Array.isArray(typedSchema?.fields) ? typedSchema.fields : []
 			}
 		};
@@ -70,10 +70,10 @@ export function validateComponentOutputs(
 	const outputErrors: Record<number, string[]> = {};
 	const bindingErrors: Record<string, string[]> = {};
 	const seenByName = new Map<string, number>();
-	const internalNodeIds = new Set(
-		(options.internalNodeIds ?? [])
-			.map((id) => String(id ?? '').trim())
-			.filter((id) => id.length > 0)
+	const availableOutputRefs = new Set(
+		(options.availableOutputRefs ?? [])
+			.map((ref) => String(ref ?? '').trim())
+			.filter((ref) => ref.length > 0)
 	);
 	for (let i = 0; i < outputs.length; i += 1) {
 		const out = outputs[i] as ComponentApiPort;
@@ -117,13 +117,13 @@ export function validateComponentOutputs(
 
 		if (name) {
 			const binding = bindingsOutputs[name] ?? {};
-			const boundNodeId = String(binding?.nodeId ?? '').trim();
+			const boundOutputRef = String(binding?.outputRef ?? '').trim();
 			const bindingIssues: string[] = [];
-			if (!boundNodeId) {
-				bindingIssues.push('bindings.outputs.<name>.nodeId is required.');
+			if (!boundOutputRef) {
+				bindingIssues.push('bindings.outputs.<name>.outputRef is required.');
 			}
-			if (boundNodeId && internalNodeIds.size > 0 && !internalNodeIds.has(boundNodeId)) {
-				bindingIssues.push('bindings.outputs.<name>.nodeId must reference an internal node in the selected revision.');
+			if (boundOutputRef && availableOutputRefs.size > 0 && !availableOutputRefs.has(boundOutputRef)) {
+				bindingIssues.push('bindings.outputs.<name>.outputRef must reference an exposed internal output.');
 			}
 			const artifactMode = String(binding?.artifact ?? 'current').trim();
 			if (artifactMode !== 'current' && artifactMode !== 'last') {
@@ -144,25 +144,25 @@ export function validateComponentOutputs(
 export function syncOutputBindings(
 	outputs: ComponentApiPort[],
 	current: Record<string, ComponentOutputBinding>,
-	internalNodeIds: string[]
+	availableOutputRefs: string[]
 ): { next: Record<string, ComponentOutputBinding>; changed: boolean } {
 	const source = current ?? {};
 	const next: Record<string, ComponentOutputBinding> = {};
-	const fallbackNodeId = String(internalNodeIds[0] ?? '').trim();
-	const existingFallbackNodeId = Object.values(source)
-		.map((value) => String((value as any)?.nodeId ?? '').trim())
+	const fallbackOutputRef = String(availableOutputRefs[0] ?? '').trim();
+	const existingFallbackOutputRef = Object.values(source)
+		.map((value) => String((value as any)?.outputRef ?? '').trim())
 		.find((value) => value.length > 0);
 	for (const output of outputs) {
 		const outName = String(output?.name ?? '').trim();
 		if (!outName) continue;
 		const existing = source[outName] ?? {};
-		const nodeId =
-			String(existing?.nodeId ?? '').trim() ||
-			fallbackNodeId ||
-			existingFallbackNodeId ||
+		const outputRef =
+			String(existing?.outputRef ?? '').trim() ||
+			fallbackOutputRef ||
+			existingFallbackOutputRef ||
 			undefined;
 		next[outName] = {
-			nodeId,
+			outputRef,
 			artifact: existing?.artifact === 'last' ? 'last' : 'current'
 		};
 	}

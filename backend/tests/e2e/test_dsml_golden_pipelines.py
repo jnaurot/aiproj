@@ -26,7 +26,6 @@ def _tool_node(
 		"data": {
 			"kind": "tool",
 			"label": node_id,
-			"ports": {"in": in_port, "out": out_port},
 			"params": {
 				"provider": "builtin",
 				"builtin": {

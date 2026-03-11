@@ -22,7 +22,6 @@ def _python_tool_graph() -> dict:
 						"builtin": {"profileId": "full"},
 						"python": {"code": "print('ok')", "args": {}, "capture_output": True},
 					},
-					"ports": {"in": None, "out": "text"},
 				},
 			}
 		],

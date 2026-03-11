@@ -11,7 +11,7 @@ This file provides guidance to agents when working with code in this repository.
 ### Backend-Specific
 - **Python Backend**: Located in `backend/` directory with FastAPI
 - **Test Running**: Backend tests use pytest, run from backend directory: `cd backend && python -m pytest`
-- **Port Capabilities**: Defined in `shared/port_capabilities.v1.json` for frontend-backend compatibility
+- **Schema Capabilities**: Defined in `shared/schema_capabilities.v1.json` for frontend-backend compatibility
 
 ### Non-Obvious Patterns
 - **Zod `.strip()`**: All Zod schemas MUST use `.strip()` to reject unknown keys
@@ -22,4 +22,4 @@ This file provides guidance to agents when working with code in this repository.
 ### Critical Gotchas
 - **Prettier Config**: Uses tabs, not spaces - this is non-standard for most projects
 - **Backend Separation**: Backend is a separate Python project in `backend/` directory
-- **Port Type Contracts**: Frontend and backend must agree on port types defined in `shared/port_capabilities.v1.json`
+- **Payload Type Contracts**: Frontend and backend must agree on payload types defined in `shared/schema_capabilities.v1.json`

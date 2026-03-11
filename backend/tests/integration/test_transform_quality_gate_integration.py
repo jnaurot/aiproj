@@ -19,8 +19,7 @@ def _graph_for_quality_gate(*, severity: str) -> dict:
 					"kind": "source",
 					"label": "Source",
 					"sourceKind": "file",
-					"params": {"file_path": "dummy.txt", "file_format": "txt"},
-					"ports": {"in": None, "out": "table"},
+					"params": {"file_path": "dummy.csv", "file_format": "csv"},
 				},
 			},
 			{
@@ -43,7 +42,6 @@ def _graph_for_quality_gate(*, severity: str) -> dict:
 							],
 						},
 					},
-					"ports": {"in": "table", "out": "table"},
 				},
 			},
 		],

@@ -189,7 +189,7 @@ export async function resolveSourceNode(req: {
 		artifact?: {
 			artifactId: string;
 			mimeType?: string;
-			portType?: string;
+			payloadType?: string;
 			sizeBytes?: number;
 			createdAt?: string;
 			contentHash?: string;

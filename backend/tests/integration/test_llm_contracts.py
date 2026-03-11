@@ -90,7 +90,6 @@ def _graph(output_mode: str, params_patch: dict | None = None) -> dict:
 						"file_format": "txt",
 						"output_mode": "text",
 					},
-					"ports": {"in": None, "out": "text"},
 				},
 			},
 			{
@@ -100,7 +99,6 @@ def _graph(output_mode: str, params_patch: dict | None = None) -> dict:
 					"label": "LLM",
 					"llmKind": "openai_compat",
 					"params": params,
-					"ports": {"in": "text", "out": "text"},
 				},
 			},
 		],
@@ -307,7 +305,6 @@ async def test_ollama_visible_thinking_emits_delta_but_output_is_final_only(monk
 					"label": "Source",
 					"sourceKind": "file",
 					"params": {"rel_path": ".", "filename": "dummy.txt", "file_format": "txt", "output_mode": "text"},
-					"ports": {"in": None, "out": "text"},
 				},
 			},
 			{
@@ -323,7 +320,6 @@ async def test_ollama_visible_thinking_emits_delta_but_output_is_final_only(monk
 						"output_mode": "text",
 						"thinking": {"enabled": True, "mode": "visible"},
 					},
-					"ports": {"in": "text", "out": "text"},
 				},
 			},
 		],

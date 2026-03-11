@@ -14,7 +14,7 @@ def _artifact_base(payload_schema):
         created_at=datetime.now(timezone.utc),
         execution_version="v1",
         mime_type="text/plain; charset=utf-8",
-        port_type="text",
+        payload_type="text",
         size_bytes=0,
         storage_uri="artifact://placeholder",
         payload_schema=payload_schema,
@@ -60,7 +60,7 @@ async def test_artifact_write_succeeds_with_metadata_v1():
                 "contractFingerprint": "c" * 64,
                 "schemaFingerprint": "s" * 64,
                 "mimeType": "text/plain; charset=utf-8",
-                "portType": "text",
+                "payloadType": "text",
                 "createdAt": datetime.now(timezone.utc).isoformat(),
                 "runId": "run-1",
                 "graphId": "graph-1",
@@ -69,3 +69,4 @@ async def test_artifact_write_succeeds_with_metadata_v1():
     )
     out = await store.write(art, b"hello")
     assert out == "a" * 64
+

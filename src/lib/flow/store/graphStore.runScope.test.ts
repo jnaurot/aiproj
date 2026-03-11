@@ -635,7 +635,7 @@ describe('graphStore partial run scope events', () => {
 				artifactId: 'a1',
 				expectedContractFingerprint: 'expfp',
 				actualContractFingerprint: 'actfp',
-				mismatchKind: 'port_type'
+				mismatchKind: 'payload_type'
 			},
 			runId
 		);
@@ -647,7 +647,7 @@ describe('graphStore partial run scope events', () => {
 		expect(state.nodeOutputs.src.preview).toBe('old');
 		expect(state.nodeOutputs.src.expectedContractFingerprint).toBe('expfp');
 		expect(state.nodeOutputs.src.actualContractFingerprint).toBe('actfp');
-		expect(state.nodeOutputs.src.mismatchKind).toBe('port_type');
+		expect(state.nodeOutputs.src.mismatchKind).toBe('payload_type');
 	});
 
 	it('contract mismatch cannot override running/succeeded node in active run', () => {
@@ -684,3 +684,4 @@ describe('graphStore partial run scope events', () => {
 		expect(state.nodeBindings.src.cacheValid).toBe(false);
 	});
 });
+

@@ -30,7 +30,6 @@ def _tool_graph(node_id: str = "tool_1") -> dict:
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],
@@ -164,7 +163,7 @@ async def test_lineage_inputs_producer_consumers_round_trip(monkeypatch, tmp_pat
             status="succeeded",
             metadata=None,
             execution_time_ms=1.0,
-            data="hello from source",
+            data={"text": "hello from source"},
         )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
@@ -190,8 +189,8 @@ async def test_lineage_inputs_producer_consumers_round_trip(monkeypatch, tmp_pat
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -200,7 +199,6 @@ async def test_lineage_inputs_producer_consumers_round_trip(monkeypatch, tmp_pat
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
         ],
@@ -310,8 +308,8 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -326,7 +324,6 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
                         "user_prompt": "summarize",
                         "output_mode": "text",
                     },
-                    "ports": {"in": "text", "out": "text"},
                 },
             },
             {
@@ -335,7 +332,6 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
                     "kind": "tool",
                     "label": "Tool A",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
             {
@@ -349,7 +345,6 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
                         "side_effect_mode": "effectful",
                         "armed": True,
                     },
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
             {
@@ -358,7 +353,6 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
                     "kind": "tool",
                     "label": "Tool Z",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
         ],
@@ -445,7 +439,12 @@ async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(mo
     run_mod = importlib.import_module("app.runner.run")
 
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
-        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
 
     async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(
@@ -468,8 +467,8 @@ async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(mo
                     "kind": "source",
                     "label": "Source",
                     "sourceKind": "file",
+                    "schema": {"expectedSchema": {"typedSchema": {"type": "json", "fields": []}}},
                     "params": {"file_path": "dummy.txt", "file_format": "txt"},
-                    "ports": {"in": None, "out": "text"},
                 },
             },
             {
@@ -478,7 +477,6 @@ async def test_delete_node_artifacts_hard_deletes_and_marks_descendants_stale(mo
                     "kind": "tool",
                     "label": "Tool",
                     "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
-                    "ports": {"in": "text", "out": "json"},
                 },
             },
         ],

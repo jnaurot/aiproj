@@ -398,10 +398,10 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
 def inputs_fingerprint(inputs: List[Tuple[str, str]]) -> List[Dict[str, str]]:
     """
-    inputs = [(port_name, upstream_artifact_id), ...]
+    inputs = [(input_handle, upstream_artifact_id), ...]
     Return stable sorted list.
     """
-    return [{"port": port, "artifact_id": aid} for port, aid in sorted(inputs, key=lambda x: x[0])]
+    return [{"inputHandle": input_handle, "artifactId": aid} for input_handle, aid in sorted(inputs, key=lambda x: x[0])]
 
 # ---- data contracts ----
 
@@ -1213,7 +1213,7 @@ def run_transform(
             "columns": list(out_df.columns),
             "content_hash": sha256_hex(payload),
             "format": "json",
-            "port_type": "json",
+            "payloadType": "json",
         }
         if quality_gate_report is not None:
             meta["quality_gate"] = quality_gate_report
@@ -1225,8 +1225,9 @@ def run_transform(
         "columns": list(out_df.columns),
         "content_hash": sha256_hex(payload),
         "format": "csv",
-        "port_type": "table",
+        "payloadType": "table",
     }
     if quality_gate_report is not None:
         meta["quality_gate"] = quality_gate_report
     return TransformResult(payload_bytes=payload, mime_type="text/csv; charset=utf-8", meta=meta)
+

@@ -27,7 +27,6 @@ def _source_graph(file_path: str) -> dict:
                     "label": "Source",
                     "sourceKind": "file",
                     "params": {"rel_path": str(p.parent), "filename": p.name, "file_format": "txt", "output_mode": "text"},
-                    "ports": {"in": None, "out": "text"},
                 },
             }
         ],
@@ -51,7 +50,6 @@ def _source_graph_with_mode(file_path: str, *, mode: str, port: str) -> dict:
                         "file_format": "csv",
                         "output_mode": mode,
                     },
-                    "ports": {"in": None, "out": port},
                 },
             }
         ],
@@ -307,7 +305,6 @@ async def test_source_api_cache_policy_never_forces_execution(monkeypatch, tmp_p
                         "output_mode": "json",
                         "cache_policy": {"mode": "never"},
                     },
-                    "ports": {"in": None, "out": "json"},
                 },
             }
         ],
@@ -349,7 +346,6 @@ async def test_source_image_png_sets_image_mime_and_rerun_hits_cache(tmp_path):
                         "filename": file_path.name,
                         "file_format": "png",
                     },
-                    "ports": {"in": None, "out": "binary"},
                 },
             }
         ],
@@ -429,7 +425,6 @@ async def test_source_audio_wav_sets_audio_mime_and_rerun_hits_cache(tmp_path):
                         "filename": file_path.name,
                         "file_format": "wav",
                     },
-                    "ports": {"in": None, "out": "binary"},
                 },
             }
         ],
@@ -509,7 +504,6 @@ async def test_source_video_mp4_sets_video_mime_and_rerun_hits_cache(tmp_path):
                         "filename": file_path.name,
                         "file_format": "mp4",
                     },
-                    "ports": {"in": None, "out": "binary"},
                 },
             }
         ],

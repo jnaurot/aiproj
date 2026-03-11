@@ -41,8 +41,6 @@ describe('graphStore schema lifecycle golden', () => {
 
 		const dto = __stripToDTOForTest(state.nodes as any, state.edges as any, 'graph_schema_lifecycle');
 		const persistedSourceNode = (dto.nodes as any[]).find((n) => String(n?.id ?? '') === sourceId) as any;
-		expect(Object.prototype.hasOwnProperty.call(persistedSourceNode?.data ?? {}, 'ports')).toBe(false);
-		expect(Boolean((dto.meta as any)?.migrations?.OMIT_NODE_PORTS_V1)).toBe(true);
 		expect(persistedSourceNode?.data?.schema?.expectedSchema?.typedSchema?.type).toBe('table');
 
 		const snapshot = __buildNodeSchemaContractSnapshotForTest(state as any, transformId);

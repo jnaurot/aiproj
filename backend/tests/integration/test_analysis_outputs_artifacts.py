@@ -16,7 +16,6 @@ def _graph_with_ml_analysis_tool() -> dict:
 				"data": {
 					"kind": "tool",
 					"label": "ML Analysis",
-					"ports": {"in": "json", "out": "json"},
 					"params": {
 						"provider": "builtin",
 						"builtin": {

@@ -121,7 +121,7 @@ describe('graphStore snapshot scoped commit', () => {
 						execKey: 'exec_c',
 						artifactId: 'artifact_c',
 						cacheHit: true,
-						artifact: { artifactId: 'artifact_c', mimeType: 'text/plain', portType: 'text' }
+						artifact: { artifactId: 'artifact_c', mimeType: 'text/plain', payloadType: 'text' }
 					}),
 					{ status: 200 }
 				);
@@ -276,7 +276,7 @@ describe('graphStore snapshot scoped commit', () => {
 					artifactId: 'art_mm',
 					preview: 'mismatch-output',
 					mimeType: 'text/plain',
-					portType: 'text'
+					payloadType: 'text'
 				} as any,
 				runId
 			);
@@ -321,7 +321,7 @@ describe('graphStore snapshot scoped commit', () => {
 					execKey: 'exec_e',
 					artifactId: 'artifact_e',
 					cacheHit: true,
-					artifact: { artifactId: 'artifact_e', mimeType: 'text/plain', portType: 'text' }
+					artifact: { artifactId: 'artifact_e', mimeType: 'text/plain', payloadType: 'text' }
 				}),
 				{ status: 200 }
 			);
@@ -477,3 +477,4 @@ describe('graphStore snapshot scoped commit', () => {
 	});
 
 });
+

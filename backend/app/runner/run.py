@@ -74,21 +74,21 @@ def _resolve_component_output_artifact_from_bindings(
 ) -> Dict[str, Any]:
     params = (src_node.get("data") or {}).get("params")
     if not isinstance(params, dict):
-        return {"artifact_id": None, "has_binding": False, "runtime_node_id": None}
+        return {"artifactId": None, "hasBinding": False, "runtimeNodeId": None}
     bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
     outputs = bindings.get("outputs") if isinstance(bindings.get("outputs"), dict) else {}
     binding = outputs.get(output_name) if isinstance(outputs, dict) else None
     if not isinstance(binding, dict):
-        return {"artifact_id": None, "has_binding": False, "runtime_node_id": None}
+        return {"artifactId": None, "hasBinding": False, "runtimeNodeId": None}
     bound_node_id = str(binding.get("nodeId") or "").strip()
     if not bound_node_id:
-        return {"artifact_id": None, "has_binding": True, "runtime_node_id": None}
+        return {"artifactId": None, "hasBinding": True, "runtimeNodeId": None}
     runtime_node_id = (
         bound_node_id if bound_node_id.startswith("cmp:") else f"cmp:{component_instance_node_id}:{bound_node_id}"
     )
     aid = get_current_artifact(runtime_node_id)
     resolved = str(aid or "").strip() or None
-    return {"artifact_id": resolved, "has_binding": True, "runtime_node_id": runtime_node_id}
+    return {"artifactId": resolved, "hasBinding": True, "runtimeNodeId": runtime_node_id}
 
 
 def _resolve_component_output_artifact_from_output_edges(
@@ -110,17 +110,17 @@ def _resolve_component_output_artifact_from_output_edges(
             continue
         candidates.append(e)
     if not candidates:
-        return {"artifact_id": None, "runtime_node_id": None, "edge_id": None, "edge_count": 0}
+        return {"artifactId": None, "runtimeNodeId": None, "edgeId": None, "edgeCount": 0}
     candidates.sort(key=lambda edge: str(edge.get("id") or ""))
     chosen = candidates[0]
     runtime_node_id = str(chosen.get("source") or "").strip()
     aid = get_current_artifact(runtime_node_id) if runtime_node_id else None
     resolved = str(aid or "").strip() or None
     return {
-        "artifact_id": resolved,
-        "runtime_node_id": runtime_node_id or None,
-        "edge_id": str(chosen.get("id") or ""),
-        "edge_count": len(candidates),
+        "artifactId": resolved,
+        "runtimeNodeId": runtime_node_id or None,
+        "edgeId": str(chosen.get("id") or ""),
+        "edgeCount": len(candidates),
     }
 
 
@@ -155,7 +155,7 @@ def _normalize_typed_schema_for_runtime(raw: Any) -> Optional[Dict[str, Any]]:
     return {"type": typed_type, "fields": fields}
 
 
-def _typed_schema_type_to_port_type(typed_schema: Optional[Dict[str, Any]]) -> str:
+def _typed_schema_type_to_payload_type(typed_schema: Optional[Dict[str, Any]]) -> str:
     t = str((typed_schema or {}).get("type") or "").strip().lower()
     if t in {"table", "json", "text", "binary", "embeddings"}:
         return t
@@ -185,19 +185,17 @@ async def _component_wrapper_output_typed_schema(
     except Exception:
         return None
     root = payload if isinstance(payload, dict) else {}
-    if isinstance(root.get("payload"), dict):
-        root = root.get("payload")  # legacy wrapper envelope compatibility
     outputs = root.get("outputs") if isinstance(root.get("outputs"), dict) else {}
     out = outputs.get(out_name) if isinstance(outputs, dict) else None
     if not isinstance(out, dict):
         return None
-    observed = _normalize_typed_schema_for_runtime(out.get("typed_schema_observed"))
+    observed = _normalize_typed_schema_for_runtime(out.get("typedSchemaObserved"))
     if observed is not None:
         return observed
-    declared = _normalize_typed_schema_for_runtime(out.get("typed_schema_expected"))
+    declared = _normalize_typed_schema_for_runtime(out.get("typedSchemaExpected"))
     if declared is not None:
         return declared
-    fallback = _normalize_typed_schema_for_runtime(out.get("typed_schema"))
+    fallback = _normalize_typed_schema_for_runtime(out.get("typedSchema"))
     return fallback
 
 
@@ -209,8 +207,8 @@ async def resolve_input_refs(
     artifact_store,
 ) -> list[tuple[str, str]]:
     """
-    Returns stable (port, upstream_artifact_id) pairs for edges targeting node_id.
-    Port name is taken from edge.targetHandle if present; else 'in'.
+    Returns stable (inputHandle, upstreamArtifactId) pairs for edges targeting node_id.
+    inputHandle is taken from edge.targetHandle if present; else 'in'.
     Only includes edges whose source node has produced an artifact via bindings.
     """
     refs: list[tuple[str, str]] = []
@@ -263,9 +261,9 @@ async def resolve_input_refs(
                 output_name=source_handle,
                 get_current_artifact=get_current_artifact,
             )
-            if bridge.get("artifact_id"):
-                aid = str(bridge["artifact_id"])
-            elif bridge.get("runtime_node_id"):
+            if bridge.get("artifactId"):
+                aid = str(bridge["artifactId"])
+            elif bridge.get("runtimeNodeId"):
                 raise ContractMismatchError(
                     f"Component output '{source_handle}' could not be resolved from bindings",
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
@@ -274,8 +272,8 @@ async def resolve_input_refs(
                         actual={
                             "edgeId": str(e.get("id") or ""),
                             "componentArtifactId": str(aid),
-                            "boundRuntimeNodeId": str(bridge.get("runtime_node_id") or ""),
-                            "outputEdgeId": str(bridge.get("edge_id") or ""),
+                            "boundRuntimeNodeId": str(bridge.get("runtimeNodeId") or ""),
+                            "outputEdgeId": str(bridge.get("edgeId") or ""),
                             "resolvedArtifact": False,
                         },
                     ),
@@ -287,13 +285,13 @@ async def resolve_input_refs(
                 output_name=source_handle,
                 get_current_artifact=get_current_artifact,
             )
-            if bridge.get("edge_count"):
+            if bridge.get("edgeCount"):
                 # Expanded component output edges are the source of truth for runtime IDs.
                 # If the bridge exists and produced no artifact, we already raised above.
                 pass
-            elif direct.get("artifact_id"):
-                aid = str(direct["artifact_id"])
-            elif bool(direct.get("has_binding")):
+            elif direct.get("artifactId"):
+                aid = str(direct["artifactId"])
+            elif bool(direct.get("hasBinding")):
                 raise ContractMismatchError(
                     f"Component output '{source_handle}' could not be resolved from bindings",
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
@@ -302,7 +300,7 @@ async def resolve_input_refs(
                         actual={
                             "edgeId": str(e.get("id") or ""),
                             "componentArtifactId": str(aid),
-                            "boundRuntimeNodeId": str(direct.get("runtime_node_id") or ""),
+                            "boundRuntimeNodeId": str(direct.get("runtimeNodeId") or ""),
                             "resolvedArtifact": False,
                         },
                     ),
@@ -320,8 +318,8 @@ async def resolve_input_refs(
                         },
                     ),
                 )
-        port = e.get("targetHandle") or "in"
-        refs.append((port, aid))
+        input_handle = e.get("targetHandle") or "in"
+        refs.append((input_handle, aid))
     # stable order
     refs.sort(key=lambda x: (x[0], x[1]))
     return refs
@@ -848,7 +846,7 @@ def _coercion_policy_for_node(node: Dict[str, Any]) -> str:
 
 def _artifact_typed_schema(artifact: Artifact) -> Dict[str, Any]:
     ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
-    ptype = str(_infer_artifact_port_type(artifact) or "unknown").strip().lower() or "unknown"
+    ptype = str(_infer_artifact_payload_type(artifact) or "unknown").strip().lower() or "unknown"
     if ptype == "table":
         cols = _extract_table_columns_from_payload_schema(ps)
         fields = [
@@ -866,20 +864,20 @@ def _artifact_typed_schema(artifact: Artifact) -> Dict[str, Any]:
     return {"type": "unknown", "fields": []}
 
 
-def _declared_component_input_schema(node: Dict[str, Any], port_name: str) -> Optional[Dict[str, Any]]:
+def _declared_component_input_schema(node: Dict[str, Any], input_name: str) -> Optional[Dict[str, Any]]:
     data = node.get("data", {}) if isinstance(node, dict) else {}
     if str(data.get("kind") or "") != "component":
         return None
     params = data.get("params", {}) if isinstance(data.get("params"), dict) else {}
     api = params.get("api") if isinstance(params.get("api"), dict) else {}
     inputs = api.get("inputs") if isinstance(api.get("inputs"), list) else []
-    target = str(port_name or "in").strip()
-    for port in inputs:
-        if not isinstance(port, dict):
+    target = str(input_name or "in").strip()
+    for entry in inputs:
+        if not isinstance(entry, dict):
             continue
-        if str(port.get("name") or "").strip() != target:
+        if str(entry.get("name") or "").strip() != target:
             continue
-        ts = port.get("typedSchema")
+        ts = entry.get("typedSchema")
         return ts if isinstance(ts, dict) else None
     return None
 
@@ -968,14 +966,14 @@ def _typed_schema_compatibility(
 
 def _component_output_port_compatible(
     *,
-    declared_port_type: str,
-    actual_port_type: str,
+    declared_payload_type: str,
+    actual_payload_type: str,
     artifact: Artifact,
 ) -> bool:
-    if declared_port_type == actual_port_type:
+    if declared_payload_type == actual_payload_type:
         return True
     # Source text-mode can materialize as a 1-row table with "text" column.
-    if declared_port_type == "text" and actual_port_type == "table":
+    if declared_payload_type == "text" and actual_payload_type == "table":
         ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
         coercion = ps.get("coercion") if isinstance(ps.get("coercion"), dict) else {}
         mode = str(coercion.get("mode") or "").strip().lower()
@@ -1258,7 +1256,7 @@ def _artifact_metadata_v1(
     contract_fingerprint: str,
     schema_fingerprint: str,
     mime_type: str,
-    port_type: Optional[str],
+    payload_type: Optional[str],
     schema: Optional[Dict[str, Any]],
     created_at_iso: str,
     run_id: Optional[str],
@@ -1280,7 +1278,7 @@ def _artifact_metadata_v1(
         "contractFingerprint": contract_fingerprint,
         "schemaFingerprint": schema_fingerprint,
         "mimeType": mime_type,
-        "portType": str(port_type or ""),
+        "payloadType": str(payload_type or ""),
         "createdAt": created_at_iso,
         "runId": run_id,
         "graphId": graph_id,
@@ -1537,13 +1535,13 @@ def _contract_details(
     return details
 
 
-def _available_columns_for_port(
+def _available_columns_for_input_handle(
     *,
-    port: str,
-    input_schema_cols_by_port: Dict[str, list[Dict[str, Any]]],
+    input_handle: str,
+    input_schema_cols_by_handle: Dict[str, list[Dict[str, Any]]],
     input_columns: Dict[str, list[str]],
 ) -> tuple[list[str], str]:
-    schema_cols = input_schema_cols_by_port.get(port) or []
+    schema_cols = input_schema_cols_by_handle.get(input_handle) or []
     schema_names = [
         str(c.get("name"))
         for c in schema_cols
@@ -1551,7 +1549,7 @@ def _available_columns_for_port(
     ]
     if schema_names:
         return _stable_unique_strings(schema_names), "schema"
-    inferred = _stable_unique_strings(input_columns.get(port) or [])
+    inferred = _stable_unique_strings(input_columns.get(input_handle) or [])
     return inferred, "inferred"
 
 
@@ -1592,9 +1590,9 @@ def _extract_quoted_identifiers(expr: str) -> list[str]:
     return sorted(set(out))
 
 
-def _infer_artifact_port_type(artifact: Artifact) -> str:
-    if artifact.port_type:
-        return str(artifact.port_type)
+def _infer_artifact_payload_type(artifact: Artifact) -> str:
+    if artifact.payload_type:
+        return str(artifact.payload_type)
     ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
     ps_type = str(ps.get("type") or "").lower()
     if ps_type == "string":
@@ -1806,8 +1804,8 @@ def _expected_output_schema_error(
     )
 
 
-def _expected_mime_for_port(port: str) -> str:
-    p = str(port or "").strip().lower()
+def _expected_mime_for_payload_type(payload_type: str) -> str:
+    p = str(payload_type or "").strip().lower()
     if p == "json":
         return "application/json"
     if p == "table":
@@ -1942,7 +1940,7 @@ def _cached_artifact_contract_mismatch(
     if not expected_schema_fingerprint:
         return None
     actual_schema_fingerprint = _artifact_schema_fingerprint(artifact)
-    expected_mime = _normalize_mime_strict(_expected_mime_for_port(declared))
+    expected_mime = _normalize_mime_strict(_expected_mime_for_payload_type(declared))
     actual_mime = _normalize_mime_strict(artifact.mime_type or "")
     expected_contract = {
         "schemaFingerprint": expected_schema_fingerprint,
@@ -2443,8 +2441,8 @@ async def run_graph(
         decision: str,
         exec_key: str,
         artifact_id: Optional[str] = None,
-        expected_port_type: Optional[str] = None,
-        actual_port_type: Optional[str] = None,
+        expected_payload_type: Optional[str] = None,
+        actual_payload_type: Optional[str] = None,
         producer_exec_key: Optional[str] = None,
         expected_schema_source: Optional[str] = None,
         expected_contract_fingerprint: Optional[str] = None,
@@ -2473,10 +2471,10 @@ async def run_graph(
         }
         if artifact_id:
             evt["artifactId"] = artifact_id
-        if expected_port_type:
-            evt["expectedPortType"] = expected_port_type
-        if actual_port_type:
-            evt["actualPortType"] = actual_port_type
+        if expected_payload_type:
+            evt["expectedType"] = expected_payload_type
+        if actual_payload_type:
+            evt["actualType"] = actual_payload_type
         if producer_exec_key is not None:
             evt["producerExecKey"] = producer_exec_key
         if expected_schema_source:
@@ -3005,10 +3003,10 @@ async def run_graph(
                 "node_state_hash": node_state_hash,
                 "node_impl_version": node_impl_version,
                 "exec_key": exec_key,
-                "artifact_id": exec_key,
+                "artifactId": exec_key,
                 "expected_schema": expected_schema,
                 "cache_resolution": cache_resolution,
-                "cached_artifact_id": cached_artifact_id,
+                "cachedArtifactId": cached_artifact_id,
                 "cache_miss_reason": cache_miss_reason,
                 "resolve_input_refs_error": resolve_input_refs_error,
             }
@@ -3047,10 +3045,10 @@ async def run_graph(
             node_state_hash = resolved["node_state_hash"]
             node_impl_version = resolved["node_impl_version"]
             exec_key = resolved["exec_key"]
-            artifact_id = resolved["artifact_id"]
+            artifact_id = resolved["artifactId"]
             expected_schema = resolved["expected_schema"]
             cache_resolution = resolved["cache_resolution"]
-            cached_artifact_id = resolved["cached_artifact_id"]
+            cached_artifact_id = resolved["cachedArtifactId"]
             cache_miss_reason = str(resolved.get("cache_miss_reason") or "CACHE_ENTRY_MISSING")
             resolve_input_refs_error = resolved.get("resolve_input_refs_error")
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
@@ -3089,7 +3087,7 @@ async def run_graph(
                 )
                 for input_port, upstream_id in input_refs:
                     upstream_art = await context.artifact_store.get(upstream_id)
-                    upstream_pt = _infer_artifact_port_type(upstream_art)
+                    upstream_pt = _infer_artifact_payload_type(upstream_art)
                     expected_in = str(declared_in or "").strip()
                     actual_ts = _artifact_typed_schema(upstream_art)
                     if expected_in and upstream_pt != expected_in:
@@ -3101,17 +3099,17 @@ async def run_graph(
                                 "level": "warn",
                                 "message": (
                                     f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:{input_port} "
-                                    f"port type {upstream_pt} coerced to {expected_in} (policy=allow_lossy)"
+                                    f"payload type {upstream_pt} coerced to {expected_in} (policy=allow_lossy)"
                                 ),
                                 "nodeId": node_id,
                             })
                         else:
                             preflight_error = ContractMismatchError(
-                                "Input edge contract mismatch: upstream artifact port type does not match input port",
-                                code="CONTRACT_EDGE_PORT_TYPE_MISMATCH",
+                                "Input edge contract mismatch: upstream artifact payload type does not match expected input type",
+                                code="CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH",
                                 details=_contract_details(
-                                    expected={"inPortType": expected_in, "coercionPolicy": coercion_policy},
-                                    actual={"artifactId": upstream_id, "portType": upstream_pt, "inputPort": input_port},
+                                    expected={"inputType": expected_in, "coercionPolicy": coercion_policy},
+                                    actual={"artifactId": upstream_id, "actualType": upstream_pt, "inputPort": input_port},
                                 ),
                             )
                             break
@@ -3127,14 +3125,14 @@ async def run_graph(
                                 code="CONTRACT_EDGE_TYPED_SCHEMA_MISSING",
                                 details=_contract_details(
                                     expected={
-                                        "inPortType": "table",
+                                        "inputType": "table",
                                         "typedSchema": {"type": "table", "fields": "non-empty"},
                                         "coercionPolicy": coercion_policy,
                                         "inputPort": input_port,
                                     },
                                     actual={
                                         "artifactId": upstream_id,
-                                        "portType": upstream_pt,
+                                        "actualType": upstream_pt,
                                         "typedSchema": actual_ts or {},
                                     },
                                 ),
@@ -3323,7 +3321,7 @@ async def run_graph(
                         "at": iso_now(),
                         "artifactId": cached_artifact_id,
                         "mimeType": cached_art.mime_type,
-                        "portType": cached_art.port_type or _declared_out_port(kind, n),
+                        "payloadType": _infer_artifact_payload_type(cached_art),
                         "cached": True,
                     })
 
@@ -3404,7 +3402,7 @@ async def run_graph(
                         else {"table", "json", "text"}
                     )
                     expected_out_contract = "json" if transform_op == "table_to_json" else "table"
-                    # Transform contract is derived by operation, not authored ports.
+                    # Transform contract is derived by operation.
                     in_contract = sorted(allowed_in_contracts)[0] if len(allowed_in_contracts) == 1 else "table"
                     out_contract = expected_out_contract
 
@@ -3420,7 +3418,7 @@ async def run_graph(
                     if is_join_transform:
                         join_edges = [e for e in edges.values() if e.get("target") == node_id]
                         if not join_edges:
-                            msg = "join: ack input node=<none> sourceNode=<none> inPort=<none> artifact=<none> cols=[]"
+                            msg = "join: ack input node=<none> sourceNode=<none> inputHandle=<none> artifact=<none> cols=[]"
                             await _emit({
                                 "type": "log",
                                 "runId": run_id,
@@ -3431,12 +3429,12 @@ async def run_graph(
                             })
                             print(
                                 f"[join-ack] runId={run_id} nodeId={node_id} "
-                                "node=<none> sourceNode=<none> inPort=<none> artifact=<none> cols=[]"
+                                "node=<none> sourceNode=<none> inputHandle=<none> artifact=<none> cols=[]"
                             )
                         else:
                             for e in join_edges:
                                 source_node = str(e.get("source") or "<unknown>")
-                                in_port = str(e.get("targetHandle") or "in")
+                                input_handle = str(e.get("targetHandle") or "in")
                                 source_artifact = get_current_artifact(source_node)
                                 artifact_label = str(source_artifact or "<none>")
                                 if source_node.startswith("n_"):
@@ -3468,7 +3466,7 @@ async def run_graph(
                                 cols_label = "[" + ",".join(cols) + "]"
                                 msg = (
                                     f"join: ack input node={short_node} sourceNode={source_node} "
-                                    f"inPort={in_port} artifact={artifact_label} cols={cols_label}"
+                                    f"inputHandle={input_handle} artifact={artifact_label} cols={cols_label}"
                                 )
                                 await _emit({
                                     "type": "log",
@@ -3481,7 +3479,7 @@ async def run_graph(
                                 print(
                                     f"[join-ack] runId={run_id} nodeId={node_id} "
                                     f"node={short_node} sourceNode={source_node} "
-                                    f"inPort={in_port} artifact={artifact_label} cols={cols_label}"
+                                    f"inputHandle={input_handle} artifact={artifact_label} cols={cols_label}"
                                 )
 
                     if not params.get("enabled", True):
@@ -3497,21 +3495,21 @@ async def run_graph(
                         # Here: succeed but emit node_finished; keep artifact binding unchanged.
                         output = NodeOutput(status="succeeded", data=None, metadata=None, execution_time_ms=0.0)
                     else:
-                        # 1) collect upstream artifacts (port -> artifact_id)
+                        # 1) collect upstream artifacts (inputHandle -> artifactId)
                         input_refs = await resolve_input_refs(
                             edges,
                             node_id,
                             get_current_artifact,
                             lambda nid: nodes.get(nid),
                             context.artifact_store,
-                        )  # [(port, artifact_id), ...]
-                        input_tables = {}  # port -> DataFrame
+                        )  # [(inputHandle, artifactId), ...]
+                        input_tables = {}  # inputHandle -> DataFrame
                         input_columns: dict[str, list[str]] = {}
-                        input_schema_cols_by_port: dict[str, list[Dict[str, Any]]] = {}
-                        input_provenance_by_port: dict[str, Dict[str, Any]] = {}
+                        input_schema_cols_by_handle: dict[str, list[Dict[str, Any]]] = {}
+                        input_provenance_by_handle: dict[str, Dict[str, Any]] = {}
                         required_cols_by_artifact: dict[str, list[str]] = {}
                         upstream_source_by_artifact: dict[str, str] = {}
-                        upstream_port_by_artifact: dict[str, str] = {}
+                        upstream_source_handle_by_artifact: dict[str, str] = {}
                         norm = _normalized_params_for_exec_key(kind=kind, node=n, params=params)
                         op = str(norm.get("op") or "").lower()
                         expected_payload_type = (
@@ -3530,7 +3528,7 @@ async def run_graph(
                             if not src_artifact_id:
                                 continue
                             upstream_source_by_artifact[src_artifact_id] = str(src)
-                            upstream_port_by_artifact[src_artifact_id] = str(e.get("targetHandle") or "in")
+                            upstream_source_handle_by_artifact[src_artifact_id] = str(e.get("targetHandle") or "in")
                             contract = (e.get("data", {}) or {}).get("contract", {}) or {}
                             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
                             target_hint = payload.get("target", {}) if isinstance(payload, dict) else {}
@@ -3538,7 +3536,7 @@ async def run_graph(
                             if isinstance(req_cols, list) and req_cols:
                                 required_cols_by_artifact[src_artifact_id] = req_cols
 
-                        for port, upstream_artifact_id in input_refs:
+                        for input_handle, upstream_artifact_id in input_refs:
                             art = await context.artifact_store.get(upstream_artifact_id)
                             ps = getattr(art, "payload_schema", None) or {}
                             ps_type_raw = ps.get("type") if isinstance(ps, dict) else None
@@ -3584,32 +3582,32 @@ async def run_graph(
                                         )
                             b = await context.artifact_store.read(upstream_artifact_id)
                             df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
-                            input_tables[port] = df
-                            input_columns[port] = [str(c) for c in list(getattr(df, "columns", []))]
+                            input_tables[input_handle] = df
+                            input_columns[input_handle] = [str(c) for c in list(getattr(df, "columns", []))]
                             schema_cols = _extract_table_columns_from_payload_schema(getattr(art, "payload_schema", None))
-                            input_schema_cols_by_port[port] = (
+                            input_schema_cols_by_handle[input_handle] = (
                                 schema_cols
                                 if schema_cols
                                 else canonical_table_columns(
-                                    [{"name": c, "type": "unknown"} for c in input_columns[port]]
+                                    [{"name": c, "type": "unknown"} for c in input_columns[input_handle]]
                                 )
                             )
-                            input_provenance_by_port[port] = {
+                            input_provenance_by_handle[input_handle] = {
                                 "sourceKind": "upstream",
                                 "upstream": {
                                     "nodeId": upstream_source_by_artifact.get(upstream_artifact_id),
-                                    "port": upstream_port_by_artifact.get(upstream_artifact_id, port),
+                                    "sourceHandle": upstream_source_handle_by_artifact.get(upstream_artifact_id, input_handle),
                                 },
                             }
 
                         op_preview = op
                         input_schema_summary = [
                             {
-                                "port": port,
+                                "inputHandle": input_handle,
                                 "artifact": aid,
-                                "columns": _compact_typed_columns(input_schema_cols_by_port.get(port) or []),
+                                "columns": _compact_typed_columns(input_schema_cols_by_handle.get(input_handle) or []),
                             }
-                            for port, aid in input_refs
+                            for input_handle, aid in input_refs
                         ]
                         input_schema_msg = (
                             f"transform: input-schema op={op_preview or '<none>'} "
@@ -3640,8 +3638,8 @@ async def run_graph(
 
                         # 3) execute (cache resolve already happened before node execution)
                         op = str(norm.get("op") or "")
-                        primary_port = "in" if "in" in input_tables else (next(iter(input_tables.keys())) if input_tables else "in")
-                        primary_cols = input_columns.get(primary_port, [])
+                        primary_input_handle = "in" if "in" in input_tables else (next(iter(input_tables.keys())) if input_tables else "in")
+                        primary_cols = input_columns.get(primary_input_handle, [])
                         primary_cols_set = set(primary_cols)
                         input_artifact_ids = [aid for _, aid in input_refs]
 
@@ -3657,9 +3655,9 @@ async def run_graph(
                                     duplicate_cols.append(col)
                                 seen_cols.add(col)
                             if duplicate_cols:
-                                available_cols, available_source = _available_columns_for_port(
-                                    port=primary_port,
-                                    input_schema_cols_by_port=input_schema_cols_by_port,
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
                                     input_columns=input_columns,
                                 )
                                 raise ContractMismatchError(
@@ -3674,9 +3672,9 @@ async def run_graph(
                                         "availableColumnsSource": available_source,
                                     },
                                 )
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             available_set = set(available_cols)
@@ -3696,9 +3694,9 @@ async def run_graph(
                         elif op == "rename":
                             rename_map = (norm.get("rename") or {}).get("map") or {}
                             expected_cols = [str(c) for c in rename_map.keys()]
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             available_set = set(available_cols)
@@ -3724,9 +3722,9 @@ async def run_graph(
                                 expected_cols.extend(_extract_quoted_identifiers(str(d.get("expr") or "")))
                             expected_cols = sorted(set(expected_cols))
                             if expected_cols:
-                                available_cols, available_source = _available_columns_for_port(
-                                    port=primary_port,
-                                    input_schema_cols_by_port=input_schema_cols_by_port,
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
                                     input_columns=input_columns,
                                 )
                                 available_set = set(available_cols)
@@ -3751,9 +3749,9 @@ async def run_graph(
                                 if str(c).strip()
                             ]
                             metrics = aggregate_spec.get("metrics") or []
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             available_set = set(available_cols)
@@ -3919,9 +3917,9 @@ async def run_graph(
                             dedupe_spec = norm.get("dedupe") or {}
                             by_cols = [str(c) for c in (dedupe_spec.get("by") or []) if str(c).strip()]
                             all_columns = bool(dedupe_spec.get("allColumns", len(by_cols) == 0))
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             print(
@@ -3965,9 +3963,9 @@ async def run_graph(
                         elif op == "split":
                             split_spec = norm.get("split") or {}
                             source_col = str(split_spec.get("sourceColumn") or "text")
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             available_set = set(available_cols)
@@ -3986,9 +3984,9 @@ async def run_graph(
                         elif op == "quality_gate":
                             gate_spec = norm.get("quality_gate") or {}
                             checks = gate_spec.get("checks") if isinstance(gate_spec.get("checks"), list) else []
-                            available_cols, available_source = _available_columns_for_port(
-                                port=primary_port,
-                                input_schema_cols_by_port=input_schema_cols_by_port,
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
                             available_set = set(available_cols)
@@ -4073,17 +4071,17 @@ async def run_graph(
                         artifact_id = exec_key  # keep your convention
 
                         created_at_dt = datetime.now(timezone.utc)
-                        transform_port_type = str(
+                        transform_payload_type = str(
                             (
-                                (res.meta.get("port_type") if isinstance(res.meta, dict) else None)
+                                (res.meta.get("payloadType") if isinstance(res.meta, dict) else None)
                                 or "table"
                             )
                         ).strip().lower() or "table"
                         table_schema_env: Optional[Dict[str, Any]] = None
                         schema_for_metadata: Optional[Dict[str, Any]] = None
 
-                        if transform_port_type == "table":
-                            primary_cols_for_schema = input_columns.get(primary_port, [])
+                        if transform_payload_type == "table":
+                            primary_cols_for_schema = input_columns.get(primary_input_handle, [])
                             other_cols_for_schema: list[str] = []
                             if op == "join":
                                 join_spec = norm.get("join") or {}
@@ -4119,12 +4117,12 @@ async def run_graph(
 
                             primary_type_by_name: dict[str, str] = {
                                 str(c.get("name") or ""): str(c.get("type") or "unknown")
-                                for c in (input_schema_cols_by_port.get(primary_port) or [])
+                                for c in (input_schema_cols_by_handle.get(primary_input_handle) or [])
                                 if isinstance(c, dict) and str(c.get("name") or "").strip()
                             }
                             all_name_counts: dict[str, int] = {}
                             all_name_type: dict[str, str] = {}
-                            for cols in input_schema_cols_by_port.values():
+                            for cols in input_schema_cols_by_handle.values():
                                 for c in cols or []:
                                     if not isinstance(c, dict):
                                         continue
@@ -4184,14 +4182,14 @@ async def run_graph(
                             output_cols = canonical_table_columns(enriched_cols if enriched_cols else output_cols)
                             upstream_refs = [
                                 {
-                                    "nodeId": input_provenance_by_port.get(port, {})
+                                    "nodeId": input_provenance_by_handle.get(input_handle, {})
                                     .get("upstream", {})
                                     .get("nodeId"),
-                                    "port": input_provenance_by_port.get(port, {})
+                                    "sourceHandle": input_provenance_by_handle.get(input_handle, {})
                                     .get("upstream", {})
-                                    .get("port", port),
+                                    .get("sourceHandle", input_handle),
                                 }
-                                for port, _ in input_refs
+                                for input_handle, _ in input_refs
                             ]
                             dedupe_provenance: dict[str, Any] = {}
                             if op == "dedupe":
@@ -4257,7 +4255,7 @@ async def run_graph(
                                 "runId": run_id,
                                 "at": iso_now(),
                                 "level": "info",
-                                "message": f"transform: output-schema op={op} type={transform_port_type}",
+                                "message": f"transform: output-schema op={op} type={transform_payload_type}",
                                 "nodeId": node_id,
                             })
                         schema_fp = str((expected_schema or {}).get("schemaFingerprint") or "")
@@ -4286,7 +4284,7 @@ async def run_graph(
                             contract_fingerprint=contract_fingerprint,
                             schema_fingerprint=schema_fp,
                             mime_type=res.mime_type,
-                            port_type=transform_port_type,
+                            payload_type=transform_payload_type,
                             schema=schema_for_metadata,
                             created_at_iso=created_at_dt.isoformat(),
                             run_id=run_id,
@@ -4309,7 +4307,7 @@ async def run_graph(
                             created_at=created_at_dt,
                             execution_version=context.execution_version,
                             mime_type=res.mime_type,
-                            port_type=transform_port_type,
+                            payload_type=transform_payload_type,
                             size_bytes=len(res.payload_bytes),
                             storage_uri=f"artifact://{artifact_id}",
                             payload_schema=base_payload_schema,
@@ -4350,7 +4348,7 @@ async def run_graph(
                             "at": iso_now(),
                             "artifactId": committed_artifact_id,
                             "mimeType": res.mime_type,
-                            "portType": transform_port_type,
+                            "payloadType": transform_payload_type,
                         })
 
                         # return a NodeOutput for legacy metadata flow
@@ -4372,21 +4370,21 @@ async def run_graph(
 
                     llm_in_contract = str((_declared_in_port("llm", n) or "text"))
 
-                    # Canonical upstream artifact list (preserve port mapping order if present)
+                    # Canonical upstream artifact list (preserve input-handle mapping order if present)
                     llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
 
                     for upstream_id in llm_upstream_ids:
                         upstream_art = await context.artifact_store.get(upstream_id)
-                        upstream_pt = _infer_artifact_port_type(upstream_art)
+                        upstream_pt = _infer_artifact_payload_type(upstream_art)
 
                         if upstream_pt != llm_in_contract:
                             if strict_schema_edge_checks:
                                 raise ContractMismatchError(
-                                    "LLM input contract mismatch: upstream artifact port_type does not match node in port",
+                                    "LLM input contract mismatch: upstream artifact payload type does not match expected input type",
                                     code="LLM_INPUT_PORT_MISMATCH",
                                     details=_contract_details(
-                                        expected={"inPortType": llm_in_contract},
-                                        actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                        expected={"inputType": llm_in_contract},
+                                        actual={"artifactId": upstream_id, "actualType": upstream_pt},
                                     ),
                                 )
                             await _emit({
@@ -4396,7 +4394,7 @@ async def run_graph(
                                 "level": "warn",
                                 "message": (
                                     f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
-                                    f"port type {upstream_pt} coerced to {llm_in_contract} "
+                                    f"payload type {upstream_pt} coerced to {llm_in_contract} "
                                     "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                 ),
                                 "nodeId": node_id,
@@ -4416,15 +4414,15 @@ async def run_graph(
                     if tool_in_contract:
                         for upstream_id in tool_upstream_ids:
                             upstream_art = await context.artifact_store.get(upstream_id)
-                            upstream_pt = _infer_artifact_port_type(upstream_art)
+                            upstream_pt = _infer_artifact_payload_type(upstream_art)
                             if upstream_pt != tool_in_contract:
                                 if strict_schema_edge_checks:
                                     raise ContractMismatchError(
-                                        "Tool output contract mismatch: upstream artifact port_type does not match node in port",
+                                        "Tool input contract mismatch: upstream artifact payload type does not match expected input type",
                                         code="TOOL_INPUT_PORT_MISMATCH",
                                         details=_contract_details(
-                                            expected={"inPortType": tool_in_contract},
-                                            actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                            expected={"inputType": tool_in_contract},
+                                            actual={"artifactId": upstream_id, "actualType": upstream_pt},
                                         ),
                                     )
                                 await _emit({
@@ -4434,7 +4432,7 @@ async def run_graph(
                                     "level": "warn",
                                     "message": (
                                         f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
-                                        f"port type {upstream_pt} coerced to {tool_in_contract} "
+                                        f"payload type {upstream_pt} coerced to {tool_in_contract} "
                                         "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                     ),
                                     "nodeId": node_id,
@@ -4470,12 +4468,12 @@ async def run_graph(
                         if isinstance(bindings.get("outputs"), dict)
                         else {}
                     )
-                    refs_by_port: Dict[str, list[str]] = {}
-                    for port_name, aid in input_refs:
-                        p = str(port_name or "").strip()
-                        if not p:
+                    refs_by_handle: Dict[str, list[str]] = {}
+                    for input_handle, aid in input_refs:
+                        handle = str(input_handle or "").strip()
+                        if not handle:
                             continue
-                        refs_by_port.setdefault(p, []).append(str(aid))
+                        refs_by_handle.setdefault(handle, []).append(str(aid))
 
                     wrapper_outputs: Dict[str, Any] = {}
                     wrapper_upstream_ids: list[str] = []
@@ -4505,7 +4503,7 @@ async def run_graph(
                                     actual={"artifactMode": mode},
                                 ),
                             )
-                        candidates = refs_by_port.get(out_name, [])
+                        candidates = refs_by_handle.get(out_name, [])
                         if not candidates:
                             raise ContractMismatchError(
                                 f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.nodeId exists and produced an artifact.",
@@ -4568,16 +4566,16 @@ async def run_graph(
                                 ),
                             )
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
-                        actual_port_type = str(_infer_artifact_port_type(bound_artifact) or "json").strip().lower() or "json"
+                        actual_payload_type = str(_infer_artifact_payload_type(bound_artifact) or "json").strip().lower() or "json"
                         wrapper_typed = await _component_wrapper_output_typed_schema(
                             artifact_store=context.artifact_store,
                             artifact_id=bound_artifact_id,
                             output_name=out_name,
                         )
                         if wrapper_typed is not None:
-                            wrapper_port_type = _typed_schema_type_to_port_type(wrapper_typed)
-                            if wrapper_port_type != "unknown":
-                                actual_port_type = wrapper_port_type
+                            wrapper_payload_type = _typed_schema_type_to_payload_type(wrapper_typed)
+                            if wrapper_payload_type != "unknown":
+                                actual_payload_type = wrapper_payload_type
                         coercion_policy = (
                             _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
                         )
@@ -4612,12 +4610,12 @@ async def run_graph(
                             )
                         wrapper_upstream_ids.append(bound_artifact_id)
                         wrapper_outputs[out_name] = {
-                            "artifact_id": bound_artifact_id,
-                            "mime_type": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
-                            "port_type": actual_port_type,
-                            "typed_schema": declared_typed,
-                            "typed_schema_expected": declared_typed,
-                            "typed_schema_observed": actual_typed,
+                            "artifactId": bound_artifact_id,
+                            "mimeType": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
+                            "payloadType": actual_payload_type,
+                            "typedSchema": declared_typed,
+                            "typedSchemaExpected": declared_typed,
+                            "typedSchemaObserved": actual_typed,
                             "required": bool(out_decl.get("required", True)),
                         }
                     for out_decl in declared_outputs:
@@ -4648,10 +4646,10 @@ async def run_graph(
                             },
                             "outputs": wrapper_outputs,
                             "meta": {
-                                "mime_type": "application/json",
-                                "port_type": "json",
-                                "input_refs": [{"port": p, "artifact_id": a} for p, a in input_refs],
-                                "upstream_artifact_ids": sorted(set(wrapper_upstream_ids)),
+                                "mimeType": "application/json",
+                                "payloadType": "json",
+                                "inputRefs": [{"inputHandle": h, "artifactId": a} for h, a in input_refs],
+                                "upstreamArtifactIds": sorted(set(wrapper_upstream_ids)),
                             },
                         },
                         metadata=None,
@@ -4732,7 +4730,7 @@ async def run_graph(
                             mime_type = source_meta_mime or "application/octet-stream"
                         else:
                             raise RuntimeError(
-                                f"Source output contract mismatch: unsupported out port '{out_contract}'"
+                                f"Source output contract mismatch: unsupported output type '{out_contract}'"
                             )
 
                     elif kind == "llm":
@@ -4804,7 +4802,7 @@ async def run_graph(
                             data_value = text_value
                         else:
                             raise RuntimeError(
-                                f"LLM output contract mismatch: unsupported out port '{out_contract}'"
+                                f"LLM output contract mismatch: unsupported output type '{out_contract}'"
                             )
 
                     elif kind == "tool":
@@ -4871,19 +4869,19 @@ async def run_graph(
                     artifact_params_hash = (
                         node_state_hash
                     )
-                    artifact_port_type = _declared_out_port(kind, n)
+                    artifact_payload_type = _declared_out_port(kind, n)
                     if kind == "source":
-                        artifact_port_type = str(
+                        artifact_payload_type = str(
                             (_declared_out_port("source", n))
-                            or artifact_port_type
+                            or artifact_payload_type
                             or "text"
                         )
                     if kind == "llm":
-                        artifact_port_type = str(_declared_out_port("llm", n) or "text")
+                        artifact_payload_type = str(_declared_out_port("llm", n) or "text")
 
                     base_payload_schema = (
                         _source_payload_schema(
-                            str(artifact_port_type or "table"),
+                            str(artifact_payload_type or "table"),
                             data_value,
                             output.metadata if kind == "source" else None,
                         )
@@ -4909,7 +4907,7 @@ async def run_graph(
                             payload=debug_payload,
                         )
                     table_schema_env: Optional[Dict[str, Any]] = None
-                    if kind == "source" and str(artifact_port_type or "").lower() == "table":
+                    if kind == "source" and str(artifact_payload_type or "").lower() == "table":
                         payload_cols = _extract_table_columns_from_payload_schema(base_payload_schema)
                         row_count = None
                         if isinstance(base_payload_schema.get("row_count"), int):
@@ -4952,7 +4950,7 @@ async def run_graph(
                         contract_fingerprint=contract_fingerprint,
                         schema_fingerprint=schema_fp,
                         mime_type=mime_type,
-                        port_type=artifact_port_type,
+                        payload_type=artifact_payload_type,
                         schema=table_schema_env,
                         created_at_iso=created_at_dt.isoformat(),
                         run_id=run_id,
@@ -4976,7 +4974,7 @@ async def run_graph(
                         created_at=created_at_dt,
                         execution_version=context.execution_version,
                         mime_type=mime_type,
-                        port_type=artifact_port_type,
+                        payload_type=artifact_payload_type,
                         size_bytes=len(payload_bytes),
                         storage_uri=f"artifact://{artifact_id}",
                         payload_schema=base_payload_schema,
@@ -5016,7 +5014,7 @@ async def run_graph(
                         "at": iso_now(),
                         "artifactId": committed_artifact_id,
                         "mimeType": artifact.mime_type,
-                        "portType": artifact.port_type,
+                        "payloadType": _infer_artifact_payload_type(artifact),
                     })
 
                     # Update cache index
@@ -5567,3 +5565,4 @@ async def run_graph(
             "status": "failed"
         })
         await _emit_cache_summary_once()
+

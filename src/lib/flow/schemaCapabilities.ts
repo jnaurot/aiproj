@@ -1,15 +1,15 @@
 import type { Node } from '@xyflow/svelte';
-import type { PipelineNodeData, PortType } from '$lib/flow/types';
-import capsRaw from '../../../shared/port_capabilities.v1.json';
+import type { PipelineNodeData, PayloadType } from '$lib/flow/types';
+import capsRaw from '../../../shared/schema_capabilities.v1.json';
 import { getBackendCapabilities } from '$lib/flow/client/capabilities';
 
 type Direction = 'in' | 'out';
 
 type NodeCapabilities = {
-	in?: PortType[];
-	out?: PortType[];
-	toolInByProvider?: Record<string, PortType[]>;
-	toolOutByProvider?: Record<string, PortType[]>;
+	in?: PayloadType[];
+	out?: PayloadType[];
+	toolInByProvider?: Record<string, PayloadType[]>;
+	toolOutByProvider?: Record<string, PayloadType[]>;
 };
 
 let activeCaps = capsRaw as any;
@@ -31,11 +31,11 @@ function getToolByProviderMap(): Record<string, any> {
 	return (getNodesMap().tool?.byProvider ?? {}) as Record<string, any>;
 }
 
-function asPortTypes(values: unknown): PortType[] {
+function asPayloadTypes(values: unknown): PayloadType[] {
 	if (!Array.isArray(values)) return [];
 	return values
 		.map((v) => String(v))
-		.filter((v): v is PortType => ['table', 'json', 'text', 'binary', 'embeddings'].includes(v));
+		.filter((v): v is PayloadType => ['table', 'json', 'text', 'binary', 'embeddings'].includes(v));
 }
 
 function buildNodeCapabilities(): Record<
@@ -45,26 +45,26 @@ function buildNodeCapabilities(): Record<
 	const nodes = getNodesMap();
 	const toolByProvider = getToolByProviderMap();
 	return {
-		llm: { in: asPortTypes(nodes.llm?.in), out: asPortTypes(nodes.llm?.out) },
-		transform: { in: asPortTypes(nodes.transform?.in), out: asPortTypes(nodes.transform?.out) },
-		source: { in: asPortTypes(nodes.source?.in), out: asPortTypes(nodes.source?.out) },
+		llm: { in: asPayloadTypes(nodes.llm?.in), out: asPayloadTypes(nodes.llm?.out) },
+		transform: { in: asPayloadTypes(nodes.transform?.in), out: asPayloadTypes(nodes.transform?.out) },
+		source: { in: asPayloadTypes(nodes.source?.in), out: asPayloadTypes(nodes.source?.out) },
 		tool: {
-			in: asPortTypes(nodes.tool?.in),
-			out: asPortTypes(nodes.tool?.out),
+			in: asPayloadTypes(nodes.tool?.in),
+			out: asPayloadTypes(nodes.tool?.out),
 			toolInByProvider: Object.fromEntries(
 				Object.entries(toolByProvider).map(([provider, value]) => [
 					provider,
-					asPortTypes((value as any)?.in)
+					asPayloadTypes((value as any)?.in)
 				])
 			),
 			toolOutByProvider: Object.fromEntries(
 				Object.entries(toolByProvider).map(([provider, value]) => [
 					provider,
-					asPortTypes((value as any)?.out)
+					asPayloadTypes((value as any)?.out)
 				])
 			)
 		},
-		component: { in: asPortTypes(nodes.component?.in), out: asPortTypes(nodes.component?.out) }
+		component: { in: asPayloadTypes(nodes.component?.in), out: asPayloadTypes(nodes.component?.out) }
 	};
 }
 
@@ -92,7 +92,7 @@ export function __setStrictSchemaFeatureFlagsForTest(flags: {
 	};
 }
 
-export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
+export async function refreshSchemaCapabilitiesFromBackend(): Promise<void> {
 	try {
 		const response = await getBackendCapabilities();
 		const caps = (response?.capabilities ?? null) as any;
@@ -109,10 +109,10 @@ export async function refreshPortCapabilitiesFromBackend(): Promise<void> {
 	}
 }
 
-export function getAllowedPortsForNode(
+export function getAllowedPayloadTypesForNode(
 	node: Node<PipelineNodeData> | null | undefined,
 	direction: Direction
-): PortType[] {
+): PayloadType[] {
 	if (!node) return [];
 	const kind = node.data.kind as keyof typeof NODE_CAPABILITIES;
 	const cap = NODE_CAPABILITIES[kind];
@@ -127,11 +127,11 @@ export function getAllowedPortsForNode(
 	return (direction === 'in' ? cap.in : cap.out) ?? [];
 }
 
-export function isPortAllowedForNode(
+export function isPayloadTypeAllowedForNode(
 	node: Node<PipelineNodeData> | null | undefined,
 	direction: Direction,
-	port: PortType | null | undefined
+	payloadType: PayloadType | null | undefined
 ): boolean {
-	if (port == null) return true;
-	return getAllowedPortsForNode(node, direction).includes(port);
+	if (payloadType == null) return true;
+	return getAllowedPayloadTypesForNode(node, direction).includes(payloadType);
 }
