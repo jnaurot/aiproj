@@ -1,4 +1,9 @@
-from app.runner.node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
+from app.runner.node_state import (
+    build_exec_key,
+    build_node_state_hash,
+    build_source_fingerprint,
+    canonical_cache_schema_view,
+)
 import pytest
 
 
@@ -202,3 +207,105 @@ def test_exec_key_changes_when_node_impl_version_changes():
         node_impl_version="SOURCE@2",
     )
     assert key_a != key_b
+
+
+def test_node_state_hash_ignores_volatile_schema_runtime_metadata():
+    params = {"provider": "builtin", "builtin": {"toolId": "noop"}}
+    schema_a = {
+        "expectedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+            "updatedAt": "2026-03-11T10:00:00Z",
+            "state": "fresh",
+            "source": "authoring",
+            "schemaFingerprint": "abc",
+        },
+        "observedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+            "updatedAt": "2026-03-11T10:01:00Z",
+            "state": "fresh",
+            "source": "runtime",
+            "schemaFingerprint": "def",
+        },
+    }
+    schema_b = {
+        "expectedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+            "updatedAt": "2030-01-01T00:00:00Z",
+            "state": "stale",
+            "source": "migration",
+            "schemaFingerprint": "zzz",
+        },
+        "observedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+            "updatedAt": "2030-01-01T00:00:01Z",
+            "state": "unknown",
+            "source": "runtime",
+            "schemaFingerprint": "yyy",
+        },
+    }
+    h1 = build_node_state_hash(node=_node(schema=schema_a), params=params, execution_version="v1")
+    h2 = build_node_state_hash(node=_node(schema=schema_b), params=params, execution_version="v1")
+    assert h1 == h2
+
+
+def test_node_state_hash_changes_when_expected_typed_schema_changes():
+    params = {"provider": "builtin", "builtin": {"toolId": "noop"}}
+    schema_a = {
+        "expectedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]},
+            "updatedAt": "2026-03-11T10:00:00Z",
+        }
+    }
+    schema_b = {
+        "expectedSchema": {
+            "typedSchema": {"type": "json", "fields": [{"name": "x", "type": "binary"}]},
+            "updatedAt": "2026-03-11T10:00:01Z",
+        }
+    }
+    h1 = build_node_state_hash(node=_node(schema=schema_a), params=params, execution_version="v1")
+    h2 = build_node_state_hash(node=_node(schema=schema_b), params=params, execution_version="v1")
+    assert h1 != h2
+
+
+def test_canonical_cache_schema_view_excludes_observed_runtime_channel():
+    raw_schema = {
+        "inferredSchema": {"typedSchema": {"type": "json", "fields": []}, "updatedAt": "2026-03-11T10:00:00Z"},
+        "observedSchema": {
+            "typedSchema": {"type": "text", "fields": []},
+            "updatedAt": "2026-03-11T10:01:00Z",
+            "state": "fresh",
+            "source": "runtime",
+        },
+        "expectedSchema": {"typedSchema": {"type": "table", "fields": [{"name": "id", "type": "text"}]}},
+    }
+    view = canonical_cache_schema_view(node_kind="source", raw_schema=raw_schema)
+    assert "observedSchema" not in view
+    assert view == {
+        "expectedSchema": {"typedSchema": {"fields": [{"name": "id", "type": "text"}], "type": "table"}},
+        "inferredSchema": {"typedSchema": {"fields": [], "type": "json"}},
+    }
+
+
+@pytest.mark.parametrize("kind", ["source", "llm", "tool", "component"])
+def test_node_state_hash_ignores_observed_schema_only_drift(kind):
+    base_schema = {
+        "expectedSchema": {"typedSchema": {"type": "text", "fields": []}},
+        "observedSchema": {"typedSchema": {"type": "text", "fields": []}, "updatedAt": "2026-03-11T10:00:00Z"},
+    }
+    drifted_schema = {
+        "expectedSchema": {"typedSchema": {"type": "text", "fields": []}},
+        "observedSchema": {"typedSchema": {"type": "json", "fields": [{"name": "x", "type": "text"}]}, "updatedAt": "2030-01-01T00:00:00Z"},
+    }
+    node_a = _node(kind=kind, schema=base_schema)
+    node_b = _node(kind=kind, schema=drifted_schema)
+    if kind == "source":
+        node_a["data"]["sourceKind"] = "file"
+        node_b["data"]["sourceKind"] = "file"
+        params = {"source_type": "file", "rel_path": ".", "filename": "a.txt", "file_format": "txt"}
+    elif kind == "llm":
+        params = _llm_params()
+    else:
+        params = {"provider": "builtin", "builtin": {"toolId": "noop"}}
+    h1 = build_node_state_hash(node=node_a, params=params, execution_version="v1")
+    h2 = build_node_state_hash(node=node_b, params=params, execution_version="v1")
+    assert h1 == h2

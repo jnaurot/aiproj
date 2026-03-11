@@ -2028,6 +2028,89 @@ def _determinism_profile_lock_from_env(determinism_env: Optional[Dict[str, Any]]
     return lock or None
 
 
+def _short_fingerprint(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return raw[:12]
+
+
+def _upstream_signature(upstream_ids: list[str]) -> Dict[str, Any]:
+    ids = sorted(str(aid) for aid in (upstream_ids or []) if str(aid).strip())
+    digest = _sha256_text(canonical_json(ids))
+    return {"count": len(ids), "digest": digest[:12]}
+
+
+def _cache_key_debug_payload(
+    *,
+    node_id: str,
+    reason: str,
+    meta: Dict[str, Any],
+    node_state_hash: str,
+    upstream_ids: list[str],
+    determinism_env: Dict[str, Any],
+    node_impl_version: str,
+) -> Dict[str, Any]:
+    prev_upstream = (
+        [str(aid) for aid in (meta.get("upstreamArtifactIds") or []) if isinstance(aid, str) and aid.strip()]
+        if isinstance(meta.get("upstreamArtifactIds"), list)
+        else []
+    )
+    prev_det_fp = str(meta.get("determinismFingerprint") or "").strip()
+    cur_det_fp = _determinism_fingerprint(determinism_env)
+    prev_code_hash = str(meta.get("codeHash") or "").strip()
+    cur_code_hash = _determinism_code_hash_from_env(determinism_env)
+    prev_profile_lock = str(meta.get("profileLock") or "").strip()
+    cur_profile_lock = str(_determinism_profile_lock_from_env(determinism_env) or "").strip()
+    return {
+        "nodeId": str(node_id or ""),
+        "reason": str(reason or ""),
+        "previous": {
+            "nodeImplVersion": str(meta.get("nodeImplVersion") or ""),
+            "paramsFingerprint": _short_fingerprint(meta.get("paramsFingerprint")),
+            "upstream": _upstream_signature(prev_upstream),
+            "determinismFingerprint": _short_fingerprint(prev_det_fp),
+            "codeHash": _short_fingerprint(prev_code_hash),
+            "profileLock": _short_fingerprint(prev_profile_lock),
+        },
+        "current": {
+            "nodeImplVersion": str(node_impl_version or ""),
+            "paramsFingerprint": _short_fingerprint(node_state_hash),
+            "upstream": _upstream_signature(upstream_ids),
+            "determinismFingerprint": _short_fingerprint(cur_det_fp),
+            "codeHash": _short_fingerprint(cur_code_hash),
+            "profileLock": _short_fingerprint(cur_profile_lock),
+        },
+    }
+
+
+def _maybe_log_cache_key_diff(
+    *,
+    node_id: str,
+    reason: str,
+    meta: Dict[str, Any],
+    node_state_hash: str,
+    upstream_ids: list[str],
+    determinism_env: Dict[str, Any],
+    node_impl_version: str,
+) -> None:
+    if not _env_bool("CACHE_KEY_DEBUG", False):
+        return
+    try:
+        payload = _cache_key_debug_payload(
+            node_id=node_id,
+            reason=reason,
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
+        logger.info("[cache-key-diff] %s", json.dumps(payload, sort_keys=True, separators=(",", ":")))
+    except Exception:
+        logger.debug("[cache-key-diff] failed to emit debug payload", exc_info=True)
+
+
 def _executor_code_hash_for_kind(kind: str) -> str:
     key = str(kind or "").strip().lower()
     fn: Any = None
@@ -2245,32 +2328,110 @@ async def _classify_cache_miss_reason(
     prev_code_hash = str(meta.get("codeHash") or "").strip()
     cur_code_hash = _determinism_code_hash_from_env(determinism_env)
     if prev_code_hash and cur_code_hash and prev_code_hash != cur_code_hash:
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="BUILD_CHANGED",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
         return "BUILD_CHANGED"
 
     if str(meta.get("nodeImplVersion") or "") != str(node_impl_version or ""):
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="BUILD_CHANGED",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
         return "BUILD_CHANGED"
 
-    if str(meta.get("paramsFingerprint") or "") != str(node_state_hash or ""):
+    params_fingerprint = str(meta.get("paramsFingerprint") or "").strip()
+    if params_fingerprint and params_fingerprint != str(node_state_hash or ""):
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="PARAMS_CHANGED",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
         return "PARAMS_CHANGED"
 
-    prev_upstream = [
-        str(aid)
-        for aid in (meta.get("upstreamArtifactIds") if isinstance(meta.get("upstreamArtifactIds"), list) else [])
-        if isinstance(aid, str) and aid.strip()
-    ]
-    if sorted(prev_upstream) != sorted(str(aid) for aid in (upstream_ids or []) if str(aid).strip()):
-        return "INPUT_CHANGED"
+    upstream_present = "upstreamArtifactIds" in meta and isinstance(meta.get("upstreamArtifactIds"), list)
+    if upstream_present:
+        prev_upstream = [
+            str(aid)
+            for aid in (meta.get("upstreamArtifactIds") if isinstance(meta.get("upstreamArtifactIds"), list) else [])
+            if isinstance(aid, str) and aid.strip()
+        ]
+        if sorted(prev_upstream) != sorted(str(aid) for aid in (upstream_ids or []) if str(aid).strip()):
+            _maybe_log_cache_key_diff(
+                node_id=node_id,
+                reason="INPUT_CHANGED",
+                meta=meta,
+                node_state_hash=node_state_hash,
+                upstream_ids=upstream_ids,
+                determinism_env=determinism_env,
+                node_impl_version=node_impl_version,
+            )
+            return "INPUT_CHANGED"
 
     prev_det_fp = str(meta.get("determinismFingerprint") or "").strip()
     cur_det_fp = _determinism_fingerprint(determinism_env)
     if prev_det_fp and prev_det_fp != cur_det_fp:
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="ENV_CHANGED",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
         return "ENV_CHANGED"
 
     prev_profile_lock = str(meta.get("profileLock") or "").strip()
     cur_profile_lock = str(_determinism_profile_lock_from_env(determinism_env) or "").strip()
     if prev_profile_lock and cur_profile_lock and prev_profile_lock != cur_profile_lock:
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="ENV_CHANGED",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
         return "ENV_CHANGED"
 
+    if not params_fingerprint and not upstream_present and not prev_det_fp and not prev_profile_lock:
+        _maybe_log_cache_key_diff(
+            node_id=node_id,
+            reason="CACHE_ENTRY_MISSING",
+            meta=meta,
+            node_state_hash=node_state_hash,
+            upstream_ids=upstream_ids,
+            determinism_env=determinism_env,
+            node_impl_version=node_impl_version,
+        )
+        return "CACHE_ENTRY_MISSING"
+
+    _maybe_log_cache_key_diff(
+        node_id=node_id,
+        reason="CACHE_ENTRY_MISSING",
+        meta=meta,
+        node_state_hash=node_state_hash,
+        upstream_ids=upstream_ids,
+        determinism_env=determinism_env,
+        node_impl_version=node_impl_version,
+    )
     return "CACHE_ENTRY_MISSING"
 
 

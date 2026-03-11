@@ -214,3 +214,50 @@ def test_exec_key_input_handles_insertion_order_is_canonical():
         execution_version="v1",
     )
     assert a == b
+
+
+def test_exec_key_invariant_when_params_inputs_and_env_identical():
+    cache = ExecutionCache()
+    params = {"model": "m1", "user_prompt": "hi", "output_mode": "text"}
+    inputs = [("in", "a" * 64)]
+    env = {"llm_table_max_rows": 200, "llm_prompt_max_chars": 20000}
+    a = cache.execution_key(
+        node_kind="llm",
+        normalized_params=params,
+        upstream_artifact_ids=["a" * 64],
+        input_handles=inputs,
+        determinism_env=env,
+        execution_version="v1",
+    )
+    b = cache.execution_key(
+        node_kind="llm",
+        normalized_params=dict(params),
+        upstream_artifact_ids=["a" * 64],
+        input_handles=list(inputs),
+        determinism_env=dict(env),
+        execution_version="v1",
+    )
+    assert a == b
+
+
+def test_exec_key_changes_when_upstream_artifact_changes():
+    cache = ExecutionCache()
+    params = {"model": "m1", "user_prompt": "hi", "output_mode": "text"}
+    env = {"llm_table_max_rows": 200}
+    a = cache.execution_key(
+        node_kind="llm",
+        normalized_params=params,
+        upstream_artifact_ids=["a" * 64],
+        input_handles=[("in", "a" * 64)],
+        determinism_env=env,
+        execution_version="v1",
+    )
+    b = cache.execution_key(
+        node_kind="llm",
+        normalized_params=params,
+        upstream_artifact_ids=["b" * 64],
+        input_handles=[("in", "b" * 64)],
+        determinism_env=env,
+        execution_version="v1",
+    )
+    assert a != b

@@ -47,6 +47,48 @@ def _sanitize(obj: Any) -> Any:
     return obj
 
 
+_VOLATILE_SCHEMA_KEYS = {
+    "updatedAt",
+    "state",
+    "source",
+    "schemaFingerprint",
+}
+
+
+def _strip_volatile_schema_metadata(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        out: Dict[str, Any] = {}
+        for k, v in obj.items():
+            key = str(k)
+            if key in _VOLATILE_SCHEMA_KEYS:
+                continue
+            out[key] = _strip_volatile_schema_metadata(v)
+        return out
+    if isinstance(obj, list):
+        return [_strip_volatile_schema_metadata(x) for x in obj]
+    return obj
+
+
+def canonical_cache_schema_view(*, node_kind: str, raw_schema: Any) -> Dict[str, Any]:
+    if not isinstance(raw_schema, dict):
+        return {}
+    stripped = _strip_volatile_schema_metadata(raw_schema)
+    if not isinstance(stripped, dict):
+        return {}
+    has_channels = any(k in stripped for k in ("expectedSchema", "inferredSchema", "observedSchema"))
+    if not has_channels:
+        return _sanitize(stripped)
+    # Cache keys should use authoring/inferred contracts only. Runtime-observed
+    # channels are excluded to avoid drift across equivalent reruns.
+    allowed_channels = ("expectedSchema", "inferredSchema")
+    view: Dict[str, Any] = {}
+    for channel in allowed_channels:
+        payload = stripped.get(channel)
+        if isinstance(payload, dict):
+            view[channel] = payload
+    return _sanitize(view)
+
+
 def _canon_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
 
@@ -109,18 +151,23 @@ def _redact_body_map(body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {k: out[k] for k in sorted(out.keys())}
 
 
-def _schema_declared_type_from_node(node: Dict[str, Any]) -> Optional[str]:
-    data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
-    schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
-    if not isinstance(schema_env, dict):
+def _schema_declared_type_from_cache_view(schema_view: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(schema_view, dict):
         return None
-    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
-        obs = schema_env.get(key)
+    for key in ("expectedSchema", "inferredSchema"):
+        obs = schema_view.get(key)
         if not isinstance(obs, dict):
             continue
         typed = obs.get("typedSchema")
         if not isinstance(typed, dict):
             continue
+        t = str(typed.get("type") or "").strip().lower()
+        if t == "string":
+            t = "text"
+        if t in {"table", "json", "text", "binary", "embeddings"}:
+            return t
+    typed = schema_view.get("typedSchema")
+    if isinstance(typed, dict):
         t = str(typed.get("type") or "").strip().lower()
         if t == "string":
             t = "text"
@@ -133,7 +180,11 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file")
     p = params or {}
-    source_output_type = _schema_declared_type_from_node(node)
+    schema_view = canonical_cache_schema_view(
+        node_kind="source",
+        raw_schema=data.get("schema") or data.get("contract") or {},
+    )
+    source_output_type = _schema_declared_type_from_cache_view(schema_view)
     fp: Dict[str, Any] = {"source_kind": source_kind}
     if source_kind == "file":
         snapshot_id = p.get("snapshot_id") or p.get("snapshotId")
@@ -275,9 +326,13 @@ def build_node_state_hash(
 ) -> str:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     kind = str(data.get("kind") or "")
+    schema_view = canonical_cache_schema_view(
+        node_kind=kind,
+        raw_schema=data.get("schema") or data.get("contract") or {},
+    )
     if kind == "llm":
         output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}
-        output_type = _schema_declared_type_from_node(node) or "text"
+        output_type = _schema_declared_type_from_cache_view(schema_view) or "text"
         output_strict = (
             params.get("output_strict")
             if "output_strict" in params
@@ -307,7 +362,7 @@ def build_node_state_hash(
     state: Dict[str, Any] = {
         "execution_version": execution_version,
         "node_kind": kind,
-        "schema": _sanitize(data.get("schema") or data.get("contract") or {}),
+        "schema": schema_view,
         "settings": _sanitize(data.get("settings") or {}),
         "params": _sanitize(params or {}),
     }
