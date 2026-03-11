@@ -2,24 +2,16 @@ from app.runner.node_state import build_exec_key, build_node_state_hash, build_s
 import pytest
 
 
-def _node(kind: str = "tool", ports=None, schema=None, settings=None):
+def _node(kind: str = "tool", schema=None, settings=None):
     return {
         "id": "n1",
         "data": {
             "kind": kind,
-            "ports": ports if ports is not None else {"in": "json", "out": "json"},
             "schema": schema if schema is not None else {},
             "settings": settings if settings is not None else {},
             "sourceKind": "file" if kind == "source" else None,
         },
     }
-
-
-def test_node_state_hash_ignores_ports_change():
-    params = {"provider": "builtin", "builtin": {"toolId": "noop"}}
-    h1 = build_node_state_hash(node=_node(ports={"in": "json", "out": "json"}), params=params, execution_version="v1")
-    h2 = build_node_state_hash(node=_node(ports={"in": "text", "out": "json"}), params=params, execution_version="v1")
-    assert h1 == h2
 
 
 def test_node_state_hash_changes_when_execution_version_changes():
@@ -31,7 +23,7 @@ def test_node_state_hash_changes_when_execution_version_changes():
 
 
 def test_source_node_state_hash_includes_source_fingerprint():
-    source_node = _node(kind="source", ports={"in": None, "out": "text"})
+    source_node = _node(kind="source")
     p1 = {"source_type": "file", "rel_path": ".", "filename": "a.txt", "file_format": "txt"}
     p2 = {"source_type": "file", "rel_path": ".", "filename": "b.txt", "file_format": "txt"}
     h1 = build_node_state_hash(node=source_node, params=p1, execution_version="v1")
@@ -40,7 +32,7 @@ def test_source_node_state_hash_includes_source_fingerprint():
 
 
 def test_source_node_state_hash_changes_when_file_stat_changes(tmp_path, monkeypatch):
-    source_node = _node(kind="source", ports={"in": None, "out": "text"})
+    source_node = _node(kind="source")
     file_path = tmp_path / "state.txt"
     file_path.write_text("a", encoding="utf-8")
     params = {"source_type": "file", "rel_path": str(tmp_path), "filename": "state.txt", "file_format": "txt"}
@@ -51,12 +43,11 @@ def test_source_node_state_hash_changes_when_file_stat_changes(tmp_path, monkeyp
     assert h1 != h2
 
 
-def _llm_node(ports=None, schema=None, settings=None):
+def _llm_node(schema=None, settings=None):
     return {
         "id": "llm_1",
         "data": {
             "kind": "llm",
-            "ports": ports if ports is not None else {"in": "text", "out": "text"},
             "schema": schema if schema is not None else {"uiOnly": True},
             "settings": settings if settings is not None else {"editor": {"collapsed": False}},
         },
@@ -85,11 +76,10 @@ def _llm_params():
     }
 
 
-def test_llm_node_state_hash_ignores_ui_only_ports_schema_settings():
+def test_llm_node_state_hash_ignores_ui_only_schema_settings():
     params = _llm_params()
     h1 = build_node_state_hash(
         node=_llm_node(
-            ports={"in": "text", "out": "json", "uiPort": "x"},
             schema={"ui": {"panel": "open"}},
             settings={"editor": {"x": 1, "y": 2}},
         ),
@@ -98,7 +88,6 @@ def test_llm_node_state_hash_ignores_ui_only_ports_schema_settings():
     )
     h2 = build_node_state_hash(
         node=_llm_node(
-            ports={"in": "table", "out": "text", "debug": True},
             schema={"ui": {"panel": "closed"}},
             settings={"editor": {"x": 999, "theme": "dark"}},
         ),

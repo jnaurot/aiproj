@@ -3607,7 +3607,7 @@ async function scrollToBottom() {
 	}
 
 	.tabBtn {
-		font-size: 12px; /* ← same scale as Ports label */
+		font-size: 12px; /* same scale as section labels */
 		padding: 4px 10px; /* ← small like section controls */
 		border-radius: 6px;
 		border: 1px solid #2c3444;

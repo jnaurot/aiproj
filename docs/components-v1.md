@@ -9,7 +9,6 @@
 	- `revisionId` (pinned, required)
 	- `apiVersion`
 - Inputs/outputs are derived from the selected component revision API contract.
-- Parent graph ports for component nodes are read-only and follow the revision contract.
 
 ## Runtime Model
 
@@ -38,5 +37,4 @@
 ## Known Limits (v1)
 
 - Nested components are rejected (`COMPONENT_NESTING_UNSUPPORTED`).
-- Component ports are not edited at parent graph level.
 - Import does not auto-install missing component revisions; it reports unresolved dependencies.

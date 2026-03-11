@@ -20,18 +20,6 @@ function sourceNodeParams(nodeId: string): Record<string, any> {
 }
 
 describe('graphStore snapshot scoped commit', () => {
-	it('ignores authored port changes because ports are no longer authored config', () => {
-		const nodeId = setupSourceNode();
-		const initial = sourceNodeParams(nodeId);
-		expect(initial.output?.mode).toBeTruthy();
-
-		const result = graphStore.updateNodeConfig(nodeId, { ports: { out: 'json' } });
-		expect(result.ok).toBe(true);
-
-		const params = sourceNodeParams(nodeId);
-		expect(params.output?.mode).toBe(initial.output?.mode);
-	});
-
 	it('selecting_previous_upload_commits_snapshot_without_dirty_state', async () => {
 		const nodeId = setupSourceNode();
 		const snapshotId = 'a'.repeat(64);

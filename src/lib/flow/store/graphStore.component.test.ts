@@ -4,7 +4,7 @@ import { get } from 'svelte/store';
 import { graphStore, derivePortsForNodeData } from './graphStore';
 
 describe('graphStore component integration', () => {
-	it('applies component revision to node and derives immutable ports from API contract', async () => {
+	it('applies component revision to node and derives immutable contracts from API schema', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(nodeId);
@@ -1027,54 +1027,6 @@ describe('graphStore component integration', () => {
 		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
 	});
 
-	it('derives component edge source contract from API output even when ports.out conflicts', () => {
-		graphStore.hardResetGraph();
-		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
-		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
-		const configRes = graphStore.updateNodeConfig(componentId, {
-			params: {
-				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
-				api: {
-					inputs: [],
-					outputs: [
-						{
-							name: 'only_out',
-							portType: 'text',
-							required: true,
-							typedSchema: { type: 'text', fields: [] }
-						}
-					]
-				},
-				bindings: {
-					inputs: {},
-					config: {},
-					outputs: { only_out: { nodeId: 'n1', artifact: 'current' } }
-				},
-				config: {}
-			},
-			// Intentionally conflicting with API output portType.
-			ports: { in: null, out: 'json' }
-		});
-		expect(configRes.ok).toBe(true);
-
-		const addRes = graphStore.addEdge({
-			id: 'e_conflicting_ports_out',
-			source: componentId,
-			sourceHandle: 'out',
-			target: llmId,
-			targetHandle: 'in',
-			data: { exec: 'idle' }
-		} as any);
-		expect(addRes.ok).toBe(true);
-
-		const state = get(graphStore);
-		const edge = state.edges.find((e) => e.id === 'e_conflicting_ports_out');
-		expect(edge).toBeTruthy();
-		expect((edge as any)?.sourceHandle).toBe('only_out');
-		expect((edge as any)?.data?.contract?.out).toBe('text');
-		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
-	});
-
 	it('prunes dangling component output bindings on Accept', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
@@ -1509,61 +1461,6 @@ describe('graphStore component integration', () => {
 			expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
 			expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_BINDING_MISSING');
 			expect(postCalled).toBe(false);
-		} finally {
-			(globalThis as any).fetch = originalFetch;
-		}
-	});
-
-	it('normalizes typedSchema.type to portType during save migration pass', async () => {
-		graphStore.hardResetGraph();
-		const componentId = graphStore.addNode('component', { x: 10, y: 10 });
-		const configRes = graphStore.updateNodeConfig(componentId, {
-			params: {
-				componentRef: { componentId: 'cmp_local', revisionId: 'crev_local', apiVersion: 'v1' },
-				api: {
-					inputs: [],
-					outputs: [
-						{ name: 'summary', portType: 'text', required: true, typedSchema: { type: 'json', fields: [] } }
-					]
-				},
-				bindings: {
-					inputs: {},
-					config: {},
-					outputs: {
-						summary: { nodeId: 'n1', artifact: 'current' }
-					}
-				},
-				config: {}
-			},
-			ports: { in: null, out: 'json' }
-		});
-		expect(configRes.ok).toBe(true);
-		const originalFetch = globalThis.fetch;
-		let postedGraph: any = null;
-		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-			const url = String(input);
-			if (url.includes('/api/graphs') && String(init?.method ?? 'GET').toUpperCase() === 'POST') {
-				postedGraph = JSON.parse(String(init?.body ?? '{}'))?.graph ?? null;
-				return new Response(
-					JSON.stringify({
-						graphId: 'graph_saved',
-						revisionId: 'rev_saved',
-						graphName: 'saved',
-						createdAt: '2026-03-09T00:00:00Z'
-					}),
-					{ status: 200, headers: { 'content-type': 'application/json' } }
-				);
-			}
-			return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
-		};
-		try {
-			const result = await graphStore.saveGraph('save');
-			expect((result as any)?.ok).toBe(true);
-			const savedComponent = (postedGraph?.nodes ?? []).find((n: any) => String(n?.id ?? '') === componentId);
-			const typedType = String(
-				((((savedComponent?.data ?? {}).params ?? {}).api ?? {}).outputs ?? [])[0]?.typedSchema?.type ?? ''
-			);
-			expect(typedType).toBe('text');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}

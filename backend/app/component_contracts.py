@@ -147,13 +147,13 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
 
     seen_names: set[str] = set()
     for section in ("inputs", "outputs"):
-        ports = api.get(section)
-        if not isinstance(ports, list):
+        entries = api.get(section)
+        if not isinstance(entries, list):
             diagnostics.append(
                 ContractDiagnostic("INVALID_API_SECTION", f"api.{section}", f"api.{section} must be an array")
             )
             continue
-        for idx, port in enumerate(ports):
+        for idx, port in enumerate(entries):
             path = f"api.{section}[{idx}]"
             if not isinstance(port, dict):
                 diagnostics.append(ContractDiagnostic("INVALID_API_PORT", path, "port must be an object"))

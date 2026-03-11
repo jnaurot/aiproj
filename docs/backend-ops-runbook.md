@@ -13,9 +13,9 @@
 ### Shared
 - Repo checked out.
 - Docker + Compose available.
-- Ports available:
-  - `8000` for `backend-cpu-dev`
-  - `8001` for `backend-rocm`
+- Backend endpoints:
+  - `http://localhost:8000` for `backend-cpu-dev`
+  - `http://localhost:8001` for `backend-rocm`
 
 ### Win11 dev
 - Docker Desktop running.

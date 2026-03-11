@@ -84,7 +84,6 @@ Tool uses a dedicated fingerprint:
 
 ## Exclusions (Must Not Affect `exec_key`)
 
-- Ports metadata (labels/description/UI)
 - Output-derived fields (`payload_schema`, `mime_type`, artifact metadata)
 - Runtime timestamps, run IDs
 - UI-only draft/editor state
