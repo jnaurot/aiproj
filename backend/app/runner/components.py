@@ -57,6 +57,35 @@ def _prefixed_edge_id(instance_node_id: str, edge_id: str, idx: int) -> str:
     return f"ce:{instance_node_id}:{base}"
 
 
+def _build_output_ref_index(internal_nodes: List[Dict[str, Any]]) -> Dict[str, List[Tuple[str, Optional[str]]]]:
+    index: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+    for node in internal_nodes:
+        if not isinstance(node, dict):
+            continue
+        internal_id = str(node.get("id") or "").strip()
+        if not internal_id:
+            continue
+        data = node.get("data") if isinstance(node.get("data"), dict) else {}
+        kind = str(data.get("kind") or "node").strip().lower() or "node"
+        label = str(data.get("label") or internal_id).strip() or internal_id
+        base_ref = f"{kind}:{label}"
+        index.setdefault(base_ref, []).append((internal_id, None))
+        if kind != "component":
+            continue
+        params = data.get("params") if isinstance(data.get("params"), dict) else {}
+        api = params.get("api") if isinstance(params.get("api"), dict) else {}
+        outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
+        for out in outputs:
+            if not isinstance(out, dict):
+                continue
+            out_name = str(out.get("name") or "").strip()
+            if not out_name:
+                continue
+            ref = f"{base_ref}|{out_name}"
+            index.setdefault(ref, []).append((internal_id, out_name))
+    return index
+
+
 def expand_graph_components(
     graph: Dict[str, Any],
     *,
@@ -323,6 +352,7 @@ def expand_graph_components(
             if isinstance(bindings, dict) and isinstance(bindings.get("outputs"), dict)
             else {}
         )
+        output_ref_index = _build_output_ref_index(internal_nodes)
 
         for idx, out_port in enumerate(api_outputs):
             if not isinstance(out_port, dict):
@@ -337,11 +367,11 @@ def expand_graph_components(
                     code="COMPONENT_OUTPUT_BINDING_MISSING",
                     details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
                 )
-            bound_internal_id = str(binding.get("nodeId") or "").strip()
+            output_ref = str(binding.get("outputRef") or "").strip()
             bound_artifact = str(binding.get("artifact") or "current").strip().lower() or "current"
-            if not bound_internal_id:
+            if not output_ref:
                 raise ComponentExpansionError(
-                    f"Output binding nodeId is required for '{out_name}' in {component_id}@{revision_id}",
+                    f"Output binding outputRef is required for '{out_name}' in {component_id}@{revision_id}",
                     code="COMPONENT_OUTPUT_BINDING_INVALID",
                     details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
                 )
@@ -356,11 +386,32 @@ def expand_graph_components(
                         "artifact": bound_artifact,
                     },
                 )
-            source_prefixed = id_map.get(bound_internal_id) or (
-                bound_internal_id
-                if bound_internal_id in id_map.values()
-                else None
-            )
+            candidates = output_ref_index.get(output_ref, [])
+            if len(candidates) == 0:
+                raise ComponentExpansionError(
+                    f"Output binding references unknown outputRef '{output_ref}' for '{out_name}'",
+                    code="COMPONENT_OUTPUT_BINDING_NODE_NOT_FOUND",
+                    details={
+                        "componentId": component_id,
+                        "revisionId": revision_id,
+                        "output": out_name,
+                        "outputRef": output_ref,
+                    },
+                )
+            if len(candidates) > 1:
+                raise ComponentExpansionError(
+                    f"Output binding outputRef '{output_ref}' is ambiguous for '{out_name}'",
+                    code="COMPONENT_OUTPUT_BINDING_AMBIGUOUS",
+                    details={
+                        "componentId": component_id,
+                        "revisionId": revision_id,
+                        "output": out_name,
+                        "outputRef": output_ref,
+                        "matchCount": len(candidates),
+                    },
+                )
+            bound_internal_id, source_handle = candidates[0]
+            source_prefixed = id_map.get(bound_internal_id) or (bound_internal_id if bound_internal_id in id_map.values() else None)
             if not source_prefixed:
                 raise ComponentExpansionError(
                     f"Output binding references unknown internal node '{bound_internal_id}' for '{out_name}'",
@@ -372,14 +423,15 @@ def expand_graph_components(
                         "nodeId": bound_internal_id,
                     },
                 )
-            out_edges.append(
-                {
-                    "id": f"ce:{instance_node_id}:output:{idx}:{out_name}",
-                    "source": source_prefixed,
-                    "target": instance_node_id,
-                    "targetHandle": out_name,
-                }
-            )
+            edge = {
+                "id": f"ce:{instance_node_id}:output:{idx}:{out_name}",
+                "source": source_prefixed,
+                "target": instance_node_id,
+                "targetHandle": out_name,
+            }
+            if source_handle:
+                edge["sourceHandle"] = source_handle
+            out_edges.append(edge)
 
     return ExpandedComponentGraph(
         graph={"nodes": out_nodes, "edges": out_edges},

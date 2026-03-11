@@ -530,7 +530,7 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_data: { nodeId: 'n_internal', artifact: 'current' }
+						out_data: { outputRef: 'node:n_internal', artifact: 'current' }
 					}
 				}
 			},
@@ -855,7 +855,7 @@ describe('graphStore component integration', () => {
 			const state = get(graphStore);
 			const node = state.nodes.find((n) => n.id === nodeId);
 			const outBinding = (node?.data?.params as any)?.bindings?.outputs?.out_data;
-			expect(String(outBinding?.nodeId ?? '')).toBe('n1');
+			expect(String(outBinding?.outputRef ?? '')).toBe('node:n1');
 			expect(String(outBinding?.artifact ?? '')).toBe('current');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
@@ -925,11 +925,11 @@ describe('graphStore component integration', () => {
 			const outputs = ((node?.data?.params as any)?.api?.outputs ?? []) as Array<{ name: string }>;
 			const bindings = ((node?.data?.params as any)?.bindings?.outputs ?? {}) as Record<
 				string,
-				{ nodeId?: string; artifact?: 'current' | 'last' }
+				{ outputRef?: string; artifact?: 'current' | 'last' }
 			>;
 			expect(outputs.map((o) => o.name)).toEqual(['out_text', 'out_json']);
-			expect(String(bindings.out_text?.nodeId ?? '')).toBe('inner_text');
-			expect(String(bindings.out_json?.nodeId ?? '')).toBe('inner_text');
+			expect(String(bindings.out_text?.outputRef ?? '')).toBe('node:inner_text');
+			expect(String(bindings.out_json?.outputRef ?? '')).toBe('node:inner_text');
 			expect(String(bindings.out_text?.artifact ?? '')).toBe('current');
 			expect(String(bindings.out_json?.artifact ?? '')).toBe('current');
 		} finally {
@@ -955,8 +955,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_a: { nodeId: 'n1', artifact: 'current' },
-						out_b: { nodeId: 'n2', artifact: 'current' }
+						out_a: { outputRef: 'node:n1', artifact: 'current' },
+						out_b: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -994,8 +994,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_text: { nodeId: 'n1', artifact: 'current' },
-						out_json: { nodeId: 'n2', artifact: 'current' }
+						out_text: { outputRef: 'node:n1', artifact: 'current' },
+						out_json: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1036,9 +1036,9 @@ describe('graphStore component integration', () => {
 				inputs: {},
 				config: {},
 				outputs: {
-					out_data: { nodeId: 'n_old', artifact: 'current' },
-					summary: { nodeId: 'n_sum', artifact: 'current' },
-					source: { nodeId: 'n_src', artifact: 'current' }
+					out_data: { outputRef: 'node:n_old', artifact: 'current' },
+					summary: { outputRef: 'node:n_sum', artifact: 'current' },
+					source: { outputRef: 'node:n_src', artifact: 'current' }
 				}
 			}
 		});
@@ -1053,7 +1053,7 @@ describe('graphStore component integration', () => {
 		expect(outputBindings.out_data).toBeUndefined();
 	});
 
-	it('blocks Accept when a declared component output is missing binding nodeId', async () => {
+	it('blocks Accept when a declared component output is missing binding outputRef', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1073,7 +1073,7 @@ describe('graphStore component integration', () => {
 				inputs: {},
 				config: {},
 				outputs: {
-					summary: { nodeId: '', artifact: 'current' }
+					summary: { outputRef: '', artifact: 'current' }
 				}
 			}
 		});
@@ -1081,10 +1081,10 @@ describe('graphStore component integration', () => {
 		const result = await graphStore.applyInspectorDraft();
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
-		expect(String((result as any)?.error ?? '')).toContain('requires a bound internal node');
+		expect(String((result as any)?.error ?? '')).toContain('requires a bound internal outputRef');
 	});
 
-	it('blocks Accept when a non-required declared component output is missing binding nodeId', async () => {
+	it('blocks Accept when a non-required declared component output is missing binding outputRef', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1104,14 +1104,14 @@ describe('graphStore component integration', () => {
 				inputs: {},
 				config: {},
 				outputs: {
-					summary: { nodeId: '', artifact: 'current' }
+					summary: { outputRef: '', artifact: 'current' }
 				}
 			}
 		});
 
 		const validation = graphStore.getInspectorDraftAcceptValidation();
 		expect(validation.ok).toBe(false);
-		expect(String(validation.errors?.[0] ?? '')).toContain('requires a bound internal node');
+		expect(String(validation.errors?.[0] ?? '')).toContain('requires a bound internal outputRef');
 		const result = await graphStore.applyInspectorDraft();
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
@@ -1137,7 +1137,7 @@ describe('graphStore component integration', () => {
 				inputs: {},
 				config: {},
 				outputs: {
-					summary: { nodeId: 'n_any', artifact: 'current' }
+					summary: { outputRef: 'node:n_any', artifact: 'current' }
 				}
 			}
 		});
@@ -1164,8 +1164,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_text: { nodeId: 'n1', artifact: 'current' },
-						out_json: { nodeId: 'n2', artifact: 'current' }
+						out_text: { outputRef: 'node:n1', artifact: 'current' },
+						out_json: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1225,8 +1225,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_text: { nodeId: 'n1', artifact: 'current' },
-						out_json: { nodeId: 'n2', artifact: 'current' }
+						out_text: { outputRef: 'node:n1', artifact: 'current' },
+						out_json: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1308,8 +1308,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_text: { nodeId: 'n1', artifact: 'current' },
-						out_json: { nodeId: 'n2', artifact: 'current' }
+						out_text: { outputRef: 'node:n1', artifact: 'current' },
+						out_json: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1354,8 +1354,8 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						out_text: { nodeId: 'n1', artifact: 'current' },
-						out_json: { nodeId: 'n2', artifact: 'current' }
+						out_text: { outputRef: 'node:n1', artifact: 'current' },
+						out_json: { outputRef: 'node:n2', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1408,7 +1408,7 @@ describe('graphStore component integration', () => {
 					inputs: {},
 					config: {},
 					outputs: {
-						summary: { nodeId: 'n_internal', artifact: 'current' }
+						summary: { outputRef: 'node:n_internal', artifact: 'current' }
 					}
 				},
 				config: {}
@@ -1427,7 +1427,7 @@ describe('graphStore component integration', () => {
 								bindings: {
 									...(((n.data as any).params?.bindings ?? {}) as Record<string, any>),
 									outputs: {
-										summary: { nodeId: '', artifact: 'current' }
+										summary: { outputRef: '', artifact: 'current' }
 									}
 								}
 							}

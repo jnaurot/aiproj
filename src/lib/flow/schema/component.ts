@@ -66,7 +66,7 @@ export const ComponentBindingsSchema = z
 				z.string(),
 				z
 					.object({
-						nodeId: z.string().min(1).optional(),
+						outputRef: z.string().min(1).optional(),
 						artifact: z.enum(["current", "last"]).optional().default("current")
 					})
 					.strip()

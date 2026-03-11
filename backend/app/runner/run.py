@@ -2712,91 +2712,90 @@ async def run_graph(
                 }
 
         async def _component_mark_node_start(node_id: str) -> None:
-            parent_node_id = component_parent_for_internal.get(node_id)
-            if not parent_node_id:
-                return
-            state = component_runtime_state.get(parent_node_id)
-            if not state or state.get("started"):
-                return
-            state["started"] = True
-            state["started_at"] = asyncio.get_running_loop().time()
-            meta = component_meta_by_parent.get(parent_node_id, {})
-            await _emit({
-                "type": "component_started",
-                "runId": run_id,
-                "at": iso_now(),
-                "nodeId": parent_node_id,
-                "componentId": str(meta.get("componentId") or ""),
-                "componentRevisionId": str(meta.get("componentRevisionId") or ""),
-                "builtinEnvironment": state.get("builtin_profile_requirements"),
-            })
-            builtin_req = (
-                state.get("builtin_profile_requirements")
-                if isinstance(state.get("builtin_profile_requirements"), dict)
-                else {}
-            )
-            required_profiles = (
-                builtin_req.get("requiredProfiles")
-                if isinstance(builtin_req.get("requiredProfiles"), list)
-                else []
-            )
-            missing_profiles = (
-                builtin_req.get("missingProfiles")
-                if isinstance(builtin_req.get("missingProfiles"), list)
-                else []
-            )
-            invalid_profiles = (
-                builtin_req.get("invalidProfiles")
-                if isinstance(builtin_req.get("invalidProfiles"), list)
-                else []
-            )
-            if required_profiles:
-                profile_ids = [
-                    (
-                        f"{str(p.get('profileId') or '').strip()}@"
-                        f"{str(p.get('installTarget') or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(p.get('profileId') or '').strip(), 'cpu_dev')).strip()}"
+            current_parent_id = component_parent_for_internal.get(node_id)
+            while current_parent_id:
+                state = component_runtime_state.get(current_parent_id)
+                if state and not state.get("started"):
+                    state["started"] = True
+                    state["started_at"] = asyncio.get_running_loop().time()
+                    meta = component_meta_by_parent.get(current_parent_id, {})
+                    await _emit({
+                        "type": "component_started",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": current_parent_id,
+                        "componentId": str(meta.get("componentId") or ""),
+                        "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+                        "builtinEnvironment": state.get("builtin_profile_requirements"),
+                    })
+                    builtin_req = (
+                        state.get("builtin_profile_requirements")
+                        if isinstance(state.get("builtin_profile_requirements"), dict)
+                        else {}
                     )
-                    for p in required_profiles
-                    if isinstance(p, dict) and str(p.get("profileId") or "").strip()
-                ]
-                missing_parts: list[str] = []
-                for item in missing_profiles:
-                    if not isinstance(item, dict):
-                        continue
-                    mid = str(item.get("profileId") or "").strip()
-                    missing_pkgs = item.get("missingPackages") if isinstance(item.get("missingPackages"), list) else []
-                    missing_text = ", ".join(str(pkg).strip() for pkg in missing_pkgs if str(pkg).strip())
-                    if mid and missing_text:
-                        missing_parts.append(f"{mid}({missing_text})")
-                    elif mid:
-                        missing_parts.append(mid)
-                invalid_parts = [
-                    f"{str(item.get('nodeId') or '')}:{str(item.get('profileId') or 'core')}"
-                    for item in invalid_profiles
-                    if isinstance(item, dict)
-                ]
-                details: list[str] = []
-                if missing_parts:
-                    details.append(
-                        f"missing: {'; '.join(missing_parts)}. Install profile: POST /env/profiles/install."
+                    required_profiles = (
+                        builtin_req.get("requiredProfiles")
+                        if isinstance(builtin_req.get("requiredProfiles"), list)
+                        else []
                     )
-                if invalid_parts:
-                    details.append(f"invalid tool profile config at {', '.join(invalid_parts)}.")
-                suffix = f" {' '.join(details)}" if details else ""
-                await _emit({
-                    "type": "log",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "level": "warn" if (missing_parts or invalid_parts) else "info",
-                    "message": (
-                        f"COMPONENT_ENV_PROFILE_REQUIREMENTS: Component requires builtin profiles: "
-                        f"{', '.join(profile_ids)}.{suffix}"
-                    ),
-                    "nodeId": parent_node_id,
-                    "requiredProfiles": required_profiles,
-                    "missingProfiles": missing_profiles,
-                    "invalidProfiles": invalid_profiles,
-                })
+                    missing_profiles = (
+                        builtin_req.get("missingProfiles")
+                        if isinstance(builtin_req.get("missingProfiles"), list)
+                        else []
+                    )
+                    invalid_profiles = (
+                        builtin_req.get("invalidProfiles")
+                        if isinstance(builtin_req.get("invalidProfiles"), list)
+                        else []
+                    )
+                    if required_profiles:
+                        profile_ids = [
+                            (
+                                f"{str(p.get('profileId') or '').strip()}@"
+                                f"{str(p.get('installTarget') or BUILTIN_PROFILE_INSTALL_TARGETS.get(str(p.get('profileId') or '').strip(), 'cpu_dev')).strip()}"
+                            )
+                            for p in required_profiles
+                            if isinstance(p, dict) and str(p.get("profileId") or "").strip()
+                        ]
+                        missing_parts: list[str] = []
+                        for item in missing_profiles:
+                            if not isinstance(item, dict):
+                                continue
+                            mid = str(item.get("profileId") or "").strip()
+                            missing_pkgs = item.get("missingPackages") if isinstance(item.get("missingPackages"), list) else []
+                            missing_text = ", ".join(str(pkg).strip() for pkg in missing_pkgs if str(pkg).strip())
+                            if mid and missing_text:
+                                missing_parts.append(f"{mid}({missing_text})")
+                            elif mid:
+                                missing_parts.append(mid)
+                        invalid_parts = [
+                            f"{str(item.get('nodeId') or '')}:{str(item.get('profileId') or 'core')}"
+                            for item in invalid_profiles
+                            if isinstance(item, dict)
+                        ]
+                        details: list[str] = []
+                        if missing_parts:
+                            details.append(
+                                f"missing: {'; '.join(missing_parts)}. Install profile: POST /env/profiles/install."
+                            )
+                        if invalid_parts:
+                            details.append(f"invalid tool profile config at {', '.join(invalid_parts)}.")
+                        suffix = f" {' '.join(details)}" if details else ""
+                        await _emit({
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "warn" if (missing_parts or invalid_parts) else "info",
+                            "message": (
+                                f"COMPONENT_ENV_PROFILE_REQUIREMENTS: Component requires builtin profiles: "
+                                f"{', '.join(profile_ids)}.{suffix}"
+                            ),
+                            "nodeId": current_parent_id,
+                            "requiredProfiles": required_profiles,
+                            "missingProfiles": missing_profiles,
+                            "invalidProfiles": invalid_profiles,
+                        })
+                current_parent_id = component_parent_for_internal.get(current_parent_id)
 
         async def _component_mark_node_finish(node_id: str, *, ok: bool, error: Optional[str] = None) -> None:
             parent_node_id = component_parent_for_internal.get(node_id)
@@ -2808,21 +2807,22 @@ async def run_graph(
             remaining = int(state.get("remaining") or 0)
             state["remaining"] = max(0, remaining - 1)
             if not ok and not state.get("failed"):
-                state["failed"] = True
-                meta = component_meta_by_parent.get(parent_node_id, {})
-                elapsed_ms = max(
-                    0.0,
-                    (asyncio.get_running_loop().time() - float(state.get("started_at") or asyncio.get_running_loop().time())) * 1000.0,
-                )
-                await _emit({
-                    "type": "component_failed",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "nodeId": parent_node_id,
-                    "componentId": str(meta.get("componentId") or ""),
-                    "componentRevisionId": str(meta.get("componentRevisionId") or ""),
-                    "error": str(error or "Component internal node failed"),
-                })
+                current_parent_id = parent_node_id
+                while current_parent_id:
+                    current_state = component_runtime_state.get(current_parent_id)
+                    if current_state and not current_state.get("failed"):
+                        current_state["failed"] = True
+                        meta = component_meta_by_parent.get(current_parent_id, {})
+                        await _emit({
+                            "type": "component_failed",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": current_parent_id,
+                            "componentId": str(meta.get("componentId") or ""),
+                            "componentRevisionId": str(meta.get("componentRevisionId") or ""),
+                            "error": str(error or "Component internal node failed"),
+                        })
+                    current_parent_id = component_parent_for_internal.get(current_parent_id)
                 return
 
             if state["remaining"] == 0 and not state.get("failed"):
@@ -4506,7 +4506,7 @@ async def run_graph(
                         candidates = refs_by_handle.get(out_name, [])
                         if not candidates:
                             raise ContractMismatchError(
-                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.nodeId exists and produced an artifact.",
+                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.outputRef exists and produced an artifact.",
                                 code="COMPONENT_OUTPUT_NOT_RESOLVED",
                                 details=_contract_details(
                                     expected={"output": out_name, "resolvedArtifact": True},
@@ -4516,21 +4516,22 @@ async def run_graph(
                         current_artifact_id = str(candidates[0] or "").strip()
                         bound_artifact_id = current_artifact_id
                         if mode == "last":
-                            bound_node_id = str(binding.get("nodeId") or "").strip()
-                            if not bound_node_id:
+                            output_edge_resolution = _resolve_component_output_artifact_from_output_edges(
+                                edges=edges,
+                                component_instance_node_id=str(node_id),
+                                output_name=out_name,
+                                get_current_artifact=get_current_artifact,
+                            )
+                            bound_runtime_node_id = str(output_edge_resolution.get("runtimeNodeId") or "").strip()
+                            if not bound_runtime_node_id:
                                 raise ContractMismatchError(
-                                    f"Component output binding for '{out_name}' requires nodeId when artifact='last'",
+                                    f"Component output binding for '{out_name}' requires a resolvable outputRef when artifact='last'",
                                     code="COMPONENT_OUTPUT_BINDING_INVALID",
                                     details=_contract_details(
-                                        expected={"output": out_name, "nodeId": "required when artifact='last'"},
-                                        actual={"nodeId": ""},
+                                        expected={"output": out_name, "outputRef": "resolvable when artifact='last'"},
+                                        actual={"runtimeNodeId": ""},
                                     ),
                                 )
-                            bound_runtime_node_id = (
-                                bound_node_id
-                                if bound_node_id.startswith("cmp:")
-                                else f"cmp:{node_id}:{bound_node_id}"
-                            )
                             latest_lookup = getattr(context.artifact_store, "get_latest_node_artifact", None)
                             if not callable(latest_lookup):
                                 raise ContractMismatchError(
@@ -4549,11 +4550,11 @@ async def run_graph(
                             bound_artifact_id = str(last_artifact_id or "").strip()
                             if not bound_artifact_id:
                                 raise ContractMismatchError(
-                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for node '{bound_node_id}'",
+                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for the bound outputRef",
                                     code="COMPONENT_OUTPUT_LAST_NOT_FOUND",
                                     details=_contract_details(
                                         expected={"output": out_name, "artifact": "last"},
-                                        actual={"nodeId": bound_node_id, "artifactFound": False},
+                                        actual={"runtimeNodeId": bound_runtime_node_id, "artifactFound": False},
                                     ),
                                 )
                         if not bound_artifact_id:
