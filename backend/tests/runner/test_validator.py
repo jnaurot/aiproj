@@ -3,7 +3,7 @@ Unit tests for validator
 """
 import pytest
 from typing import Dict, Any
-from app.runner.validator import validate_node_connections, validate_parameters, validate_pipeline
+from app.runner.validator import GraphValidator, validate_node_connections, validate_parameters, validate_pipeline
 
 
 class TestValidator:
@@ -279,7 +279,42 @@ class TestPipelineComplexity:
         validation_result = validate_pipeline(nodes, edges)
         
         assert validation_result["valid"]
-    
+
+
+class TestSchemaFirstEdgeValidation:
+    def test_source_txt_to_llm_ignores_stale_inferred_table_type(self):
+        validator = GraphValidator()
+        graph = {
+            "nodes": [
+                {
+                    "id": "src1",
+                    "data": {
+                        "kind": "source",
+                        "sourceKind": "file",
+                        "params": {"file_format": "txt"},
+                        # stale inferred schema should not override declared/default source contract
+                        "schema": {
+                            "inferredSchema": {
+                                "typedSchema": {
+                                    "type": "table",
+                                    "fields": [{"name": "text", "type": "text", "nullable": True}],
+                                }
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "llm1",
+                    "data": {"kind": "llm", "params": {"model": "dummy", "user_prompt": "summarize"}},
+                },
+            ],
+            "edges": [{"id": "e1", "source": "src1", "target": "llm1"}],
+        }
+
+        result = validator.validate_pre_execution(graph)
+        edge_errors = [e for e in result.errors if str(e.edge_id or "") == "e1"]
+        assert all("TYPE_MISMATCH" not in str(e.code or "") for e in edge_errors)
+
     def test_validate_complex_chain(self):
         """Test validating complex chain of transforms"""
         chain_length = 10

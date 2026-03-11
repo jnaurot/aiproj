@@ -65,7 +65,7 @@ describe('graphStore edge schema compatibility', () => {
 			data: { exec: 'idle' }
 		} as any);
 		expect(added.ok).toBe(false);
-		expect(String(added.error ?? '')).toContain('Missing required columns');
+		expect(String(added.error ?? '')).toContain('Missing required typed schema coverage');
 	});
 
 	it('uses schema solver compatibility even when source port metadata is absent', () => {

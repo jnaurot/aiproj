@@ -29,11 +29,9 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     if "apiKeyRef" in p and "api_key_ref" not in p:
         p["api_key_ref"] = p.pop("apiKeyRef")
 
-    # nested output -> flattened output_mode/output_schema (if your backend uses those)
+    # nested output -> flattened output schema controls
     out = p.get("output")
     if isinstance(out, dict):
-        if "mode" in out and "output_mode" not in p:
-            p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
@@ -61,6 +59,25 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["thinking"] = mapping.get(legacy, {"enabled": False, "mode": "none"})
 
     return p
+
+
+def _llm_schema_declared_output_mode(node: Dict[str, Any]) -> str:
+    data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
+    schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+    if isinstance(schema_env, dict):
+        for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+            obs = schema_env.get(key)
+            if not isinstance(obs, dict):
+                continue
+            typed = obs.get("typedSchema")
+            if not isinstance(typed, dict):
+                continue
+            t = str(typed.get("type") or "").strip().lower()
+            if t == "string":
+                t = "text"
+            if t in {"json", "embeddings", "text"}:
+                return t
+    return "text"
 
 #
 
@@ -151,6 +168,11 @@ async def exec_llm(
     print("LLM EXEC raw_params (before normalize):", pformat(raw_params)[:8000])
 
     norm_params = normalize_llm_params(raw_params)
+    declared_mode = _llm_schema_declared_output_mode(node)
+    norm_params["output_mode"] = declared_mode
+    if declared_mode == "json" and not isinstance(norm_params.get("output_schema"), dict):
+        # Schema-first: JSON mode is chosen by typed schema declaration, so allow empty schema by default.
+        norm_params["output_schema"] = {}
     print("LLM EXEC norm_params (after normalize):", pformat(norm_params)[:8000])
 
     # ✅ Validate normalized dict

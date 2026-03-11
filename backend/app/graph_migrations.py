@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, List, Optional, Tuple
 
-from .runner.capabilities import allowed_port_types, allowed_ports
+from .runner.capabilities import allowed_port_types
 from .schema_contracts import canonicalize_schema_envelope
 
 
@@ -208,12 +208,7 @@ def _derive_transform_ports(params: Dict[str, Any], transform_kind_raw: Any) -> 
 
 
 def _derive_tool_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-	provider = str(params.get("provider") or "").strip().lower() or None
-	allowed_in = {str(v).strip().lower() for v in allowed_ports("tool", "in", provider=provider)}
-	allowed_out = {str(v).strip().lower() for v in allowed_ports("tool", "out", provider=provider)}
-	in_port = _preferred_port(allowed_in, ["json", "table", "text", "binary", "embeddings"])
-	out_port = _preferred_port(allowed_out, ["json", "text", "binary", "table", "embeddings"])
-	return _normalize_port_type(in_port), _normalize_port_type(out_port)
+	return None, None
 
 
 def _derive_component_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:

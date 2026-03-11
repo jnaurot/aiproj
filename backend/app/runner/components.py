@@ -217,9 +217,7 @@ def expand_graph_components(
         )
         component_clone_params["api"] = component_api if isinstance(component_api, dict) else {}
         component_clone_data["params"] = component_clone_params
-        ports = component_clone_data.get("ports", {}) if isinstance(component_clone_data.get("ports"), dict) else {}
-        # Component output typing/routing is sourced from params.api.outputs + named handles.
-        component_clone_data["ports"] = {**ports, "out": None}
+        component_clone_data.pop("ports", None)
         component_clone["data"] = component_clone_data
         out_nodes.append(component_clone)
 

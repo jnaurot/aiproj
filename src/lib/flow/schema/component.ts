@@ -31,7 +31,7 @@ export const ComponentTypedSchemaSchema = z
 export const ComponentApiPortSchema = z
 	.object({
 		name: z.string().min(1),
-		portType: PortTypeSchema,
+		portType: PortTypeSchema.optional(),
 		required: z.boolean().optional().default(true),
 		typedSchema: ComponentTypedSchemaSchema
 	})

@@ -84,6 +84,14 @@ def _extract_chat_content(obj: Dict[str, Any]) -> str:
     return ""
 
 
+def _resolved_output_mode(params: LLMParams) -> str:
+    if isinstance(params.embedding_contract, dict) and params.embedding_contract:
+        return "embeddings"
+    if isinstance(params.output_schema, dict):
+        return "json"
+    return "text"
+
+
 async def exec_llm_openai_compat(
     run_id: str,
     node: Dict[str, Any],
@@ -142,6 +150,7 @@ async def exec_llm_openai_compat(
         "max_tokens": params.max_tokens,
         "stream": True,
     }
+    output_mode = _resolved_output_mode(params)
 
     if params.top_p is not None:
         payload["top_p"] = params.top_p
@@ -153,7 +162,7 @@ async def exec_llm_openai_compat(
         payload["presence_penalty"] = params.presence_penalty
     if params.frequency_penalty is not None:
         payload["frequency_penalty"] = params.frequency_penalty
-    if params.output_mode == "json":
+    if output_mode == "json":
         payload["response_format"] = {"type": "json_object"}
 
     await context.bus.emit(
@@ -163,12 +172,12 @@ async def exec_llm_openai_compat(
             "nodeId": node_id,
             "at": iso_now(),
             "level": "info",
-            "message": f"OpenAI-compatible chat: base_url={base_url} model={params.model} output_mode={params.output_mode}",
+            "message": f"OpenAI-compatible chat: base_url={base_url} model={params.model} output_mode={output_mode}",
         }
     )
 
     url = f"{base_url}/v1/chat/completions"
-    if params.output_mode == "embeddings":
+    if output_mode == "embeddings":
         url = f"{base_url}/v1/embeddings"
     attempt = 0
     last_err: Optional[str] = None
@@ -182,7 +191,7 @@ async def exec_llm_openai_compat(
                 pool=10.0,
             )
 
-            if params.output_mode == "embeddings":
+            if output_mode == "embeddings":
                 embed_payload: Dict[str, Any] = {
                     "model": params.model,
                     "input": input_items if len(input_items) > 1 else (input_items[0] if input_items else upstream_text),
@@ -314,7 +323,7 @@ async def exec_llm_openai_compat(
             file_type = "txt"
             file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
 
-            if params.output_mode == "json":
+            if output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
                 except json.JSONDecodeError as e:
@@ -325,14 +334,14 @@ async def exec_llm_openai_compat(
                             "nodeId": node_id,
                             "at": iso_now(),
                             "level": "error",
-                            "message": f"JSON parse failed in output_mode=json: {str(e)}",
+                            "message": f"JSON parse failed in output_mode={output_mode}: {str(e)}",
                         }
                     )
                     return NodeOutput(
                         status="failed",
                         metadata=None,
                         execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                        error="LLM output_mode=json but response was not valid JSON",
+                        error=f"LLM output_mode={output_mode} but response was not valid JSON",
                     )
                 if params.output_strict:
                     try:
@@ -349,7 +358,7 @@ async def exec_llm_openai_compat(
                 mime_type = "application/json"
                 file_type = "json"
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
-            elif params.output_mode == "embeddings":
+            elif output_mode == "embeddings":
                 mime_type = "application/json"
                 file_type = "json"
                 file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.embeddings.json"

@@ -236,7 +236,8 @@ function normalizeComponentPortType(value: unknown): PortType | null {
 function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?: PortType | null } {
 	const contract = (api ?? {}) as ComponentApiContract;
 	const inputs = Array.isArray(contract?.inputs) ? contract.inputs : [];
-	const inPort = normalizeComponentPortType(inputs[0]?.portType ?? null);
+	const inTyped = (inputs[0] as any)?.typedSchema?.type;
+	const inPort = normalizeComponentPortType(inTyped ?? inputs[0]?.portType ?? null);
 	// Component output routing/type comes from API outputs + sourceHandle, not ports.out.
 	return { in: inPort, out: null };
 }
@@ -2283,12 +2284,12 @@ function componentApiOutputPortType(
 	const handle = String(sourceHandle ?? '').trim();
 	if (!handle || handle === 'out') {
 		if (outputs.length === 1) {
-			return normalizeComponentPortType((outputs[0] as any)?.portType ?? null);
+			return normalizeComponentPortType((outputs[0] as any)?.typedSchema?.type ?? (outputs[0] as any)?.portType ?? null);
 		}
 		return null;
 	}
 	const decl = outputs.find((o) => String((o as any)?.name ?? '').trim() === handle);
-	return normalizeComponentPortType((decl as any)?.portType ?? null);
+	return normalizeComponentPortType((decl as any)?.typedSchema?.type ?? (decl as any)?.portType ?? null);
 }
 
 function sourcePortTypeForEdge(

@@ -27,11 +27,9 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     if "user_prompt" in p and "user_prompt" not in p:
         pass
 
-    # frontend output object -> backend output_mode/output_schema
+    # frontend output object -> backend output_schema/strict/embedding_contract
     out = p.get("output")
     if isinstance(out, dict):
-        if "mode" in out and "output_mode" not in p:
-            p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:

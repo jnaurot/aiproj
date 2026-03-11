@@ -1901,6 +1901,8 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if len(outputs) == 1 and isinstance(outputs[0], dict):
             typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
             out_pt = str(typed.get("type") or "").strip().lower()
+            if not out_pt:
+                out_pt = str(outputs[0].get("portType") or "").strip().lower()
             if out_pt == "string":
                 out_pt = "text"
             return out_pt or None
@@ -1923,6 +1925,8 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if len(inputs) == 1 and isinstance(inputs[0], dict):
             typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
             in_pt = str(typed.get("type") or "").strip().lower()
+            if not in_pt:
+                in_pt = str(inputs[0].get("portType") or "").strip().lower()
             if in_pt == "string":
                 in_pt = "text"
             return in_pt or None

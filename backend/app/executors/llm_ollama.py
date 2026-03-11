@@ -190,6 +190,14 @@ def _compose_user_content(user_prompt: str, upstream_text: str) -> str:
     return f"{prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
 
 
+def _resolved_output_mode(params: LLMParams) -> str:
+    if isinstance(params.embedding_contract, dict) and params.embedding_contract:
+        return "embeddings"
+    if isinstance(params.output_schema, dict):
+        return "json"
+    return "text"
+
+
 async def exec_llm_ollama(
     run_id: str,
     node: Dict[str, Any],
@@ -267,6 +275,7 @@ async def exec_llm_ollama(
 
 
     # Ollama API payload
+    output_mode = _resolved_output_mode(params)
     payload: Dict[str, Any] = {
         "model": params.model,
         "messages": messages,
@@ -287,9 +296,9 @@ async def exec_llm_ollama(
         payload["options"]["repeat_penalty"] = params.repeat_penalty
 
     # Structured output (Ollama supports `format: "json"` for JSON mode)
-    if params.output_mode == "json":
+    if output_mode == "json":
         payload["format"] = "json"
-    elif params.output_mode == "embeddings":
+    elif output_mode == "embeddings":
         return NodeOutput(
             status="failed",
             metadata=None,
@@ -304,7 +313,7 @@ async def exec_llm_ollama(
             "nodeId": node_id,
             "at": iso_now(),
             "level": "info",
-            "message": f"Ollama chat: base_url={base_url} model={params.model} output_mode={params.output_mode}",
+            "message": f"Ollama chat: base_url={base_url} model={params.model} output_mode={output_mode}",
         }
     )
 
@@ -469,7 +478,7 @@ async def exec_llm_ollama(
                 )
 
             mime_type = "text/plain; charset=utf-8"
-            if params.output_mode == "json":
+            if output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
                 except json.JSONDecodeError as e:
@@ -480,14 +489,14 @@ async def exec_llm_ollama(
                             "nodeId": node_id,
                             "at": iso_now(),
                             "level": "error",
-                            "message": f"JSON parse failed in output_mode=json: {str(e)}",
+                            "message": f"JSON parse failed in output_mode={output_mode}: {str(e)}",
                         }
                     )
                     return NodeOutput(
                         status="failed",
                         metadata=None,
                         execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                        error="LLM output_mode=json but response was not valid JSON",
+                        error=f"LLM output_mode={output_mode} but response was not valid JSON",
                     )
                 if params.output_strict:
                     try:

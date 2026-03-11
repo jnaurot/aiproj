@@ -42,7 +42,7 @@ class TestLLMParams:
         assert result["connection_ref"] == "conn-123"
     
     def test_normalize_frontend_output_object(self):
-        """Test frontend output object to output_mode/output_schema transformation"""
+        """Test frontend output object normalization keeps schema controls only."""
         input_params = {
             "model": "gpt-4",
             "user_prompt": "Hello",
@@ -55,7 +55,7 @@ class TestLLMParams:
         
         result = normalize_llm_params_frontend(input_params)
         
-        assert result["output_mode"] == "json"
+        assert "output_mode" not in result
         assert result["output_schema"] == {"type": "object"}
         assert result["output_strict"] is True
     
@@ -86,7 +86,7 @@ class TestLLMParams:
         assert result["frequency_penalty"] == -0.1
         assert result["repeat_penalty"] == 1.1
         assert result["thinking"] == {"enabled": True, "mode": "visible"}
-        assert result["output_mode"] == "embeddings"
+        assert "output_mode" not in result
         assert result["embedding_contract"] == {"dims": 1536}
     
     def test_success_with_base_url(self):

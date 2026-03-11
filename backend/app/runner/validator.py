@@ -112,17 +112,15 @@ class GraphValidator:
         schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
         if not isinstance(schema_env, dict):
             return None
-        # Schema-first precedence: user intent (expected) > compile/sample inference > stale runtime observation.
-        for key in ("expectedSchema", "inferredSchema", "observedSchema"):
-            obs = schema_env.get(key)
-            if not isinstance(obs, dict):
-                continue
+        # Declared contract is expectedSchema only.
+        # inferred/observed are advisory and may be stale across file/sample changes.
+        obs = schema_env.get("expectedSchema")
+        if isinstance(obs, dict):
             typed = obs.get("typedSchema")
-            if not isinstance(typed, dict):
-                continue
-            resolved = GraphValidator._normalize_port_type(typed.get("type"))
-            if resolved:
-                return resolved
+            if isinstance(typed, dict):
+                resolved = GraphValidator._normalize_port_type(typed.get("type"))
+                if resolved:
+                    return resolved
         return None
 
     @staticmethod
@@ -180,7 +178,10 @@ class GraphValidator:
         if sh == "out":
             if len(outputs) == 1 and isinstance(outputs[0], dict):
                 typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
-                return self._normalize_port_type(typed.get("type")), None
+                resolved = self._normalize_port_type(typed.get("type"))
+                if not resolved:
+                    resolved = self._normalize_port_type(outputs[0].get("portType"))
+                return resolved, None
             if len(outputs) > 1:
                 return None, ValidationError(
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
@@ -207,7 +208,10 @@ class GraphValidator:
                 node_id=source_id,
             )
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
-        return self._normalize_port_type(typed.get("type")), None
+        resolved = self._normalize_port_type(typed.get("type"))
+        if not resolved:
+            resolved = self._normalize_port_type(decl.get("portType"))
+        return resolved, None
 
     def _component_input_type(self, node: Dict[str, Any], target_handle: Any) -> Optional[str]:
         params = ((node.get("data") or {}).get("params") or {})
@@ -217,7 +221,10 @@ class GraphValidator:
         if th == "in":
             if len(inputs) == 1 and isinstance(inputs[0], dict):
                 typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
-                return self._normalize_port_type(typed.get("type"))
+                resolved = self._normalize_port_type(typed.get("type"))
+                if not resolved:
+                    resolved = self._normalize_port_type(inputs[0].get("portType"))
+                return resolved
             return None
         decl = next(
             (
@@ -230,7 +237,10 @@ class GraphValidator:
         if not isinstance(decl, dict):
             return None
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
-        return self._normalize_port_type(typed.get("type"))
+        resolved = self._normalize_port_type(typed.get("type"))
+        if not resolved:
+            resolved = self._normalize_port_type(decl.get("portType"))
+        return resolved
 
     def _adapter_suggestions(
         self,

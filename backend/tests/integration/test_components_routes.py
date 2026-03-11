@@ -601,8 +601,8 @@ def test_component_routes_validate_endpoint():
         canonicalized_body = canonicalized.json()
         assert canonicalized_body["ok"] is True
         normalized_output = canonicalized_body["normalizedDefinition"]["api"]["outputs"][0]
-        assert normalized_output["typedSchema"]["type"] == "text"
-        assert normalized_output["typedSchema"]["fields"] == []
+        assert normalized_output["typedSchema"]["type"] == "json"
+        assert normalized_output["typedSchema"]["fields"] == [{"name": "x", "type": "text", "nullable": False}]
 
         bad = client.post(
             "/components/validate",

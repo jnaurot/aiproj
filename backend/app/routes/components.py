@@ -164,10 +164,10 @@ def _post_canonical_port_schema_diagnostics(definition: Dict[str, Any]) -> list[
         if port_type and typed_type and port_type != typed_type:
             diagnostics.append(
                 {
-                    "code": "TYPED_SCHEMA_PORT_MISMATCH",
-                    "path": f"api.outputs[{idx}].typedSchema.type",
-                    "message": "typedSchema.type must match portType after canonicalization",
-                    "severity": "error",
+                    "code": "PORT_TYPE_DERIVED_FROM_TYPED_SCHEMA",
+                    "path": f"api.outputs[{idx}].portType",
+                    "message": "portType differs from typedSchema.type; typedSchema.type is authoritative",
+                    "severity": "warning",
                 }
             )
     return diagnostics

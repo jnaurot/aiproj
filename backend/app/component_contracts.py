@@ -43,10 +43,14 @@ def _canonical_field(raw: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _canonical_typed_schema(raw: Optional[Dict[str, Any]], port_type: str) -> Dict[str, Any]:
+def _canonical_typed_schema(raw: Optional[Dict[str, Any]], fallback_type: str) -> Dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
-    typed = str(port_type or "json").strip().lower() or "json"
-    if typed not in ALLOWED_PORT_TYPES:
+    typed = str(value.get("type") or "").strip().lower()
+    if typed == "string":
+        typed = "text"
+    if typed not in ALLOWED_TYPED_TYPES:
+        typed = str(fallback_type or "json").strip().lower() or "json"
+    if typed not in ALLOWED_TYPED_TYPES:
         typed = "json"
     fields_raw = value.get("fields")
     fields: List[Dict[str, Any]] = []
@@ -60,16 +64,18 @@ def _canonical_typed_schema(raw: Optional[Dict[str, Any]], port_type: str) -> Di
 
 
 def _canonical_api_port(raw: Dict[str, Any]) -> Dict[str, Any]:
-    port_type = str(raw.get("portType") or "json").strip().lower() or "json"
-    if port_type not in ALLOWED_PORT_TYPES:
-        port_type = "json"
+    raw_port_type = str(raw.get("portType") or "").strip().lower()
+    fallback = raw_port_type if raw_port_type in ALLOWED_PORT_TYPES else "json"
+    typed_schema = _canonical_typed_schema(
+        raw.get("typedSchema") if isinstance(raw, dict) else None, fallback
+    )
+    typed_type = str(typed_schema.get("type") or "").strip().lower()
+    port_type = typed_type if typed_type in ALLOWED_PORT_TYPES else fallback
     return {
         "name": str(raw.get("name") or "").strip(),
         "portType": port_type,
         "required": bool(raw.get("required", True)),
-        "typedSchema": _canonical_typed_schema(
-            raw.get("typedSchema") if isinstance(raw, dict) else None, port_type
-        ),
+        "typedSchema": typed_schema,
     }
 
 
@@ -163,7 +169,7 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
                     )
                 seen_names.add(name)
             port_type = str(port.get("portType") or "").strip().lower()
-            if port_type not in ALLOWED_PORT_TYPES:
+            if port_type and port_type not in ALLOWED_PORT_TYPES:
                 diagnostics.append(
                     ContractDiagnostic(
                         "INVALID_PORT_TYPE",
@@ -182,6 +188,17 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
                         "INVALID_TYPED_SCHEMA_TYPE",
                         f"{path}.typedSchema.type",
                         "typedSchema.type must be one of: table, json, text, binary, embeddings, unknown",
+                    )
+                )
+            if typed == "string":
+                typed = "text"
+            if port_type and typed in ALLOWED_PORT_TYPES and typed != port_type:
+                diagnostics.append(
+                    ContractDiagnostic(
+                        "PORT_TYPE_DERIVED_FROM_TYPED_SCHEMA",
+                        f"{path}.portType",
+                        "portType differs from typedSchema.type; canonicalization will derive portType from typedSchema.type",
+                        severity="warning",
                     )
                 )
             fields = typed_schema.get("fields", [])

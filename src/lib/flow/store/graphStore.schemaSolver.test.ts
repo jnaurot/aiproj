@@ -11,7 +11,7 @@ describe('graphStore schema solver', () => {
 					kind: 'source',
 					sourceKind: 'file',
 					ports: { in: null, out: 'table' },
-					params: { file_format: 'txt' }
+					params: { file_format: 'csv' }
 				}
 			},
 			{
@@ -34,7 +34,7 @@ describe('graphStore schema solver', () => {
 		expect(constraints.e1.requiredSchema.type).toBe('table');
 		expect(constraints.e1.requiredSchema.required_columns).toEqual(['id']);
 		expect(constraints.e1.compatible).toBe(false);
-		expect(constraints.e1.reason).toBe('missing_required_columns');
+		expect(constraints.e1.reason).toBe('missing_typed_schema');
 	});
 
 	it('infers adapter suggestion for coercible type mismatch', () => {
