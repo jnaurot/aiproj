@@ -1172,7 +1172,7 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
 	});
 
-	it('blocks Accept when typedSchema.type is not aligned with component output portType', async () => {
+	it('allows Accept when typedSchema.type is present even if portType metadata differs', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1198,9 +1198,7 @@ describe('graphStore component integration', () => {
 		});
 
 		const result = await graphStore.applyInspectorDraft();
-		expect((result as any)?.ok).toBe(false);
-		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
-		expect(String((result as any)?.error ?? '')).toContain('typedSchema.type aligned with portType');
+		expect((result as any)?.ok).toBe(true);
 	});
 
 	it('recomputes component edge contract payload source from sourceHandle on load', () => {

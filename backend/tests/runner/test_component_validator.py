@@ -122,8 +122,18 @@ def test_component_validator_checks_named_output_type_compatibility_before_run()
                         "api": {
                             "inputs": [],
                             "outputs": [
-                                {"name": "summary", "portType": "text", "required": True},
-                                {"name": "payload", "portType": "json", "required": True},
+                                {
+                                    "name": "summary",
+                                    "portType": "text",
+                                    "required": True,
+                                    "typedSchema": {"type": "text", "fields": []},
+                                },
+                                {
+                                    "name": "payload",
+                                    "portType": "json",
+                                    "required": True,
+                                    "typedSchema": {"type": "json", "fields": []},
+                                },
                             ],
                         },
                         "bindings": {"inputs": {}, "config": {}, "outputs": {}},

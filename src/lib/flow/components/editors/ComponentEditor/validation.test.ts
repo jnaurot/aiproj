@@ -46,7 +46,7 @@ describe('ComponentEditor validation', () => {
 		expect(result.hasErrors).toBe(false);
 	});
 
-	it('enforces output name pattern and typedSchema.type alignment', () => {
+	it('enforces output name pattern and requires typedSchema.type', () => {
 		const outputs = [
 			{
 				name: 'out-data',
@@ -60,7 +60,7 @@ describe('ComponentEditor validation', () => {
 		});
 		expect(result.hasErrors).toBe(true);
 		expect(result.outputErrors[0]?.join(' ')).toContain('must match [A-Za-z_][A-Za-z0-9_]*');
-		expect(result.outputErrors[0]?.join(' ')).toContain('typedSchema.type must match portType');
+		expect(result.outputErrors[0]?.join(' ')).not.toContain('typedSchema.type must match portType');
 	});
 
 	it('requires bindings for declared outputs even when not required', () => {

@@ -97,9 +97,6 @@ export function validateComponentOutputs(
 		const typedSchema = (out?.typedSchema ?? {}) as { type?: string; fields?: Array<{ name?: string; type?: string }> };
 		const schemaType = String(typedSchema?.type ?? '').trim();
 		if (!schemaType) issues.push('typedSchema.type is required.');
-		if (schemaType && String(out?.portType ?? '').trim() && schemaType !== String(out?.portType ?? '').trim()) {
-			issues.push('typedSchema.type must match portType.');
-		}
 		const fields = Array.isArray(typedSchema?.fields) ? typedSchema.fields : [];
 		const seenFieldNames = new Set<string>();
 		for (const field of fields) {

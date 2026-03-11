@@ -179,8 +179,6 @@ class GraphValidator:
             if len(outputs) == 1 and isinstance(outputs[0], dict):
                 typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
                 resolved = self._normalize_port_type(typed.get("type"))
-                if not resolved:
-                    resolved = self._normalize_port_type(outputs[0].get("portType"))
                 return resolved, None
             if len(outputs) > 1:
                 return None, ValidationError(
@@ -209,8 +207,6 @@ class GraphValidator:
             )
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
         resolved = self._normalize_port_type(typed.get("type"))
-        if not resolved:
-            resolved = self._normalize_port_type(decl.get("portType"))
         return resolved, None
 
     def _component_input_type(self, node: Dict[str, Any], target_handle: Any) -> Optional[str]:
@@ -222,8 +218,6 @@ class GraphValidator:
             if len(inputs) == 1 and isinstance(inputs[0], dict):
                 typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
                 resolved = self._normalize_port_type(typed.get("type"))
-                if not resolved:
-                    resolved = self._normalize_port_type(inputs[0].get("portType"))
                 return resolved
             return None
         decl = next(
@@ -238,8 +232,6 @@ class GraphValidator:
             return None
         typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
         resolved = self._normalize_port_type(typed.get("type"))
-        if not resolved:
-            resolved = self._normalize_port_type(decl.get("portType"))
         return resolved
 
     def _adapter_suggestions(

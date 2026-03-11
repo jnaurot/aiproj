@@ -409,13 +409,9 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 				`Component output "${outputName}" must set artifact mode to "current" or "last" before Accept.`
 			);
 		}
-		const portType = normalizeComponentPortType(output?.portType);
-		if (portType == null) {
-			errors.push(`Component output "${outputName}" has no derivable output type.`);
-		}
 		const typedSchemaType = normalizeComponentPortType(output?.typedSchema?.type);
-		if (typedSchemaType == null || typedSchemaType !== portType) {
-			errors.push(`Component output "${outputName}" must keep typedSchema.type aligned with portType.`);
+		if (typedSchemaType == null) {
+			errors.push(`Component output "${outputName}" must declare typedSchema.type.`);
 		}
 	}
 	if (errors.length > 0) return { ok: false, errors };
@@ -2234,13 +2230,12 @@ function buildSavePreflightDiagnostics(
 					severity: 'error'
 				});
 			}
-			const portType = normalizeComponentPortType(out?.portType);
 			const typedSchemaType = normalizeComponentPortType(out?.typedSchema?.type);
-			if (portType == null || typedSchemaType == null || portType !== typedSchemaType) {
+			if (typedSchemaType == null) {
 				diagnostics.push({
-					code: 'COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH',
+					code: 'COMPONENT_OUTPUT_TYPED_SCHEMA_MISSING',
 					path: `${pathBase}.typedSchema.type`,
-					message: `Component output "${outputName}" must keep typedSchema.type aligned with portType.`,
+					message: `Component output "${outputName}" must declare typedSchema.type.`,
 					severity: 'error'
 				});
 			}

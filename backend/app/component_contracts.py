@@ -64,8 +64,7 @@ def _canonical_typed_schema(raw: Optional[Dict[str, Any]], fallback_type: str) -
 
 
 def _canonical_api_port(raw: Dict[str, Any]) -> Dict[str, Any]:
-    raw_port_type = str(raw.get("portType") or "").strip().lower()
-    fallback = raw_port_type if raw_port_type in ALLOWED_PORT_TYPES else "json"
+    fallback = "json"
     typed_schema = _canonical_typed_schema(
         raw.get("typedSchema") if isinstance(raw, dict) else None, fallback
     )
@@ -172,9 +171,10 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
             if port_type and port_type not in ALLOWED_PORT_TYPES:
                 diagnostics.append(
                     ContractDiagnostic(
-                        "INVALID_PORT_TYPE",
+                        "PORT_TYPE_IGNORED",
                         f"{path}.portType",
-                        "portType must be one of: table, json, text, binary, embeddings",
+                        "portType is non-authoritative metadata; invalid value will be ignored in favor of typedSchema.type",
+                        severity="warning",
                     )
                 )
             typed_schema = port.get("typedSchema")

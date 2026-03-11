@@ -1901,8 +1901,6 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if len(outputs) == 1 and isinstance(outputs[0], dict):
             typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
             out_pt = str(typed.get("type") or "").strip().lower()
-            if not out_pt:
-                out_pt = str(outputs[0].get("portType") or "").strip().lower()
             if out_pt == "string":
                 out_pt = "text"
             return out_pt or None
@@ -1925,8 +1923,6 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if len(inputs) == 1 and isinstance(inputs[0], dict):
             typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
             in_pt = str(typed.get("type") or "").strip().lower()
-            if not in_pt:
-                in_pt = str(inputs[0].get("portType") or "").strip().lower()
             if in_pt == "string":
                 in_pt = "text"
             return in_pt or None
@@ -4572,7 +4568,6 @@ async def run_graph(
                                 ),
                             )
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
-                        declared_port_type = str(out_decl.get("portType") or "json").strip().lower() or "json"
                         actual_port_type = str(_infer_artifact_port_type(bound_artifact) or "json").strip().lower() or "json"
                         wrapper_typed = await _component_wrapper_output_typed_schema(
                             artifact_store=context.artifact_store,
@@ -4586,20 +4581,6 @@ async def run_graph(
                         coercion_policy = (
                             _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
                         )
-                        port_compatible = _component_output_port_compatible(
-                            declared_port_type=declared_port_type,
-                            actual_port_type=actual_port_type,
-                            artifact=bound_artifact,
-                        )
-                        if strict_schema_edge_checks and (not port_compatible) and coercion_policy != "allow_lossy":
-                            raise ContractMismatchError(
-                                f"Component output '{out_name}' port type mismatch",
-                                code="COMPONENT_OUTPUT_CONTRACT_MISMATCH",
-                                details=_contract_details(
-                                    expected={"output": out_name, "portType": declared_port_type, "coercionPolicy": coercion_policy},
-                                    actual={"artifactId": bound_artifact_id, "portType": actual_port_type},
-                                ),
-                            )
                         declared_typed = (
                             _normalize_typed_schema_for_runtime(out_decl.get("typedSchema"))
                             if isinstance(out_decl.get("typedSchema"), dict)

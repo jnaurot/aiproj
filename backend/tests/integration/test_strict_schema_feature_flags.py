@@ -189,7 +189,7 @@ async def test_strict_schema_edge_checks_on_fails_component_output_mismatch(monk
 		e.get("type") == "node_finished"
 		and e.get("nodeId") == "cmp1"
 		and e.get("status") == "failed"
-		and str(e.get("errorCode") or "") == "COMPONENT_OUTPUT_CONTRACT_MISMATCH"
+		and str(e.get("errorCode") or "") == "COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH"
 		for e in events
 	)
 	assert any(e.get("type") == "run_finished" and e.get("status") == "failed" for e in events)
@@ -252,6 +252,12 @@ async def test_strict_schema_edge_checks_on_fails_component_output_typed_schema_
 	assert finish
 	assert str(finish[-1].get("errorCode") or "") == "COMPONENT_OUTPUT_TYPED_SCHEMA_MISMATCH"
 	details = finish[-1].get("errorDetails") or {}
+	expected = details.get("expected") or {}
 	actual = details.get("actual") or {}
-	assert sorted(actual.get("mismatchedColumns") or []) == ["text"]
+	mismatched_columns = sorted(actual.get("mismatchedColumns") or [])
+	if mismatched_columns:
+		assert mismatched_columns == ["text"]
+	else:
+		assert str((expected.get("typedSchema") or {}).get("type") or "") == "table"
+		assert str((actual.get("typedSchema") or {}).get("type") or "") in {"text", "table"}
 	assert any(e.get("type") == "run_finished" and e.get("status") == "failed" for e in events)

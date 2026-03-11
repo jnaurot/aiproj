@@ -620,7 +620,7 @@ def test_component_routes_validate_endpoint():
         bad_body = bad.json()
         assert bad_body["ok"] is False
         codes = {d.get("code") for d in bad_body.get("diagnostics", [])}
-        assert "INVALID_PORT_TYPE" in codes
+        assert "PORT_TYPE_IGNORED" in codes
         assert "INVALID_TYPED_SCHEMA_TYPE" in codes
 
 

@@ -302,7 +302,13 @@ def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
     if expected_type in {"table", "text", "json", "binary"}:
         return expected_type
     params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    legacy_source_type = str(params.get("source_type") or "").strip().lower()
+    if legacy_source_type in {"text", "json", "table", "binary"}:
+        return legacy_source_type
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file").strip().lower()
+    # Legacy alias support for older graphs that used source_type as an output contract hint.
+    if source_kind in {"text", "json", "table", "binary"}:
+        return source_kind
     if source_kind == "api":
         return "json"
     if source_kind == "database":
