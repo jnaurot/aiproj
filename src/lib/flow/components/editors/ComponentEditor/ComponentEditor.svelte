@@ -243,10 +243,16 @@ export let onDraft: (
 				if (!id) return null;
 				const kind = String(n?.data?.kind ?? 'node').trim();
 				const name = String(n?.data?.label ?? id).trim() || id;
-				const outPortRaw = String(n?.data?.ports?.out ?? '').trim().toLowerCase();
-				if (PORT_TYPE_OPTIONS.includes(outPortRaw as PortType)) {
-					nextMeta[id] = { outPortType: outPortRaw as PortType };
-				}
+					const outSchemaType = String(
+						n?.data?.schema?.observedSchema?.typedSchema?.type ??
+							n?.data?.schema?.inferredSchema?.typedSchema?.type ??
+							''
+					)
+						.trim()
+						.toLowerCase();
+					if (PORT_TYPE_OPTIONS.includes(outSchemaType as PortType)) {
+						nextMeta[id] = { outPortType: outSchemaType as PortType };
+					}
 				return {
 					id,
 					label: `${kind}: ${name}`

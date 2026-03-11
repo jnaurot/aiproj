@@ -20,6 +20,7 @@ from app.runner.contracts import (
 from app.runner.run import (
     _available_columns_for_port,
     _cached_artifact_contract_mismatch,
+    _declared_out_port,
     _expected_output_schema_error,
     _expected_schema_contract_for_node,
     _missing_column_details,
@@ -167,6 +168,19 @@ def test_expected_schema_source_declared_from_node_schema():
     assert declared["schemaSource"] == "declared"
     assert declared.get("typedSchema", {}).get("type") == "table"
     assert str(declared["schemaFingerprint"])
+
+
+def test_declared_out_port_source_prefers_output_mode_over_file_format():
+    node = _node(
+        "source",
+        source_kind="file",
+        params={
+            "source_type": "file",
+            "file_format": "txt",
+            "output_mode": "table",
+        },
+    )
+    assert _declared_out_port("source", node) == "text"
 
 
 def test_expected_output_schema_runtime_enforcement_missing_field():

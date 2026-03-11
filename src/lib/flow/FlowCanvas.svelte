@@ -9,10 +9,14 @@
 	import { nodeTypes } from '$lib/flow/nodeTypes';
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PortType } from '$lib/flow/types'; //porttype actually in base
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
-	import { graphStore, selectedNode, edgeSchemaDiagnostics } from '$lib/flow/store/graphStore';
+	import {
+		graphStore,
+		selectedNode,
+		edgeSchemaDiagnostics,
+		derivePortsForNodeData
+	} from '$lib/flow/store/graphStore';
 	import type { GraphState, InputResolution } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
-	import PortsEditor from '$lib/flow/components/PortsEditor.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import ToolbarMenu from './components/ToolbarMenu.svelte';
@@ -194,21 +198,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	// keep draft in sync when selection changes
-	$: if ($selectedNode) {
-		const next = JSON.stringify(
-			{
-				params: $selectedNode.data.params ?? {},
-				ports: {
-					in: $selectedNode.data.ports?.in ?? 'table',
-					out: $selectedNode.data.ports?.out ?? 'table'
-				}
-			},
-			null,
-			2
-		);
-	}
+		$: if ($selectedNode) {
+			const next = JSON.stringify(
+				{
+					params: $selectedNode.data.params ?? {}
+				},
+				null,
+				2
+			);
+		}
 	//ViewArtifact
-	type InspectorMode = 'edit' | 'inputs' | 'output' | 'ports';
+	type InspectorMode = 'edit' | 'inputs' | 'output';
 	let inspectorMode: InspectorMode = 'edit';
 	let inspectorTopWeight = 2;
 	let environmentWeight = 1;
@@ -292,11 +292,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				label?: string;
 				sourceKind?: string;
 				transformKind?: string;
-				llmKind?: string;
-				componentKind?: string;
-				ports?: { in?: unknown; out?: unknown };
-				params?: unknown;
-			};
+					llmKind?: string;
+					componentKind?: string;
+					params?: unknown;
+				};
 		}>;
 		edges: Array<{
 			id: string;
@@ -377,7 +376,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$selectedNode?.data?.kind === 'component'
 			? String(($selectedNode.data.meta as any)?.componentLatestRevisionId ?? '').trim()
 			: '';
-	$: hasInputs = Boolean($selectedNode && $selectedNode.data?.ports?.in !== null && $selectedNode.data?.ports?.in !== undefined);
+		$: hasInputs = Boolean($selectedNode && derivePortsForNodeData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
 	$: activeArtifactId =
@@ -590,11 +589,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		nodeList: Node<PipelineNodeData>[],
 		edgeList: Edge<PipelineEdgeData>[]
 	): CanonicalGraphSnapshot {
-		const nodesCanonical = [...(nodeList ?? [])]
-			.map((node) => {
-				const data = (node?.data ?? {}) as Record<string, unknown>;
-				const ports = (data.ports ?? {}) as Record<string, unknown>;
-				return {
+			const nodesCanonical = [...(nodeList ?? [])]
+				.map((node) => {
+					const data = (node?.data ?? {}) as Record<string, unknown>;
+					return {
 					id: String(node?.id ?? ''),
 					type: String(node?.type ?? ''),
 					position: {
@@ -604,18 +602,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					data: {
 						kind: typeof data.kind === 'string' ? data.kind : undefined,
 						label: typeof data.label === 'string' ? data.label : undefined,
-						sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
-						transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
-						llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
-						componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
-						ports: {
-							in: ports.in ?? null,
-							out: ports.out ?? null
-						},
-						params: stableCanonicalValue(data.params ?? {})
-					}
-				};
-			})
+							sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
+							transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
+							llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
+							componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
+							params: stableCanonicalValue(data.params ?? {})
+						}
+					};
+				})
 			.sort((a, b) => a.id.localeCompare(b.id));
 
 		const edgesCanonical = [...(edgeList ?? [])]
@@ -925,14 +919,10 @@ async function scrollToBottom() {
 				id: preset.id,
 				name: preset.name,
 				subtype: String(preset.subtype),
-				appliedAt: new Date().toISOString(),
-				appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>),
-				appliedPorts: {
-					in: node.data.ports?.in ?? null,
-					out: node.data.ports?.out ?? null
+					appliedAt: new Date().toISOString(),
+					appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>)
 				}
-			}
-		});
+			});
 		if (result.mode === 'updated') {
 			showToast(`Preset "${preset.name}" overwritten.`, 'info');
 		}
@@ -1031,14 +1021,10 @@ async function scrollToBottom() {
 				id: String(currentRef.id),
 				name: String(currentRef.name),
 				subtype: currentRef.subtype ? String(currentRef.subtype) : undefined,
-				appliedAt: new Date().toISOString(),
-				appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>),
-				appliedPorts: {
-					in: node.data.ports?.in ?? null,
-					out: node.data.ports?.out ?? null
+					appliedAt: new Date().toISOString(),
+					appliedParams: structuredClone((node.data.params ?? {}) as Record<string, unknown>)
 				}
-			}
-		});
+			});
 	}
 
 	function applyPresetToNode(nodeId: string, preset: NodePreset): void {
@@ -1051,13 +1037,9 @@ async function scrollToBottom() {
 		} else {
 			graphStore.setToolProvider(nodeId, preset.subtype as ToolProvider);
 		}
-		graphStore.updateNodeConfig(nodeId, {
-			params: structuredClone(preset.params),
-			ports: {
-				in: preset.ports?.in ?? null,
-				out: preset.ports?.out ?? null
-			}
-		});
+			graphStore.updateNodeConfig(nodeId, {
+				params: structuredClone(preset.params)
+			});
 		syncPresetBaselineFromNode(nodeId, {
 			id: preset.id,
 			name: preset.name,
@@ -1093,13 +1075,9 @@ async function scrollToBottom() {
 		} else if (preset.kind === 'tool' && preset.toolProvider) {
 			graphStore.setToolProvider(nodeId, preset.toolProvider);
 		}
-		graphStore.updateNodeConfig(nodeId, {
-			params: structuredClone(preset.params),
-			ports: {
-				in: preset.ports?.in ?? null,
-				out: preset.ports?.out ?? null
-			}
-		});
+			graphStore.updateNodeConfig(nodeId, {
+				params: structuredClone(preset.params)
+			});
 		showToast(`Applied preset: ${preset.name}`, 'info');
 	}
 
@@ -1149,33 +1127,23 @@ async function scrollToBottom() {
 				graphStore.setToolProvider(nodeId, definition.toolProvider);
 			}
 			graphStore.updateNodeTitle(nodeId, definition.label);
-			graphStore.updateNodeConfig(nodeId, {
-				params: structuredClone(definition.params ?? {}),
-				ports: {
-					in: definition.ports?.in ?? null,
-					out: definition.ports?.out ?? null
-				}
-			});
+				graphStore.updateNodeConfig(nodeId, {
+					params: structuredClone(definition.params ?? {})
+				});
 		}
-		for (const edge of template.edges) {
-			const source = nodeIdByTemplateId[edge.source];
-			const target = nodeIdByTemplateId[edge.target];
-			if (!source || !target) continue;
-			const sourceTemplate = template.nodes.find((n) => n.id === edge.source);
-			const targetTemplate = template.nodes.find((n) => n.id === edge.target);
-			graphStore.addEdge({
+			for (const edge of template.edges) {
+				const source = nodeIdByTemplateId[edge.source];
+				const target = nodeIdByTemplateId[edge.target];
+				if (!source || !target) continue;
+				graphStore.addEdge({
 				id: `e_${crypto.randomUUID()}`,
 				source,
 				target,
-				markerEnd: { type: MarkerType.ArrowClosed },
-				data: {
-					exec: 'idle',
-					contract: {
-						out: sourceTemplate?.ports?.out ?? null,
-						in: targetTemplate?.ports?.in ?? null
+					markerEnd: { type: MarkerType.ArrowClosed },
+					data: {
+						exec: 'idle'
 					}
-				}
-			});
+				});
 		}
 		const focusId = nodeIdByTemplateId[template.nodes[template.nodes.length - 1]?.id ?? ''];
 		if (focusId) graphStore.selectNode(focusId);
@@ -1549,8 +1517,8 @@ async function scrollToBottom() {
 		const leaves = graphNodes.filter((n) => (outDegree.get(String(n.id)) ?? 0) === 0);
 		const primaryRoot = roots[0];
 		const primaryLeaf = leaves[0];
-		const inputPortType = (primaryRoot?.data?.ports?.in ?? null) as PortType | null;
-		const outputPortType = (primaryLeaf?.data?.ports?.out ?? null) as PortType | null;
+			const inputPortType = (primaryRoot ? derivePortsForNodeData(primaryRoot.data).in : null) as PortType | null;
+			const outputPortType = (primaryLeaf ? derivePortsForNodeData(primaryLeaf.data).out : null) as PortType | null;
 		const inputs: ComponentApiContract['inputs'] =
 			inputPortType == null
 				? []
@@ -2565,13 +2533,6 @@ async function scrollToBottom() {
 								>
 									Output
 								</button>
-								<button
-									class="tabBtn"
-									class:active={inspectorMode === 'ports'}
-									on:click={() => (inspectorMode = 'ports')}
-								>
-									Ports
-								</button>
 								{#if inspectorMode === 'edit' && $selectedNode}
 									<select
 										class="nodeTypeSwitch"
@@ -2728,8 +2689,6 @@ async function scrollToBottom() {
 										preview={nodeOut.preview}
 										onJumpToNode={jumpToNodeFromArtifact}
 									/>
-								{:else}
-									<PortsEditor selectedNode={$selectedNode} />
 								{/if}
 							</div>
 

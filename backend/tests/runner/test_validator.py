@@ -165,8 +165,8 @@ class TestValidator:
         
         assert validation_result["valid"]
     
-    def test_validate_missing_output_ports(self):
-        """Test nodes missing output ports"""
+    def test_validate_legacy_ports_are_ignored(self):
+        """Legacy top-level ports field does not affect validation."""
         nodes = [
             {"id": "source-1", "data": {"kind": "source"}, "ports": []},
             {"id": "llm-1", "data": {"kind": "llm"}, "ports": []}
@@ -177,9 +177,8 @@ class TestValidator:
         ]
         
         validation_result = validate_pipeline(nodes, edges)
-        
-        # This should fail due to missing ports
-        assert not validation_result["valid"]
+
+        assert validation_result["valid"]
 
 
 class TestEdgeValidation:

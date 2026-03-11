@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
 
-import { graphStore } from './graphStore';
+import { graphStore, derivePortsForNodeData } from './graphStore';
 
 describe('graphStore component integration', () => {
 	it('applies component revision to node and derives immutable ports from API contract', async () => {
@@ -79,8 +79,8 @@ describe('graphStore component integration', () => {
 			const state = get(graphStore);
 			const node = state.nodes.find((n) => n.id === nodeId);
 			expect(node).toBeTruthy();
-			expect(node?.data?.ports?.in).toBe('table');
-			expect(node?.data?.ports?.out).toBeNull();
+			expect(node ? derivePortsForNodeData(node.data).in : null).toBe('table');
+			expect(node ? derivePortsForNodeData(node.data).out : null).toBeNull();
 			expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_test');
 			expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_1');
 		} finally {
@@ -226,13 +226,13 @@ describe('graphStore component integration', () => {
 			expect((res as any)?.ok).toBe(true);
 
 			const state = get(graphStore);
-			const node = state.nodes.find((n) => n.id === nodeId);
-			expect(node).toBeTruthy();
-			expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_dst');
-			expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_dst');
-			expect(node?.data?.ports?.in).toBe('table');
-			expect(node?.data?.ports?.out).toBeNull();
-		} finally {
+				const node = state.nodes.find((n) => n.id === nodeId);
+				expect(node).toBeTruthy();
+				expect((node?.data?.params as any)?.componentRef?.componentId).toBe('cmp_dst');
+				expect((node?.data?.params as any)?.componentRef?.revisionId).toBe('crev_dst');
+				expect(node ? derivePortsForNodeData(node.data).in : null).toBe('table');
+				expect(node ? derivePortsForNodeData(node.data).out : null).toBeNull();
+			} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
@@ -1571,26 +1571,73 @@ describe('graphStore component integration', () => {
 		}
 	});
 
-	it('blocks save preflight when downstream edge has port type mismatch', async () => {
+	it('does not block save preflight for unconstrained downstream schema', async () => {
 		graphStore.hardResetGraph();
-		const sourceId = graphStore.addNode('source', { x: 10, y: 10 });
-		const llmId = graphStore.addNode('llm', { x: 280, y: 20 });
-		graphStore.updateNodeConfig(sourceId, { ports: { in: null, out: 'json' } });
-		graphStore.updateNodeConfig(llmId, { ports: { in: 'text', out: 'text' } });
-		graphStore.syncFromCanvas(get(graphStore).nodes as any, [
+		const sourceId = 'n_source_schema_json';
+		const llmId = 'n_llm_schema_text';
+		graphStore.loadGraphDocument(
 			{
-				id: 'e_mismatch_save',
-				source: sourceId,
-				sourceHandle: 'out',
-				target: llmId,
-				targetHandle: 'in',
-				data: { exec: 'idle' }
-			}
-		] as any);
-		const result = await graphStore.saveGraph('save');
-		expect((result as any)?.ok).toBe(false);
-		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
-		expect(String((result as any)?.error ?? '')).toContain('CONTRACT_EDGE_PORT_TYPE_MISMATCH');
+				nodes: [
+					{
+						id: sourceId,
+						type: 'default',
+						position: { x: 10, y: 10 },
+						data: {
+							kind: 'source',
+							label: 'Source',
+							sourceKind: 'file',
+							params: { file_format: 'txt' },
+							schema: {
+								inferredSchema: {
+									source: 'sample',
+									state: 'fresh',
+									typedSchema: { type: 'json', fields: [] }
+								}
+							},
+							status: 'idle'
+						}
+					},
+					{
+						id: llmId,
+						type: 'default',
+						position: { x: 280, y: 20 },
+						data: {
+							kind: 'llm',
+							label: 'LLM',
+							params: {},
+							schema: {
+								expectedSchema: {
+									source: 'declared',
+									typedSchema: { type: 'text', fields: [] }
+								}
+							},
+							status: 'idle'
+						}
+					}
+				],
+				edges: [
+					{
+						id: 'e_mismatch_save',
+						source: sourceId,
+						sourceHandle: 'out',
+						target: llmId,
+						targetHandle: 'in',
+						data: {
+							exec: 'idle',
+							contract: {
+								payload: {
+									source: { type: 'json' },
+									target: { type: 'text' }
+								}
+							}
+						}
+					}
+				]
+			},
+			null
+		);
+		const preflight = graphStore.getSavePreflight();
+		expect(preflight.ok).toBe(true);
 	});
 
 	it('blocks save preflight when edge is missing required typed schema coverage', async () => {

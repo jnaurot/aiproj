@@ -1,6 +1,6 @@
 import type { Node } from '@xyflow/svelte';
 
-import type { PipelineNodeData, NodeKind, PortType } from '$lib/flow/types';
+import type { PipelineNodeData, NodeKind } from '$lib/flow/types';
 import type { SourceKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 
 export type GuidedStarterTemplateNode = {
@@ -12,7 +12,6 @@ export type GuidedStarterTemplateNode = {
 	transformKind?: TransformKind;
 	toolProvider?: ToolProvider;
 	params: Record<string, unknown>;
-	ports: { in: PortType | null; out: PortType | null };
 };
 
 export type GuidedStarterTemplate = {
@@ -32,7 +31,6 @@ export type GuidedOperationPreset = {
 	transformKind?: TransformKind;
 	toolProvider?: ToolProvider;
 	params: Record<string, unknown>;
-	ports: { in?: PortType | null; out?: PortType | null };
 };
 
 export type GuidedRecommendation = {
@@ -60,10 +58,8 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 					source_type: 'file',
 					filename: 'train.csv',
 					file_format: 'csv',
-					output_mode: 'table',
 					cache_enabled: true,
 				},
-				ports: { in: null, out: 'table' },
 			},
 			{
 				id: 'select',
@@ -75,7 +71,6 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 					op: 'select',
 					select: { mode: 'include', strict: true, columns: ['x1', 'x2', 'label'] },
 				},
-				ports: { in: 'table', out: 'table' },
 			},
 			{
 				id: 'train',
@@ -95,7 +90,6 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 						},
 					},
 				},
-				ports: { in: 'table', out: 'json' },
 			},
 		],
 		edges: [
@@ -118,10 +112,8 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 					source_type: 'file',
 					filename: 'train.csv',
 					file_format: 'csv',
-					output_mode: 'table',
 					cache_enabled: true,
 				},
-				ports: { in: null, out: 'table' },
 			},
 			{
 				id: 'quality',
@@ -138,7 +130,6 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 						],
 					},
 				},
-				ports: { in: 'table', out: 'table' },
 			},
 			{
 				id: 'train',
@@ -157,7 +148,6 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 						},
 					},
 				},
-				ports: { in: 'table', out: 'json' },
 			},
 		],
 		edges: [
@@ -181,7 +171,6 @@ export const DSML_OPERATION_PRESETS: GuidedOperationPreset[] = [
 				checks: [{ kind: 'null_pct', column: 'target', maxNullPct: 0.02, severity: 'error' }],
 			},
 		},
-		ports: { in: 'table', out: 'table' },
 	},
 	{
 		id: 'preset_tool_ml_train_classifier',
@@ -197,7 +186,6 @@ export const DSML_OPERATION_PRESETS: GuidedOperationPreset[] = [
 				args: { label_col: 'label', feature_cols: ['x1', 'x2'], max_iter: 200 },
 			},
 		},
-		ports: { in: 'table', out: 'json' },
 	},
 	{
 		id: 'preset_tool_ml_train_regressor',
@@ -213,7 +201,6 @@ export const DSML_OPERATION_PRESETS: GuidedOperationPreset[] = [
 				args: { label_col: 'target', feature_cols: ['x1', 'x2'] },
 			},
 		},
-		ports: { in: 'table', out: 'json' },
 	},
 ];
 

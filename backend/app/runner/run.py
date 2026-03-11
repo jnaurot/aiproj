@@ -25,7 +25,6 @@ from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
-from .capabilities import allowed_ports
 from .contracts import (
     TABLE_V1,
     canonical_table_columns,
@@ -418,7 +417,7 @@ def _tool_exec_key(
     graph_id: str = "test_graph",
     node_id: str = "tool",
 ) -> str:
-    node = {"data": {"kind": "tool", "ports": {}, "schema": {}, "settings": {}}}
+    node = {"data": {"kind": "tool", "schema": {}, "settings": {}}}
     node_state_hash = build_node_state_hash(
         node=node,
         params=params or {},
@@ -446,7 +445,7 @@ def _transform_exec_key(
     graph_id: str = "test_graph",
     node_id: str = "transform",
 ) -> str:
-    node = {"data": {"kind": "transform", "ports": {}, "schema": {}, "settings": {}}}
+    node = {"data": {"kind": "transform", "schema": {}, "settings": {}}}
     node_state_hash = build_node_state_hash(
         node=node,
         params=normalized_params or {},
@@ -1660,6 +1659,26 @@ def _declared_expected_typed_schema_from_node(node: Dict[str, Any]) -> Optional[
     return {"type": typed_type, "fields": fields}
 
 
+def _node_typed_schema_type_from_node(node: Dict[str, Any]) -> Optional[str]:
+    data = node.get("data", {}) if isinstance(node, dict) else {}
+    schema_env = data.get("schema") if isinstance(data, dict) and isinstance(data.get("schema"), dict) else {}
+    if not isinstance(schema_env, dict):
+        return None
+    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+        obs = schema_env.get(key)
+        if not isinstance(obs, dict):
+            continue
+        typed = obs.get("typedSchema")
+        if not isinstance(typed, dict):
+            continue
+        typed_type = str(typed.get("type") or "").strip().lower()
+        if typed_type == "string":
+            typed_type = "text"
+        if typed_type in {"table", "json", "text", "binary", "embeddings"}:
+            return typed_type
+    return None
+
+
 def _source_table_provenance(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file").lower()
@@ -1818,27 +1837,96 @@ def _normalize_mime_strict(mime_type: str) -> str:
 
 
 def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
-    ports = (node.get("data", {}).get("ports", {}) or {})
+    params = (node.get("data", {}).get("params", {}) or {})
     if kind == "llm":
-        params = (node.get("data", {}).get("params", {}) or {})
-        output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
-        if output_mode == "json":
-            return "json"
-        if output_mode == "embeddings":
-            return "embeddings"
+        typed_type = _node_typed_schema_type_from_node(node)
+        if typed_type in {"json", "embeddings", "text"}:
+            return typed_type
         return "text"
-    declared = ports.get("out")
-    if declared:
-        return str(declared)
+    if kind == "source":
+        declared_typed = _declared_expected_typed_schema_from_node(node)
+        if isinstance(declared_typed, dict):
+            declared_type = str(declared_typed.get("type") or "").strip().lower()
+            if declared_type in {"table", "text", "json", "binary"}:
+                return declared_type
+        source_kind = str(params.get("sourceKind") or params.get("source_type") or "file").strip().lower()
+        if source_kind == "file":
+            file_format = str(params.get("file_format") or "").strip().lower()
+            if file_format in {"csv", "tsv", "parquet", "arrow", "feather", "xlsx", "xls"}:
+                return "table"
+            if file_format in {"json", "jsonl"}:
+                return "json"
+            if file_format in {"txt", "pdf"}:
+                return "text"
+            if file_format in {
+                "jpg",
+                "jpeg",
+                "png",
+                "webp",
+                "gif",
+                "svg",
+                "tif",
+                "tiff",
+                "mp3",
+                "wav",
+                "flac",
+                "ogg",
+                "m4a",
+                "aac",
+                "mp4",
+                "mov",
+                "webm",
+            }:
+                return "binary"
+            return "text"
+        if source_kind == "api":
+            return "json"
+        if source_kind == "database":
+            return "table"
+        if source_kind == "json":
+            return "json"
+        if source_kind == "table":
+            return "table"
+        return "text"
     if kind == "transform":
         return "table"
     if kind == "tool":
-        return "json"
+        typed_type = _node_typed_schema_type_from_node(node)
+        if typed_type in {"json", "text", "binary"}:
+            return typed_type
+        return None
+    if kind == "component":
+        api = params.get("api") if isinstance(params.get("api"), dict) else {}
+        outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
+        if len(outputs) == 1 and isinstance(outputs[0], dict):
+            typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
+            out_pt = str(typed.get("type") or "").strip().lower()
+            if out_pt == "string":
+                out_pt = "text"
+            return out_pt or None
     return None
 
 
-def _allowed_ports(kind: str, direction: str, provider: Optional[str] = None) -> set[str]:
-    return allowed_ports(kind, direction, provider=provider)
+def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
+    params = (node.get("data", {}).get("params", {}) or {})
+    if kind == "source":
+        return None
+    if kind == "transform":
+        return "table"
+    if kind == "llm":
+        return "text"
+    if kind == "tool":
+        return None
+    if kind == "component":
+        api = params.get("api") if isinstance(params.get("api"), dict) else {}
+        inputs = api.get("inputs") if isinstance(api.get("inputs"), list) else []
+        if len(inputs) == 1 and isinstance(inputs[0], dict):
+            typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
+            in_pt = str(typed.get("type") or "").strip().lower()
+            if in_pt == "string":
+                in_pt = "text"
+            return in_pt or None
+    return None
 
 
 def _cached_artifact_contract_mismatch(
@@ -2029,7 +2117,18 @@ def _expected_tool_profile_locks(resolved_env: Dict[str, Any]) -> Dict[str, str]
 def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
     env: Dict[str, Any]
     if kind == "llm":
-        output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
+        output_cfg = params.get("output") if isinstance(params.get("output"), dict) else {}
+        output_schema = params.get("output_schema")
+        if output_schema is None and isinstance(output_cfg, dict):
+            output_schema = output_cfg.get("jsonSchema")
+        embedding_contract = params.get("embedding_contract")
+        if embedding_contract is None and isinstance(output_cfg, dict):
+            embedding_contract = output_cfg.get("embedding")
+        llm_output_type = "text"
+        if isinstance(embedding_contract, dict) and embedding_contract:
+            llm_output_type = "embeddings"
+        elif isinstance(output_schema, dict) and output_schema:
+            llm_output_type = "json"
         input_encoding = str((params.get("input_encoding") or params.get("inputEncoding") or "text"))
         env = {
             "llm_input_format": "artifact_input_v2",
@@ -2039,7 +2138,7 @@ def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, An
             "llm_table_max_cols": _env_int("LLM_TABLE_MAX_COLS", 50),
             "llm_prompt_max_chars": _env_int("LLM_PROMPT_MAX_CHARS", 20000),
             "llm_table_sort_rows": _env_bool("LLM_TABLE_SORT_ROWS", True),
-            "llm_output_mode": output_mode,
+            "llm_output_type": llm_output_type,
         }
     elif kind == "transform":
         env = {"transform_engine": "duckdb"}
@@ -2764,7 +2863,6 @@ async def run_graph(
             n = nodes[node_id]
             kind = n["data"]["kind"]
             params = n["data"].get("params", {}) or {}
-            ports = (n.get("data", {}).get("ports", {}) or {})
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
             component_ctx = (
@@ -2897,7 +2995,6 @@ async def run_graph(
                 "node": n,
                 "kind": kind,
                 "params": params,
-                "ports": ports,
                 "tool_provider": tool_provider,
                 "determinism_env": determinism_env,
                 "tool_mode": tool_mode,
@@ -2940,7 +3037,6 @@ async def run_graph(
             n = resolved["node"]
             kind = resolved["kind"]
             params = resolved["params"]
-            ports = resolved["ports"]
             tool_provider = resolved["tool_provider"]
             determinism_env = resolved["determinism_env"]
             tool_mode = resolved["tool_mode"]
@@ -2974,28 +3070,8 @@ async def run_graph(
                     "expectedSchemaFingerprint": (expected_schema or {}).get("schemaFingerprint"),
                 })
 
-            allowed_in = _allowed_ports(kind, "in", provider=tool_provider)
-            allowed_out = _allowed_ports(kind, "out", provider=tool_provider)
-            declared_in = ports.get("in")
-            declared_out = ports.get("out")
+            declared_in = _declared_in_port(kind, n)
             preflight_error: Optional[ContractMismatchError] = resolve_input_refs_error
-            if kind != "source" and declared_in is not None and str(declared_in) not in allowed_in:
-                preflight_error = ContractMismatchError(
-                    f"{kind.capitalize()} output contract mismatch: unsupported input port '{declared_in}'",
-                    details=_contract_details(
-                        expected={"allowedInPortTypes": sorted(allowed_in)},
-                        actual={"inPortType": str(declared_in)},
-                    ),
-                )
-
-            if (preflight_error is None) and declared_out is not None and str(declared_out) not in allowed_out:
-                preflight_error = ContractMismatchError(
-                    f"{kind.capitalize()} output contract mismatch: unsupported output port '{declared_out}'",
-                    details=_contract_details(
-                        expected={"allowedOutPortTypes": sorted(allowed_out)},
-                        actual={"outPortType": str(declared_out)},
-                    ),
-                )
             if preflight_error is None:
                 preflight_error = _tool_builtin_env_preflight_error(
                     kind=kind,
@@ -3247,7 +3323,7 @@ async def run_graph(
                         "at": iso_now(),
                         "artifactId": cached_artifact_id,
                         "mimeType": cached_art.mime_type,
-                        "portType": cached_art.port_type or ((n.get("data", {}).get("ports", {}) or {}).get("out")),
+                        "portType": cached_art.port_type or _declared_out_port(kind, n),
                         "cached": True,
                     })
 
@@ -3318,9 +3394,6 @@ async def run_graph(
                     print("[run_graph] bound artifact", artifact_id[:10], "to node", node_id)
 ###
                 elif kind == "transform":
-                    ports = (n.get("data", {}).get("ports", {}) or {})
-                    in_contract = ports.get("in") or "table"
-                    out_contract = ports.get("out") or "table"
                     transform_kind = str((n.get("data", {}) or {}).get("transformKind") or "").lower()
                     op_hint = str((params or {}).get("op") or "").lower()
                     transform_op = op_hint or transform_kind
@@ -3331,28 +3404,9 @@ async def run_graph(
                         else {"table", "json", "text"}
                     )
                     expected_out_contract = "json" if transform_op == "table_to_json" else "table"
-                    if in_contract not in allowed_in_contracts:
-                        raise ContractMismatchError(
-                            (
-                                "Transform output contract mismatch: "
-                                f"in must be one of {sorted(allowed_in_contracts)}, got '{in_contract}'"
-                            ),
-                            details=_contract_details(
-                                expected={"portTypes": sorted(allowed_in_contracts)},
-                                actual={"portType": str(in_contract)},
-                            ),
-                        )
-                    if out_contract != expected_out_contract:
-                        raise ContractMismatchError(
-                            (
-                                "Transform output contract mismatch: "
-                                f"out must be '{expected_out_contract}', got '{out_contract}'"
-                            ),
-                            details=_contract_details(
-                                expected={"portType": expected_out_contract},
-                                actual={"portType": str(out_contract)},
-                            ),
-                        )
+                    # Transform contract is derived by operation, not authored ports.
+                    in_contract = sorted(allowed_in_contracts)[0] if len(allowed_in_contracts) == 1 else "table"
+                    out_contract = expected_out_contract
 
                     await _emit({
                         "type": "log",
@@ -4018,12 +4072,6 @@ async def run_graph(
                         # 5) store artifact bytes + cache
                         artifact_id = exec_key  # keep your convention
 
-                        llm_output_mode = str((norm_params.get("output_mode") or ((norm_params.get("output") or {}).get("mode")) or "text")) if kind == "llm" else ""
-                        llm_port_type = "text"
-                        if llm_output_mode == "json":
-                            llm_port_type = "json"
-                        elif llm_output_mode == "embeddings":
-                            llm_port_type = "embeddings"
                         created_at_dt = datetime.now(timezone.utc)
                         transform_port_type = str(
                             (
@@ -4322,18 +4370,7 @@ async def run_graph(
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] bound node ids:", [b.node_id for b in context.bindings.all()])
 
-                    llm_in_contract = str((ports.get("in") or "text"))
-                    llm_allowed_in = _allowed_ports("llm", "in")
-
-                    if llm_in_contract not in llm_allowed_in:
-                        raise ContractMismatchError(
-                            f"LLM input contract mismatch: unsupported input port '{llm_in_contract}'",
-                            code="LLM_INPUT_PORT_UNSUPPORTED",
-                            details=_contract_details(
-                                expected={"allowedInPortTypes": sorted(llm_allowed_in)},
-                                actual={"inPortType": llm_in_contract},
-                            ),
-                        )
+                    llm_in_contract = str((_declared_in_port("llm", n) or "text"))
 
                     # Canonical upstream artifact list (preserve port mapping order if present)
                     llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
@@ -4341,16 +4378,6 @@ async def run_graph(
                     for upstream_id in llm_upstream_ids:
                         upstream_art = await context.artifact_store.get(upstream_id)
                         upstream_pt = _infer_artifact_port_type(upstream_art)
-
-                        if upstream_pt not in llm_allowed_in:
-                            raise ContractMismatchError(
-                                f"LLM input contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
-                                code="LLM_UPSTREAM_PORT_UNSUPPORTED",
-                                details=_contract_details(
-                                    expected={"allowedInPortTypes": sorted(llm_allowed_in)},
-                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
-                                ),
-                            )
 
                         if upstream_pt != llm_in_contract:
                             if strict_schema_edge_checks:
@@ -4385,51 +4412,33 @@ async def run_graph(
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")
                     tool_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
-                    tool_in_contract = str((ports.get("in") or "json"))
-                    tool_allowed_in = _allowed_ports("tool", "in", provider=tool_provider)
-                    if tool_in_contract not in tool_allowed_in:
-                        raise ContractMismatchError(
-                            f"Tool output contract mismatch: unsupported input port '{tool_in_contract}'",
-                            code="TOOL_INPUT_PORT_UNSUPPORTED",
-                            details=_contract_details(
-                                expected={"allowedInPortTypes": sorted(tool_allowed_in)},
-                                actual={"inPortType": tool_in_contract},
-                                ),
-                            )
-                    for upstream_id in tool_upstream_ids:
-                        upstream_art = await context.artifact_store.get(upstream_id)
-                        upstream_pt = _infer_artifact_port_type(upstream_art)
-                        if upstream_pt not in tool_allowed_in:
-                            raise ContractMismatchError(
-                                f"Tool output contract mismatch: upstream artifact port_type '{upstream_pt}' is not supported",
-                                code="TOOL_UPSTREAM_PORT_UNSUPPORTED",
-                                details=_contract_details(
-                                    expected={"allowedInPortTypes": sorted(tool_allowed_in)},
-                                    actual={"artifactId": upstream_id, "portType": upstream_pt},
-                                ),
-                            )
-                        if upstream_pt != tool_in_contract:
-                            if strict_schema_edge_checks:
-                                raise ContractMismatchError(
-                                    "Tool output contract mismatch: upstream artifact port_type does not match node in port",
-                                    code="TOOL_INPUT_PORT_MISMATCH",
-                                    details=_contract_details(
-                                        expected={"inPortType": tool_in_contract},
-                                        actual={"artifactId": upstream_id, "portType": upstream_pt},
+                    tool_in_contract = _declared_in_port("tool", n)
+                    if tool_in_contract:
+                        for upstream_id in tool_upstream_ids:
+                            upstream_art = await context.artifact_store.get(upstream_id)
+                            upstream_pt = _infer_artifact_port_type(upstream_art)
+                            if upstream_pt != tool_in_contract:
+                                if strict_schema_edge_checks:
+                                    raise ContractMismatchError(
+                                        "Tool output contract mismatch: upstream artifact port_type does not match node in port",
+                                        code="TOOL_INPUT_PORT_MISMATCH",
+                                        details=_contract_details(
+                                            expected={"inPortType": tool_in_contract},
+                                            actual={"artifactId": upstream_id, "portType": upstream_pt},
+                                        ),
+                                    )
+                                await _emit({
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "warn",
+                                    "message": (
+                                        f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
+                                        f"port type {upstream_pt} coerced to {tool_in_contract} "
+                                        "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                     ),
-                                )
-                            await _emit({
-                                "type": "log",
-                                "runId": run_id,
-                                "at": iso_now(),
-                                "level": "warn",
-                                "message": (
-                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
-                                    f"port type {upstream_pt} coerced to {tool_in_contract} "
-                                    "(STRICT_SCHEMA_EDGE_CHECKS=off)"
-                                ),
-                                "nodeId": node_id,
-                            })
+                                    "nodeId": node_id,
+                                })
 
                     tool_params_runtime = dict(params)
                     tool_params_runtime["_request_fingerprint"] = exec_key
@@ -4689,16 +4698,9 @@ async def run_graph(
                     data_value = getattr(output, "data", None)
 
                     if kind == "source":
-                        declared_source_out = (((n.get("data", {}) or {}).get("ports", {}) or {}).get("out"))
                         out_contract = str(
-                            (declared_source_out if declared_source_out else None)
-                            or (params.get("output_mode") if isinstance(params, dict) else None)
-                            or (
-                                (params.get("output") or {}).get("mode")
-                                if isinstance(params, dict) and isinstance(params.get("output"), dict)
-                                else None
-                            )
-                            or "table"
+                            (_declared_out_port("source", n))
+                            or "text"
                         )
 
                         if out_contract == "table":
@@ -4749,17 +4751,7 @@ async def run_graph(
                             )
 
                     elif kind == "llm":
-                        output_cfg = params.get("output") if isinstance(params, dict) else {}
-                        output_mode = str(
-                            (params.get("output_mode") if isinstance(params, dict) else None)
-                            or (output_cfg.get("mode") if isinstance(output_cfg, dict) else None)
-                            or "text"
-                        )
-                        out_contract = "text"
-                        if output_mode == "json":
-                            out_contract = "json"
-                        elif output_mode == "embeddings":
-                            out_contract = "embeddings"
+                        out_contract = str(_declared_out_port("llm", n) or "text")
 
                         if out_contract == "json":
                             if data_value is None:
@@ -4831,14 +4823,13 @@ async def run_graph(
                             )
 
                     elif kind == "tool":
-                        ports = (n.get("data", {}).get("ports", {}) or {})
-                        out_contract = ports.get("out") or "json"
                         envelope = data_value if isinstance(data_value, dict) else {
                             "kind": "json",
                             "payload": data_value,
                             "meta": {"status": "ok"},
                         }
                         envelope_kind = str(envelope.get("kind") or "json")
+                        out_contract = _declared_out_port("tool", n) or envelope_kind
                         payload = envelope.get("payload")
                         envelope_mime = envelope.get("mime") or envelope.get("content_type")
                         envelope_mime = (
@@ -4895,28 +4886,15 @@ async def run_graph(
                     artifact_params_hash = (
                         node_state_hash
                     )
-                    artifact_port_type = ((n.get("data", {}).get("ports", {}) or {}).get("out"))
+                    artifact_port_type = _declared_out_port(kind, n)
                     if kind == "source":
-                        declared_source_out = (((n.get("data", {}) or {}).get("ports", {}) or {}).get("out"))
                         artifact_port_type = str(
-                            (declared_source_out if declared_source_out else None)
-                            or (params.get("output_mode") if isinstance(params, dict) else None)
-                            or (
-                                (params.get("output") or {}).get("mode")
-                                if isinstance(params, dict) and isinstance(params.get("output"), dict)
-                                else None
-                            )
+                            (_declared_out_port("source", n))
                             or artifact_port_type
-                            or "table"
+                            or "text"
                         )
                     if kind == "llm":
-                        llm_output_mode = str((params.get("output_mode") or ((params.get("output") or {}).get("mode")) or "text"))
-                        if llm_output_mode == "json":
-                            artifact_port_type = "json"
-                        elif llm_output_mode == "embeddings":
-                            artifact_port_type = "embeddings"
-                        else:
-                            artifact_port_type = "text"
+                        artifact_port_type = str(_declared_out_port("llm", n) or "text")
 
                     base_payload_schema = (
                         _source_payload_schema(

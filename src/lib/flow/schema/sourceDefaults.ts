@@ -13,7 +13,7 @@ export const defaultSourceFileParams: SourceFileParams = {
     sheet_name: "Sheet1",
     encoding: "utf-8",
     cache_enabled: true,
-    output: { mode: "table" }
+    output: { mode: "text" }
 };
 
 export const defaultSourceDatabaseParams: SourceDatabaseParams = {
@@ -56,5 +56,4 @@ export const defaultSourceNodeData = {
     label: "Source",
     params: defaultSourceParams,
     status: "idle" as const,
-    ports: { in: null, out: "table" as const },
 };

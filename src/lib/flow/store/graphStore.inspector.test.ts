@@ -20,14 +20,13 @@ function sourceNodeParams(nodeId: string): Record<string, any> {
 }
 
 describe('graphStore snapshot scoped commit', () => {
-	it('rejects authored port changes because ports are derived metadata', () => {
+	it('ignores authored port changes because ports are no longer authored config', () => {
 		const nodeId = setupSourceNode();
 		const initial = sourceNodeParams(nodeId);
 		expect(initial.output?.mode).toBeTruthy();
 
 		const result = graphStore.updateNodeConfig(nodeId, { ports: { out: 'json' } });
-		expect(result.ok).toBe(false);
-		expect(String(result.error ?? '')).toContain('Ports are derived metadata');
+		expect(result.ok).toBe(true);
 
 		const params = sourceNodeParams(nodeId);
 		expect(params.output?.mode).toBe(initial.output?.mode);

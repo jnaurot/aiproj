@@ -494,13 +494,13 @@ class TestSourceAPIParams:
 
 
 class TestNormalizeSourceParamsFrontend:
-    def test_legacy_rows_output_mode_is_normalized_to_table(self):
+    def test_legacy_output_mode_is_dropped_in_schema_first_mode(self):
         out = normalize_source_params_frontend({"output_mode": "rows"})
-        assert out["output_mode"] == "table"
+        assert "output_mode" not in out
 
         out_nested = normalize_source_params_frontend({"output": {"mode": "rows"}})
-        assert out_nested["output_mode"] == "table"
-        assert out_nested["output"]["mode"] == "table"
+        assert "output_mode" not in out_nested
+        assert "output" not in out_nested or "mode" not in out_nested.get("output", {})
 
     def test_api_camel_case_fields_are_normalized(self):
         raw = {

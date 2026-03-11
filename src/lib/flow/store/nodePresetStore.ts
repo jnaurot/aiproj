@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import type { NodeKind, PipelineNodeData, PortType } from '$lib/flow/types';
+import type { NodeKind, PipelineNodeData } from '$lib/flow/types';
 import type { LlmKind, SourceKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
 
 const KEY = 'flow:node-presets:v1';
@@ -12,10 +12,6 @@ export type NodePreset = {
 	kind: NodeKind;
 	subtype: NodeSubtype;
 	params: Record<string, unknown>;
-	ports?: {
-		in?: PortType | null;
-		out?: PortType | null;
-	};
 	description?: string;
 	tags?: string[];
 	createdAt: string;
@@ -64,21 +60,12 @@ function parsePreset(raw: unknown): NodePreset | null {
 	const updatedAt = String(v.updatedAt ?? '').trim();
 	if (!id || !name || !kind || !subtype || !createdAt || !updatedAt) return null;
 	if (kind !== 'source' && kind !== 'transform' && kind !== 'llm' && kind !== 'tool') return null;
-	const portsRaw = v.ports as Record<string, unknown> | undefined;
-	const ports =
-		portsRaw && typeof portsRaw === 'object'
-			? {
-					in: (portsRaw.in as PortType | null | undefined) ?? null,
-					out: (portsRaw.out as PortType | null | undefined) ?? null
-				}
-			: undefined;
 	return {
 		id,
 		name,
 		kind,
 		subtype,
 		params,
-		ports,
 		description: typeof v.description === 'string' ? v.description : undefined,
 		tags: Array.isArray(v.tags) ? v.tags.map((x) => String(x)) : undefined,
 		createdAt,
@@ -127,10 +114,6 @@ function createPresetFromNodeData(data: PipelineNodeData, name: string): NodePre
 		kind: data.kind,
 		subtype: normalizeSubtype(data),
 		params: cloneRecord((data.params ?? {}) as Record<string, unknown>),
-		ports: {
-			in: data.ports?.in ?? null,
-			out: data.ports?.out ?? null
-		},
 		createdAt: now,
 		updatedAt: now,
 		useCount: 0
@@ -167,22 +150,12 @@ function samePresetPayload(
 	preset: NodePreset,
 	kind: NodeKind,
 	subtype: NodeSubtype,
-	params: Record<string, unknown>,
-	ports: { in?: PortType | null; out?: PortType | null }
+	params: Record<string, unknown>
 ): boolean {
 	if (preset.kind !== kind || preset.subtype !== subtype) return false;
 	const a = stableStringify(preset.params ?? {});
 	const b = stableStringify(params ?? {});
-	if (a !== b) return false;
-	const pa = stableStringify({
-		in: preset.ports?.in ?? null,
-		out: preset.ports?.out ?? null
-	});
-	const pb = stableStringify({
-		in: ports.in ?? null,
-		out: ports.out ?? null
-	});
-	return pa === pb;
+	return a === b;
 }
 
 function createNodePresetStore() {
@@ -215,13 +188,9 @@ function createNodePresetStore() {
 			const kind = data.kind;
 			const subtype = normalizeSubtype(data);
 			const params = cloneRecord((data.params ?? {}) as Record<string, unknown>);
-			const ports = {
-				in: data.ports?.in ?? null,
-				out: data.ports?.out ?? null
-			};
 			const all = get(store);
 			const overwriteId = String(options?.overwritePresetId ?? '').trim();
-			const identical = all.find((p) => samePresetPayload(p, kind, subtype, params, ports));
+			const identical = all.find((p) => samePresetPayload(p, kind, subtype, params));
 			if (identical && identical.id !== overwriteId) {
 				return {
 					ok: false,
@@ -233,7 +202,7 @@ function createNodePresetStore() {
 				const idx = all.findIndex((p) => p.id === overwriteId);
 				if (idx < 0) return { ok: false, error: 'preset_not_found' };
 				const target = all[idx];
-				if (samePresetPayload(target, kind, subtype, params, ports)) {
+				if (samePresetPayload(target, kind, subtype, params)) {
 					return {
 						ok: false,
 						error: 'identical_preset_exists',
@@ -258,7 +227,6 @@ function createNodePresetStore() {
 					kind,
 					subtype,
 					params,
-					ports,
 					updatedAt: now
 				};
 				const next = [...all];
@@ -276,8 +244,7 @@ function createNodePresetStore() {
 			}
 			const preset: NodePreset = {
 				...createPresetFromNodeData(data, cleanName),
-				params,
-				ports
+				params
 			};
 			set(persist([preset, ...all]));
 			return { ok: true, preset: structuredClone(preset), mode: 'created' };

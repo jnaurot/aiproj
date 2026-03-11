@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import { graphStore } from '$lib/flow/store/graphStore';
+	import { graphStore, derivePortsForNodeData } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 
 	type NodeHandleDef = { id: string; label?: string };
@@ -21,9 +21,10 @@
 	$: kind = data?.kind ?? 'node';
 	$: label = data?.label ?? 'Node';
 
-	// normalize ports (treat missing as null)
-	$: inPort = data?.ports?.in ?? null;
-	$: outPort = data?.ports?.out ?? null;
+	// Port contracts are derived from node kind/params.
+	$: derivedPorts = data ? derivePortsForNodeData(data) : { in: null, out: null };
+	$: inPort = derivedPorts.in ?? null;
+	$: outPort = derivedPorts.out ?? null;
 	$: effectiveTargetHandles =
 		Array.isArray(targetHandles) && targetHandles.length > 0
 			? targetHandles.filter((h) => String(h?.id ?? '').trim().length > 0)

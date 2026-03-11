@@ -139,9 +139,8 @@ def _component_output_port_type(node: Dict[str, Any], output_name: str) -> Optio
 
 
 def _node_in_port_type(node: Dict[str, Any]) -> Optional[str]:
-	data = _node_data(node)
-	ports = data.get("ports") if isinstance(data.get("ports"), dict) else {}
-	return _normalize_port_type(ports.get("in"))
+	derived_in, _ = _derive_node_ports(node)
+	return _normalize_port_type(derived_in)
 
 
 def _node_out_port_type(node: Dict[str, Any]) -> Optional[str]:
@@ -150,8 +149,8 @@ def _node_out_port_type(node: Dict[str, Any]) -> Optional[str]:
 	if kind == "component":
 		# Component source edges are per-output and must use output declarations.
 		return None
-	ports = data.get("ports") if isinstance(data.get("ports"), dict) else {}
-	return _normalize_port_type(ports.get("out"))
+	_, derived_out = _derive_node_ports(node)
+	return _normalize_port_type(derived_out)
 
 
 def _preferred_port(candidates: set[str], preferred: List[str]) -> Optional[str]:
@@ -164,19 +163,36 @@ def _preferred_port(candidates: set[str], preferred: List[str]) -> Optional[str]
 
 
 def _derive_source_out_port(params: Dict[str, Any], source_kind_raw: Any) -> Optional[str]:
-	output = params.get("output") if isinstance(params.get("output"), dict) else {}
-	mode = str(params.get("output_mode") or output.get("mode") or "").strip().lower()
-	if mode in {"table", "json", "text", "binary", "embeddings"}:
-		return mode
 	source_kind = str(source_kind_raw or "").strip().lower()
-	return "json" if source_kind == "api" else "table"
+	if source_kind == "api":
+		return "json"
+	if source_kind == "file":
+		file_format = str(params.get("file_format") or "").strip().lower()
+		if file_format in {"csv", "tsv", "parquet", "arrow", "feather", "xlsx", "xls"}:
+			return "table"
+		if file_format in {"json", "jsonl"}:
+			return "json"
+		if file_format in {"txt", "pdf"}:
+			return "text"
+		return "text"
+	if source_kind == "database":
+		return "table"
+	return "text"
 
 
 def _derive_llm_ports(params: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-	output = params.get("output") if isinstance(params.get("output"), dict) else {}
-	mode = str(output.get("mode") or "").strip().lower()
-	if mode in {"json", "binary", "embeddings"}:
-		return "text", mode
+	output_schema = params.get("output_schema")
+	if not isinstance(output_schema, dict):
+		output = params.get("output") if isinstance(params.get("output"), dict) else {}
+		output_schema = output.get("jsonSchema") if isinstance(output.get("jsonSchema"), dict) else None
+	embedding_contract = params.get("embedding_contract")
+	if not isinstance(embedding_contract, dict):
+		output = params.get("output") if isinstance(params.get("output"), dict) else {}
+		embedding_contract = output.get("embedding") if isinstance(output.get("embedding"), dict) else None
+	if isinstance(embedding_contract, dict) and embedding_contract:
+		return "text", "embeddings"
+	if isinstance(output_schema, dict) and output_schema:
+		return "text", "json"
 	return "text", "text"
 
 
@@ -302,23 +318,15 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		kind = str(data.get("kind") or "").strip().lower()
 		if kind:
 			data["kind"] = kind
-		ports_before = data.get("ports") if isinstance(data.get("ports"), dict) else {}
-		derived_in, derived_out = _derive_node_ports(next_node)
-		data["ports"] = {
-			"in": _normalize_port_type(derived_in),
-			"out": _normalize_port_type(derived_out),
-		}
-		if (
-			_normalize_port_type(ports_before.get("in")) != data["ports"]["in"]
-			or _normalize_port_type(ports_before.get("out")) != data["ports"]["out"]
-		):
-			notes.append(
-				{
-					"code": "NODE_PORTS_DERIVED",
-					"nodeId": str(next_node.get("id") or ""),
-					"message": "Derived node.data.ports from node kind + params.",
-				}
-			)
+			if "ports" in data:
+				data.pop("ports", None)
+				notes.append(
+					{
+						"code": "NODE_PORTS_REMOVED",
+						"nodeId": str(next_node.get("id") or ""),
+						"message": "Removed legacy node.data.ports (schema-first runtime).",
+					}
+				)
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node

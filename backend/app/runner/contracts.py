@@ -108,12 +108,49 @@ def _contract_from_output_mode(output_mode: Optional[str], fallback: str) -> str
     return fallback
 
 
+def _typed_schema_type_from_node(node: Dict[str, Any]) -> Optional[str]:
+    data = (node.get("data") or {}) if isinstance(node, dict) else {}
+    schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+    if not isinstance(schema_env, dict):
+        return None
+    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+        obs = schema_env.get(key)
+        if not isinstance(obs, dict):
+            continue
+        typed = obs.get("typedSchema")
+        if not isinstance(typed, dict):
+            continue
+        t = str(typed.get("type") or "").strip().lower()
+        if t == "string":
+            t = "text"
+        if t in {"table", "json", "text", "binary", "embeddings"}:
+            return t
+    return None
+
+
+def _contract_from_typed_type(typed: Optional[str]) -> Optional[str]:
+    t = str(typed or "").strip().lower()
+    if t == "json":
+        return JSON_ANY_V1
+    if t == "text":
+        return TEXT_V1
+    if t == "table":
+        return TABLE_ANY_V1
+    if t == "binary":
+        return BINARY_V1
+    if t == "embeddings":
+        return EMBEDDINGS_ANY_V1
+    return None
+
+
 def default_contract_for_node(node: Dict[str, Any]) -> str:
     data = (node.get("data") or {}) if isinstance(node, dict) else {}
     kind = str(data.get("kind") or "").strip().lower()
     params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
-    output_obj = (params.get("output") or {}) if isinstance(params.get("output"), dict) else {}
-    output_mode = params.get("output_mode") or output_obj.get("mode")
+
+    typed_contract = _contract_from_typed_type(_typed_schema_type_from_node(node))
+    if typed_contract:
+        return typed_contract
 
     if kind == "source":
         source_kind = str(data.get("sourceKind") or params.get("source_type") or "").strip().lower()
@@ -130,15 +167,15 @@ def default_contract_for_node(node: Dict[str, Any]) -> str:
             fallback = JSON_ANY_V1
         else:
             fallback = TABLE_V1
-        return _contract_from_output_mode(output_mode, fallback)
+        return fallback
 
     if kind == "transform":
         return TABLE_V1
 
     if kind == "llm":
-        return _contract_from_output_mode(output_mode, TEXT_V1)
+        return TEXT_V1
 
     if kind == "tool":
-        return _contract_from_output_mode(output_mode, JSON_ANY_V1)
+        return JSON_ANY_V1
 
     return BINARY_V1

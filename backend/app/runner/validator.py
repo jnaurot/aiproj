@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 import json
 from .schemas import validate_node_params  # Import schema validation
-from .capabilities import allowed_port_types, allowed_ports
 from .schema_diagnostics import (
     SCHEMA_DIAGNOSTIC_CODES,
     TYPE_MISMATCH,
@@ -100,6 +99,138 @@ class GraphValidator:
         if isinstance(cols, list):
             return [str(c).strip() for c in cols if str(c).strip()]
         return []
+
+    @staticmethod
+    def _payload_declared_type(payload: Any) -> Optional[str]:
+        if not isinstance(payload, dict):
+            return None
+        return GraphValidator._normalize_port_type(payload.get("type"))
+
+    @staticmethod
+    def _node_schema_declared_type(node: Dict[str, Any]) -> Optional[str]:
+        data = (node.get("data") or {}) if isinstance(node, dict) else {}
+        schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+        if not isinstance(schema_env, dict):
+            return None
+        # Schema-first precedence: user intent (expected) > compile/sample inference > stale runtime observation.
+        for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+            obs = schema_env.get(key)
+            if not isinstance(obs, dict):
+                continue
+            typed = obs.get("typedSchema")
+            if not isinstance(typed, dict):
+                continue
+            resolved = GraphValidator._normalize_port_type(typed.get("type"))
+            if resolved:
+                return resolved
+        return None
+
+    @staticmethod
+    def _source_default_type(node: Dict[str, Any]) -> Optional[str]:
+        data = (node.get("data") or {})
+        kind = str(data.get("kind") or "").strip().lower()
+        params = (data.get("params") or {})
+        if kind == "source":
+            source_kind = str(params.get("sourceKind") or params.get("source_type") or "file").strip().lower()
+            if source_kind == "file":
+                file_format = str(params.get("file_format") or "").strip().lower()
+                if file_format in {"csv", "tsv", "parquet", "arrow", "feather", "xlsx", "xls"}:
+                    return "table"
+                if file_format in {"json", "jsonl"}:
+                    return "json"
+                return "text"
+            if source_kind == "json":
+                return "json"
+            if source_kind == "table":
+                return "table"
+            return "text"
+        if kind == "transform":
+            return "table"
+        if kind == "llm":
+            return "text"
+        if kind == "tool":
+            return "json"
+        return None
+
+    @staticmethod
+    def _target_default_type(node: Dict[str, Any]) -> Optional[str]:
+        data = (node.get("data") or {})
+        kind = str(data.get("kind") or "").strip().lower()
+        if kind == "source":
+            return None
+        if kind == "transform":
+            return "table"
+        if kind == "llm":
+            return "text"
+        if kind == "tool":
+            return "json"
+        return None
+
+    def _component_output_type(
+        self,
+        node: Dict[str, Any],
+        source_handle: Any,
+        edge_id: str,
+        source_id: Any,
+    ) -> tuple[Optional[str], Optional[ValidationError]]:
+        params = ((node.get("data") or {}).get("params") or {})
+        api = params.get("api") if isinstance(params.get("api"), dict) else {}
+        outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
+        sh = str(source_handle or "out")
+        if sh == "out":
+            if len(outputs) == 1 and isinstance(outputs[0], dict):
+                typed = outputs[0].get("typedSchema") if isinstance(outputs[0].get("typedSchema"), dict) else {}
+                return self._normalize_port_type(typed.get("type")), None
+            if len(outputs) > 1:
+                return None, ValidationError(
+                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                    message=(
+                        "Component edge sourceHandle must name an output when component has multiple outputs"
+                    ),
+                    edge_id=edge_id,
+                    node_id=source_id,
+                )
+            return None, None
+        decl = next(
+            (
+                o
+                for o in outputs
+                if isinstance(o, dict) and str(o.get("name") or "").strip() == sh
+            ),
+            None,
+        )
+        if not isinstance(decl, dict):
+            return None, ValidationError(
+                code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
+                message=f"Component output handle '{sh}' is not declared in component API outputs",
+                edge_id=edge_id,
+                node_id=source_id,
+            )
+        typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
+        return self._normalize_port_type(typed.get("type")), None
+
+    def _component_input_type(self, node: Dict[str, Any], target_handle: Any) -> Optional[str]:
+        params = ((node.get("data") or {}).get("params") or {})
+        api = params.get("api") if isinstance(params.get("api"), dict) else {}
+        inputs = api.get("inputs") if isinstance(api.get("inputs"), list) else []
+        th = str(target_handle or "in")
+        if th == "in":
+            if len(inputs) == 1 and isinstance(inputs[0], dict):
+                typed = inputs[0].get("typedSchema") if isinstance(inputs[0].get("typedSchema"), dict) else {}
+                return self._normalize_port_type(typed.get("type"))
+            return None
+        decl = next(
+            (
+                i
+                for i in inputs
+                if isinstance(i, dict) and str(i.get("name") or "").strip() == th
+            ),
+            None,
+        )
+        if not isinstance(decl, dict):
+            return None
+        typed = decl.get("typedSchema") if isinstance(decl.get("typedSchema"), dict) else {}
+        return self._normalize_port_type(typed.get("type"))
 
     def _adapter_suggestions(
         self,
@@ -275,65 +406,11 @@ class GraphValidator:
         return errors
     
     def _validate_port_types(self, graph: Dict[str, Any]) -> List[ValidationError]:
-        """Ensure all connections have compatible types"""
+        """Ensure all connections have compatible schemas/types."""
         errors = []
         edges = graph.get("edges", [])
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
 
-        for nid, node in nodes.items():
-            data = node.get("data", {}) or {}
-            kind = data.get("kind")
-            ports = data.get("ports", {}) or {}
-            in_port = ports.get("in")
-            out_port = ports.get("out")
-            provider = None
-            if kind == "tool":
-                provider = str((data.get("params", {}) or {}).get("provider") or "")
-            caps_in = allowed_ports(str(kind or ""), "in", provider=provider)
-            caps_out = allowed_ports(str(kind or ""), "out", provider=provider)
-
-            all_port_types = allowed_port_types()
-            if in_port is not None and in_port not in all_port_types:
-                errors.append(
-                    ValidationError(
-                        code="UNSUPPORTED_PORT_TYPE",
-                        message=f"Unsupported input port type '{in_port}' on node '{data.get('label', nid)}'",
-                        node_id=nid,
-                    )
-                )
-            if out_port is not None and out_port not in all_port_types:
-                errors.append(
-                    ValidationError(
-                        code="UNSUPPORTED_PORT_TYPE",
-                        message=f"Unsupported output port type '{out_port}' on node '{data.get('label', nid)}'",
-                        node_id=nid,
-                    )
-                )
-            if kind == "source" and in_port not in (None, ""):
-                errors.append(
-                    ValidationError(
-                        code="INVALID_PORT_CAPABILITY",
-                        message=f"Source node '{data.get('label', nid)}' cannot have an input port",
-                        node_id=nid,
-                    )
-                )
-            if in_port is not None and in_port not in caps_in:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_PORT_CAPABILITY",
-                        message=f"Input port '{in_port}' is not supported for node kind '{kind}'",
-                        node_id=nid,
-                    )
-                )
-            if out_port is not None and out_port not in caps_out:
-                errors.append(
-                    ValidationError(
-                        code="INVALID_PORT_CAPABILITY",
-                        message=f"Output port '{out_port}' is not supported for node kind '{kind}'",
-                        node_id=nid,
-                    )
-                )
-        
         for edge in edges:
             edge_id = edge.get("id", "unknown")
             source_id = edge.get("source")
@@ -361,90 +438,59 @@ class GraphValidator:
             # Get port types
             source_handle = edge.get("sourceHandle", "out")
             target_handle = edge.get("targetHandle", "in")
-            
-            source_ports = (source_node["data"].get("ports") or {})
-            target_ports = (target_node["data"].get("ports") or {})
 
-            source_type = source_ports.get("out")
-            if (source_node.get("data") or {}).get("kind") == "component":
-                params = ((source_node.get("data") or {}).get("params") or {})
-                api = params.get("api") if isinstance(params.get("api"), dict) else {}
-                outputs = api.get("outputs") if isinstance(api.get("outputs"), list) else []
-                sh = str(source_handle or "out")
-                if sh == "out":
-                    if len(outputs) == 1 and isinstance(outputs[0], dict):
-                        source_type = str(outputs[0].get("portType") or "").strip().lower() or None
-                    elif len(outputs) > 1:
-                        errors.append(
-                            ValidationError(
-                                code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                                message=(
-                                    "Component edge sourceHandle must name an output when component has multiple outputs"
-                                ),
-                                edge_id=edge_id,
-                                node_id=source_id,
-                            )
-                        )
-                        continue
-                elif sh:
-                    decl = next(
-                        (
-                            o
-                            for o in outputs
-                            if isinstance(o, dict) and str(o.get("name") or "").strip() == sh
-                        ),
-                        None,
-                    )
-                    if not isinstance(decl, dict):
-                        errors.append(
-                            ValidationError(
-                                code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                                message=f"Component output handle '{sh}' is not declared in component API outputs",
-                                edge_id=edge_id,
-                                node_id=source_id,
-                            )
-                        )
-                        continue
-                    source_type = str(decl.get("portType") or "").strip().lower() or None
-            target_type = target_ports.get("in")
-
-            
-            if not source_type:
-                errors.append(ValidationError(
-                    code="MISSING_OUTPUT_PORT",
-                    message=f"Source node '{source_node['data'].get('label')}' missing output port '{source_handle}'",
-                    edge_id=edge_id,
-                    node_id=source_id
-                ))
-                continue
-            
-            if not target_type:
-                errors.append(ValidationError(
-                    code="MISSING_INPUT_PORT",
-                    message=f"Target node '{target_node['data'].get('label')}' missing input port '{target_handle}'",
-                    edge_id=edge_id,
-                    node_id=target_id
-                ))
-                continue
-            
             # Optional payload schema compatibility (forward path)
             contract = (edge.get("data", {}) or {}).get("contract", {}) or {}
             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
             src_payload = payload.get("source", {}) if isinstance(payload, dict) else {}
             tgt_payload = payload.get("target", {}) if isinstance(payload, dict) else {}
+            source_type = self._payload_declared_type(src_payload)
+            target_type = self._payload_declared_type(tgt_payload)
+            if (source_node.get("data") or {}).get("kind") == "component":
+                component_type, component_error = self._component_output_type(
+                    source_node,
+                    source_handle,
+                    edge_id=edge_id,
+                    source_id=source_id,
+                )
+                if component_error:
+                    errors.append(component_error)
+                    continue
+                source_type = source_type or component_type
+            if (target_node.get("data") or {}).get("kind") == "component":
+                target_type = target_type or self._component_input_type(target_node, target_handle)
+            source_type = (
+                self._node_schema_declared_type(source_node)
+                or self._source_default_type(source_node)
+                or source_type
+            )
+            target_type = (
+                self._node_schema_declared_type(target_node)
+                or self._target_default_type(target_node)
+                or target_type
+            )
+            source_type = self._normalize_port_type(source_type)
+            target_type = self._normalize_port_type(target_type)
+
+            normalized_src_payload = dict(src_payload) if isinstance(src_payload, dict) else {}
+            normalized_tgt_payload = dict(tgt_payload) if isinstance(tgt_payload, dict) else {}
+            if source_type:
+                normalized_src_payload["type"] = source_type
+            if target_type:
+                normalized_tgt_payload["type"] = target_type
 
             provided_schema = {
-                "portType": self._normalize_port_type(source_type),
-                "payload": src_payload if isinstance(src_payload, dict) else {},
+                "type": source_type,
+                "payload": normalized_src_payload,
             }
             required_schema = {
-                "portType": self._normalize_port_type(target_type),
-                "payload": tgt_payload if isinstance(tgt_payload, dict) else {},
+                "type": target_type,
+                "payload": normalized_tgt_payload,
             }
 
-            src_cols = self._schema_columns(src_payload, fields_key="fields", columns_key="columns")
+            src_cols = self._schema_columns(normalized_src_payload, fields_key="fields", columns_key="columns")
             req_cols = self._schema_columns(
-                tgt_payload,
+                normalized_tgt_payload,
                 fields_key="required_fields",
                 columns_key="required_columns",
             )
@@ -460,11 +506,11 @@ class GraphValidator:
                         edge_id=edge_id,
                         details={
                             "expected": {
-                                "portType": self._normalize_port_type(target_type),
+                                "type": self._normalize_port_type(target_type),
                                 "typedSchema": {"fields": "non-empty"},
                             },
                             "actual": {
-                                "portType": self._normalize_port_type(source_type),
+                                "type": self._normalize_port_type(source_type),
                                 "typedSchema": {"fields": src_cols},
                             },
                             "provided_schema": provided_schema,
@@ -501,7 +547,7 @@ class GraphValidator:
                     continue
 
             # Schema constraint solver (compile-time): port compatibility + actionable adapter hints.
-            if source_type != target_type:
+            if source_type and target_type and source_type != target_type:
                 suggestions = self._adapter_suggestions(source_type, target_type, target_node)
                 suggestion_suffix = (
                     f" Auto-adapter suggestion: {' | '.join(suggestions)}"
@@ -699,12 +745,5 @@ def validate_pipeline(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) 
             errors.append(f"edge source does not exist: {source}")
         if target not in node_ids:
             errors.append(f"edge target does not exist: {target}")
-
-        source_node = next((n for n in nodes if n.get("id") == source), None)
-        target_node = next((n for n in nodes if n.get("id") == target), None)
-        if isinstance(source_node, dict) and source_node.get("ports") == []:
-            errors.append(f"node '{source}' missing output ports")
-        if isinstance(target_node, dict) and target_node.get("ports") == []:
-            errors.append(f"node '{target}' missing input ports")
 
     return {"valid": len(errors) == 0, "errors": errors}

@@ -222,9 +222,10 @@ async def test_source_output_mode_change_recomputes_cache_key(monkeypatch, tmp_p
     out_3 = [e for e in events_3 if e.get("type") == "node_output" and e.get("nodeId") == "source_1"]
     decisions_3 = [e for e in events_3 if e.get("type") == "cache_decision" and e.get("nodeId") == "source_1"]
     assert out_3
-    assert decisions_3 and decisions_3[-1].get("decision") == "cache_miss"
-    assert str(out_3[-1]["artifactId"]) != first_artifact_id
-    assert calls["source"] == 2
+    # Schema-first runtime ignores legacy output_mode toggles for source execution keying.
+    assert decisions_3 and decisions_3[-1].get("decision") == "cache_hit"
+    assert str(out_3[-1]["artifactId"]) == first_artifact_id
+    assert calls["source"] == 1
 
 
 @pytest.mark.asyncio

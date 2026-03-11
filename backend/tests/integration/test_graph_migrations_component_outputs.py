@@ -299,7 +299,7 @@ def test_canonicalize_graph_payload_defaults_builtin_profile_storage():
 	assert builtin.get("customPackages") == []
 
 
-def test_canonicalize_graph_payload_derives_ports_from_kind_and_params():
+def test_canonicalize_graph_payload_removes_legacy_ports_from_nodes():
 	graph = {
 		"version": 1,
 		"nodes": [
@@ -327,13 +327,10 @@ def test_canonicalize_graph_payload_derives_ports_from_kind_and_params():
 	next_graph, notes = canonicalize_graph_payload(graph)
 	assert isinstance(notes, list)
 	nodes = {str(n.get("id") or ""): n for n in next_graph.get("nodes", [])}
-	assert (((nodes["src1"].get("data") or {}).get("ports") or {}).get("in")) is None
-	assert str((((nodes["src1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "text"
-	assert str((((nodes["tx1"].get("data") or {}).get("ports") or {}).get("in") or "")) == "text"
-	assert str((((nodes["tx1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "table"
-	assert str((((nodes["llm1"].get("data") or {}).get("ports") or {}).get("in") or "")) == "text"
-	assert str((((nodes["llm1"].get("data") or {}).get("ports") or {}).get("out") or "")) == "json"
-	assert any(str(note.get("code") or "") == "NODE_PORTS_DERIVED" for note in notes)
+	assert "ports" not in ((nodes["src1"].get("data") or {}))
+	assert "ports" not in ((nodes["tx1"].get("data") or {}))
+	assert "ports" not in ((nodes["llm1"].get("data") or {}))
+	assert not any(str(note.get("code") or "") == "NODE_PORTS_DERIVED" for note in notes)
 
 
 def test_canonicalize_graph_payload_updates_edge_contracts_after_port_derivation():

@@ -8,10 +8,6 @@ export function isPortType(value: unknown): value is PortType {
 }
 export type UpdateNodeConfig = {
   params?: unknown;
-  ports?: {
-    in?: PortType | null;
-    out?: PortType | null;
-  };
 };
 
 export type NodeKind = "source" | "transform" | "llm" | "tool" | "component";
@@ -42,7 +38,6 @@ export type NodeMeta = {
     subtype?: string;
     appliedAt: string;
     appliedParams: Record<string, unknown>;
-    appliedPorts?: { in?: PortType | null; out?: PortType | null };
   };
 };
 
@@ -58,8 +53,6 @@ export type BaseNodeData<K extends NodeKind, P> = {
   lastEndedAt?: string;   // ISO
   error?: { message: string; code?: string; details?: unknown };
 
-  // typing/contracts (optional but useful)
-  ports?: { in?: PortType | null; out?: PortType | null };
   schema?: NodeSchemaEnvelope;
 
   meta?: NodeMeta;

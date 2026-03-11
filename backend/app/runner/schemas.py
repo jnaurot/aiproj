@@ -95,18 +95,22 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p.setdefault("filename", str(p.get("file_path")))
     out = p.get("output")
     if isinstance(out, dict):
-        if "mode" in out and "output_mode" not in p:
-            p["output_mode"] = out.get("mode")
         if "schema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("schema")
+        # Schema-first: ignore legacy output mode controls.
+        out.pop("mode", None)
+        if not out:
+            p.pop("output", None)
+        else:
+            p["output"] = out
+    # Schema-first: ignore legacy output mode controls.
+    p.pop("output_mode", None)
     # Legacy alias support: older revisions used "rows" for table output.
-    if str(p.get("output_mode") or "").strip().lower() == "rows":
-        p["output_mode"] = "table"
     if isinstance(p.get("output"), dict):
         output_obj = p.get("output")
         output_mode = output_obj.get("mode") if isinstance(output_obj, dict) else None
         if str(output_mode or "").strip().lower() == "rows":
-            output_obj["mode"] = "table"
+            output_obj.pop("mode", None)
     if "contentType" in p and "content_type" not in p:
         p["content_type"] = p.pop("contentType")
     if "bodyMode" in p and "body_mode" not in p:

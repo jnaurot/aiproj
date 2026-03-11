@@ -17,7 +17,6 @@
 5. `inspectorForm.css` must not set `.field/.k/.v` display/layout/positioning.
 6. Editor-specific CSS stays in each editor component and must be namespaced by an editor root class.
 7. Global overrides are allowed only when namespaced (for example `.inspector`, `.portsTheme`).
-8. `PortsEditor.svelte` is an intentional local theme layer and may override `.k/.v` within `.portsTheme`.
 
 ## Primitive Contracts
 

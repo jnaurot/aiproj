@@ -42,5 +42,4 @@ export const defaultLlmNodeData = {
     label: "LLM",
     params: defaultLlmParams,
     status: "idle" as const,
-    ports: { in: "text" as const, out: "text" as const },
 } as const;

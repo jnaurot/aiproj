@@ -15,7 +15,7 @@ function asNode(id: string, kind: PipelineNodeData['kind']): Node<PipelineNodeDa
 		id,
 		type: kind,
 		position: { x: 0, y: 0 },
-		data: { kind, label: id, ports: { in: null, out: null }, params: {} } as PipelineNodeData
+		data: { kind, label: id, params: {} } as PipelineNodeData
 	};
 }
 

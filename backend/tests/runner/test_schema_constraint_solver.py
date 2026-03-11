@@ -35,7 +35,19 @@ def test_schema_constraint_solver_emits_adapter_suggestion_for_type_mismatch() -
 			),
 		],
 		"edges": [
-			{"id": "e1", "source": "n_source", "target": "n_transform", "data": {"contract": {"payload": {}}}},
+			{
+				"id": "e1",
+				"source": "n_source",
+				"target": "n_transform",
+				"data": {
+					"contract": {
+						"payload": {
+							"source": {"type": "text"},
+							"target": {"type": "table"},
+						}
+					}
+				},
+			},
 		],
 	}
 

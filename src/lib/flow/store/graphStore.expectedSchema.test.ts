@@ -25,7 +25,7 @@ describe('graphStore expected schema authoring', () => {
 		expect((nodeAfterClear?.data as any)?.schema?.expectedSchema).toBeUndefined();
 	});
 
-	it('save preflight fails when expected schema type mismatches derived output type', () => {
+	it('save preflight is schema-only and does not fail on derived output mode', () => {
 		graphStore.hardResetGraph();
 		const applied = graphStore.loadGraphDocument(
 			{
@@ -38,7 +38,7 @@ describe('graphStore expected schema authoring', () => {
 							kind: 'source',
 							label: 'Source',
 							sourceKind: 'file',
-							params: { file_format: 'txt', output_mode: 'text' },
+							params: { file_format: 'txt' },
 							schema: {
 								expectedSchema: {
 									source: 'declared',
@@ -56,8 +56,7 @@ describe('graphStore expected schema authoring', () => {
 		expect(applied.ok).toBe(true);
 
 		const preflight = graphStore.getSavePreflight();
-		expect(preflight.ok).toBe(false);
-		expect(preflight.diagnostics.some((d) => d.code === 'EXPECTED_SCHEMA_PORT_MISMATCH')).toBe(true);
+		expect(preflight.ok).toBe(true);
 	});
 
 	it('emits schema drift warning in run logs when observed output violates expected schema', () => {

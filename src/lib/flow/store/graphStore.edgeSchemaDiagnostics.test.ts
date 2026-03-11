@@ -13,8 +13,14 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'text' },
-					params: { file_format: 'txt' }
+					params: { file_format: 'txt' },
+					schema: {
+						inferredSchema: {
+							source: 'sample',
+							state: 'fresh',
+							typedSchema: { type: 'text', fields: [] }
+						}
+					}
 				}
 			},
 			{
@@ -22,10 +28,15 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'filter',
-					ports: { in: 'binary', out: 'table' },
 					params: {
 						op: 'filter',
 						filter: { expr: '' }
+					},
+					schema: {
+						expectedSchema: {
+							source: 'declared',
+							typedSchema: { type: 'binary', fields: [] }
+						}
 					}
 				}
 			}
@@ -47,16 +58,27 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'api',
-					ports: { in: null, out: 'json' },
-					params: {}
+					params: {},
+					schema: {
+						inferredSchema: {
+							source: 'sample',
+							state: 'fresh',
+							typedSchema: { type: 'json', fields: [] }
+						}
+					}
 				}
 			},
 			{
 				id: 'n_llm',
 				data: {
 					kind: 'llm',
-					ports: { in: 'text', out: 'text' },
-					params: { coercion_policy: 'allow_lossy' }
+					params: { coercion_policy: 'allow_lossy' },
+					schema: {
+						expectedSchema: {
+							source: 'declared',
+							typedSchema: { type: 'text', fields: [] }
+						}
+					}
 				}
 			}
 		];
@@ -74,8 +96,14 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'source',
 					sourceKind: 'file',
-					ports: { in: null, out: 'table' },
-					params: { file_format: 'csv' }
+					params: { file_format: 'csv' },
+					schema: {
+						inferredSchema: {
+							source: 'sample',
+							state: 'fresh',
+							typedSchema: { type: 'table', fields: [] }
+						}
+					}
 				}
 			},
 			{
@@ -83,7 +111,6 @@ describe('graphStore edge schema diagnostics', () => {
 				data: {
 					kind: 'transform',
 					transformKind: 'select',
-					ports: { in: 'table', out: 'table' },
 					params: { op: 'select', select: { mode: 'include', columns: ['id'] } }
 				}
 			}

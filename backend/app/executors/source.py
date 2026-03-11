@@ -293,22 +293,23 @@ def _metadata_for_output(
     )
 
 
-def _get_output_mode(params: Dict[str, Any], default_mode: str) -> str:
-    output_mode = params.get("output_mode")
-    if not isinstance(output_mode, str):
-        output = params.get("output")
-        if isinstance(output, dict):
-            output_mode = output.get("mode")
-    mode = str(output_mode or default_mode)
-    if mode not in {"table", "text", "json", "binary"}:
-        return default_mode
-    return mode
-
-
 def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
-    out = (((node or {}).get("data", {}) or {}).get("ports", {}) or {}).get("out")
-    if isinstance(out, str) and out in {"table", "text", "json", "binary"}:
-        return out
+    data = ((node or {}).get("data", {}) or {})
+    schema = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+    expected = schema.get("expectedSchema") if isinstance(schema.get("expectedSchema"), dict) else {}
+    typed = expected.get("typedSchema") if isinstance(expected.get("typedSchema"), dict) else {}
+    expected_type = str(typed.get("type") or "").strip().lower()
+    if expected_type in {"table", "text", "json", "binary"}:
+        return expected_type
+    params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    source_kind = str(data.get("sourceKind") or params.get("source_type") or "file").strip().lower()
+    if source_kind == "api":
+        return "json"
+    if source_kind == "database":
+        return "table"
+    if source_kind == "file":
+        file_format = str(params.get("file_format") or "").strip().lower()
+        return _default_file_output_mode(file_format)
     return None
 
 
@@ -365,9 +366,23 @@ async def exec_source(
                 forced_output_mode=_source_out_mode_from_node(node),
             )
         elif source_type == "database":
-            output = await _handle_database_source(node_id, params, context.bus, run_id, context.graph_id)
+            output = await _handle_database_source(
+                node_id,
+                params,
+                context.bus,
+                run_id,
+                context.graph_id,
+                forced_output_mode=_source_out_mode_from_node(node),
+            )
         elif source_type == "api":
-            output = await _handle_api_source(node_id, params, context.bus, run_id, context.graph_id)
+            output = await _handle_api_source(
+                node_id,
+                params,
+                context.bus,
+                run_id,
+                context.graph_id,
+                forced_output_mode=_source_out_mode_from_node(node),
+            )
         else:
             raise ValueError(f"Unknown source_type: {source_type}")
         output.execution_time_ms = (time.time() - start_time) * 1000
@@ -408,7 +423,7 @@ async def _handle_file_source(
         params.setdefault("rel_path", str(legacy.parent) if str(legacy.parent) not in {"", "."} else ".")
         params.setdefault("filename", legacy.name or str(legacy))
     schema = SourceFileParams.model_validate(params)
-    output_mode = forced_output_mode or _get_output_mode(params, _default_file_output_mode(schema.file_format))
+    output_mode = forced_output_mode or _default_file_output_mode(schema.file_format)
 
     file_bytes: Optional[bytes] = None
     file_path: Optional[Path] = None
@@ -575,11 +590,12 @@ async def _handle_database_source(
     bus: RunEventBus,
     run_id: str,
     graph_id: str,
+    forced_output_mode: Optional[str] = None,
 ) -> NodeOutput:
     if not HAS_DATABASE:
         raise ImportError("Database support requires sqlalchemy")
     schema = SourceDatabaseParams.model_validate(params)
-    output_mode = _get_output_mode(params, "table")
+    output_mode = forced_output_mode or "table"
 
     conn_string = schema.connection_string
     if not conn_string and schema.connection_ref:
@@ -634,9 +650,10 @@ async def _handle_api_source(
     bus: RunEventBus,
     run_id: str,
     graph_id: str,
+    forced_output_mode: Optional[str] = None,
 ) -> NodeOutput:
     schema = SourceAPIParams.model_validate(params)
-    output_mode = _get_output_mode(params, "json")
+    output_mode = forced_output_mode or "json"
 
     headers = {str(k): str(v) for k, v in dict(schema.headers).items()}
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}

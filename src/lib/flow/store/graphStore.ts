@@ -241,16 +241,33 @@ function derivePortsFromComponentApi(api: unknown): { in?: PortType | null; out?
 	return { in: inPort, out: null };
 }
 
-function deriveSourceOutPort(params: Record<string, any>, sourceKindRaw: unknown): PortType {
-	const output = params?.output && typeof params.output === 'object' ? params.output : {};
-	const mode = String(params?.output_mode ?? (output as any)?.mode ?? '').trim().toLowerCase();
-	if (mode === 'text') return 'text';
-	if (mode === 'json') return 'json';
-	if (mode === 'binary') return 'binary';
-	if (mode === 'embeddings') return 'embeddings';
-	if (mode === 'table') return 'table';
-	const sourceKind = String(sourceKindRaw ?? '').trim().toLowerCase();
-	return sourceKind === 'api' ? 'json' : 'table';
+function deriveSourceOutPort(data: PipelineNodeData): PortType {
+	const schema = (data as any)?.schema ?? {};
+	const expectedType = normalizeTypedSchemaPrimitive(schema?.expectedSchema?.typedSchema?.type);
+	if (isPortType(expectedType)) return expectedType;
+	const inferredType = normalizeTypedSchemaPrimitive(schema?.inferredSchema?.typedSchema?.type);
+	if (isPortType(inferredType)) return inferredType;
+	const observedType = normalizeTypedSchemaPrimitive(schema?.observedSchema?.typedSchema?.type);
+	if (isPortType(observedType)) return observedType;
+	const params = (((data as any)?.params ?? {}) as Record<string, any>);
+	const sourceKind = String((data as any)?.sourceKind ?? '').trim().toLowerCase();
+	if (sourceKind === 'api') return 'json';
+	if (sourceKind === 'database') return 'table';
+	if (sourceKind === 'file') {
+		const fileFormat = String(params?.file_format ?? '').trim().toLowerCase();
+		if (fileFormat === 'json') return 'json';
+		if (fileFormat === 'txt' || fileFormat === 'pdf') return 'text';
+		if (
+			fileFormat === 'csv' ||
+			fileFormat === 'tsv' ||
+			fileFormat === 'parquet' ||
+			fileFormat === 'excel'
+		) {
+			return 'table';
+		}
+		return 'binary';
+	}
+	return 'text';
 }
 
 function deriveLlmOutPort(params: Record<string, any>): PortType {
@@ -274,11 +291,11 @@ function deriveToolPorts(_params: Record<string, any>): { in: PortType; out: Por
 	return { in: 'json', out: 'json' };
 }
 
-function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; out: PortType | null } {
-	const params = ((data as any)?.params ?? {}) as Record<string, any>;
+export function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; out: PortType | null } {
 	if (data.kind === 'source') {
-		return { in: null, out: deriveSourceOutPort(params, (data as any)?.sourceKind) };
+		return { in: null, out: deriveSourceOutPort(data) };
 	}
+	const params = ((data as any)?.params ?? {}) as Record<string, any>;
 	if (data.kind === 'llm') {
 		return { in: 'text', out: deriveLlmOutPort(params) };
 	}
@@ -300,15 +317,10 @@ function derivePortsForNodeData(data: PipelineNodeData): { in: PortType | null; 
 
 function canonicalizeNodePorts(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
 	return nodes.map((node) => {
-		const derived = derivePortsForNodeData(node.data);
 		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
 			data: {
-				...node.data,
-				ports: {
-					in: derived.in,
-					out: derived.out
-				}
+				...node.data
 			}
 		} as Node<PipelineNodeData>);
 		const existingSchema =
@@ -1924,20 +1936,12 @@ function normalizeComponentNodeForMigration(
 		if (!outputSet.has(String(key))) delete outputBindingsRaw[key];
 	}
 
-	const nextNode: Node<PipelineNodeData> = {
-		...node,
-		data: {
-			...node.data,
-			ports: {
-				...((node.data as any)?.ports ?? {}),
-				in:
-					normalizeComponentPortType(
-						(Array.isArray((api as any)?.inputs) ? (api as any).inputs[0]?.portType : null) ?? null
-					) ?? null,
-				out: null
-			},
-			params: {
-				...params,
+		const nextNode: Node<PipelineNodeData> = {
+			...node,
+			data: {
+				...node.data,
+				params: {
+					...params,
 				api: {
 					...(api as Record<string, any>),
 					outputs: normalizedOutputs
@@ -2149,7 +2153,7 @@ function buildSavePreflightDiagnostics(
 		if (!edgeCheck.ok) {
 			if (edgeCheck.reason === 'type_mismatch') {
 				diagnostics.push({
-					code: 'CONTRACT_EDGE_PORT_TYPE_MISMATCH',
+					code: 'CONTRACT_EDGE_TYPE_MISMATCH',
 					path: `edges.${String(edge.id ?? '')}.data.contract`,
 					message: `Edge has incompatible schemas (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')})${edgeCheck.suggestion ? ` ${edgeCheck.suggestion}` : ''}.`,
 					severity: 'error'
@@ -2170,7 +2174,7 @@ function buildSavePreflightDiagnostics(
 				});
 			} else {
 				diagnostics.push({
-					code: 'CONTRACT_EDGE_PORT_TYPE_UNRESOLVED',
+					code: 'CONTRACT_EDGE_SCHEMA_UNRESOLVED',
 					path: `edges.${String(edge.id ?? '')}.data.contract`,
 					message: `Edge has unresolved schema compatibility (source=${String(edge.source ?? '')}:${sourceHandle} target=${String((edge as any)?.target ?? '')}:${String((edge as any)?.targetHandle ?? 'in')}).`,
 					severity: 'error'
@@ -2195,17 +2199,6 @@ function buildSavePreflightDiagnostics(
 					message: 'Expected schema must define a valid typedSchema.type.',
 					severity: 'error'
 				});
-			} else if (node.data.kind !== 'component') {
-				const outHint = sourcePayloadHint(node as any, 'out', 'out');
-				const outType = normalizeTypedSchemaPrimitive((outHint as any)?.type);
-				if (outType !== 'unknown' && expectedTyped.type !== 'unknown' && outType !== expectedTyped.type) {
-					diagnostics.push({
-						code: 'EXPECTED_SCHEMA_PORT_MISMATCH',
-						path: `nodes.${String(node.id)}.data.schema.expectedSchema.typedSchema.type`,
-						message: `Expected schema type "${expectedTyped.type}" must align with derived output type "${outType}".`,
-						severity: 'error'
-					});
-				}
 			}
 		}
 		if (node.data.kind !== 'component') continue;
@@ -2318,19 +2311,22 @@ function sourcePayloadHint(
 ) {
 	const preferNodeSchema = opts?.preferNodeSchema !== false;
 	if (preferNodeSchema) {
-		const observedHint = typedSchemaToPayloadHint((node.data as any)?.schema?.observedSchema?.typedSchema);
-		if (observedHint) return observedHint;
+		const expectedHint = typedSchemaToPayloadHint((node.data as any)?.schema?.expectedSchema?.typedSchema);
+		if (expectedHint) return expectedHint;
 		const inferredHint = typedSchemaToPayloadHint((node.data as any)?.schema?.inferredSchema?.typedSchema);
 		if (inferredHint) return inferredHint;
+		const observedHint = typedSchemaToPayloadHint((node.data as any)?.schema?.observedSchema?.typedSchema);
+		if (observedHint) return observedHint;
 	}
 	if (node.data.kind === 'component' && whichPort === 'out') {
 		const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
 			? ((node.data as any).params.api.outputs as any[])
 			: [];
 		const handle = String(handleId ?? '').trim();
-		const decl =
-			handle && handle !== 'out'
-				? outputs.find((o) => String((o as any)?.name ?? '').trim() === handle)
+		const decl = handle && handle !== 'out'
+			? outputs.find((o) => String((o as any)?.name ?? '').trim() === handle)
+			: outputs.length === 1
+				? outputs[0]
 				: null;
 		const typed = (decl as any)?.typedSchema ?? null;
 		const typedType = String((typed as any)?.type ?? '').trim().toLowerCase();
@@ -2342,44 +2338,17 @@ function sourcePayloadHint(
 		if (typedType === 'json') return { type: 'json' };
 		if (typedType === 'text') return { type: 'string' };
 		if (typedType === 'binary') return { type: 'binary' };
-		const declared = normalizeComponentPortType((decl as any)?.portType ?? null);
-		if (declared === 'table') return { type: 'table' };
-		if (declared === 'json') return { type: 'json' };
-		if (declared === 'text') return { type: 'string' };
-		if (declared === 'binary') return { type: 'binary' };
-		// Component edge payload hint must come from selected API output only.
+		// Schema-first: component edge hints come from typedSchema only.
 		return { type: 'unknown' };
 	}
-	const derivedPorts = derivePortsForNodeData(node.data);
-	const port = whichPort === 'in' ? derivedPorts.in : derivedPorts.out;
-	if (port === 'table') {
-		let fields: SchemaField[] | undefined;
-		if (node.data.kind === 'source') {
-			const params: any = node.data.params ?? {};
-			const sourceKind = node.data.sourceKind;
-			if (sourceKind === 'file') {
-				const fileFormat = String(params?.file_format ?? 'csv').toLowerCase();
-				if (fileFormat === 'txt') {
-					fields = normalizeSchemaFields([{ name: 'text', type: 'string', nullable: true }]);
-				}
-				if (fileFormat === 'pdf') {
-					fields = normalizeSchemaFields([
-						{ name: 'page_number', type: 'integer', nullable: false },
-						{ name: 'text', type: 'string', nullable: true },
-						{ name: 'has_tables', type: 'boolean', nullable: false },
-						{ name: 'table_count', type: 'integer', nullable: false },
-						{ name: 'tables', type: 'json', nullable: true }
-					]);
-				}
-			}
-		}
-		const columns = schemaFieldNames(fields ?? []);
-		return fields && fields.length > 0 ? { type: 'table', fields, columns } : { type: 'table' };
-	}
-	if (port === 'json') return { type: 'json' };
-	if (port === 'text') return { type: 'string' };
-	if (port === 'binary') return { type: 'binary' };
-	return undefined;
+	const derived = derivePortsForNodeData(node.data);
+	const fallbackType = normalizeHintType(whichPort === 'in' ? derived.in ?? 'unknown' : derived.out ?? 'unknown');
+	if (fallbackType === 'table') return { type: 'table' };
+	if (fallbackType === 'json') return { type: 'json' };
+	if (fallbackType === 'text') return { type: 'string' };
+	if (fallbackType === 'binary') return { type: 'binary' };
+	if (fallbackType === 'embeddings') return { type: 'embeddings' };
+	return { type: 'unknown' };
 }
 
 function targetPayloadHint(node: Node<PipelineNodeData>) {
@@ -2584,6 +2553,38 @@ function hasSchemaEnvelopeContent(raw: unknown): boolean {
 }
 
 function deriveInferredSchemaObservationForNode(node: Node<PipelineNodeData>): NodeSchemaObservation | null {
+	if (node.data.kind === 'source') {
+		const params = ((node.data as any)?.params ?? {}) as Record<string, unknown>;
+		const sourceKind = String((node.data as any)?.sourceKind ?? '').trim().toLowerCase();
+		if (sourceKind === 'file') {
+			const fileFormat = String(params?.file_format ?? '').trim().toLowerCase();
+			let type: TypedSchemaPrimitive = 'unknown';
+			if (fileFormat === 'txt' || fileFormat === 'pdf') type = 'text';
+			else if (fileFormat === 'json') type = 'json';
+			else if (fileFormat === 'csv' || fileFormat === 'tsv' || fileFormat === 'parquet' || fileFormat === 'excel') type = 'table';
+			else if (fileFormat) type = 'binary';
+			if (type !== 'unknown') {
+				const typed =
+					type === 'table'
+						? {
+								type: 'table' as const,
+								fields: normalizeTypedSchemaFields(
+									((node.data as any)?.schema?.inferredSchema?.typedSchema?.fields as any[]) ?? []
+								)
+							}
+						: { type, fields: [] as Array<{ name: string; type: TypedSchemaPrimitive; nullable?: boolean }> };
+				return {
+					typedSchema: typed,
+					source: 'sample',
+					state: 'fresh',
+					schemaFingerprint: fingerprintTypedSchema(typed),
+					updatedAt: String(
+						(node.data as any)?.meta?.updatedAt ?? (node.data as any)?.meta?.createdAt ?? new Date().toISOString()
+					)
+				};
+			}
+		}
+	}
 	const hint = sourcePayloadHint(node, 'out', 'out', { preferNodeSchema: false });
 	const typed = payloadHintToTypedSchema(hint);
 	if (!typed) return null;
@@ -2721,6 +2722,16 @@ function isSchemaCompatible(
 ): SchemaCompatibility {
 	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
 	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
+	if (requiredType === 'unknown') {
+		return { ok: true };
+	}
+	if (providedType === 'unknown') {
+		return {
+			ok: false,
+			reason: 'missing_typed_schema',
+			missingColumns: []
+		};
+	}
 	const coercionPolicy = String(requiredSchema?.coercion_policy ?? 'safe_widening')
 		.trim()
 		.toLowerCase();
@@ -2985,7 +2996,6 @@ export function __computeEdgeSchemaDiagnosticsForTest(
 }
 
 type EdgeInvalidReason =
-	| 'missing_port_type' // couldn't resolve out/in
 	| 'type_mismatch'
 	| 'schema_mismatch'
 	| 'typed_schema_missing';
@@ -3005,19 +3015,17 @@ function normalizeHintPortType(raw: unknown): PortType | undefined {
 }
 
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
-	const outPort = sourcePortTypeForEdge(nodes, e);
-	const inPort = getPortType(nodes, e.target, 'in');
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
 	if (!sourceNode || !targetNode) {
-		return { ok: false, reason: 'missing_port_type' };
+		return { ok: false, reason: 'typed_schema_missing' };
 	}
 	const sourcePayload = sourceNode
 		? sourcePayloadHint(sourceNode as any, 'out', String((e as any).sourceHandle ?? 'out'))
 		: undefined;
 	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any) : undefined;
 	if (!sourcePayload || !targetPayload) {
-		return { ok: false, reason: 'missing_port_type' };
+		return { ok: false, reason: 'typed_schema_missing' };
 	}
 	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any);
 	if (!schemaCheck.ok) {
@@ -3045,8 +3053,8 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 
 	return {
 		ok: true,
-		out: normalizeHintPortType((sourcePayload as any)?.type ?? outPort ?? null) ?? outPort ?? undefined,
-		in: normalizeHintPortType((targetPayload as any)?.type ?? inPort ?? null) ?? inPort ?? undefined
+		out: normalizeHintPortType((sourcePayload as any)?.type ?? null) ?? undefined,
+		in: normalizeHintPortType((targetPayload as any)?.type ?? null) ?? undefined
 	};
 }
 
@@ -3344,14 +3352,15 @@ export const graphStore = (() => {
 				nodes = res.nodes;
 			}
 
-			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
-			if (config.ports !== undefined) {
-				out = {
-					ok: false,
-					error: 'Ports are derived metadata. Change node subtype/params instead of editing ports directly.'
-				};
-				return logPush(s, 'warn', out.error, nodeId);
-			}
+				const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
+				if (config.ports !== undefined) {
+					logPush(
+						s,
+						'warn',
+						'Ports are ignored. Port contracts are derived from schema/subtype/params.',
+						nodeId
+					);
+				}
 			const effectivePorts = derivePortsForNodeData(currentNode.data);
 			const { in: inPort, out: outPort } = effectivePorts;
 			if (inPort !== null && !isPortType(inPort)) {
@@ -3464,7 +3473,17 @@ export const graphStore = (() => {
 					data: nextData as PipelineNodeData & Record<string, unknown>
 				};
 			});
-			const next = logPush({ ...s, nodes }, 'info', 'Expected schema updated', nodeId);
+			const rechecked = pruneAndRecontractEdgesStrict(nodes, s.edges);
+			if (!rechecked.ok) {
+				result = { ok: false, error: rechecked.error };
+				return logPush(s, 'warn', rechecked.error, nodeId);
+			}
+			const next = logPush(
+				{ ...s, nodes, edges: rechecked.edges },
+				'info',
+				'Expected schema updated',
+				nodeId
+			);
 			persist(next);
 			return next;
 		});

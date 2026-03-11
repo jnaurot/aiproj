@@ -109,10 +109,31 @@ def _redact_body_map(body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {k: out[k] for k in sorted(out.keys())}
 
 
+def _schema_declared_type_from_node(node: Dict[str, Any]) -> Optional[str]:
+    data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
+    schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+    if not isinstance(schema_env, dict):
+        return None
+    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+        obs = schema_env.get(key)
+        if not isinstance(obs, dict):
+            continue
+        typed = obs.get("typedSchema")
+        if not isinstance(typed, dict):
+            continue
+        t = str(typed.get("type") or "").strip().lower()
+        if t == "string":
+            t = "text"
+        if t in {"table", "json", "text", "binary", "embeddings"}:
+            return t
+    return None
+
+
 def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file")
     p = params or {}
+    source_output_type = _schema_declared_type_from_node(node)
     fp: Dict[str, Any] = {"source_kind": source_kind}
     if source_kind == "file":
         snapshot_id = p.get("snapshot_id") or p.get("snapshotId")
@@ -124,7 +145,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                     "encoding": p.get("encoding"),
                     "delimiter": p.get("delimiter"),
                     "sheet_name": p.get("sheet_name"),
-                    "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                    "output_type": source_output_type,
                     "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 }
             )
@@ -176,7 +197,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "encoding": p.get("encoding"),
                 "delimiter": p.get("delimiter"),
                 "sheet_name": p.get("sheet_name"),
-                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 "file_stat": file_stat,
             }
@@ -206,7 +227,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "table_name": p.get("table_name"),
                 "query": p.get("query"),
                 "limit": p.get("limit"),
-                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
             }
         )
@@ -238,7 +259,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "body": body,
                 "timeout_seconds": p.get("timeout_seconds"),
                 "cache_policy": p.get("cache_policy") or {"mode": "default"},
-                "output_mode": p.get("output_mode") or ((p.get("output") or {}).get("mode")),
+                "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
             }
         )
@@ -256,7 +277,7 @@ def build_node_state_hash(
     kind = str(data.get("kind") or "")
     if kind == "llm":
         output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}
-        output_mode = str(params.get("output_mode") or output_obj.get("mode") or "text")
+        output_type = _schema_declared_type_from_node(node) or "text"
         output_strict = (
             params.get("output_strict")
             if "output_strict" in params
@@ -273,7 +294,7 @@ def build_node_state_hash(
             "execution_version": execution_version,
             "node_kind": kind,
             "schema": {
-                "output_mode": output_mode,
+                "output_type": output_type,
                 "output_strict": bool(output_strict),
                 "output_schema": _sanitize(output_schema),
                 "embedding_contract": _sanitize(embedding_contract),

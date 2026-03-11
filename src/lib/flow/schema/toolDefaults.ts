@@ -163,5 +163,4 @@ export const defaultToolNodeData = {
     label: "Tool",
     params: defaultToolParams,
     status: "idle" as const,
-    ports: { in: "json" as const, out: "json" as const },
 };

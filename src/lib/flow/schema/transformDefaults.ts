@@ -242,5 +242,4 @@ export const defaultTransformNodeData = {
 	label: 'Transform',
 	params: defaultTransformParams,
 	status: 'idle' as const,
-	ports: { in: 'table', out: 'table' as const }
 };

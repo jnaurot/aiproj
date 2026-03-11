@@ -136,9 +136,17 @@
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
 	$: schemaDriftSummary = (() => {
-		const expected = (selectedNode?.data as any)?.schema?.expectedSchema?.typedSchema;
-		const observed = (selectedNode?.data as any)?.schema?.observedSchema?.typedSchema;
+		const expectedEnvelope = (selectedNode?.data as any)?.schema?.expectedSchema;
+		const observedEnvelope = (selectedNode?.data as any)?.schema?.observedSchema;
+		const expected = expectedEnvelope?.typedSchema;
+		const observed = observedEnvelope?.typedSchema;
 		if (!expected || !observed) return null;
+		const expectedAt = Date.parse(String(expectedEnvelope?.updatedAt ?? ''));
+		const observedAt = Date.parse(String(observedEnvelope?.updatedAt ?? ''));
+		if (Number.isFinite(expectedAt) && Number.isFinite(observedAt) && observedAt < expectedAt) {
+			// Ignore stale observed schema; show drift only after a run newer than the expected declaration.
+			return null;
+		}
 		const expectedType = String(expected?.type ?? 'unknown').trim().toLowerCase();
 		const observedType = String(observed?.type ?? 'unknown').trim().toLowerCase();
 		const issues: string[] = [];

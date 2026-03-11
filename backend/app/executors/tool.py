@@ -78,12 +78,22 @@ def _permissions(params: Dict[str, Any]) -> Dict[str, bool]:
 
 
 def _requested_output_mode(node: Dict[str, Any], params: Dict[str, Any]) -> str:
-    ports = (node.get("data", {}).get("ports", {}) or {}) if isinstance(node, dict) else {}
-    out_port = str(ports.get("out") or "json").strip().lower()
-    if out_port in ("json", "text", "binary"):
-        return out_port
-    # Tool out ports currently support json/text/binary only.
-    # Fallback remains json for unknown/missing values.
+    data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
+    schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+    if isinstance(schema_env, dict):
+        for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+            obs = schema_env.get(key)
+            if not isinstance(obs, dict):
+                continue
+            typed = obs.get("typedSchema")
+            if not isinstance(typed, dict):
+                continue
+            out_type = str(typed.get("type") or "").strip().lower()
+            if out_type == "string":
+                out_type = "text"
+            if out_type in ("json", "text", "binary"):
+                return out_type
+    # Tool outputs default to JSON unless explicit schema says text/binary.
     return "json"
 
 

@@ -93,7 +93,7 @@ def test_graph_migration_dry_run_and_apply(tmp_path: Path):
 		assert isinstance(graph.get("nodes"), list)
 		assert isinstance(graph.get("edges"), list)
 		assert graph["nodes"][0]["data"]["kind"] == "source"
-		assert graph["nodes"][0]["data"]["ports"]["out"] == "table"
+		assert "ports" not in graph["nodes"][0]["data"]
 		assert str(row[1]) != "stale-checksum"
 
 	second_live = migrate_graph_revisions(str(db_path), dry_run=False)

@@ -24,6 +24,5 @@ export const defaultComponentNodeData = {
 	label: "Component",
 	params: defaultComponentParams,
 	status: "idle" as const,
-	ports: { in: null, out: null }
 };
 

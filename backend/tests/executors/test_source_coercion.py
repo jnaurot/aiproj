@@ -24,14 +24,23 @@ def _context_with_snapshot_bytes(payload: bytes):
 	)
 
 
-def _file_node(params: dict):
+def _file_node(params: dict, expected_type: str | None = None):
+	data: dict = {
+		"kind": "source",
+		"sourceKind": "file",
+		"params": params,
+	}
+	if expected_type:
+		data["schema"] = {
+			"expectedSchema": {
+				"typedSchema": {"type": expected_type, "fields": []},
+				"source": "declared",
+				"state": "fresh",
+			}
+		}
 	return {
 		"id": "n_source",
-		"data": {
-			"kind": "source",
-			"sourceKind": "file",
-			"params": params,
-		},
+		"data": data,
 	}
 
 
@@ -43,7 +52,6 @@ async def test_csv_table_sets_native_coercion_and_rows():
 			"snapshot_id": "a" * 64,
 			"file_format": "csv",
 			"encoding": "utf-8",
-			"output_mode": "table",
 			"source_type": "file",
 		}
 	)
@@ -65,9 +73,9 @@ async def test_json_scalar_array_coerces_to_index_value_rows():
 			"snapshot_id": "b" * 64,
 			"file_format": "json",
 			"encoding": "utf-8",
-			"output_mode": "table",
 			"source_type": "file",
-		}
+		},
+		expected_type="table",
 	)
 	out = await exec_source("r1", node, ctx)
 	assert out.status == "succeeded"
@@ -88,9 +96,9 @@ async def test_text_table_sets_text_1row_coercion():
 			"snapshot_id": "c" * 64,
 			"file_format": "txt",
 			"encoding": "utf-8",
-			"output_mode": "table",
 			"source_type": "file",
-		}
+		},
+		expected_type="table",
 	)
 	out = await exec_source("r1", node, ctx)
 	assert out.status == "succeeded"
@@ -107,9 +115,9 @@ async def test_binary_table_sets_binary_hex_1row_coercion():
 			"snapshot_id": "d" * 64,
 			"file_format": "png",
 			"encoding": "utf-8",
-			"output_mode": "table",
 			"source_type": "file",
-		}
+		},
+		expected_type="table",
 	)
 	out = await exec_source("r1", node, ctx)
 	assert out.status == "succeeded"
@@ -126,8 +134,8 @@ async def test_legacy_inline_text_file_source_does_not_touch_filesystem():
 		{
 			"source_type": "text",
 			"text": "hello from legacy text source",
-			"output_mode": "table",
-		}
+		},
+		expected_type="table",
 	)
 	out = await exec_source("r1", node, ctx)
 	assert out.status == "succeeded"
