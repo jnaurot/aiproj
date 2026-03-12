@@ -379,7 +379,10 @@ def _normalized_params_for_exec_key(
     if kind == "source":
         from .schemas import normalize_source_params_frontend
 
+        source_kind = (node.get("data", {}).get("sourceKind") or p.get("source_type") or "file")
+        p["source_type"] = source_kind
         p = normalize_source_params_frontend(p)
+        p["source_type"] = source_kind
         for ui_key in (
             "recentSnapshotIds",
             "recent_snapshot_ids",
@@ -389,8 +392,6 @@ def _normalized_params_for_exec_key(
             "snapshotHistory",
         ):
             p.pop(ui_key, None)
-        source_kind = (node.get("data", {}).get("sourceKind") or p.get("source_type") or "file")
-        p["source_type"] = source_kind
         if source_kind == "file" and isinstance(p.get("file_path"), str) and not p.get("filename"):
             from pathlib import Path as _P
 

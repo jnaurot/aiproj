@@ -380,6 +380,24 @@ class TestSourceDatabaseParams:
         assert db_params.query == "SELECT * FROM active_users"
         assert db_params.table_name == "users"  # Still stored
 
+    def test_normalize_source_database_preserves_string_query(self):
+        raw = {
+            "source_type": "database",
+            "connection_string": "postgresql://user:pass@host/db",
+            "query": "SELECT * FROM faculty;",
+        }
+        out = normalize_source_params_frontend(raw)
+        assert out.get("query") == "SELECT * FROM faculty;"
+
+    def test_normalize_source_database_rejects_non_string_query(self):
+        raw = {
+            "source_type": "database",
+            "connection_string": "postgresql://user:pass@host/db",
+            "query": {},
+        }
+        out = normalize_source_params_frontend(raw)
+        assert out.get("query") is None
+
 
 class TestSourceAPIParams:
     """Test source API parameter validation"""
@@ -894,3 +912,19 @@ class TestComponentValidation:
         }
         errors = validate_node_params(node)
         assert any("MISSING_REVISION_ID" in err for err in errors)
+
+
+class TestValidateNodeParamsSourceNormalization:
+    def test_database_query_string_not_coerced_to_query_object(self):
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "database",
+                "params": {
+                    "connection_ref": "conn:default",
+                    "query": "select 1",
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert errors == []

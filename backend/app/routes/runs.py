@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, field_validator
@@ -31,6 +32,108 @@ def _alpha_input_label(idx: int) -> str:
         n, rem = divmod(n - 1, 26)
         out = chr(65 + rem) + out
     return f"Input {out}"
+
+
+def _normalize_typed_field_type(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"table", "json", "text", "binary", "embeddings", "unknown"}:
+        return value
+    if value in {"string", "str"}:
+        return "text"
+    if value in {"object", "array"}:
+        return "json"
+    if value in {"bytes", "bytea"}:
+        return "binary"
+    return "unknown"
+
+
+def _native_type_from_dtype_text(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return "unknown"
+    if any(token in value for token in ("int", "int8", "int16", "int32", "int64")):
+        return "int"
+    if any(token in value for token in ("float", "double", "decimal", "numeric")):
+        return "float"
+    if "bool" in value:
+        return "bool"
+    if any(token in value for token in ("datetime", "timestamp", "date", "time")):
+        return "datetime"
+    if any(token in value for token in ("bytes", "bytea", "blob", "binary")):
+        return "binary"
+    if any(token in value for token in ("json", "dict", "list", "array", "struct", "map")):
+        return "json"
+    if value in {"string", "str", "object", "text"}:
+        return "string"
+    return "unknown"
+
+
+def _native_type_from_value(value: Any) -> str:
+    try:
+        if pd.isna(value):
+            return "unknown"
+    except Exception:
+        pass
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return "binary"
+    if isinstance(value, (dict, list)):
+        return "json"
+    if hasattr(value, "isoformat"):
+        return "datetime"
+    if isinstance(value, str):
+        return "string"
+    return "unknown"
+
+
+def _typed_field_type_from_native(native_type: str) -> str:
+    native = str(native_type or "unknown").strip().lower()
+    if native == "json":
+        return "json"
+    if native == "binary":
+        return "binary"
+    if native in {"int", "float", "bool", "datetime", "string"}:
+        return "text"
+    return "unknown"
+
+
+def _inferred_expected_schema_from_columns(
+    columns: Any,
+    *,
+    first_row: Optional[Dict[str, Any]] = None,
+    pandas_dtypes: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    fields: list[Dict[str, Any]] = []
+    first_row = first_row if isinstance(first_row, dict) else {}
+    pandas_dtypes = pandas_dtypes if isinstance(pandas_dtypes, dict) else {}
+    if isinstance(columns, list):
+        for col in columns:
+            if isinstance(col, dict):
+                name = str(col.get("name") or "").strip()
+                col_type = col.get("type", col.get("dtype"))
+            else:
+                name = str(col or "").strip()
+                col_type = "unknown"
+            if not name:
+                continue
+            value_native = _native_type_from_value(first_row.get(name))
+            dtype_native = _native_type_from_dtype_text(pandas_dtypes.get(name, col_type))
+            native_type = value_native if value_native != "unknown" else dtype_native
+            typed_type = _typed_field_type_from_native(native_type)
+            fields.append(
+                {
+                    "name": name,
+                    "type": typed_type if typed_type != "unknown" else _normalize_typed_field_type(col_type),
+                    "nativeType": native_type,
+                    "nullable": True,
+                }
+            )
+    return {"type": "table", "fields": fields}
 
 
 def _extract_builtin_environment(payload_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -903,6 +1006,16 @@ async def get_artifact_preview(
                     if rows:
                         cols = sorted({str(k) for r in rows for k in r.keys()})
                         page_rows = rows[offset : offset + limit]
+                        json_df = pd.DataFrame(rows)
+                        first_row = (
+                            json_df.iloc[0].where(json_df.iloc[0].notna(), None).to_dict()
+                            if len(json_df) > 0
+                            else {}
+                        )
+                        dtype_map = {
+                            str(name): str(dtype)
+                            for name, dtype in zip(json_df.columns.tolist(), json_df.dtypes.tolist())
+                        }
                         return {
                             "artifactId": artifact_id,
                             "mimeType": mime,
@@ -911,17 +1024,38 @@ async def get_artifact_preview(
                             "totalRows": len(rows),
                             "columns": [{"name": c, "type": "unknown"} for c in cols],
                             "rows": page_rows,
+                            "inferredExpectedSchema": _inferred_expected_schema_from_columns(
+                                [{"name": c, "type": "unknown"} for c in cols],
+                                first_row=first_row,
+                                pandas_dtypes=dtype_map,
+                            ),
                             "warning": warning,
                         }
                 if isinstance(parsed, dict):
+                    json_cols = [{"name": str(k), "type": "unknown"} for k in parsed.keys()]
+                    json_df = pd.DataFrame([parsed])
+                    first_row = (
+                        json_df.iloc[0].where(json_df.iloc[0].notna(), None).to_dict()
+                        if len(json_df) > 0
+                        else {}
+                    )
+                    dtype_map = {
+                        str(name): str(dtype)
+                        for name, dtype in zip(json_df.columns.tolist(), json_df.dtypes.tolist())
+                    }
                     return {
                         "artifactId": artifact_id,
                         "mimeType": mime,
                         "offset": 0,
                         "limit": 1,
                         "totalRows": 1,
-                        "columns": [{"name": str(k), "type": "unknown"} for k in parsed.keys()],
+                        "columns": json_cols,
                         "rows": [parsed],
+                        "inferredExpectedSchema": _inferred_expected_schema_from_columns(
+                            json_cols,
+                            first_row=first_row,
+                            pandas_dtypes=dtype_map,
+                        ),
                         "warning": warning,
                     }
             except Exception:
@@ -941,6 +1075,9 @@ async def get_artifact_preview(
             "totalRows": len(lines),
             "columns": [{"name": "text", "type": "string"}],
             "rows": [{"text": line} for line in page_lines],
+            "inferredExpectedSchema": _inferred_expected_schema_from_columns(
+                [{"name": "text", "type": "string"}]
+            ),
             "warning": warning,
         }
 
@@ -975,6 +1112,18 @@ async def get_artifact_preview(
         "totalRows": total_rows,
         "columns": schema_cols,
         "rows": rows,
+        "inferredExpectedSchema": _inferred_expected_schema_from_columns(
+            schema_cols,
+            first_row=(
+                page_df.iloc[0].where(page_df.iloc[0].notna(), None).to_dict()
+                if len(page_df) > 0
+                else {}
+            ),
+            pandas_dtypes={
+                str(name): str(dtype)
+                for name, dtype in zip(df.columns.tolist(), df.dtypes.tolist())
+            },
+        ),
     }
     if warning:
         out["warning"] = warning

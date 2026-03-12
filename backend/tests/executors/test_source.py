@@ -99,3 +99,28 @@ async def test_source_invalid_type_returns_failed():
 	result = await exec_source("run_4", node, _ctx())
 	assert result.status == "failed"
 	assert "unknown source_type" in (result.error or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_source_database_preserves_string_query_when_source_kind_on_node(monkeypatch):
+	captured = {}
+
+	async def _fake_handle_database_source(node_id, params, bus, run_id, graph_id, forced_output_mode=None):
+		captured["query"] = params.get("query")
+		return NodeOutput(status="succeeded", data=[], metadata=None, execution_time_ms=0.0)
+
+	monkeypatch.setattr("app.executors.source._handle_database_source", _fake_handle_database_source)
+	node = {
+		"id": "n_db",
+		"data": {
+			"sourceKind": "database",
+			"params": {
+				"connection_string": "postgresql://user:pass@host/db",
+				"query": "select * from faculty;",
+				"limit": 5,
+			},
+		},
+	}
+	result = await exec_source("run_db", node, _ctx())
+	assert result.status == "succeeded"
+	assert captured.get("query") == "select * from faculty;"

@@ -6,7 +6,7 @@
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 	import ComponentEditor from '$lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte';
-	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
+	import { getArtifactMetaUrl, getArtifactPreviewUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
 
@@ -192,6 +192,7 @@
 	let expectedSchemaDraft = '';
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
+	let headerSchemaLoading = false;
 
 	function normalizeExpectedSchemaDraft(node: any): string {
 		const typed =
@@ -212,6 +213,50 @@
 		const typed = (selectedNode.data as any)?.schema?.inferredSchema?.typedSchema ?? { type: 'unknown', fields: [] };
 		expectedSchemaDraft = JSON.stringify(typed, null, 2);
 		expectedSchemaError = '';
+	}
+
+	async function useHeaderForExpectedSchema(): Promise<void> {
+		if (!selectedNode?.id) return;
+		const graphId = String($graphStore?.graphId ?? '').trim();
+		if (!graphId) {
+			expectedSchemaError = 'Graph id is missing.';
+			return;
+		}
+		const nodeBinding = ($graphStore?.nodeBindings ?? {})[selectedNode.id];
+		const artifactId = artifactIdFromBinding(nodeBinding);
+		if (!artifactId) {
+			expectedSchemaError = 'No source artifact found. Run this node first.';
+			return;
+		}
+
+		headerSchemaLoading = true;
+		expectedSchemaError = '';
+		try {
+			const res = await fetch(getArtifactPreviewUrl(artifactId, graphId, 0, 1));
+			if (!res.ok) throw new Error(`Failed to load artifact preview: ${res.status}`);
+			const preview = await res.json();
+			const inferredExpectedSchema =
+				preview?.inferredExpectedSchema && typeof preview.inferredExpectedSchema === 'object'
+					? (preview.inferredExpectedSchema as Record<string, unknown>)
+					: null;
+			const typedType = String(inferredExpectedSchema?.type ?? '').trim().toLowerCase();
+			const fields = Array.isArray(inferredExpectedSchema?.fields)
+				? (inferredExpectedSchema?.fields as unknown[])
+				: [];
+			if (typedType !== 'table' || fields.length === 0) {
+				expectedSchemaError = 'Backend did not return inferred table schema from header.';
+				return;
+			}
+			expectedSchemaDraft = JSON.stringify(
+				inferredExpectedSchema,
+				null,
+				2
+			);
+		} catch (error) {
+			expectedSchemaError = String((error as Error)?.message ?? 'Failed to infer schema from header.');
+		} finally {
+			headerSchemaLoading = false;
+		}
 	}
 
 	function clearExpectedSchema(): void {
@@ -478,6 +523,11 @@
 				<div class="expectedSchemaActions">
 					<button type="button" on:click={saveExpectedSchema}>Save expected</button>
 					<button type="button" on:click={useInferredExpectedSchema}>Use inferred</button>
+					{#if isSource && sourceKind === 'database'}
+						<button type="button" on:click={useHeaderForExpectedSchema} disabled={headerSchemaLoading}>
+							{headerSchemaLoading ? 'Reading header...' : 'Use header'}
+						</button>
+					{/if}
 					<button type="button" on:click={clearExpectedSchema}>Clear</button>
 				</div>
 				{#if schemaDriftSummary}

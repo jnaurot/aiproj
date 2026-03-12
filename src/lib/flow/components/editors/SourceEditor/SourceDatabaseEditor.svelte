@@ -68,11 +68,21 @@
 				placeholder="SELECT * FROM table"
 				onInput={(event) => {
 					const value = (event.currentTarget as HTMLTextAreaElement).value;
-					draft({ query: value, table_name: value.trim() ? undefined : params?.table_name });
+					const nextQuery = value.trim();
+					const patch = {
+						query: nextQuery === '' ? undefined : value,
+						table_name: nextQuery ? undefined : params?.table_name
+					};
+					draft(patch);
+					commit(patch);
 				}}
 				onBlur={(event) => {
 					const value = (event.currentTarget as HTMLTextAreaElement).value;
-					commit({ query: value, table_name: value.trim() ? undefined : params?.table_name });
+					const nextQuery = value.trim();
+					commit({
+						query: nextQuery === '' ? undefined : value,
+						table_name: nextQuery ? undefined : params?.table_name
+					});
 				}}
 			/>
 		</Field>
@@ -82,12 +92,22 @@
 				value={table_name}
 				placeholder="(optional) table"
 				onInput={(event) => {
-					const value = (event.currentTarget as HTMLInputElement).value.trim();
-					draft({ table_name: value === '' ? undefined : value, query: value ? undefined : params?.query });
+					const value = (event.currentTarget as HTMLInputElement).value;
+					const nextTable = value.trim();
+					const patch = {
+						table_name: nextTable === '' ? undefined : value,
+						query: nextTable ? undefined : params?.query
+					};
+					draft(patch);
+					commit(patch);
 				}}
 				onBlur={(event) => {
-					const value = (event.currentTarget as HTMLInputElement).value.trim();
-					commit({ table_name: value === '' ? undefined : value, query: value ? undefined : params?.query });
+					const value = (event.currentTarget as HTMLInputElement).value;
+					const nextTable = value.trim();
+					commit({
+						table_name: nextTable === '' ? undefined : value,
+						query: nextTable ? undefined : params?.query
+					});
 				}}
 			/>
 		</Field>

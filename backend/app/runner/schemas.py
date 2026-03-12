@@ -128,8 +128,23 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p.setdefault("body_mode", "raw")
         p.setdefault("body_raw", p.get("body"))
     p.pop("body", None)
-    if "query" in p and not isinstance(p.get("query"), dict):
-        p["query"] = {}
+    source_type = str(
+        p.get("source_type")
+        or p.get("sourceType")
+        or p.get("kind")
+        or ""
+    ).strip().lower()
+    # API source uses a query-map; database source uses SQL string query.
+    if source_type == "api":
+        if "query" in p and not isinstance(p.get("query"), dict):
+            p["query"] = {}
+    elif source_type == "database":
+        if "query" in p and not isinstance(p.get("query"), str):
+            p["query"] = None
+    else:
+        # Unknown/legacy shape: preserve historical API-safe behavior.
+        if "query" in p and not isinstance(p.get("query"), dict):
+            p["query"] = {}
     cache_policy = p.get("cache_policy")
     if isinstance(cache_policy, dict) and "ttlSeconds" in cache_policy and "ttl_seconds" not in cache_policy:
         cache_policy["ttl_seconds"] = cache_policy.pop("ttlSeconds")
@@ -879,8 +894,18 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
 
             llm_params = LLMParams.model_validate(norm)
         elif kind == "source":
-            norm_source = normalize_source_params_frontend(params)
-            source_kind = (node.get("data", {}).get("sourceKind") or norm_source.get("source_type") or "file")
+            source_kind = (
+                node.get("data", {}).get("sourceKind")
+                or (params.get("source_type") if isinstance(params, dict) else None)
+                or "file"
+            )
+            norm_source = normalize_source_params_frontend(
+                {
+                    **(params if isinstance(params, dict) else {}),
+                    "source_type": source_kind,
+                }
+            )
+            norm_source["source_type"] = source_kind
             if source_kind == "file":
                 model = SourceFileParams.model_validate(norm_source)
                 errors.extend(model.validate_required())

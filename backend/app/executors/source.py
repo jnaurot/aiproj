@@ -356,8 +356,9 @@ async def exec_source(
     start_time = time.time()
     node_id = node["id"]
     raw_params = dict(node.get("data", {}).get("params", {}) or {})
+    source_type = (node.get("data", {}).get("sourceKind") or raw_params.get("source_type") or "file")
+    raw_params["source_type"] = source_type
     params = normalize_source_params_frontend(raw_params)
-    source_type = (node.get("data", {}).get("sourceKind") or params.get("source_type") or "file")
     params["source_type"] = source_type
 
     try:
