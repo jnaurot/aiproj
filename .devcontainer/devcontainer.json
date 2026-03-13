@@ -1,0 +1,20 @@
+{
+  "name": "aiproj",
+
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  "postCreateCommand": "npm install",
+
+  "postStartCommand": "docker compose --profile backend-cpu-dev up -d && npm run dev -- --host 0.0.0.0",
+
+  "forwardPorts": [5173, 8000],
+
+  "portsAttributes": {
+    "5173": { "label": "frontend" },
+    "8000": { "label": "backend" }
+  }
+}
