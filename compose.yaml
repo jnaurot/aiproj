@@ -14,7 +14,6 @@ services:
       - "8000:8000"
     volumes:
       - ./:/workspace
-      - C:/Users/Owner/Desktop:/host/desktop
       - backend-data:/workspace/backend/data
       - uv-cache:/root/.cache/uv
   backend-rocm:
@@ -46,7 +45,6 @@ services:
     shm_size: "8gb"
     volumes:
       - ./:/workspace
-      - C:/Users/Owner/Desktop:/host/desktop
       - backend-data-rocm:/workspace/backend/data
       - uv-cache-rocm:/root/.cache/uv
 

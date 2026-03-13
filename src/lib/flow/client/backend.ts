@@ -1,4 +1,5 @@
-const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+// const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+const DEFAULT_BACKEND_URL = '/api';
 const IS_TEST = String((import.meta as any)?.env?.MODE || '').trim().toLowerCase() === 'test';
 
 function normalizeBase(url: string): string {
