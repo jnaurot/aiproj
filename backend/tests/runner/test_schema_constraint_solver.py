@@ -141,3 +141,48 @@ def test_schema_constraint_solver_requires_typed_schema_coverage() -> None:
 	details = typed_schema_errors[0].details or {}
 	assert details.get("expected", {}).get("typedSchema", {}).get("fields") == "non-empty"
 	assert details.get("actual", {}).get("typedSchema", {}).get("fields") == []
+
+
+def test_schema_constraint_solver_accepts_text_source_to_text_to_table_adapter_even_with_stale_edge_contract() -> None:
+	graph = {
+		"nodes": [
+			_node(
+				"n_source",
+				kind="source",
+				label="Source",
+				params={"sourceKind": "file", "snapshot_id": "d" * 64, "file_format": "txt"},
+			),
+			{
+				"id": "n_adapter",
+				"data": {
+					"kind": "transform",
+					"label": "Adapter",
+					"transformKind": "text_to_table",
+					"params": {"op": "text_to_table", "text_to_table": {"mode": "lines", "column": "text"}},
+					# expectedSchema reflects output contract and must not force incoming target type to table.
+					"schema": {"expectedSchema": {"typedSchema": {"type": "table", "fields": []}}},
+				},
+			},
+		],
+		"edges": [
+			{
+				"id": "e1",
+				"source": "n_source",
+				"target": "n_adapter",
+				"data": {
+					"contract": {
+						"in": "table",
+						"out": "text",
+						"payload": {
+							"source": {"type": "text"},
+							"target": {"type": "table"},
+						},
+					}
+				},
+			},
+		],
+	}
+
+	result = GraphValidator().validate_pre_execution(graph)
+	edge_errors = [e for e in result.errors if str(e.edge_id or "") == "e1"]
+	assert all(str(e.code or "") != "TYPE_MISMATCH" for e in edge_errors)

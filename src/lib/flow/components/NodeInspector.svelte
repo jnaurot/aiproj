@@ -9,6 +9,12 @@
 	import { getArtifactMetaUrl, getArtifactPreviewUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
+	import {
+		buildTransformAutoFixes,
+		buildTransformPreviewDiff,
+		guidedControlsForTransform,
+		suggestNextTransformOps
+	} from '$lib/flow/components/editors/TransformEditor/transformAssist';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import {
@@ -51,10 +57,43 @@
 	$: schemaContract = selectedNode
 		? __buildNodeSchemaContractSnapshotForTest($graphStore as any, selectedNode.id)
 		: { nodeId: '', status: 'clean', edges: [] as NodeSchemaContractEdge[] };
+	$: guidedControls = isTransform ? guidedControlsForTransform(transformKind as TransformKind) : [];
+	$: transformPreviewDiff = isTransform
+		? buildTransformPreviewDiff({
+				kind: transformKind as TransformKind,
+				params: (params ?? {}) as Record<string, unknown>,
+				inputColumns: Array.from(new Set([...(schemaProps.inputColumns ?? []), ...inputPreviewColumns])),
+				sampleRows: inputPreviewRows
+			})
+		: {
+				beforeColumns: [],
+				afterColumns: [],
+				beforeRows: [],
+				afterRows: [],
+				notes: []
+			};
+	$: transformAutoFixes = isTransform
+		? buildTransformAutoFixes({
+				kind: transformKind as TransformKind,
+				params: (params ?? {}) as Record<string, unknown>,
+				nodeError,
+				availableColumns: schemaProps.inputColumns ?? []
+			})
+		: [];
+	$: nextTransformOps = isTransform
+		? suggestNextTransformOps({
+				kind: transformKind as TransformKind,
+				nodeError,
+				schemaEdges: (schemaContract.edges ?? []).filter((e) => e.direction === 'incoming')
+			})
+		: [];
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
 	let lastInputSignature = '';
+	let transformGuidedMode = true;
+	let inputPreviewRows: Array<Record<string, unknown>> = [];
+	let inputPreviewColumns: string[] = [];
 	type SchemaAssistState = 'fresh' | 'partial' | 'stale' | 'unknown';
 	type SchemaAssistSummary = {
 		state: SchemaAssistState;
@@ -305,12 +344,16 @@
 	} else {
 		lastInputSignature = '';
 		inputSchemas = [];
+		inputPreviewRows = [];
+		inputPreviewColumns = [];
 	}
 
 	async function refreshInputSchemas(): Promise<void> {
 		const nodeId = selectedNode?.id;
 		if (!nodeId) {
 			inputSchemas = [];
+			inputPreviewRows = [];
+			inputPreviewColumns = [];
 			return;
 		}
 		const reqId = ++inputSchemaReqSeq;
@@ -321,6 +364,8 @@
 			const graphId = String($graphStore?.graphId ?? '').trim();
 			if (!graphId) {
 				inputSchemas = [];
+				inputPreviewRows = [];
+				inputPreviewColumns = [];
 				return;
 			}
 			const incoming = edges
@@ -339,6 +384,8 @@
 				});
 			if (incoming.length === 0) {
 				inputSchemas = [];
+				inputPreviewRows = [];
+				inputPreviewColumns = [];
 				return;
 			}
 			const responses = await Promise.all(
@@ -374,9 +421,38 @@
 			);
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemas = responses.filter(Boolean) as InputSchemaView[];
+			const previewSource = incoming.find((entry) => entry.artifactId.length > 0);
+			if (previewSource?.artifactId) {
+				try {
+					const previewRes = await fetch(getArtifactPreviewUrl(previewSource.artifactId, graphId, 0, 5));
+					if (previewRes.ok) {
+						const preview = await previewRes.json();
+						const rows = Array.isArray(preview?.rows) ? (preview.rows as Array<Record<string, unknown>>) : [];
+						const columns = Array.isArray(preview?.columns)
+							? preview.columns
+									.map((col: Record<string, unknown>) => String(col?.name ?? '').trim())
+									.filter((col: string) => col.length > 0)
+							: [];
+						if (reqId !== inputSchemaReqSeq) return;
+						inputPreviewRows = rows.slice(0, 5);
+						inputPreviewColumns = columns;
+					} else {
+						inputPreviewRows = [];
+						inputPreviewColumns = [];
+					}
+				} catch {
+					inputPreviewRows = [];
+					inputPreviewColumns = [];
+				}
+			} else {
+				inputPreviewRows = [];
+				inputPreviewColumns = [];
+			}
 		} catch {
 			if (reqId !== inputSchemaReqSeq) return;
 			inputSchemas = [];
+			inputPreviewRows = [];
+			inputPreviewColumns = [];
 		}
 	}
 
@@ -405,6 +481,16 @@
 
 	function onJoinCommit(patch: Record<string, any>) {
 		onCommit(toJoinPatch(patch));
+	}
+
+	function applyTransformAutoFix(patch: Record<string, unknown>): void {
+		if (!isTransform) return;
+		graphStore.commitInspectorImmediate(patch as Record<string, any>);
+	}
+
+	function switchTransformOp(nextOp: TransformKind): void {
+		if (!selectedNode?.id) return;
+		graphStore.setTransformKind(selectedNode.id, nextOp);
 	}
 
 	function schemaTypeLabel(schema: Record<string, any> | undefined): string {
@@ -463,7 +549,7 @@
 			{onDraft}
 			{onCommit}
 		/>
-	{:else if isComponent}
+		{:else if isComponent}
 		<ComponentEditor {selectedNode} {params} {onDraft} />
 		{:else if isTransform}
 			<div class={`schemaAssist schemaAssist-${schemaAssist.state}`}>
@@ -477,7 +563,113 @@
 					</div>
 				{/if}
 			</div>
-			{#if transformKind === 'join'}
+			<div class="guidedModeRow">
+				<label class="guidedToggle">
+					<input type="checkbox" bind:checked={transformGuidedMode} />
+					<span>Guided mode</span>
+				</label>
+				<span class="guidedHint">Start with 3-5 core controls, then expand advanced editor.</span>
+			</div>
+			{#if transformGuidedMode}
+				<div class="guidedAssistCard">
+					<div class="guidedAssistHead">High-Value Controls</div>
+					<div class="guidedAssistList">
+						{#each guidedControls as control (control.id)}
+							<div class="guidedAssistItem">
+								<div class="guidedAssistLabel">{control.label}</div>
+								<div class="guidedAssistDesc">{control.description}</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+			{#if nodeError}
+				<div class="guidedAssistCard guidedAssistError">
+					<div class="guidedAssistHead">Why This Failed</div>
+					<div class="guidedAssistDesc">
+						{nodeError.message || 'Transform failed. Review diagnostics and apply a suggested fix.'}
+					</div>
+					{#if transformAutoFixes.length > 0}
+						<div class="assistActionRow">
+							{#each transformAutoFixes as fix (fix.id)}
+								<button type="button" class="small" on:click={() => applyTransformAutoFix(fix.patch)}>
+									{fix.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
+			{#if nextTransformOps.length > 0}
+				<div class="guidedAssistCard">
+					<div class="guidedAssistHead">Suggested Next Transform</div>
+					<div class="guidedAssistList">
+						{#each nextTransformOps as suggestion, index (`${suggestion.op}-${index}`)}
+							<div class="guidedAssistItem">
+								<div class="guidedAssistLabel">{suggestion.op}</div>
+								<div class="guidedAssistDesc">{suggestion.reason}</div>
+								<button type="button" class="small" on:click={() => switchTransformOp(suggestion.op)}>
+									Switch to {suggestion.op}
+								</button>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Live Preview Diff</div>
+				<div class="previewDiffCols">
+					<div>
+						<div class="guidedAssistLabel">Before columns ({transformPreviewDiff.beforeColumns.length})</div>
+						<div class="schemaSuggestions">{transformPreviewDiff.beforeColumns.join(', ') || '-'}</div>
+					</div>
+					<div>
+						<div class="guidedAssistLabel">After columns ({transformPreviewDiff.afterColumns.length})</div>
+						<div class="schemaSuggestions">{transformPreviewDiff.afterColumns.join(', ') || '-'}</div>
+					</div>
+				</div>
+				<div class="previewDiffRows">
+					<div>
+						<div class="guidedAssistLabel">Sample input rows</div>
+						<pre>{JSON.stringify(transformPreviewDiff.beforeRows, null, 2)}</pre>
+					</div>
+					<div>
+						<div class="guidedAssistLabel">Sample output rows</div>
+						<pre>{JSON.stringify(transformPreviewDiff.afterRows, null, 2)}</pre>
+					</div>
+				</div>
+				{#if transformPreviewDiff.notes.length > 0}
+					<div class="schemaSuggestions">{transformPreviewDiff.notes.join(' ')}</div>
+				{/if}
+			</div>
+			{#if transformGuidedMode}
+				<div class="advancedEditor">
+					<div class="advancedEditorTitle">Editor</div>
+					{#if transformKind === 'join'}
+						<svelte:component
+							this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
+							{selectedNode}
+							{params}
+							{nodeError}
+							{inputSchemas}
+							onDraft={onJoinDraft}
+							onCommit={onJoinCommit}
+						/>
+					{:else}
+						<svelte:component
+							this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
+							{selectedNode}
+							{params}
+							{nodeError}
+							inputColumns={schemaProps.inputColumns}
+							inputSchemaColumns={schemaProps.inputSchemaColumns}
+							inputSchemas={schemaProps.inputSchemas}
+							{onDraft}
+							{onCommit}
+						/>
+					{/if}
+				</div>
+			{:else if transformKind === 'join'}
 				<svelte:component
 					this={TransformEditorByKind[transformKind] ?? TransformEditorByKind.filter}
 					{selectedNode}
@@ -674,6 +866,108 @@
 	.schemaAssistHint {
 		font-size: 11px;
 		color: var(--ni-muted);
+	}
+
+	.guidedModeRow {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 8px;
+		font-size: 11px;
+	}
+
+	.guidedToggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-weight: 600;
+	}
+
+	.guidedHint {
+		color: var(--ni-muted);
+	}
+
+	.guidedAssistCard {
+		margin-bottom: 8px;
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px;
+		background: var(--ni-card);
+		display: grid;
+		gap: 6px;
+	}
+
+	.guidedAssistError {
+		border-color: var(--ni-error-border);
+		background: var(--ni-error-bg);
+	}
+
+	.guidedAssistHead {
+		font-size: 12px;
+		font-weight: 700;
+	}
+
+	.guidedAssistList {
+		display: grid;
+		gap: 6px;
+	}
+
+	.guidedAssistItem {
+		border: 1px solid var(--ni-border);
+		border-radius: 8px;
+		padding: 6px;
+		display: grid;
+		gap: 4px;
+	}
+
+	.guidedAssistLabel {
+		font-size: 11px;
+		font-weight: 600;
+	}
+
+	.guidedAssistDesc {
+		font-size: 11px;
+		opacity: 0.85;
+	}
+
+	.assistActionRow {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.previewDiffCols,
+	.previewDiffRows {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+	}
+
+	.previewDiffRows pre {
+		margin: 0;
+		max-height: 140px;
+		overflow: auto;
+		border: 1px solid var(--ni-border);
+		border-radius: 8px;
+		padding: 6px;
+		font-size: 10px;
+		background: var(--ni-control-bg);
+		color: var(--ni-control-text);
+	}
+
+	.advancedEditor {
+		margin-bottom: 8px;
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px;
+		background: var(--ni-card);
+	}
+
+	.advancedEditorTitle {
+		font-size: 12px;
+		font-weight: 600;
+		margin-bottom: 8px;
 	}
 
 	.expectedSchemaEditor {

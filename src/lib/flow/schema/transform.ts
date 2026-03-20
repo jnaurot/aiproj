@@ -188,7 +188,14 @@ export const TransformDedupeParamsSchema = z.object({
       message: "by must be empty when allColumns is true",
     });
   }
-});
+	if (!val.allColumns && val.by.length === 0) {
+		ctx.addIssue({
+			code: 'custom',
+			path: ['by'],
+			message: 'by must contain at least one column when allColumns is false'
+		});
+	}
+}).strip();
 
 export const TransformSqlParamsSchema = z.object({
   dialect: z.enum(["duckdb", "postgres", "sqlite"]).optional().default("duckdb"),

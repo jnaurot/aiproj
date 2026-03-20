@@ -145,6 +145,9 @@ class GraphValidator:
                 return "table"
             return "text"
         if kind == "transform":
+            op = GraphValidator._transform_op(data, params)
+            if op == "table_to_json":
+                return "json"
             return "table"
         if kind == "llm":
             return "text"
@@ -156,15 +159,30 @@ class GraphValidator:
     def _target_default_type(node: Dict[str, Any]) -> Optional[str]:
         data = (node.get("data") or {})
         kind = str(data.get("kind") or "").strip().lower()
+        params = (data.get("params") or {})
         if kind == "source":
             return None
         if kind == "transform":
+            op = GraphValidator._transform_op(data, params)
+            if op == "json_to_table":
+                return "json"
+            if op == "text_to_table":
+                return "text"
+            if op == "table_to_json":
+                return "table"
             return "table"
         if kind == "llm":
             return "text"
         if kind == "tool":
             return "json"
         return None
+
+    @staticmethod
+    def _transform_op(data: Dict[str, Any], params: Dict[str, Any]) -> str:
+        op = str((params or {}).get("op") or "").strip().lower()
+        if op:
+            return op
+        return str((data or {}).get("transformKind") or "").strip().lower()
 
     def _component_output_type(
         self,
@@ -468,11 +486,9 @@ class GraphValidator:
                 or self._source_default_type(source_node)
                 or source_type
             )
-            target_type = (
-                self._node_schema_declared_type(target_node)
-                or self._target_default_type(target_node)
-                or target_type
-            )
+            # expectedSchema currently models node output schema. It should not override
+            # incoming edge requirements for target-side validation.
+            target_type = self._target_default_type(target_node) or target_type
             source_type = self._normalize_payload_type(source_type)
             target_type = self._normalize_payload_type(target_type)
 

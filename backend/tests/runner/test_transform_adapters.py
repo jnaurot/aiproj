@@ -4,7 +4,13 @@ import json
 
 import pandas as pd
 
-from app.runner.nodes.transform import execute_transform_op, normalize_transform_params, run_transform
+from app.runner.nodes.transform import (
+	execute_transform_op,
+	load_table_from_json_bytes,
+	load_table_from_text_bytes,
+	normalize_transform_params,
+	run_transform,
+)
 
 
 def test_normalize_transform_adapter_defaults():
@@ -49,4 +55,44 @@ def test_table_to_json_emits_json_artifact():
 	assert res.meta.get("payloadType") == "json"
 	parsed = json.loads(res.payload_bytes.decode("utf-8"))
 	assert parsed == [{"id": 1, "value": "x"}, {"id": 2, "value": "y"}]
+
+
+def test_json_to_table_records_adapter_parses_scalar_arrays():
+	payload = b'["a","b","c"]'
+	out = load_table_from_json_bytes(payload, orient="records", rows_key="rows")
+	assert list(out.columns) == ["value"]
+	assert out.to_dict(orient="records") == [{"value": "a"}, {"value": "b"}, {"value": "c"}]
+
+
+def test_json_to_table_object_adapter_respects_rows_key():
+	payload = b'{"rows":[{"id":1,"name":"x"},{"id":2,"name":"y"}]}'
+	out = load_table_from_json_bytes(payload, orient="object", rows_key="rows")
+	assert list(out.columns) == ["id", "name"]
+	assert out.to_dict(orient="records") == [{"id": 1, "name": "x"}, {"id": 2, "name": "y"}]
+
+
+def test_text_to_table_csv_adapter_honors_header_and_delimiter():
+	payload = b"col_a;col_b\n1;2\n3;4\n"
+	out = load_table_from_text_bytes(
+		payload,
+		mode="csv",
+		column="text",
+		delimiter=";",
+		has_header=True,
+	)
+	assert list(out.columns) == ["col_a", "col_b"]
+	assert out.to_dict(orient="records") == [{"col_a": 1, "col_b": 2}, {"col_a": 3, "col_b": 4}]
+
+
+def test_text_to_table_tsv_adapter_no_header_generates_named_columns():
+	payload = b"a\tb\nc\td\n"
+	out = load_table_from_text_bytes(
+		payload,
+		mode="tsv",
+		column="item",
+		delimiter=",",
+		has_header=False,
+	)
+	assert list(out.columns) == ["item", "item_1"]
+	assert out.to_dict(orient="records") == [{"item": "a", "item_1": "b"}, {"item": "c", "item_1": "d"}]
 

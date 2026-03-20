@@ -6,12 +6,14 @@ import re
 import traceback
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from app.runner.nodes.transform import (
     normalize_transform_params,
     canonical_json,
     load_table_from_artifact_bytes,
+    load_table_from_json_bytes,
+    load_table_from_text_bytes,
     run_transform,
     sha256_hex,
 )
@@ -1835,6 +1837,15 @@ def _normalize_mime_strict(mime_type: str) -> str:
     return str(mime_type or "").strip().lower()
 
 
+def _transform_op_for_node(node: Dict[str, Any]) -> str:
+    data = (node.get("data", {}) or {}) if isinstance(node, dict) else {}
+    params = (data.get("params", {}) or {}) if isinstance(data, dict) else {}
+    op = str(params.get("op") or "").strip().lower()
+    if op:
+        return op
+    return str(data.get("transformKind") or "").strip().lower()
+
+
 def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     params = (node.get("data", {}).get("params", {}) or {})
     if kind == "llm":
@@ -1888,6 +1899,9 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
             return "table"
         return "text"
     if kind == "transform":
+        transform_op = _transform_op_for_node(node)
+        if transform_op == "table_to_json":
+            return "json"
         return "table"
     if kind == "tool":
         typed_type = _node_typed_schema_type_from_node(node)
@@ -1911,6 +1925,13 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     if kind == "source":
         return None
     if kind == "transform":
+        transform_op = _transform_op_for_node(node)
+        if transform_op == "json_to_table":
+            return "json"
+        if transform_op == "text_to_table":
+            return "text"
+        if transform_op == "table_to_json":
+            return "table"
         return "table"
     if kind == "llm":
         return "text"
@@ -1926,6 +1947,45 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
                 in_pt = "text"
             return in_pt or None
     return None
+
+
+def _resolve_join_placeholder_node_ids(
+    clauses: List[Dict[str, Any]],
+    connected_nodes: List[str],
+) -> tuple[List[Dict[str, Any]], Dict[str, str]]:
+    if not clauses:
+        return clauses, {}
+    ordered = [str(n).strip() for n in connected_nodes if str(n).strip()]
+    if len(ordered) < 2:
+        return clauses, {}
+    left_default = ordered[0]
+    right_default = ordered[1]
+    placeholder_map: Dict[str, str] = {}
+    resolved: List[Dict[str, Any]] = []
+    left_tokens = {"upstream_left", "left"}
+    right_tokens = {"upstream_right", "right"}
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            resolved.append(clause)
+            continue
+        next_clause = dict(clause)
+        left_node = str(next_clause.get("leftNodeId") or "").strip()
+        right_node = str(next_clause.get("rightNodeId") or "").strip()
+        if left_node in left_tokens:
+            next_clause["leftNodeId"] = left_default
+            placeholder_map[left_node] = left_default
+        if right_node in right_tokens or right_node in left_tokens:
+            next_clause["rightNodeId"] = right_default
+            placeholder_map[right_node] = right_default
+        left_resolved = str(next_clause.get("leftNodeId") or "").strip()
+        right_resolved = str(next_clause.get("rightNodeId") or "").strip()
+        if left_resolved and right_resolved and left_resolved == right_resolved:
+            for candidate in ordered:
+                if candidate != left_resolved:
+                    next_clause["rightNodeId"] = candidate
+                    break
+        resolved.append(next_clause)
+    return resolved, placeholder_map
 
 
 def _cached_artifact_contract_mismatch(
@@ -3743,7 +3803,30 @@ async def run_graph(
                                             ),
                                         )
                             b = await context.artifact_store.read(upstream_artifact_id)
-                            df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
+                            if op == "json_to_table":
+                                json_spec = norm.get("json_to_table") if isinstance(norm.get("json_to_table"), dict) else {}
+                                json_orient = str(json_spec.get("orient") or "records").strip().lower() or "records"
+                                json_rows_key = str(json_spec.get("rowsKey") or "rows").strip() or "rows"
+                                df = load_table_from_json_bytes(
+                                    b,
+                                    orient=json_orient,
+                                    rows_key=json_rows_key,
+                                )
+                            elif op == "text_to_table":
+                                text_spec = norm.get("text_to_table") if isinstance(norm.get("text_to_table"), dict) else {}
+                                text_mode = str(text_spec.get("mode") or "lines").strip().lower() or "lines"
+                                text_column = str(text_spec.get("column") or "text").strip() or "text"
+                                text_delimiter = str(text_spec.get("delimiter") or ",")
+                                text_has_header = bool(text_spec.get("hasHeader", True))
+                                df = load_table_from_text_bytes(
+                                    b,
+                                    mode=text_mode,
+                                    column=text_column,
+                                    delimiter=text_delimiter,
+                                    has_header=text_has_header,
+                                )
+                            else:
+                                df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
                             input_tables[input_handle] = df
                             input_columns[input_handle] = [str(c) for c in list(getattr(df, "columns", []))]
                             schema_cols = _extract_table_columns_from_payload_schema(getattr(art, "payload_schema", None))
@@ -3981,6 +4064,24 @@ async def run_graph(
                                 for aid in input_artifact_ids
                                 if str(upstream_source_by_artifact.get(aid, "")).strip()
                             }
+                            clauses_resolved, placeholder_map = _resolve_join_placeholder_node_ids(
+                                [c for c in clauses if isinstance(c, dict)],
+                                sorted(connected_nodes),
+                            )
+                            if placeholder_map:
+                                norm["join"] = {"clauses": clauses_resolved}
+                                clauses = clauses_resolved
+                                await _emit({
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": (
+                                        "join: resolved placeholder node ids "
+                                        f"{json.dumps(placeholder_map, sort_keys=True)}"
+                                    ),
+                                    "nodeId": node_id,
+                                })
                             node_columns: dict[str, list[str]] = {}
                             for connected_node in connected_nodes:
                                 df = join_lookup.get(connected_node)

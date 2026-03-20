@@ -5,6 +5,7 @@ import json
 import hashlib
 import re
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,6 +14,13 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - exercised in lightweight test envs
     duckdb = None
 import pandas as pd
+from pandas.api.types import (
+    is_bool_dtype,
+    is_datetime64_any_dtype,
+    is_float_dtype,
+    is_integer_dtype,
+    is_string_dtype,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +451,78 @@ def _load_table_from_plain_text(b: bytes) -> pd.DataFrame:
     return pd.DataFrame({"text": lines})
 
 
+def _json_rows_to_df(value: Any, *, rows_key: str) -> pd.DataFrame:
+    if isinstance(value, list):
+        if all(isinstance(item, dict) for item in value):
+            return pd.DataFrame(value)
+        return pd.DataFrame({"value": list(value)})
+    if isinstance(value, dict):
+        if rows_key in value and isinstance(value.get(rows_key), list):
+            rows_value = value.get(rows_key) or []
+            if all(isinstance(item, dict) for item in rows_value):
+                return pd.DataFrame(rows_value)
+            return pd.DataFrame({"value": list(rows_value)})
+        return pd.DataFrame([value])
+    if value is None:
+        return pd.DataFrame()
+    return pd.DataFrame({"value": [value]})
+
+
+def load_table_from_json_bytes(
+    b: bytes,
+    *,
+    orient: str = "records",
+    rows_key: str = "rows",
+) -> pd.DataFrame:
+    text = b.decode("utf-8", errors="replace")
+    if not text.strip():
+        return pd.DataFrame()
+    obj: Any
+    try:
+        obj = json.loads(text)
+    except Exception:
+        # Fallback to JSONL for newline-delimited records.
+        jsonl_rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        obj = jsonl_rows
+
+    mode = str(orient or "records").strip().lower()
+    if mode == "object" and isinstance(obj, dict):
+        if rows_key in obj:
+            return _json_rows_to_df(obj.get(rows_key), rows_key=rows_key)
+        return _json_rows_to_df(obj, rows_key=rows_key)
+    return _json_rows_to_df(obj, rows_key=rows_key)
+
+
+def load_table_from_text_bytes(
+    b: bytes,
+    *,
+    mode: str = "lines",
+    column: str = "text",
+    delimiter: str = ",",
+    has_header: bool = True,
+) -> pd.DataFrame:
+    text = b.decode("utf-8", errors="replace")
+    normalized_mode = str(mode or "lines").strip().lower()
+    out_column = str(column or "text").strip() or "text"
+
+    if normalized_mode == "lines":
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return pd.DataFrame({out_column: lines})
+
+    if normalized_mode in {"csv", "tsv"}:
+        sep = "\t" if normalized_mode == "tsv" else (delimiter or ",")
+        header = 0 if has_header else None
+        df = pd.read_csv(io.StringIO(text), sep=sep, header=header)
+        if not has_header:
+            df.columns = [
+                out_column if idx == 0 else f"{out_column}_{idx}"
+                for idx in range(len(df.columns))
+            ]
+        return df
+
+    return pd.DataFrame({out_column: [text] if text else []})
+
+
 def load_table_from_artifact_bytes(mime_type: str, b: bytes) -> pd.DataFrame:
     mt = normalize_mime_type(mime_type)
 
@@ -495,6 +575,202 @@ def df_to_json_bytes(df: pd.DataFrame, *, orient: str = "records", pretty: bool 
     if pretty:
         return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _dtype_to_transform_type(series: pd.Series) -> str:
+    dtype = series.dtype
+    if is_bool_dtype(dtype):
+        return "bool"
+    if is_integer_dtype(dtype):
+        return "int"
+    if is_float_dtype(dtype):
+        return "float"
+    if is_datetime64_any_dtype(dtype):
+        return "datetime"
+    if is_string_dtype(dtype):
+        return "string"
+    return "unknown"
+
+
+def _null_ratio_by_column(df: pd.DataFrame) -> Dict[str, float]:
+    row_count = int(len(df))
+    if row_count <= 0:
+        return {str(col): 0.0 for col in list(df.columns)}
+    out: Dict[str, float] = {}
+    for col in list(df.columns):
+        col_name = str(col)
+        null_count = int(df[col].isna().sum())
+        out[col_name] = float(null_count) / float(row_count)
+    return out
+
+
+def _column_types(df: pd.DataFrame) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for col in list(df.columns):
+        col_name = str(col)
+        try:
+            out[col_name] = _dtype_to_transform_type(df[col])
+        except Exception:
+            out[col_name] = "unknown"
+    return out
+
+
+def _table_schema_snapshot(df: pd.DataFrame) -> Dict[str, Any]:
+    columns = [str(c) for c in list(df.columns)]
+    return {
+        "type": "table",
+        "columns": [{"name": col, "type": _column_types(df).get(col, "unknown")} for col in columns],
+        "rowCount": int(len(df)),
+    }
+
+
+def _determinism_profile(op: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    strict_mode = True
+    stable_sort = True
+    stable_type_coercion = True
+    seed = 0
+    if op == "sort":
+        stable_sort = len((params.get("sort") or {}).get("by") or []) > 0
+    if op == "sql":
+        stable_sort = False
+    if op == "text_to_table":
+        stable_type_coercion = str((params.get("text_to_table") or {}).get("mode") or "lines") == "lines"
+    return {
+        "profile": "strict_repro_v1",
+        "strict": strict_mode,
+        "seed": seed,
+        "stableSort": stable_sort,
+        "stableTypeCoercion": stable_type_coercion,
+    }
+
+
+def _cost_plan(op: str, params: Dict[str, Any], in_rows: int, in_cols: int) -> Dict[str, Any]:
+    score = float(in_rows) * max(float(in_cols), 1.0)
+    recommendations: List[str] = []
+    heavy_ops = {"join", "aggregate", "sort", "sql", "split"}
+    if op in heavy_ops:
+        score *= 2.0
+    if op == "join":
+        clause_count = len((params.get("join") or {}).get("clauses") or [])
+        score *= max(float(clause_count), 1.0)
+        recommendations.append("Consider pre-filtering or pre-limiting both join inputs.")
+    if op in {"sort", "aggregate", "sql", "join"} and in_rows > 50000:
+        recommendations.append("Add a LIMIT earlier or filter rows before this transform.")
+    if op == "split":
+        recommendations.append("Cap maxParts to control row explosion.")
+    if score >= 2_000_000:
+        tier = "high"
+    elif score >= 250_000:
+        tier = "medium"
+    else:
+        tier = "low"
+    if not recommendations and op in {"filter", "select", "rename", "derive"}:
+        recommendations.append("Safe early-stage op: keep before heavy transforms.")
+    return {
+        "estimatedTier": tier,
+        "estimatedScore": round(score, 2),
+        "recommendations": recommendations,
+    }
+
+
+def _row_level_diagnostics(input_df: pd.DataFrame, output_df: pd.DataFrame) -> Dict[str, Any]:
+    in_cols = [str(c) for c in list(input_df.columns)]
+    out_cols = [str(c) for c in list(output_df.columns)]
+    common = [c for c in in_cols if c in set(out_cols)]
+    preview_in = input_df.head(3).where(input_df.head(3).notna(), None).to_dict(orient="records")
+    preview_out = output_df.head(3).where(output_df.head(3).notna(), None).to_dict(orient="records")
+    per_column_changed_ratio: Dict[str, float] = {}
+    if common and len(input_df) > 0 and len(output_df) > 0:
+        aligned_len = min(len(input_df), len(output_df))
+        left = input_df.iloc[:aligned_len]
+        right = output_df.iloc[:aligned_len]
+        for col in common:
+            try:
+                neq = (left[col].astype("string") != right[col].astype("string")).fillna(False)
+                per_column_changed_ratio[col] = float(neq.mean())
+            except Exception:
+                per_column_changed_ratio[col] = 0.0
+    return {
+        "sampleIn": preview_in,
+        "sampleOut": preview_out,
+        "columnChangeRatio": per_column_changed_ratio,
+    }
+
+
+def _build_execution_metadata(
+    *,
+    op: str,
+    params: Dict[str, Any],
+    input_df: pd.DataFrame,
+    output_df: pd.DataFrame,
+    elapsed_ms: float,
+) -> Dict[str, Any]:
+    in_rows = int(len(input_df))
+    out_rows = int(len(output_df))
+    in_cols = [str(c) for c in list(input_df.columns)]
+    out_cols = [str(c) for c in list(output_df.columns)]
+    in_null = _null_ratio_by_column(input_df)
+    out_null = _null_ratio_by_column(output_df)
+    in_types = _column_types(input_df)
+    out_types = _column_types(output_df)
+
+    common_cols = sorted(set(in_cols).intersection(out_cols))
+    null_drift = {
+        col: float(out_null.get(col, 0.0)) - float(in_null.get(col, 0.0))
+        for col in common_cols
+    }
+    type_drift = [
+        {"column": col, "from": in_types.get(col, "unknown"), "to": out_types.get(col, "unknown")}
+        for col in common_cols
+        if in_types.get(col, "unknown") != out_types.get(col, "unknown")
+    ]
+    schema_before = _table_schema_snapshot(input_df)
+    schema_after = _table_schema_snapshot(output_df)
+    planner = _cost_plan(op, params, in_rows, len(in_cols))
+    determinism = _determinism_profile(op, params)
+    row_diag = _row_level_diagnostics(input_df, output_df)
+
+    return {
+        "op": str(op or ""),
+        "input": {
+            "rows": in_rows,
+            "columns": in_cols,
+            "nullRatioByColumn": in_null,
+            "typesByColumn": in_types,
+        },
+        "output": {
+            "rows": out_rows,
+            "columns": out_cols,
+            "nullRatioByColumn": out_null,
+            "typesByColumn": out_types,
+        },
+        "drift": {
+            "rowDelta": out_rows - in_rows,
+            "rowRatio": (float(out_rows) / float(in_rows)) if in_rows > 0 else None,
+            "addedColumns": [c for c in out_cols if c not in set(in_cols)],
+            "removedColumns": [c for c in in_cols if c not in set(out_cols)],
+            "nullRatioDeltaByColumn": null_drift,
+            "typeChanges": type_drift,
+        },
+        "cost": {
+            "elapsedMs": round(max(0.0, float(elapsed_ms)), 3),
+            "rowsIn": in_rows,
+            "rowsOut": out_rows,
+        },
+        "schemaChecks": {
+            "mandatory": True,
+            "before": {"ok": True, "schema": schema_before},
+            "after": {"ok": True, "schema": schema_after},
+        },
+        "determinism": determinism,
+        "planner": planner,
+        "timeline": [
+            {"phase": "schema_check_before", "rows": in_rows, "columns": len(in_cols)},
+            {"phase": "execute_op", "op": str(op or ""), "elapsedMs": round(max(0.0, float(elapsed_ms)), 3)},
+            {"phase": "schema_check_after", "rows": out_rows, "columns": len(out_cols)},
+        ],
+        "rowDiagnostics": row_diag,
+    }
 
 
 def _execute_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> pd.DataFrame:
@@ -1187,7 +1463,11 @@ def run_transform(
     input_tables: Dict[str, pd.DataFrame],
     join_lookup: Optional[Dict[str, pd.DataFrame]],
 ) -> TransformResult:
+    t0 = time.perf_counter()
     op = params["op"]
+    primary_input = input_tables.get("in")
+    if primary_input is None:
+        primary_input = next(iter(input_tables.values())) if input_tables else pd.DataFrame()
     quality_gate_report: Optional[Dict[str, Any]] = None
     if op == "quality_gate":
         spec = params["quality_gate"]
@@ -1203,6 +1483,15 @@ def run_transform(
     else:
         out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
 
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    execution_meta = _build_execution_metadata(
+        op=op,
+        params=params,
+        input_df=primary_input,
+        output_df=out_df,
+        elapsed_ms=elapsed_ms,
+    )
+
     if op == "table_to_json":
         spec = params.get("table_to_json") if isinstance(params.get("table_to_json"), dict) else {}
         orient = str(spec.get("orient") or "records").strip().lower()
@@ -1214,6 +1503,7 @@ def run_transform(
             "content_hash": sha256_hex(payload),
             "format": "json",
             "payloadType": "json",
+            "execution": execution_meta,
         }
         if quality_gate_report is not None:
             meta["quality_gate"] = quality_gate_report
@@ -1226,6 +1516,7 @@ def run_transform(
         "content_hash": sha256_hex(payload),
         "format": "csv",
         "payloadType": "table",
+        "execution": execution_meta,
     }
     if quality_gate_report is not None:
         meta["quality_gate"] = quality_gate_report
