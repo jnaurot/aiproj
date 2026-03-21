@@ -578,6 +578,28 @@ def _detect_payload_and_mime(
     }
 
 
+def _schema_fingerprint_from_data(data: Any, payload_type: str) -> str:
+    fields: list[dict[str, str]] = []
+    if payload_type == "table" and isinstance(data, list):
+        fields = _infer_table_columns_from_rows([row for row in data if isinstance(row, dict)])
+    env = {"type": str(payload_type or "unknown"), "fields": fields}
+    return hashlib.sha256(_canon_json_bytes(env)).hexdigest()
+
+
+def _sample_preview(data: Any, payload_type: str) -> Any:
+    if payload_type == "table" and isinstance(data, list):
+        return [dict(row) for row in data[: min(len(data), 5)] if isinstance(row, dict)]
+    if payload_type == "json":
+        if isinstance(data, list):
+            return data[: min(len(data), 5)]
+        if isinstance(data, dict):
+            return dict(list(data.items())[:10])
+    if payload_type == "binary" and isinstance(data, (bytes, bytearray)):
+        return {"hex_prefix": bytes(data[:16]).hex(), "size": len(data)}
+    text = str(data if data is not None else "")
+    return text[:200]
+
+
 def _resolve_file_path(rel_path: str, filename: str) -> Path:
     base = Path(str(rel_path or ".")).expanduser()
     leaf = Path(str(filename or "")).expanduser()
@@ -945,6 +967,21 @@ async def exec_source(
                 }
                 output.metadata.data_schema = schema_env
                 output.metadata.mime_type = str(detection.get("mime_type") or output.metadata.mime_type)
+                payload_type = str(detection.get("payload_type") or output_mode or "unknown")
+                output.metadata.priming_artifact = {
+                    "version": 1,
+                    "payload_type": payload_type,
+                    "mime_type": str(detection.get("mime_type") or output.metadata.mime_type),
+                    "schema_fingerprint": _schema_fingerprint_from_data(output.data, payload_type),
+                    "sample_preview": _sample_preview(output.data, payload_type),
+                    "stats": {
+                        "sample_rows": int(priming_spec.get("sample_rows") or 50),
+                        "sample_bytes": int(priming_spec.get("sample_bytes") or 65536),
+                        "truncated_rows": bool(priming_meta.get("truncated_rows")),
+                        "truncated_bytes": bool(priming_meta.get("truncated_bytes")),
+                    },
+                    "detection": detection,
+                }
                 if bool(detection.get("ambiguous")):
                     await context.bus.emit(
                         {

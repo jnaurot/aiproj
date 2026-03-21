@@ -70,3 +70,38 @@ async def test_artifact_write_succeeds_with_metadata_v1():
     out = await store.write(art, b"hello")
     assert out == "a" * 64
 
+
+@pytest.mark.asyncio
+async def test_artifact_write_succeeds_with_metadata_v1_and_priming_payload():
+    store = MemoryArtifactStore()
+    art = _artifact_base(
+        {
+            "schema_version": 1,
+            "type": "table",
+            "primingArtifactV1": {
+                "version": 1,
+                "payload_type": "table",
+                "schema_fingerprint": "p" * 64,
+                "sample_preview": [{"id": 1}],
+            },
+            "artifactMetadataV1": {
+                "metadataVersion": 1,
+                "execKey": "b" * 64,
+                "nodeId": "n1",
+                "nodeType": "source",
+                "nodeImplVersion": "SOURCE@1",
+                "paramsFingerprint": "p" * 64,
+                "upstreamArtifactIds": [],
+                "contractFingerprint": "c" * 64,
+                "schemaFingerprint": "s" * 64,
+                "mimeType": "text/csv",
+                "payloadType": "table",
+                "createdAt": datetime.now(timezone.utc).isoformat(),
+                "runId": "run-1",
+                "graphId": "graph-1",
+            },
+        }
+    )
+    out = await store.write(art, b"id\n1\n")
+    assert out == "a" * 64
+

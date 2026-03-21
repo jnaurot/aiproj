@@ -411,6 +411,9 @@ async def test_source_priming_only_sets_metadata_marker(tmp_path):
 	assert isinstance(result.metadata.data_schema, dict)
 	assert (result.metadata.data_schema.get("priming") or {}).get("enabled") is True
 	assert (result.metadata.data_schema.get("priming") or {}).get("priming_only") is True
+	assert isinstance(result.metadata.priming_artifact, dict)
+	assert (result.metadata.priming_artifact or {}).get("version") == 1
+	assert (result.metadata.priming_artifact or {}).get("schema_fingerprint")
 
 
 def _priming_node(source_kind: str, priming: dict) -> dict:

@@ -40,6 +40,7 @@ class FileMetadata(BaseModel):
     is_partitioned: bool = False
     partition_key: Optional[str] = None
     observability: Optional[Dict[str, Any]] = None
+    priming_artifact: Optional[Dict[str, Any]] = None
 
 class NodeOutput(BaseModel):
     """What each node produces"""

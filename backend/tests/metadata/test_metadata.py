@@ -152,6 +152,22 @@ class TestFileMetadata:
         assert metadata.params_hash == "params-456"
         assert metadata.input_metadata_hash == "input-hash"
 
+    def test_priming_artifact_envelope_field(self):
+        metadata = FileMetadata(
+            file_path="/test.csv",
+            file_type="csv",
+            mime_type="text/csv",
+            content_hash="hash",
+            priming_artifact={
+                "version": 1,
+                "payload_type": "table",
+                "schema_fingerprint": "abc",
+                "sample_preview": [{"a": 1}],
+            },
+        )
+        assert isinstance(metadata.priming_artifact, dict)
+        assert metadata.priming_artifact.get("version") == 1
+
 
 class TestNodeOutput:
     """Test NodeOutput validation"""
