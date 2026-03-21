@@ -63,6 +63,13 @@ describe('node subtype contract schemas', () => {
 					{ type: 'image', dataUrl: 'data:image/png;base64,QUJD' },
 					{ type: 'audio', dataUrl: 'data:audio/wav;base64,QUJD' }
 				],
+				requestPolicy: {
+					retries: 2,
+					timeout_seconds: 30,
+					backoff: { base_seconds: 0.5, max_seconds: 4 },
+					circuit_breaker: { enabled: true, fail_threshold: 3, reset_seconds: 20 },
+					fallback_chain: [{ llmKind: 'openai_compat', baseUrl: 'https://backup.example.com', model: 'gpt-4.1-mini' }]
+				},
 				output: { mode: 'text' }
 			}).success
 		).toBe(true);

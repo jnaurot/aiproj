@@ -14,6 +14,13 @@ from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 from .model_adapters import OllamaAdapter
+from .model_policy import (
+    circuit_guard_allows,
+    circuit_record_failure,
+    circuit_record_success,
+    normalize_request_policy,
+    policy_backoff_seconds,
+)
 from .model_registry import resolve_model_connection
 
 # Adjust these imports to your actual paths/types
@@ -244,6 +251,7 @@ async def exec_llm_ollama(
             error=adapter.normalize_error(e),
         )
     effective_params = params.model_copy(update={"base_url": resolved_conn.base_url})
+    request_policy = normalize_request_policy(params)
     try:
         prepared = adapter.prepare_request(
             effective_params,
@@ -274,6 +282,14 @@ async def exec_llm_ollama(
     )
 
     url = prepared.url
+    circuit_key = f"ollama::{base_url}::{params.model}"
+    if not circuit_guard_allows(circuit_key, request_policy):
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+            error="ollama request blocked by circuit breaker",
+        )
 
     # Retry loop (simple exponential backoff)
     attempt = 0
@@ -283,7 +299,7 @@ async def exec_llm_ollama(
         try:
             timeout = httpx.Timeout(
                 connect=10.0,
-                read=float(params.timeout_seconds),
+                read=float(request_policy.timeout_seconds),
                 write=10.0,
                 pool=10.0,
             )
@@ -495,6 +511,7 @@ async def exec_llm_ollama(
                 params_hash=params_hash 
                 )
             
+            circuit_record_success(circuit_key, request_policy)
             return NodeOutput(
                 status="succeeded",
                 data=data,
@@ -508,6 +525,7 @@ async def exec_llm_ollama(
         except (httpx.HTTPError, httpx.TimeoutException) as e:
             last_err = str(e)
             attempt += 1
+            circuit_record_failure(circuit_key, request_policy)
 
             await context.bus.emit(
                 {
@@ -516,11 +534,11 @@ async def exec_llm_ollama(
                     "nodeId": node_id,
                     "at": iso_now(),
                     "level": "warn",
-                    "message": f"Ollama request failed (attempt {attempt}/{params.max_retries}): {last_err}",
+                    "message": f"Ollama request failed (attempt {attempt}/{request_policy.retries}): {last_err}",
                 }
             )
 
-            if not params.retry_on_error or attempt > params.max_retries:
+            if not params.retry_on_error or attempt > request_policy.retries:
                 return NodeOutput(
                     status="failed",
                     metadata=None,
@@ -529,5 +547,5 @@ async def exec_llm_ollama(
                 )
 
             # exponential backoff, capped
-            backoff = min(2.0 ** (attempt - 1), 8.0)
+            backoff = policy_backoff_seconds(request_policy, attempt)
             await asyncio.sleep(backoff)

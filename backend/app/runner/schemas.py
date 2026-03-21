@@ -49,6 +49,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_encoding"] = p.pop("inputEncoding")
     if "inputEnvelope" in p and "input_envelope" not in p:
         p["input_envelope"] = p.pop("inputEnvelope")
+    if "requestPolicy" in p and "request_policy" not in p:
+        p["request_policy"] = p.pop("requestPolicy")
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -778,6 +780,7 @@ class LLMParams(NodeParamSchema):
     
     input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/handles
     input_envelope: Optional[List[Dict[str, Any]]] = None
+    request_policy: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def _validate_contract(self):

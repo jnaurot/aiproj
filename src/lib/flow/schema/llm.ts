@@ -73,6 +73,42 @@ export const LlmParamsSchema = z
 			.optional(),
 		inputEncoding: z.enum(['text', 'json_canonical', 'table_canonical']).optional(),
 		inputEnvelope: z.array(LlmInputEnvelopePartSchema).optional(),
+		requestPolicy: z
+			.object({
+				retries: z.number().int().min(0).max(20).optional(),
+				timeout_seconds: z.number().min(1).max(3600).optional(),
+				backoff: z
+					.object({
+						base_seconds: z.number().min(0).max(60).optional(),
+						max_seconds: z.number().min(0).max(300).optional(),
+						jitter_seconds: z.number().min(0).max(60).optional()
+					})
+					.strip()
+					.optional(),
+				circuit_breaker: z
+					.object({
+						enabled: z.boolean().optional(),
+						fail_threshold: z.number().int().min(1).max(100).optional(),
+						reset_seconds: z.number().min(1).max(3600).optional()
+					})
+					.strip()
+					.optional(),
+				fallback_chain: z
+					.array(
+						z
+							.object({
+								llmKind: LlmKindSchema.optional(),
+								connectionRef: z.string().min(1).optional(),
+								baseUrl: z.string().url().optional(),
+								model: z.string().min(1).optional(),
+								apiKeyRef: z.string().min(1).optional()
+							})
+							.strip()
+					)
+					.optional()
+			})
+			.strip()
+			.optional(),
 
 		output: z
 			.object({

@@ -11,6 +11,7 @@ from ..runner.schemas import LLMParams
 from .llm_ollama import exec_llm_ollama           # new module (suggested)
 from .llm_openai_compat import exec_llm_openai_compat
 from .model_adapters import get_model_adapter
+from .model_policy import normalize_request_policy
 from pprint import pformat
 
 # print("[exec_llm] has bus?", hasattr(context, "bus"), type(context.bus))
@@ -47,6 +48,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_encoding"] = p.pop("inputEncoding")
     if "inputEnvelope" in p and "input_envelope" not in p:
         p["input_envelope"] = p.pop("inputEnvelope")
+    if "requestPolicy" in p and "request_policy" not in p:
+        p["request_policy"] = p.pop("requestPolicy")
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -307,35 +310,71 @@ async def exec_llm(
         }
     )
 
-    # ✅ Dispatch by node-level discriminator
-    if llm_kind == "ollama":
-        return await exec_llm_ollama(
-            run_id,
-            node,
-            context,
-            None,
-            llm_params,
-            input_text=text,
-            input_items=serialized_inputs,
-            input_media=serialized_media,
-            upstream_artifact_ids=upstream_artifact_ids,
-        )
+    async def _dispatch(kind: str, params_override: LLMParams) -> NodeOutput:
+        if kind == "ollama":
+            return await exec_llm_ollama(
+                run_id,
+                node,
+                context,
+                None,
+                params_override,
+                input_text=text,
+                input_items=serialized_inputs,
+                input_media=serialized_media,
+                upstream_artifact_ids=upstream_artifact_ids,
+            )
+        if kind == "openai_compat":
+            return await exec_llm_openai_compat(
+                run_id,
+                node,
+                context,
+                None,
+                params_override,
+                input_text=text,
+                input_items=serialized_inputs,
+                input_media=serialized_media,
+                upstream_artifact_ids=upstream_artifact_ids,
+            )
+        raise ValueError(f"Unsupported llmKind: {kind}")
 
+    request_policy = normalize_request_policy(llm_params)
+    chain = [{"llm_kind": llm_kind, "params": llm_params}]
+    for fallback in request_policy.fallback_chain:
+        kind = str(fallback.get("llm_kind") or fallback.get("llmKind") or llm_kind).strip().lower()
+        patch: Dict[str, Any] = {}
+        for src_key, dst_key in (
+            ("connection_ref", "connection_ref"),
+            ("connectionRef", "connection_ref"),
+            ("base_url", "base_url"),
+            ("baseUrl", "base_url"),
+            ("model", "model"),
+            ("api_key_ref", "api_key_ref"),
+            ("apiKeyRef", "api_key_ref"),
+        ):
+            val = fallback.get(src_key)
+            if val is not None:
+                patch[dst_key] = val
+        chain.append({"llm_kind": kind, "params": llm_params.model_copy(update=patch)})
 
-    if llm_kind == "openai_compat":
-        return await exec_llm_openai_compat(
-            run_id,
-            node,
-            context,
-            None,
-            llm_params,
-            input_text=text,
-            input_items=serialized_inputs,
-            input_media=serialized_media,
-            upstream_artifact_ids=upstream_artifact_ids,
-        )
-
-
-    raise ValueError(f"Unsupported llmKind: {llm_kind}")
+    last_output: Optional[NodeOutput] = None
+    for idx, entry in enumerate(chain, start=1):
+        kind = str(entry["llm_kind"])
+        params_override = entry["params"]
+        if idx > 1:
+            await context.bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "warn",
+                    "message": f"MODEL_FALLBACK_ACTIVATED: trying fallback #{idx - 1} provider={kind} model={params_override.model}",
+                    "nodeId": node["id"],
+                }
+            )
+        out = await _dispatch(kind, params_override)
+        if out.status == "succeeded":
+            return out
+        last_output = out
+    return last_output if last_output is not None else NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="Unsupported llmKind")
 
 
