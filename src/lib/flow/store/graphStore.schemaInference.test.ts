@@ -142,5 +142,32 @@ describe('graphStore schema inference envelope', () => {
 		expect(observed?.fields?.[0]?.name).toBe('name');
 		expect(observed?.fields?.[1]?.name).toBe('age');
 	});
+
+	it('retains format-specific sourceObservability metadata on node outputs', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('source', { x: 10, y: 10 });
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_output',
+				runId: 'run_schema_obs_format_meta',
+				at: '2026-03-11T12:07:00Z',
+				nodeId,
+				artifactId: 'artifact_format_meta',
+				payloadType: 'text',
+				mimeType: 'application/pdf',
+				sourceObservability: {
+					source_kind: 'file',
+					pdf_metadata: {
+						requested_mode: 'hybrid',
+						selected_pages: [0]
+					}
+				}
+			},
+			'run_schema_obs_format_meta'
+		);
+		expect((next.nodeOutputs[nodeId]?.sourceObservability as any)?.pdf_metadata?.requested_mode).toBe('hybrid');
+	});
 });
 

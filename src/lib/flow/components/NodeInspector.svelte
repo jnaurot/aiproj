@@ -73,6 +73,26 @@
 		}
 		return warnings;
 	})();
+	$: sourceObsDetailsText = (() => {
+		if (!sourceObservability) return '';
+		const omit = new Set([
+			'source_kind',
+			'output_mode',
+			'input_bytes',
+			'output_rows',
+			'null_ratio',
+			'retry_count',
+			'partition_count',
+			'execution_ms',
+			'cost_estimate_usd',
+			'table_columns'
+		]);
+		const details: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(sourceObservability)) {
+			if (!omit.has(k)) details[k] = v;
+		}
+		return Object.keys(details).length > 0 ? JSON.stringify(details, null, 2) : '';
+	})();
 
 	// sub-kinds / kinds
 	$: sourceKind = (selectedNode?.data as any)?.sourceKind ?? 'file';
@@ -749,6 +769,9 @@
 			</div>
 			{#if sourceObsWarnings.length > 0}
 				<div class="guidedAssistDesc">{sourceObsWarnings.join(' | ')}</div>
+			{/if}
+			{#if sourceObsDetailsText}
+				<pre class="jsonBox compact">{sourceObsDetailsText}</pre>
 			{/if}
 		</div>
 	{/if}
