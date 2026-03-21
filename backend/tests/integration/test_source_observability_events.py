@@ -1,4 +1,7 @@
 import pytest
+import pyarrow as pa
+import pyarrow.parquet as pq
+from decimal import Decimal
 
 from app.runner.artifacts import DiskArtifactStore
 from app.runner.cache import SqliteExecutionCache
@@ -103,3 +106,58 @@ async def test_source_node_output_event_includes_runtime_table_columns_for_csv(t
     assert isinstance(source_obs.get("table_columns"), list)
     col_names = [str(c.get("name")) for c in (source_obs.get("table_columns") or []) if isinstance(c, dict)]
     assert col_names == ["name", "age"]
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_parquet_logical_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-3"
+    source_dir = tmp_path / "source-3"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "amount": pa.array([Decimal("12.34")], type=pa.decimal128(10, 2)),
+                "tags": pa.array([["x", "y"]], type=pa.list_(pa.string())),
+            }
+        ),
+        source_file,
+    )
+    bus = RunEventBus("run-source-obs-3", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-3",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_parquet",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.parquet",
+                            "file_format": "parquet",
+                            "output": {"mode": "table"},
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-3",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_parquet"]
+    assert node_outputs, "Expected node_output for source_parquet"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    logical = source_obs.get("parquet_logical_types")
+    assert isinstance(logical, dict)
+    assert logical.get("amount") == "decimal(10,2)"

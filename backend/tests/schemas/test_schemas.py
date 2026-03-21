@@ -350,6 +350,9 @@ class TestSourceFileParams:
             "thousands_separator": ".",
             "date_columns": ["d"],
             "date_format": "%d.%m.%Y",
+            "parquet_columns": ["id"],
+            "parquet_row_groups": [0, 1],
+            "parquet_max_rows": 50,
         }
         source_params = SourceFileParams.model_validate(params)
         assert source_params.quote_char == "\""
@@ -359,6 +362,9 @@ class TestSourceFileParams:
         assert source_params.thousands_separator == "."
         assert source_params.date_columns == ["d"]
         assert source_params.date_format == "%d.%m.%Y"
+        assert source_params.parquet_columns == ["id"]
+        assert source_params.parquet_row_groups == [0, 1]
+        assert source_params.parquet_max_rows == 50
     
     def test_valid_file_formats(self):
         """Test all valid file formats"""
@@ -725,6 +731,9 @@ class TestNormalizeSourceParamsFrontend:
                 "thousandsSeparator": ".",
                 "dateColumns": ["created_at"],
                 "dateFormat": "%d.%m.%Y",
+                "parquetColumns": ["id"],
+                "parquetRowGroups": [1],
+                "parquetMaxRows": 25,
             }
         )
         assert out["quote_char"] == "\""
@@ -734,6 +743,9 @@ class TestNormalizeSourceParamsFrontend:
         assert out["thousands_separator"] == "."
         assert out["date_columns"] == ["created_at"]
         assert out["date_format"] == "%d.%m.%Y"
+        assert out["parquet_columns"] == ["id"]
+        assert out["parquet_row_groups"] == [1]
+        assert out["parquet_max_rows"] == 25
 
 
 class TestFilterTransformParams:

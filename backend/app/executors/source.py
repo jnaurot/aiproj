@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from pandas.api.types import (
     is_bool_dtype,
@@ -302,6 +303,50 @@ def _infer_table_columns_from_dataframe(df: pd.DataFrame) -> list[dict[str, str]
         except Exception:
             col_type = "unknown"
         cols.append({"name": name, "type": col_type})
+    return cols
+
+
+def _arrow_type_label(dtype: Any) -> str:
+    try:
+        if pa.types.is_decimal(dtype):
+            precision = int(getattr(dtype, "precision", 0) or 0)
+            scale = int(getattr(dtype, "scale", 0) or 0)
+            return f"decimal({precision},{scale})"
+        if pa.types.is_timestamp(dtype):
+            unit = str(getattr(dtype, "unit", "us") or "us")
+            tz = getattr(dtype, "tz", None)
+            return f"timestamp[{unit},{tz}]" if tz else f"timestamp[{unit}]"
+        if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+            value_type = _arrow_type_label(getattr(dtype, "value_type", None))
+            return f"list<{value_type}>"
+        if pa.types.is_struct(dtype):
+            fields = []
+            for field in list(getattr(dtype, "fields", []) or []):
+                fields.append(f"{field.name}:{_arrow_type_label(field.type)}")
+            return f"struct<{','.join(fields)}>"
+    except Exception:
+        pass
+    text = str(dtype).strip().lower()
+    return text or "unknown"
+
+
+def _table_columns_from_arrow_schema(schema: Any) -> list[dict[str, str]]:
+    cols: list[dict[str, str]] = []
+    if schema is None:
+        return cols
+    try:
+        fields = list(schema)
+    except Exception:
+        fields = []
+    for field in fields:
+        try:
+            name = str(getattr(field, "name", "") or "").strip()
+            if not name:
+                continue
+            dtype = getattr(field, "type", None)
+            cols.append({"name": name, "type": _arrow_type_label(dtype)})
+        except Exception:
+            continue
     return cols
 
 
@@ -1268,6 +1313,7 @@ async def _handle_file_source(
     table_coercion: Dict[str, Any] | None = None
     table_columns: list[dict[str, str]] | None = None
     csv_has_header: Optional[bool] = None
+    format_specific_metadata: Dict[str, Any] = {}
 
     if schema.file_format in {"csv", "tsv"}:
         delimiter = schema.delimiter or ("\t" if schema.file_format == "tsv" else ",")
@@ -1334,9 +1380,38 @@ async def _handle_file_source(
                 )
     elif schema.file_format == "parquet":
         parquet_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
-        df = pq.read_table(parquet_input).to_pandas()
+        projected_columns = [str(c).strip() for c in (getattr(schema, "parquet_columns", []) or []) if str(c).strip()]
+        selected_row_groups = [int(g) for g in (getattr(schema, "parquet_row_groups", []) or []) if isinstance(g, int) and g >= 0]
+        parquet_file = pq.ParquetFile(parquet_input)
+        if selected_row_groups:
+            parquet_table = parquet_file.read_row_groups(selected_row_groups, columns=projected_columns or None)
+        else:
+            parquet_table = parquet_file.read(columns=projected_columns or None)
+        parquet_schema = parquet_table.schema
+        max_rows = getattr(schema, "parquet_max_rows", None)
+        if isinstance(max_rows, int) and max_rows > 0 and parquet_table.num_rows > max_rows:
+            parquet_table = parquet_table.slice(0, max_rows)
+        df = parquet_table.to_pandas()
         rows = df.to_dict(orient="records")
-        table_columns = _infer_table_columns_from_dataframe(df)
+        table_columns = _table_columns_from_arrow_schema(parquet_schema)
+        format_specific_metadata["parquet_logical_types"] = {
+            str(col.get("name") or ""): str(col.get("type") or "unknown")
+            for col in (table_columns or [])
+            if isinstance(col, dict) and str(col.get("name") or "").strip()
+        }
+        try:
+            if hasattr(parquet_input, "seek"):
+                parquet_input.seek(0)
+            parquet_pf = pq.ParquetFile(parquet_input)
+            format_specific_metadata["parquet_stats"] = {
+                "row_groups": int(parquet_pf.num_row_groups),
+                "columns": int(len(parquet_pf.schema_arrow.names)),
+                "selected_row_groups": selected_row_groups,
+                "projected_columns": (projected_columns if projected_columns else list(parquet_table.column_names)),
+                "output_rows": int(parquet_table.num_rows),
+            }
+        except Exception:
+            pass
     elif schema.file_format == "json":
         raw_json = (
             (file_bytes or b"").decode(schema.encoding, errors="replace")
@@ -1447,6 +1522,7 @@ async def _handle_file_source(
             ),
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
+            **format_specific_metadata,
         },
         source_observability=_build_source_observability(
             source_kind="file",

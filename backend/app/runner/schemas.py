@@ -105,6 +105,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["date_columns"] = p.pop("dateColumns")
     if "dateFormat" in p and "date_format" not in p:
         p["date_format"] = p.pop("dateFormat")
+    if "parquetColumns" in p and "parquet_columns" not in p:
+        p["parquet_columns"] = p.pop("parquetColumns")
+    if "parquetRowGroups" in p and "parquet_row_groups" not in p:
+        p["parquet_row_groups"] = p.pop("parquetRowGroups")
+    if "parquetMaxRows" in p and "parquet_max_rows" not in p:
+        p["parquet_max_rows"] = p.pop("parquetMaxRows")
     if "rootId" in p and "rel_path" not in p:
         p["rel_path"] = p.pop("rootId")
     if "relPath" in p and "filename" not in p:
@@ -350,6 +356,9 @@ class SourceFileParams(NodeParamSchema):
     thousands_separator: Optional[str] = None
     date_columns: List[str] = Field(default_factory=list)
     date_format: Optional[str] = None
+    parquet_columns: List[str] = Field(default_factory=list)
+    parquet_row_groups: List[int] = Field(default_factory=list)
+    parquet_max_rows: Optional[int] = Field(default=None, ge=1)
     sheet_name: Optional[str] = None  # for Excel
     encoding: str = "utf-8"
     cache_enabled: bool = True

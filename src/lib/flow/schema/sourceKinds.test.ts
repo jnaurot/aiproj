@@ -84,12 +84,18 @@ describe('source kinds schema coverage', () => {
 			decimal_separator: ',',
 			thousands_separator: '.',
 			date_columns: ['created_at'],
-			date_format: '%d.%m.%Y'
+			date_format: '%d.%m.%Y',
+			parquet_columns: ['id'],
+			parquet_row_groups: [0],
+			parquet_max_rows: 100
 		});
 		expect(parsed.quote_char).toBe('"');
 		expect(parsed.escape_char).toBe('\\');
 		expect(parsed.malformed_row_policy).toBe('warn');
 		expect(parsed.decimal_separator).toBe(',');
 		expect(parsed.date_columns).toEqual(['created_at']);
+		expect(parsed.parquet_columns).toEqual(['id']);
+		expect(parsed.parquet_row_groups).toEqual([0]);
+		expect(parsed.parquet_max_rows).toBe(100);
 	});
 });

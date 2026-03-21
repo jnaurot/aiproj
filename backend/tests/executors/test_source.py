@@ -1,8 +1,12 @@
 import asyncio
+from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import httpx
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from app.executors.source import exec_source
@@ -218,6 +222,89 @@ async def test_source_file_csv_locale_decimal_and_date_parsing(tmp_path):
 	assert len(result.data) == 1
 	assert "d" in result.data[0]
 	assert "amount" in result.data[0]
+
+
+@pytest.mark.asyncio
+async def test_source_file_parquet_preserves_logical_types_metadata(tmp_path):
+	file_path = tmp_path / "logical.parquet"
+	table = pa.table(
+		{
+			"amount": pa.array([Decimal("12.34"), Decimal("56.78")], type=pa.decimal128(10, 2)),
+			"ts": pa.array(
+				[
+					datetime(2025, 1, 1, 10, 0, tzinfo=timezone.utc),
+					datetime(2025, 1, 2, 10, 0, tzinfo=timezone.utc),
+				],
+				type=pa.timestamp("us", tz="UTC"),
+			),
+			"tags": pa.array([["a", "b"], ["c"]], type=pa.list_(pa.string())),
+			"meta": pa.array([{"k": "v1"}, {"k": "v2"}], type=pa.struct([("k", pa.string())])),
+		}
+	)
+	pq.write_table(table, file_path)
+	node = {
+		"id": "n_source_parquet_logical",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "parquet",
+				"output_mode": "table",
+			}
+		},
+	}
+	result = await exec_source("run_parquet_logical", node, _ctx())
+	assert result.status == "succeeded"
+	assert result.metadata is not None
+	data_schema = result.metadata.data_schema or {}
+	cols = data_schema.get("table_columns")
+	assert isinstance(cols, list)
+	type_map = {str(c.get("name")): str(c.get("type")) for c in cols if isinstance(c, dict)}
+	assert type_map.get("amount") == "decimal(10,2)"
+	assert type_map.get("ts") == "timestamp[us,UTC]"
+	assert type_map.get("tags") == "list<string>"
+	assert type_map.get("meta") == "struct<k:string>"
+	logical = data_schema.get("parquet_logical_types")
+	assert isinstance(logical, dict)
+	assert logical.get("amount") == "decimal(10,2)"
+
+
+@pytest.mark.asyncio
+async def test_source_file_parquet_column_projection_and_row_group_pruning(tmp_path):
+	file_path = tmp_path / "prune.parquet"
+	table = pa.table(
+		{
+			"a": pa.array([1, 2, 3, 4]),
+			"b": pa.array(["x", "y", "z", "w"]),
+			"c": pa.array([10, 20, 30, 40]),
+		}
+	)
+	pq.write_table(table, file_path, row_group_size=2)
+	node = {
+		"id": "n_source_parquet_prune",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "parquet",
+				"output_mode": "table",
+				"parquet_columns": ["a", "c"],
+				"parquet_row_groups": [1],
+				"parquet_max_rows": 1,
+			}
+		},
+	}
+	result = await exec_source("run_parquet_prune", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 1
+	assert set(result.data[0].keys()) == {"a", "c"}
+	data_schema = (result.metadata.data_schema or {}) if result.metadata else {}
+	stats = data_schema.get("parquet_stats")
+	assert isinstance(stats, dict)
+	assert stats.get("selected_row_groups") == [1]
+	assert stats.get("projected_columns") == ["a", "c"]
+	assert stats.get("output_rows") == 1
 
 
 @pytest.mark.asyncio

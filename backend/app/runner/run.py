@@ -1098,6 +1098,20 @@ def _source_payload_schema(
         else {}
     )
     if out_contract == "table" and isinstance(data_value, list):
+        def _copy_format_specific(target: Dict[str, Any]) -> None:
+            for key in (
+                "parquet_logical_types",
+                "parquet_stats",
+                "csv_dialect",
+                "image_metadata",
+                "audio_metadata",
+                "video_metadata",
+                "pdf_metadata",
+            ):
+                value = source_data_schema.get(key)
+                if value is not None:
+                    target[key] = value
+
         payload = _table_payload_schema_from_rows(data_value)
         table_columns = source_data_schema.get("table_columns")
         if isinstance(table_columns, list):
@@ -1108,6 +1122,7 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             payload["source_observability"] = source_observability
+        _copy_format_specific(payload)
         if isinstance(source_priming_artifact, dict) and source_priming_artifact:
             payload["priming_artifact"] = source_priming_artifact
         resolved_columns = payload.get("columns")
@@ -1670,6 +1685,20 @@ def _infer_artifact_payload_type(artifact: Artifact) -> str:
 
 
 def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str, Any]]:
+    def _apply_format_specific_fields(out: Dict[str, Any], source: Dict[str, Any]) -> None:
+        passthrough_keys = {
+            "parquet_logical_types",
+            "parquet_stats",
+            "csv_dialect",
+            "image_metadata",
+            "audio_metadata",
+            "video_metadata",
+            "pdf_metadata",
+        }
+        for key in passthrough_keys:
+            if key in source:
+                out[key] = source.get(key)
+
     ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
     direct = ps.get("source_observability")
     if isinstance(direct, dict):
@@ -1681,6 +1710,7 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
             out["table_columns"] = canonical_table_columns(table_columns)
         if "header_detected" in ps:
             out["header_detected"] = ps.get("header_detected")
+        _apply_format_specific_fields(out, ps)
         return out
     schema_env = ps.get("schema")
     if isinstance(schema_env, dict):
@@ -1694,6 +1724,7 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
                 out["table_columns"] = canonical_table_columns(table_columns)
             if "header_detected" in schema_env:
                 out["header_detected"] = schema_env.get("header_detected")
+            _apply_format_specific_fields(out, schema_env)
             return out
     return None
 
