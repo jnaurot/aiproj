@@ -122,4 +122,53 @@ describe('graphStore edge schema diagnostics', () => {
 		expect(diagnostics.e3?.code).toBe('PAYLOAD_SCHEMA_MISMATCH');
 		expect(String(diagnostics.e3?.message ?? '')).toContain('Required typed schema coverage is missing');
 	});
+
+	it('respects manual expected schema precedence over inferred/observed hints', () => {
+		const nodes: any[] = [
+			{
+				id: 'n_source',
+				data: {
+					kind: 'source',
+					sourceKind: 'file',
+					params: { file_format: 'csv' },
+					schema: {
+						expectedSchema: {
+							source: 'declared',
+							state: 'fresh',
+							typedSchema: { type: 'binary', fields: [] }
+						},
+						inferredSchema: {
+							source: 'sample',
+							state: 'fresh',
+							typedSchema: { type: 'table', fields: [{ name: 'id', type: 'int' }] }
+						},
+						observedSchema: {
+							source: 'runtime',
+							state: 'fresh',
+							typedSchema: { type: 'table', fields: [{ name: 'id', type: 'int' }] }
+						}
+					}
+				}
+			},
+			{
+				id: 'n_transform',
+				data: {
+					kind: 'transform',
+					transformKind: 'select',
+					params: { op: 'select', select: { mode: 'include', columns: ['id'] } },
+					schema: {
+						expectedSchema: {
+							source: 'declared',
+							typedSchema: { type: 'table', fields: [{ name: 'id', type: 'int' }] }
+						}
+					}
+				}
+			}
+		];
+		const edges: any[] = [{ id: 'e4', source: 'n_source', target: 'n_transform' }];
+		const constraints = __computeEdgeSchemaConstraintsForTest(nodes as any, edges as any);
+		const diagnostics = __computeEdgeSchemaDiagnosticsForTest(constraints);
+		expect(diagnostics.e4).toBeTruthy();
+		expect(diagnostics.e4?.code).toBe('TYPE_MISMATCH');
+	});
 });
