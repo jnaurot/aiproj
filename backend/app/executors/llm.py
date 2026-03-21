@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from ..runner.schemas import LLMParams
 from .llm_ollama import exec_llm_ollama           # new module (suggested)
 from .llm_openai_compat import exec_llm_openai_compat
+from .model_adapters import get_model_adapter
 from pprint import pformat
 
 # print("[exec_llm] has bus?", hasattr(context, "bus"), type(context.bus))
@@ -179,6 +180,7 @@ async def exec_llm(
     llm_params = LLMParams.model_validate(norm_params)
 
     llm_kind = node.get("data", {}).get("llmKind") or "ollama"
+    adapter = get_model_adapter(llm_kind)
 
     input_encoding = llm_params.input_encoding or "text"
     serialized_inputs: List[str] = []
@@ -203,7 +205,7 @@ async def exec_llm(
             "runId": run_id,
             "at": iso_now(),
             "level": "info",
-            "message": f"LLM ({llm_kind}) model: {llm_params.model}",
+            "message": f"LLM ({adapter.provider}) model: {llm_params.model}",
             "nodeId": node["id"],
         }
     )

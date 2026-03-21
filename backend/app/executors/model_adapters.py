@@ -192,3 +192,11 @@ class OllamaAdapter:
 	def normalize_error(self, error: Exception) -> str:
 		return f"ollama request failed: {str(error)}"
 
+
+def get_model_adapter(llm_kind: str) -> ModelProviderAdapter:
+	key = str(llm_kind or "").strip().lower()
+	if key == "ollama":
+		return OllamaAdapter()
+	if key == "openai_compat":
+		return OpenAICompatAdapter()
+	raise ValueError(f"Unsupported llmKind: {llm_kind}")
