@@ -493,6 +493,91 @@ def _apply_priming_bounds(output_mode: str, data: Any, priming_spec: Dict[str, A
     }
 
 
+def _detect_payload_and_mime(
+    *,
+    data: Any,
+    output_mode: str,
+    current_mime: Optional[str] = None,
+    file_format_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    mode = str(output_mode or "").strip().lower()
+    ff = str(file_format_hint or "").strip().lower()
+    payload_type = "binary"
+    mime_type = str(current_mime or "").strip() or "application/octet-stream"
+    confidence = 0.6
+    detected_by = "mode"
+    ambiguous = False
+
+    if isinstance(data, (bytes, bytearray)):
+        payload_type = "binary"
+        mime_type = mime_type if mime_type else "application/octet-stream"
+        confidence = 0.98
+        detected_by = "python_type"
+    elif isinstance(data, str):
+        payload_type = "text"
+        mime_type = "text/plain; charset=utf-8"
+        confidence = 0.95
+        detected_by = "python_type"
+        raw = data.strip()
+        if raw.startswith("{") or raw.startswith("["):
+            try:
+                json.loads(raw)
+                payload_type = "json"
+                mime_type = "application/json"
+                confidence = 0.86
+                detected_by = "content_sniff_json"
+            except Exception:
+                pass
+    elif isinstance(data, dict):
+        payload_type = "json"
+        mime_type = "application/json"
+        confidence = 0.97
+        detected_by = "python_type"
+    elif isinstance(data, list):
+        if all(isinstance(item, dict) for item in data):
+            payload_type = "table" if mode == "table" else "json"
+            mime_type = "text/csv" if payload_type == "table" else "application/json"
+            confidence = 0.9 if payload_type == "table" else 0.86
+            detected_by = "list_of_objects"
+        else:
+            payload_type = "json"
+            mime_type = "application/json"
+            confidence = 0.82
+            detected_by = "python_type"
+
+    if mode == "binary" and payload_type != "binary":
+        ambiguous = True
+    if mode == "binary" and str(current_mime or "").lower().startswith(("text/", "application/json")):
+        ambiguous = True
+    if ff in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+        payload_type = "image"
+        mime_type = _file_format_mime(ff)
+        confidence = 0.99
+        detected_by = "file_format_hint"
+    elif ff in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+        payload_type = "audio"
+        mime_type = _file_format_mime(ff)
+        confidence = 0.99
+        detected_by = "file_format_hint"
+    elif ff in {"mp4", "mov", "webm"}:
+        payload_type = "video"
+        mime_type = _file_format_mime(ff)
+        confidence = 0.99
+        detected_by = "file_format_hint"
+    elif ff == "pdf":
+        mime_type = _file_format_mime(ff)
+        if payload_type == "text":
+            confidence = max(confidence, 0.75)
+            detected_by = "file_format_hint"
+    return {
+        "payload_type": payload_type,
+        "mime_type": mime_type,
+        "confidence": round(float(confidence), 3),
+        "detected_by": detected_by,
+        "ambiguous": bool(ambiguous),
+    }
+
+
 def _resolve_file_path(rel_path: str, filename: str) -> Path:
     base = Path(str(rel_path or ".")).expanduser()
     leaf = Path(str(filename or "")).expanduser()
@@ -840,6 +925,12 @@ async def exec_source(
             output.data = bounded_data
             if output.metadata is not None and isinstance(output.metadata.data_schema, dict) and priming_meta.get("applied"):
                 schema_env = dict(output.metadata.data_schema)
+                detection = _detect_payload_and_mime(
+                    data=output.data,
+                    output_mode=output_mode,
+                    current_mime=output.metadata.mime_type,
+                    file_format_hint=str((schema_env.get("file_format") or "")).strip().lower() or None,
+                )
                 schema_env["priming"] = {
                     "enabled": True,
                     "mode": str(priming_spec.get("mode") or "advisory"),
@@ -850,8 +941,24 @@ async def exec_source(
                     "timed_out": ((time.monotonic() - start_mono) * 1000.0) >= float(priming_spec.get("timeout_ms") or 1500),
                     "truncated_rows": bool(priming_meta.get("truncated_rows")),
                     "truncated_bytes": bool(priming_meta.get("truncated_bytes")),
+                    "detection": detection,
                 }
                 output.metadata.data_schema = schema_env
+                output.metadata.mime_type = str(detection.get("mime_type") or output.metadata.mime_type)
+                if bool(detection.get("ambiguous")):
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": _iso_now(),
+                            "level": "warning",
+                            "message": (
+                                "PRIMING_TYPE_DETECTION_AMBIGUOUS: bounded sample produced ambiguous payload detection; "
+                                f"payload={detection.get('payload_type')} mode={output_mode}"
+                            ),
+                            "nodeId": node_id,
+                        }
+                    )
                 if output.metadata.row_count is not None and isinstance(output.data, list):
                     output.metadata.row_count = len(output.data)
                 payload_bytes = _payload_bytes_for_mode(output.data, output_mode or "text")

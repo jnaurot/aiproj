@@ -452,6 +452,18 @@ def _output(data, output_mode: str) -> NodeOutput:
 	)
 
 
+def _ctx_with_events(events: list[dict]):
+	async def _emit(payload):
+		events.append(dict(payload))
+		return None
+
+	return SimpleNamespace(
+		bus=SimpleNamespace(emit=_emit),
+		artifact_store=SimpleNamespace(),
+		graph_id="graph_test",
+	)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
 	"source_kind,handler_name,output_mode,data,assertion",
@@ -495,3 +507,42 @@ async def test_source_priming_timeout_sets_timed_out_marker(monkeypatch):
 	result = await exec_source("run_prime_timeout", node, _ctx())
 	assert result.status == "succeeded"
 	assert ((result.metadata.data_schema or {}).get("priming") or {}).get("timed_out") is True
+
+
+@pytest.mark.parametrize(
+	"data,mode,mime_hint,file_hint,expected_type,expected_mime",
+	[
+		("plain text", "text", "text/plain; charset=utf-8", "", "text", "text/plain; charset=utf-8"),
+		('{"ok":true}', "text", "text/plain; charset=utf-8", "", "json", "application/json"),
+		([{"a": 1}], "table", "text/csv", "", "table", "text/csv"),
+		([{"a": 1}], "json", "application/json", "", "json", "application/json"),
+		(b"\x89PNG\r\n", "binary", "application/octet-stream", "png", "image", "image/png"),
+		(b"RIFF....", "binary", "application/octet-stream", "wav", "audio", "audio/wav"),
+	],
+)
+def test_detect_payload_and_mime_vectors(data, mode, mime_hint, file_hint, expected_type, expected_mime):
+	import app.executors.source as source_mod
+
+	detected = source_mod._detect_payload_and_mime(
+		data=data,
+		output_mode=mode,
+		current_mime=mime_hint,
+		file_format_hint=file_hint or None,
+	)
+	assert detected["payload_type"] == expected_type
+	assert detected["mime_type"] == expected_mime
+	assert 0.0 <= float(detected["confidence"]) <= 1.0
+	assert isinstance(detected["detected_by"], str) and detected["detected_by"]
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_detection_emits_warning_log(monkeypatch):
+	async def _fake_file(*_args, **_kwargs):
+		return _output("not-binary-content", "binary")
+
+	events: list[dict] = []
+	monkeypatch.setattr("app.executors.source._handle_file_source", _fake_file)
+	node = _priming_node("file", {"enabled": True, "mode": "priming_only", "sample_rows": 2, "sample_bytes": 100, "timeout_ms": 100})
+	result = await exec_source("run_prime_ambiguous", node, _ctx_with_events(events))
+	assert result.status == "succeeded"
+	assert any("PRIMING_TYPE_DETECTION_AMBIGUOUS" in str(e.get("message") or "") for e in events if e.get("type") == "log")
