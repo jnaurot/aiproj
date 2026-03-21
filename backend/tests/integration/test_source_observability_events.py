@@ -212,3 +212,53 @@ async def test_source_node_output_event_includes_json_streaming_metadata(tmp_pat
     stream_meta = source_obs.get("json_streaming")
     assert isinstance(stream_meta, dict)
     assert stream_meta.get("records_emitted") == 2
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_json_flatten_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-5"
+    source_dir = tmp_path / "source-5"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.json"
+    source_file.write_text('{"id":1,"user":{"name":"alice"}}', encoding="utf-8")
+    bus = RunEventBus("run-source-obs-5", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-5",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_json_flat",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.json",
+                            "file_format": "json",
+                            "json_mode": "document",
+                            "json_flatten_strategy": "deep",
+                            "json_flatten_separator": "_",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-5",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_json_flat"]
+    assert node_outputs, "Expected node_output for source_json_flat"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    flatten = source_obs.get("json_flatten")
+    assert isinstance(flatten, dict)
+    assert flatten.get("strategy") == "deep"

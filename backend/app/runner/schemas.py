@@ -113,6 +113,10 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["json_stream_chunk_lines"] = p.pop("jsonStreamChunkLines")
     if "jsonStreamMaxRecords" in p and "json_stream_max_records" not in p:
         p["json_stream_max_records"] = p.pop("jsonStreamMaxRecords")
+    if "jsonFlattenStrategy" in p and "json_flatten_strategy" not in p:
+        p["json_flatten_strategy"] = p.pop("jsonFlattenStrategy")
+    if "jsonFlattenSeparator" in p and "json_flatten_separator" not in p:
+        p["json_flatten_separator"] = p.pop("jsonFlattenSeparator")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -368,6 +372,8 @@ class SourceFileParams(NodeParamSchema):
     json_streaming_enabled: bool = False
     json_stream_chunk_lines: int = Field(default=1000, ge=1)
     json_stream_max_records: Optional[int] = Field(default=None, ge=1)
+    json_flatten_strategy: Literal["none", "shallow", "deep"] = "none"
+    json_flatten_separator: str = "."
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)
@@ -414,6 +420,8 @@ class SourceFileParams(NodeParamSchema):
             errors.append("escape_char must be a single character")
         if self.thousands_separator is not None and len(str(self.thousands_separator)) > 1:
             errors.append("thousands_separator must be a single character")
+        if len(str(self.json_flatten_separator or ".")) != 1:
+            errors.append("json_flatten_separator must be a single character")
         return errors
 
 class SourceDatabaseParams(NodeParamSchema):

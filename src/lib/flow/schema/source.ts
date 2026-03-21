@@ -150,6 +150,8 @@ export const SourceFileParamsSchema = z
 		json_streaming_enabled: z.boolean().optional(),
 		json_stream_chunk_lines: z.number().int().positive().optional(),
 		json_stream_max_records: z.number().int().positive().optional(),
+		json_flatten_strategy: z.enum(["none", "shallow", "deep"]).optional(),
+		json_flatten_separator: z.string().min(1).max(1).optional(),
 		parquet_columns: z.array(z.string().min(1)).optional(),
 		parquet_row_groups: z.array(z.number().int().nonnegative()).optional(),
 		parquet_max_rows: z.number().int().positive().optional(),

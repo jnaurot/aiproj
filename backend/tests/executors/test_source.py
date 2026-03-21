@@ -402,6 +402,42 @@ async def test_source_file_json_streaming_ndjson_progress_and_cap(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+	"strategy,expected_cols",
+	[
+		("none", {"id", "user", "metrics"}),
+		("shallow", {"id", "user_name", "user_addr", "metrics_clicks"}),
+		("deep", {"id", "user_name", "user_addr_city", "metrics_clicks"}),
+	],
+)
+async def test_source_file_json_flatten_strategies_affect_table_columns(tmp_path, strategy, expected_cols):
+	file_path = tmp_path / f"nested_{strategy}.json"
+	file_path.write_text(
+		'{"id":1,"user":{"name":"alice","addr":{"city":"ny"}},"metrics":{"clicks":3}}',
+		encoding="utf-8",
+	)
+	node = {
+		"id": f"n_source_json_flat_{strategy}",
+		"data": {
+			"schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "json",
+				"json_mode": "document",
+				"json_flatten_strategy": strategy,
+				"json_flatten_separator": "_",
+			}
+		},
+	}
+	result = await exec_source(f"run_json_flat_{strategy}", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 1
+	assert set(result.data[0].keys()) == expected_cols
+
+
+@pytest.mark.asyncio
 async def test_source_api_success(monkeypatch):
 	class _Resp:
 		headers = {"content-type": "application/json"}

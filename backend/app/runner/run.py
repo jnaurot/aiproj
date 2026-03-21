@@ -1108,6 +1108,7 @@ def _source_payload_schema(
             "pdf_metadata",
             "json_streaming",
             "json_mode_resolved",
+            "json_flatten",
         ):
             value = source_data_schema.get(key)
             if value is not None:
@@ -1698,6 +1699,7 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
             "video_metadata",
             "pdf_metadata",
             "json_streaming",
+            "json_flatten",
         }
         for key in passthrough_keys:
             if key in source:

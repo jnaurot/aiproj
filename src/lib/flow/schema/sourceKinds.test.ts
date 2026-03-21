@@ -89,6 +89,8 @@ describe('source kinds schema coverage', () => {
 			json_streaming_enabled: true,
 			json_stream_chunk_lines: 500,
 			json_stream_max_records: 1000,
+			json_flatten_strategy: 'deep',
+			json_flatten_separator: '_',
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -105,5 +107,7 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.json_streaming_enabled).toBe(true);
 		expect(parsed.json_stream_chunk_lines).toBe(500);
 		expect(parsed.json_stream_max_records).toBe(1000);
+		expect(parsed.json_flatten_strategy).toBe('deep');
+		expect(parsed.json_flatten_separator).toBe('_');
 	});
 });

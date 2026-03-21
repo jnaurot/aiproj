@@ -354,6 +354,8 @@ class TestSourceFileParams:
             "json_streaming_enabled": True,
             "json_stream_chunk_lines": 500,
             "json_stream_max_records": 2000,
+            "json_flatten_strategy": "deep",
+            "json_flatten_separator": "_",
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -370,6 +372,8 @@ class TestSourceFileParams:
         assert source_params.json_streaming_enabled is True
         assert source_params.json_stream_chunk_lines == 500
         assert source_params.json_stream_max_records == 2000
+        assert source_params.json_flatten_strategy == "deep"
+        assert source_params.json_flatten_separator == "_"
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -743,6 +747,8 @@ class TestNormalizeSourceParamsFrontend:
                 "jsonStreamingEnabled": True,
                 "jsonStreamChunkLines": 200,
                 "jsonStreamMaxRecords": 1000,
+                "jsonFlattenStrategy": "shallow",
+                "jsonFlattenSeparator": "_",
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -759,6 +765,8 @@ class TestNormalizeSourceParamsFrontend:
         assert out["json_streaming_enabled"] is True
         assert out["json_stream_chunk_lines"] == 200
         assert out["json_stream_max_records"] == 1000
+        assert out["json_flatten_strategy"] == "shallow"
+        assert out["json_flatten_separator"] == "_"
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25

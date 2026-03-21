@@ -27,6 +27,8 @@ export const defaultSourceFileParams: SourceFileParams = {
     json_streaming_enabled: false,
     json_stream_chunk_lines: 1000,
     json_stream_max_records: undefined,
+    json_flatten_strategy: "none",
+    json_flatten_separator: ".",
     parquet_columns: [],
     parquet_row_groups: [],
     parquet_max_rows: undefined,

@@ -493,6 +493,35 @@ async def _parse_ndjson_stream(
     }
 
 
+def _flatten_json_record(
+    value: Any,
+    *,
+    strategy: str,
+    separator: str,
+    _prefix: str = "",
+    _depth: int = 0,
+) -> Dict[str, Any]:
+    mode = str(strategy or "none").strip().lower()
+    sep = str(separator or ".")
+    if mode == "none":
+        if isinstance(value, dict):
+            return {str(k): v for k, v in value.items()}
+        return {"value": value}
+    if not isinstance(value, dict):
+        return {"value": value}
+    out: Dict[str, Any] = {}
+    for key, item in value.items():
+        k = str(key)
+        path = f"{_prefix}{sep}{k}" if _prefix else k
+        can_descend = isinstance(item, dict) and (mode == "deep" or (mode == "shallow" and _depth == 0))
+        if can_descend:
+            nested = _flatten_json_record(item, strategy=mode, separator=sep, _prefix=path, _depth=_depth + 1)
+            out.update(nested)
+        else:
+            out[path] = item
+    return out
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1568,10 +1597,35 @@ async def _handle_file_source(
                 table_coercion = {"mode": "native", "lossy": False}
             elif schema.file_format == "json":
                 rows, json_mode = _table_rows_from_json_array(rows)
+                flatten_strategy = str(getattr(schema, "json_flatten_strategy", "none") or "none")
+                flatten_separator = str(getattr(schema, "json_flatten_separator", ".") or ".")
+                if flatten_strategy in {"shallow", "deep"}:
+                    rows = [
+                        _flatten_json_record(row, strategy=flatten_strategy, separator=flatten_separator)
+                        if isinstance(row, dict)
+                        else {"value": row}
+                        for row in rows
+                    ]
+                    format_specific_metadata["json_flatten"] = {
+                        "strategy": flatten_strategy,
+                        "separator": flatten_separator,
+                    }
                 table_coercion = {"mode": json_mode, "lossy": False}
             data = _canonical_table_rows(rows)
         elif isinstance(json_data, dict):
-            data = [json_data]
+            flatten_strategy = str(getattr(schema, "json_flatten_strategy", "none") or "none")
+            flatten_separator = str(getattr(schema, "json_flatten_separator", ".") or ".")
+            record = (
+                _flatten_json_record(json_data, strategy=flatten_strategy, separator=flatten_separator)
+                if flatten_strategy in {"shallow", "deep"}
+                else json_data
+            )
+            data = [record]
+            if flatten_strategy in {"shallow", "deep"}:
+                format_specific_metadata["json_flatten"] = {
+                    "strategy": flatten_strategy,
+                    "separator": flatten_separator,
+                }
             table_coercion = {"mode": "json_object_1row", "lossy": False}
         elif text_data is not None:
             data = [{"text": text_data}]
