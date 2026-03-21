@@ -3,6 +3,10 @@
 	import { SourceEditorByKind } from '$lib/flow/components/editors/SourceEditor/SourceEditor';
 	import SourceGuidedQuickEditor from '$lib/flow/components/editors/SourceEditor/SourceGuidedQuickEditor.svelte';
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
+	import {
+		guidedControlsForModelKind,
+		taskKindsForModelKind
+	} from '$lib/flow/components/editors/LlmEditor/modelAssist';
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
@@ -27,6 +31,7 @@
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
 	import type { LlmKind, TransformKind, ToolProvider } from '$lib/flow/types/paramsMap';
+	import type { ModelKind, ModelTaskKind } from '$lib/flow/schema/llm';
 	// import type { LlmKind } from '$lib/flow/types/paramsMap'; // adjust path if yours differs
 	// import type { TransformKind } from '$lib/flow/types/paramsMap';
 
@@ -65,6 +70,10 @@
 
 	// LLM kind source of truth: node discriminator (optionally draft override), never node.data.kind.
 	$: llmKind = (((params as any)?.llmKind ?? (selectedNode?.data as any)?.llmKind ?? 'ollama') as LlmKind);
+	$: modelKind = (((selectedNode?.data as any)?.modelKind ?? 'llm') as ModelKind);
+	$: taskKind = (((selectedNode?.data as any)?.taskKind ?? 'generate') as ModelTaskKind);
+	$: modelTaskOptions = taskKindsForModelKind(modelKind);
+	$: modelGuidedControls = isLlm ? guidedControlsForModelKind(modelKind) : [];
 
 	$: transformKind = (selectedNode?.data as any)?.transformKind ?? 'select';
 	$: toolProvider = ((params as any)?.provider ??
@@ -110,6 +119,9 @@
 	let lastInputSignature = '';
 	let transformGuidedMode = true;
 	let sourceGuidedMode = true;
+	let modelGuidedMode = true;
+	let modelAdvancedOpen = false;
+	let modelEditorNodeId = '';
 	let inputPreviewRows: Array<Record<string, unknown>> = [];
 	let inputPreviewColumns: string[] = [];
 	type SchemaAssistState = 'fresh' | 'partial' | 'stale' | 'unknown';
@@ -263,6 +275,12 @@
 		expectedSchemaNodeId = selectedNode.id;
 		expectedSchemaDraft = normalizeExpectedSchemaDraft(selectedNode);
 		expectedSchemaError = '';
+	}
+
+	$: if (isLlm && selectedNode?.id && selectedNode.id !== modelEditorNodeId) {
+		modelEditorNodeId = selectedNode.id;
+		modelGuidedMode = true;
+		modelAdvancedOpen = false;
 	}
 
 	function useInferredExpectedSchema(): void {
@@ -607,6 +625,41 @@
 		graphStore.setTransformKind(selectedNode.id, nextOp);
 	}
 
+	function setModelProvider(nextKind: LlmKind): void {
+		if (!selectedNode?.id) return;
+		graphStore.setLlmKind(selectedNode.id, nextKind);
+	}
+
+	function setModelKind(nextKind: ModelKind): void {
+		if (!selectedNode?.id) return;
+		const allowedTasks = taskKindsForModelKind(nextKind);
+		const nextTask = allowedTasks.includes(taskKind) ? taskKind : allowedTasks[0];
+		graphStore.updateNodeConfig(selectedNode.id, {
+			modelKind: nextKind,
+			taskKind: nextTask
+		} as Record<string, any>);
+	}
+
+	function setTaskKind(nextTask: ModelTaskKind): void {
+		if (!selectedNode?.id) return;
+		graphStore.updateNodeConfig(selectedNode.id, { taskKind: nextTask } as Record<string, any>);
+	}
+
+	function setOutputModeQuick(mode: 'text' | 'json' | 'embeddings'): void {
+		const nextOutput: Record<string, unknown> = {
+			mode,
+			strict: true
+		};
+		if (mode === 'json') {
+			nextOutput.jsonSchema = (params as any)?.output?.jsonSchema ?? { type: 'object', properties: {} };
+		}
+		if (mode === 'embeddings') {
+			nextOutput.embedding = (params as any)?.output?.embedding ?? { dims: 1536, dtype: 'float32', layout: '1d' };
+		}
+		onDraft({ output: nextOutput });
+		onCommit({ output: nextOutput });
+	}
+
 	function schemaTypeLabel(schema: Record<string, any> | undefined): string {
 		return String(schema?.type ?? 'unknown');
 	}
@@ -710,13 +763,91 @@
 			/>
 		{/if}
 	{:else if isLlm}
-		<svelte:component
-			this={LlmEditorByKind[llmKind] ?? LlmEditorByKind.ollama}
-			{selectedNode}
-			{params}
-			{onDraft}
-			{onCommit}
-		/>
+		<div class="guidedModeRow">
+			<label class="guidedToggle">
+				<input type="checkbox" bind:checked={modelGuidedMode} />
+				<span>Guided model mode</span>
+			</label>
+			<span class="guidedHint">Use only high-value controls first, then open advanced settings.</span>
+		</div>
+		{#if modelGuidedMode}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Model Setup Checklist</div>
+				<div class="guidedAssistList">
+					{#each modelGuidedControls as control (control.id)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">{control.label}</div>
+							<div class="guidedAssistDesc">{control.description}</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Quick Controls</div>
+				<div class="assistActionRow">
+					<label class="guidedToggle">
+						<span>Provider</span>
+						<select value={llmKind} on:change={(e) => setModelProvider((e.currentTarget as HTMLSelectElement).value as LlmKind)}>
+							<option value="ollama">ollama</option>
+							<option value="openai_compat">openai_compat</option>
+						</select>
+					</label>
+					<label class="guidedToggle">
+						<span>Model kind</span>
+						<select value={modelKind} on:change={(e) => setModelKind((e.currentTarget as HTMLSelectElement).value as ModelKind)}>
+							<option value="llm">llm</option>
+							<option value="vision">vision</option>
+							<option value="audio">audio</option>
+							<option value="embedding">embedding</option>
+							<option value="reranker">reranker</option>
+							<option value="multimodal">multimodal</option>
+						</select>
+					</label>
+					<label class="guidedToggle">
+						<span>Task</span>
+						<select value={taskKind} on:change={(e) => setTaskKind((e.currentTarget as HTMLSelectElement).value as ModelTaskKind)}>
+							{#each modelTaskOptions as option}
+								<option value={option}>{option}</option>
+							{/each}
+						</select>
+					</label>
+				</div>
+				<div class="assistActionRow">
+					<label class="guidedToggle">
+						<span>Model</span>
+						<input
+							type="text"
+							value={String((params as any)?.model ?? '')}
+							on:input={(e) => onDraft({ model: (e.currentTarget as HTMLInputElement).value })}
+							on:blur={(e) => onCommit({ model: (e.currentTarget as HTMLInputElement).value })}
+						/>
+					</label>
+					<label class="guidedToggle">
+						<span>Output</span>
+						<select value={String((params as any)?.output?.mode ?? 'text')} on:change={(e) => setOutputModeQuick((e.currentTarget as HTMLSelectElement).value as 'text' | 'json' | 'embeddings')}>
+							<option value="text">text</option>
+							<option value="json">json</option>
+							<option value="embeddings">embeddings</option>
+						</select>
+					</label>
+				</div>
+				<button type="button" class="small" on:click={() => (modelAdvancedOpen = !modelAdvancedOpen)}>
+					{modelAdvancedOpen ? 'Hide Advanced Editor' : 'Show Advanced Editor'}
+				</button>
+			</div>
+		{/if}
+		{#if !modelGuidedMode || modelAdvancedOpen}
+			<div class="advancedEditor">
+				<div class="advancedEditorTitle">Model Editor</div>
+				<svelte:component
+					this={LlmEditorByKind[llmKind] ?? LlmEditorByKind.ollama}
+					{selectedNode}
+					{params}
+					{onDraft}
+					{onCommit}
+				/>
+			</div>
+		{/if}
 	{:else if isTool}
 		<ToolEditor {selectedNode} {params} {onDraft} {onCommit} />
 		<svelte:component
