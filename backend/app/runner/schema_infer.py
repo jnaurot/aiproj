@@ -134,3 +134,59 @@ def infer_json_schema_cached(value: Any, *, max_depth: int = 24) -> Dict[str, An
 
 def get_schema_infer_stats() -> Dict[str, int]:
     return _SCHEMA_INFER_MEMO.stats()
+
+
+def infer_typed_schema_from_sample_profile(sample: Any, payload_type: str) -> Dict[str, Any]:
+    pt = str(payload_type or "unknown").strip().lower() or "unknown"
+    if pt == "table":
+        rows = sample if isinstance(sample, list) else []
+        ordered: list[str] = []
+        seen = set()
+        field_type: Dict[str, str] = {}
+        nullable: Dict[str, bool] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                name = str(key)
+                if name not in seen:
+                    seen.add(name)
+                    ordered.append(name)
+                if value is None:
+                    nullable[name] = True
+                    continue
+                if isinstance(value, bool):
+                    inferred = "bool"
+                elif isinstance(value, int) and not isinstance(value, bool):
+                    inferred = "int"
+                elif isinstance(value, float):
+                    inferred = "float"
+                elif isinstance(value, str):
+                    inferred = "string"
+                elif isinstance(value, (dict, list)):
+                    inferred = "json"
+                else:
+                    inferred = "unknown"
+                prev = field_type.get(name, "unknown")
+                field_type[name] = inferred if prev in {"unknown", inferred} else "unknown"
+                nullable.setdefault(name, False)
+        return {
+            "type": "table",
+            "fields": [
+                {
+                    "name": col,
+                    "type": field_type.get(col, "unknown"),
+                    "nullable": bool(nullable.get(col, False)),
+                    "confidence": 0.8 if field_type.get(col, "unknown") != "unknown" else 0.5,
+                }
+                for col in ordered
+            ],
+            "confidence": 0.82 if ordered else 0.6,
+        }
+    if pt == "json":
+        return {"type": "json", "schema": infer_json_schema_cached(sample), "confidence": 0.78}
+    if pt == "text":
+        return {"type": "text", "fields": [], "confidence": 0.95}
+    if pt in {"image", "audio", "video", "binary"}:
+        return {"type": pt, "fields": [], "confidence": 0.99}
+    return {"type": "unknown", "fields": [], "confidence": 0.5}

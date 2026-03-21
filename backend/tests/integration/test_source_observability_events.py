@@ -31,6 +31,7 @@ async def test_source_node_output_event_includes_source_observability(tmp_path):
                             "filename": "input.txt",
                             "file_format": "txt",
                             "output": {"mode": "table"},
+                            "priming": {"enabled": True, "mode": "priming_only", "sample_rows": 5, "sample_bytes": 64},
                         },
                     },
                 }
@@ -50,3 +51,8 @@ async def test_source_node_output_event_includes_source_observability(tmp_path):
     assert isinstance(source_obs, dict)
     assert source_obs.get("source_kind") == "file"
     assert source_obs.get("output_mode") in {"text", "table"}
+    priming_artifact = node_outputs[-1].get("primingArtifact")
+    assert isinstance(priming_artifact, dict)
+    inferred_schema = priming_artifact.get("inferred_schema")
+    assert isinstance(inferred_schema, dict)
+    assert inferred_schema.get("type") in {"table", "text"}

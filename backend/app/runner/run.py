@@ -1092,6 +1092,11 @@ def _source_payload_schema(
     source_data_schema = (
         getattr(source_metadata, "data_schema", {}) if isinstance(getattr(source_metadata, "data_schema", None), dict) else {}
     )
+    source_priming_artifact = (
+        getattr(source_metadata, "priming_artifact", {})
+        if isinstance(getattr(source_metadata, "priming_artifact", None), dict)
+        else {}
+    )
     if out_contract == "table" and isinstance(data_value, list):
         payload = _table_payload_schema_from_rows(data_value)
         table_columns = source_data_schema.get("table_columns")
@@ -1103,6 +1108,8 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             payload["source_observability"] = source_observability
+        if isinstance(source_priming_artifact, dict) and source_priming_artifact:
+            payload["priming_artifact"] = source_priming_artifact
         resolved_columns = payload.get("columns")
         if isinstance(resolved_columns, list):
             node_id = str(getattr(source_metadata, "node_id", "") or "")
@@ -1129,18 +1136,24 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        if isinstance(source_priming_artifact, dict) and source_priming_artifact:
+            out["priming_artifact"] = source_priming_artifact
         return out
     if out_contract == "text":
         out = {"schema_version": 1, "type": "text", "encoding": "utf-8"}
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        if isinstance(source_priming_artifact, dict) and source_priming_artifact:
+            out["priming_artifact"] = source_priming_artifact
         return out
     if out_contract == "binary":
         out = {"schema_version": 1, "type": "binary"}
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        if isinstance(source_priming_artifact, dict) and source_priming_artifact:
+            out["priming_artifact"] = source_priming_artifact
         return out
     return None
 
@@ -1666,6 +1679,22 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
         nested = schema_env.get("source_observability")
         if isinstance(nested, dict):
             return nested
+    return None
+
+
+def _source_priming_artifact_from_artifact(artifact: Artifact) -> Optional[Dict[str, Any]]:
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    direct = ps.get("priming_artifact")
+    if isinstance(direct, dict):
+        return direct
+    nested = ps.get("primingArtifactV1")
+    if isinstance(nested, dict):
+        return nested
+    schema_env = ps.get("schema")
+    if isinstance(schema_env, dict):
+        nested_schema = schema_env.get("priming_artifact")
+        if isinstance(nested_schema, dict):
+            return nested_schema
     return None
 
 
@@ -3640,6 +3669,7 @@ async def run_graph(
                         "mimeType": cached_art.mime_type,
                         "payloadType": _infer_artifact_payload_type(cached_art),
                         "sourceObservability": _source_observability_from_artifact(cached_art),
+                        "primingArtifact": _source_priming_artifact_from_artifact(cached_art),
                         "cached": True,
                     })
 
@@ -5258,6 +5288,7 @@ async def run_graph(
                             "mimeType": res.mime_type,
                             "payloadType": transform_payload_type,
                             "sourceObservability": _source_observability_from_artifact(artifact),
+                            "primingArtifact": _source_priming_artifact_from_artifact(artifact),
                         })
 
                         # return a NodeOutput for legacy metadata flow
@@ -5930,6 +5961,7 @@ async def run_graph(
                         "mimeType": artifact.mime_type,
                         "payloadType": _infer_artifact_payload_type(artifact),
                         "sourceObservability": _source_observability_from_artifact(artifact),
+                        "primingArtifact": _source_priming_artifact_from_artifact(artifact),
                     })
 
                     # Update cache index

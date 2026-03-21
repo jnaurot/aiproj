@@ -72,6 +72,7 @@ type NodeOutputInfo = {
 	payloadType?: string;
 	preview?: string;
 	sourceObservability?: Record<string, unknown>;
+	primingArtifact?: Record<string, unknown>;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
 	expectedContractFingerprint?: string;
@@ -1407,6 +1408,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					sourceObservability:
 						evt.sourceObservability && typeof evt.sourceObservability === 'object'
 							? (evt.sourceObservability as Record<string, unknown>)
+							: undefined,
+					primingArtifact:
+						(evt as any).primingArtifact && typeof (evt as any).primingArtifact === 'object'
+							? ((evt as any).primingArtifact as Record<string, unknown>)
 							: undefined,
 					cached: evt.cached ?? false,
 					cacheDecision: nextCacheDecision
@@ -2886,14 +2891,19 @@ function deriveObservedSchemaObservationFromNodeOutput(
 ): NodeSchemaObservation | null {
 	const observedType = normalizeTypedSchemaPrimitive((evt as any)?.payloadType ?? '');
 	if (observedType === 'unknown') return null;
+	const primingInferred = ((evt as any)?.primingArtifact?.inferred_schema ?? null) as Record<string, any> | null;
+	const primingFields = Array.isArray(primingInferred?.fields)
+		? normalizeTypedSchemaFields((primingInferred?.fields as any[]).map((f) => ({ name: f?.name, type: f?.type })))
+		: [];
 	const inferredFields =
 		(node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields &&
 		Array.isArray((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
 			? normalizeTypedSchemaFields((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
 			: [];
+	const resolvedFields = primingFields.length > 0 ? primingFields : inferredFields;
 	const typedSchema =
 		observedType === 'table'
-			? { type: 'table' as const, fields: inferredFields }
+			? { type: 'table' as const, fields: resolvedFields }
 			: { type: observedType, fields: [] };
 	return {
 		typedSchema,

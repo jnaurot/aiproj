@@ -33,6 +33,7 @@ from ..runner.schemas import (
     SourceWarehouseParams,
     normalize_source_params_frontend,
 )
+from ..runner.schema_infer import infer_typed_schema_from_sample_profile
 
 logger = logging.getLogger(__name__)
 
@@ -973,6 +974,7 @@ async def exec_source(
                     "payload_type": payload_type,
                     "mime_type": str(detection.get("mime_type") or output.metadata.mime_type),
                     "schema_fingerprint": _schema_fingerprint_from_data(output.data, payload_type),
+                    "inferred_schema": infer_typed_schema_from_sample_profile(output.data, payload_type),
                     "sample_preview": _sample_preview(output.data, payload_type),
                     "stats": {
                         "sample_rows": int(priming_spec.get("sample_rows") or 50),

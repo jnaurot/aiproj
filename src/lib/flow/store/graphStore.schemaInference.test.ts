@@ -78,5 +78,38 @@ describe('graphStore schema inference envelope', () => {
 		expect(observed?.state).toBe('fresh');
 		expect(observed?.typedSchema?.type).toBe('json');
 	});
+
+	it('uses priming artifact inferred fields on source node_output', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('source', { x: 4, y: 4 });
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_output',
+				runId: 'run_schema_priming',
+				at: '2026-03-11T12:00:00Z',
+				nodeId,
+				artifactId: 'artifact_table',
+				payloadType: 'table',
+				mimeType: 'text/csv',
+				primingArtifact: {
+					version: 1,
+					inferred_schema: {
+						type: 'table',
+						fields: [
+							{ name: 'id', type: 'int' },
+							{ name: 'text', type: 'string' }
+						]
+					}
+				}
+			},
+			'run_schema_priming'
+		);
+		const observed = (next.nodes.find((n) => n.id === nodeId)?.data as any)?.schema?.observedSchema?.typedSchema;
+		expect(observed?.type).toBe('table');
+		expect(Array.isArray(observed?.fields)).toBe(true);
+		expect(observed?.fields?.[0]?.name).toBe('id');
+	});
 });
 
