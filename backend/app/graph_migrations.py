@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from .runner.capabilities import allowed_payload_types
 from .schema_contracts import canonicalize_schema_envelope
@@ -353,3 +354,34 @@ def find_component_edge_handle_errors(graph: Dict[str, Any]) -> List[Dict[str, s
 				}
 			)
 	return errors
+
+
+def migrate_llm_nodes_to_model(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+	"""Normalize graph node kind from legacy `llm` to `model` and return a dry-run report."""
+	payload = copy.deepcopy(raw if isinstance(raw, dict) else {})
+	target_graph = payload.get("graph") if isinstance(payload.get("graph"), dict) else payload
+	nodes = target_graph.get("nodes") if isinstance(target_graph, dict) and isinstance(target_graph.get("nodes"), list) else []
+	converted_ids: List[str] = []
+	already_model_ids: List[str] = []
+	llm_count = 0
+	for node in nodes:
+		if not isinstance(node, dict):
+			continue
+		data = _node_data(node)
+		kind = str(data.get("kind") or "").strip().lower()
+		nid = str(node.get("id") or "")
+		if kind == "llm":
+			llm_count += 1
+			data["kind"] = "model"
+			converted_ids.append(nid)
+		elif kind == "model":
+			already_model_ids.append(nid)
+	report = {
+		"migratedAt": datetime.now(timezone.utc).isoformat(),
+		"totalNodes": len([n for n in nodes if isinstance(n, dict)]),
+		"llmNodesFound": llm_count,
+		"convertedNodeIds": converted_ids,
+		"alreadyModelNodeIds": already_model_ids,
+		"idempotent": llm_count == 0,
+	}
+	return payload, report
