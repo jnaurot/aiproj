@@ -11,6 +11,7 @@ export function detectFileFormatFromFilename(filename: string | undefined): File
 	if (name.endsWith('.tsv')) return 'tsv';
 	if (name.endsWith('.parquet')) return 'parquet';
 	if (name.endsWith('.json')) return 'json';
+	if (name.endsWith('.ndjson') || name.endsWith('.jsonl')) return 'json';
 	if (name.endsWith('.xlsx') || name.endsWith('.xls')) return 'excel';
 	if (name.endsWith('.pdf')) return 'pdf';
 	if (name.endsWith('.jpg')) return 'jpg';

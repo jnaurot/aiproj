@@ -189,8 +189,11 @@
 		return recentOptionLabel(entry, loadingIds.includes(entry.id), shortHash);
 	}
 
-	function patchForDetectedFormat(next: FileFormat | null): SourceFilePatch {
+	function patchForDetectedFormat(next: FileFormat | null, detectedFilename?: string): SourceFilePatch {
 		if (!next) return {};
+		const detectedName = asString(detectedFilename, '').trim().toLowerCase();
+		const jsonModeHint: 'ndjson' | undefined =
+			detectedName.endsWith('.ndjson') || detectedName.endsWith('.jsonl') ? 'ndjson' : undefined;
 		const patch: SourceFilePatch = { file_format: next };
 		if (next === 'csv' || next === 'tsv') {
 			patch.delimiter = next === 'tsv' ? '\t' : ',';
@@ -216,7 +219,7 @@
 			patch.delimiter = undefined;
 			patch.has_header = params?.has_header;
 		} else if (next === 'json') {
-			patch.json_mode = asString((params as any)?.json_mode, 'auto') as any;
+			patch.json_mode = (jsonModeHint ?? asString((params as any)?.json_mode, 'auto')) as any;
 			const currentMode = asString((params as any)?.output?.mode, '').trim().toLowerCase();
 			if (currentMode === '' || currentMode === 'text' || currentMode === 'json') {
 				patch.output = {
@@ -293,7 +296,10 @@
 				snapshotId: incoming.id,
 				snapshotMetadata: result.metadata,
 				filename: incoming.filename ?? file.name,
-				...patchForDetectedFormat(detectFileFormatFromFilename(incoming.filename ?? file.name)),
+				...patchForDetectedFormat(
+					detectFileFormatFromFilename(incoming.filename ?? file.name),
+					incoming.filename ?? file.name
+				),
 				...withRecentPatch(nextRecent)
 			};
 			commitSnapshot(canonicalFileParams(patch));
@@ -366,7 +372,7 @@
 				mimeType: resolved?.mimeType
 			},
 			filename: resolved?.filename,
-			...patchForDetectedFormat(detectFileFormatFromFilename(resolved?.filename)),
+			...patchForDetectedFormat(detectFileFormatFromFilename(resolved?.filename), resolved?.filename),
 			...withRecentPatch(nextRecent)
 		};
 		commitSnapshot(canonicalFileParams(patch));

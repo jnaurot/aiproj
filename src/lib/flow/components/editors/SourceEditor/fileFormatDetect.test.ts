@@ -16,6 +16,8 @@ describe('detectFileFormatFromFilename', () => {
 
 	it('maps existing text/document formats and returns null for unknown', () => {
 		expect(detectFileFormatFromFilename('report.pdf')).toBe('pdf');
+		expect(detectFileFormatFromFilename('events.ndjson')).toBe('json');
+		expect(detectFileFormatFromFilename('events.jsonl')).toBe('json');
 		expect(detectFileFormatFromFilename('song.mp3')).toBe('mp3');
 		expect(detectFileFormatFromFilename('song.wav')).toBe('wav');
 		expect(detectFileFormatFromFilename('song.flac')).toBe('flac');
