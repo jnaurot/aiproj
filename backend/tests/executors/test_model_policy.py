@@ -25,6 +25,8 @@ def test_normalize_request_policy_defaults_from_legacy_fields():
 	assert policy.timeout_seconds == 21
 	assert policy.backoff_base_seconds == 0.5
 	assert policy.backoff_max_seconds == 8.0
+	assert policy.batch_enabled is True
+	assert policy.batch_max_items == 64
 
 
 def test_normalize_request_policy_explicit_values():
@@ -34,6 +36,7 @@ def test_normalize_request_policy_explicit_values():
 			"timeout_seconds": 9,
 			"backoff": {"base_seconds": 1.5, "max_seconds": 4.0, "jitter_seconds": 0.2},
 			"circuit_breaker": {"enabled": True, "fail_threshold": 2, "reset_seconds": 30},
+			"batching": {"enabled": True, "max_items": 16},
 			"fallback_chain": [{"llmKind": "openai_compat", "model": "gpt-4.1-mini"}],
 		}
 	)
@@ -45,6 +48,8 @@ def test_normalize_request_policy_explicit_values():
 	assert policy.backoff_jitter_seconds == 0.2
 	assert policy.circuit_enabled is True
 	assert policy.circuit_fail_threshold == 2
+	assert policy.batch_enabled is True
+	assert policy.batch_max_items == 16
 	assert len(policy.fallback_chain) == 1
 
 

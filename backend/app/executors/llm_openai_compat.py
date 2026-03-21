@@ -161,24 +161,42 @@ async def exec_llm_openai_compat(
             )
 
             if output_mode == "embeddings":
-                embed_payload: Dict[str, Any] = {
-                    "model": params.model,
-                    "input": input_items if len(input_items) > 1 else (input_items[0] if input_items else upstream_text),
-                }
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.post(url, json=embed_payload, headers=headers)
-                    resp.raise_for_status()
-                    obj = resp.json()
-                rows = obj.get("data")
-                if not isinstance(rows, list) or not rows:
-                    return NodeOutput(
-                        status="failed",
-                        metadata=None,
-                        execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                        error="Embeddings response missing data[]",
-                    )
+                items: List[str] = input_items if input_items else [upstream_text]
+                chunk_size = request_policy.batch_max_items if request_policy.batch_enabled else len(items)
+                chunk_size = max(1, int(chunk_size or len(items)))
+                all_rows: List[Dict[str, Any]] = []
+                for batch_start in range(0, len(items), chunk_size):
+                    batch = items[batch_start : batch_start + chunk_size]
+                    embed_payload: Dict[str, Any] = {
+                        "model": params.model,
+                        "input": batch if len(batch) > 1 else batch[0],
+                    }
+                    if len(items) > chunk_size:
+                        await context.bus.emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": f"embeddings: micro-batch start={batch_start} size={len(batch)}",
+                            }
+                        )
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        resp = await client.post(url, json=embed_payload, headers=headers)
+                        resp.raise_for_status()
+                        obj = resp.json()
+                    rows = obj.get("data")
+                    if not isinstance(rows, list) or not rows:
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error="Embeddings response missing data[]",
+                        )
+                    all_rows.extend(rows)
                 vectors: List[List[float]] = []
-                for row in rows:
+                for row in all_rows:
                     if not isinstance(row, dict) or not isinstance(row.get("embedding"), list):
                         return NodeOutput(
                             status="failed",

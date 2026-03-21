@@ -18,6 +18,8 @@ class RequestPolicy:
 	circuit_enabled: bool
 	circuit_fail_threshold: int
 	circuit_reset_seconds: float
+	batch_enabled: bool
+	batch_max_items: int
 	fallback_chain: List[Dict[str, Any]]
 
 
@@ -41,6 +43,7 @@ def normalize_request_policy(params: LLMParams) -> RequestPolicy:
 	raw = params.request_policy if isinstance(params.request_policy, dict) else {}
 	backoff = raw.get("backoff") if isinstance(raw.get("backoff"), dict) else {}
 	circuit = raw.get("circuit_breaker") if isinstance(raw.get("circuit_breaker"), dict) else {}
+	batching = raw.get("batching") if isinstance(raw.get("batching"), dict) else {}
 	fallback = raw.get("fallback_chain")
 	if not isinstance(fallback, list):
 		fallback = []
@@ -53,6 +56,8 @@ def normalize_request_policy(params: LLMParams) -> RequestPolicy:
 		circuit_enabled=bool(circuit.get("enabled", False)),
 		circuit_fail_threshold=_as_int(circuit.get("fail_threshold"), default=5, minimum=1, maximum=100),
 		circuit_reset_seconds=_as_float(circuit.get("reset_seconds"), default=30.0, minimum=1.0, maximum=3600.0),
+		batch_enabled=bool(batching.get("enabled", True)),
+		batch_max_items=_as_int(batching.get("max_items"), default=64, minimum=1, maximum=4096),
 		fallback_chain=[x for x in fallback if isinstance(x, dict)],
 	)
 

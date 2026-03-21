@@ -93,6 +93,13 @@ export const LlmParamsSchema = z
 					})
 					.strip()
 					.optional(),
+				batching: z
+					.object({
+						enabled: z.boolean().optional(),
+						max_items: z.number().int().min(1).max(4096).optional()
+					})
+					.strip()
+					.optional(),
 				fallback_chain: z
 					.array(
 						z
