@@ -39,12 +39,14 @@ function asPayloadTypes(values: unknown): PayloadType[] {
 }
 
 function buildNodeCapabilities(): Record<
-	'llm' | 'transform' | 'source' | 'tool' | 'component',
+	'model' | 'llm' | 'transform' | 'source' | 'tool' | 'component',
 	NodeCapabilities
 > {
 	const nodes = getNodesMap();
 	const toolByProvider = getToolByProviderMap();
+	const modelCaps = nodes.model ?? nodes.llm ?? {};
 	return {
+		model: { in: asPayloadTypes(modelCaps?.in), out: asPayloadTypes(modelCaps?.out) },
 		llm: { in: asPayloadTypes(nodes.llm?.in), out: asPayloadTypes(nodes.llm?.out) },
 		transform: { in: asPayloadTypes(nodes.transform?.in), out: asPayloadTypes(nodes.transform?.out) },
 		source: { in: asPayloadTypes(nodes.source?.in), out: asPayloadTypes(nodes.source?.out) },
@@ -69,7 +71,7 @@ function buildNodeCapabilities(): Record<
 }
 
 export let NODE_CAPABILITIES: Record<
-	'llm' | 'transform' | 'source' | 'tool' | 'component',
+	'model' | 'llm' | 'transform' | 'source' | 'tool' | 'component',
 	NodeCapabilities
 > = buildNodeCapabilities();
 

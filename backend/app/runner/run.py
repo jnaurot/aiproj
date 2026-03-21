@@ -374,7 +374,7 @@ def _normalized_params_for_exec_key(
     params: Dict[str, Any],
 ) -> Dict[str, Any]:
     p = dict(params or {})
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         from .schemas import normalize_llm_params_frontend
 
         return normalize_llm_params_frontend(p)
@@ -469,6 +469,7 @@ def _node_impl_version(kind: str) -> str:
     mapping = {
         "source": "SOURCE@1",
         "transform": "TRANSFORM@1",
+        "model": "LLM@1",
         "llm": "LLM@1",
         "tool": "TOOL@1",
         "component": "COMPONENT@1",
@@ -1218,7 +1219,7 @@ def _sample_external_payload(value: Any, *, depth: int = 0, max_depth: int = 2, 
 
 
 def _emit_external_schema_debug(*, kind: str, node_id: str, schema: Dict[str, Any], payload: Any) -> None:
-    if kind not in {"source", "llm", "tool"}:
+    if kind not in {"source", "model", "llm", "tool"}:
         return
     try:
         schema_json = json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
@@ -1921,7 +1922,7 @@ def _transform_op_for_node(node: Dict[str, Any]) -> str:
 
 def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     params = (node.get("data", {}).get("params", {}) or {})
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         typed_type = _node_typed_schema_type_from_node(node)
         if typed_type in {"json", "embeddings", "text"}:
             return typed_type
@@ -2006,7 +2007,7 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if transform_op == "table_to_json":
             return "table"
         return "table"
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         return "text"
     if kind == "tool":
         return None
@@ -2252,7 +2253,7 @@ def _executor_code_hash_for_kind(kind: str) -> str:
         fn = exec_source
     elif key == "transform":
         fn = run_transform
-    elif key == "llm":
+    elif key in {"llm", "model"}:
         fn = exec_llm
     elif key == "tool":
         fn = exec_tool
@@ -2331,7 +2332,7 @@ def _expected_tool_profile_locks(resolved_env: Dict[str, Any]) -> Dict[str, str]
 
 def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, Any]:
     env: Dict[str, Any]
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         output_cfg = params.get("output") if isinstance(params.get("output"), dict) else {}
         output_schema = params.get("output_schema")
         if output_schema is None and isinstance(output_cfg, dict):
@@ -5251,7 +5252,7 @@ async def run_graph(
                             # },
                             execution_time_ms=0.0
                         )
-                elif kind == "llm":
+                elif kind in {"llm", "model"}:
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] bound node ids:", [b.node_id for b in context.bindings.all()])
 
@@ -5621,7 +5622,7 @@ async def run_graph(
                                 f"Source output contract mismatch: unsupported output type '{out_contract}'"
                             )
 
-                    elif kind == "llm":
+                    elif kind in {"llm", "model"}:
                         out_contract = str(_declared_out_port("llm", n) or "text")
 
                         if out_contract == "json":
@@ -5764,7 +5765,7 @@ async def run_graph(
                             or artifact_payload_type
                             or "text"
                         )
-                    if kind == "llm":
+                    if kind in {"llm", "model"}:
                         artifact_payload_type = str(_declared_out_port("llm", n) or "text")
 
                     base_payload_schema = (
@@ -5775,7 +5776,7 @@ async def run_graph(
                         )
                         if kind == "source"
                         else _llm_payload_schema(mime_type, data_value)
-                        if kind == "llm"
+                        if kind in {"llm", "model"}
                         else _tool_payload_schema(
                             str(data_value.get("kind") or "json") if isinstance(data_value, dict) else "json",
                             data_value.get("payload") if isinstance(data_value, dict) else data_value,
@@ -5784,7 +5785,7 @@ async def run_graph(
                         if kind == "tool"
                         else None
                     ) or {}
-                    if kind in {"source", "llm", "tool"}:
+                    if kind in {"source", "model", "llm", "tool"}:
                         debug_payload = data_value
                         if kind == "tool" and isinstance(data_value, dict):
                             debug_payload = data_value.get("payload")
@@ -6077,6 +6078,7 @@ async def run_graph(
         kind_sems = {
             "source": asyncio.Semaphore(max_source),
             "transform": asyncio.Semaphore(max_transform),
+            "model": asyncio.Semaphore(max_llm),
             "llm": asyncio.Semaphore(max_llm),
             "tool": asyncio.Semaphore(max_tool),
         }
@@ -6236,7 +6238,7 @@ async def run_graph(
                 await _emit_cache_summary_once()
                 return
 
-            kind_counts: Dict[str, int] = {"source": 0, "transform": 0, "llm": 0, "tool": 0}
+            kind_counts: Dict[str, int] = {"source": 0, "transform": 0, "model": 0, "llm": 0, "tool": 0}
             for nid in level_nodes:
                 k = (nodes.get(nid, {}).get("data", {}) or {}).get("kind")
                 if k in kind_counts:
@@ -6454,4 +6456,5 @@ async def run_graph(
             "status": "failed"
         })
         await _emit_cache_summary_once()
+
 

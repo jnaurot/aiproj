@@ -43,7 +43,7 @@ describe('flowToolbarModel', () => {
 			'Starter Template',
 			'Source',
 			'Transform',
-			'LLM',
+			'Model',
 			'Tool',
 			'Preset',
 			'Component',
@@ -132,6 +132,7 @@ describe('flowToolbarModel', () => {
 			addStarterTemplate: vi.fn(),
 			addSource: vi.fn(),
 			addTransform: vi.fn(),
+			addModel: vi.fn(),
 			addLlm: vi.fn(),
 			addTool: vi.fn(),
 			addComponent: vi.fn(),
@@ -140,6 +141,7 @@ describe('flowToolbarModel', () => {
 		dispatchAddMenuAction('add_starter_template', handlers);
 		dispatchAddMenuAction('add_source', handlers);
 		dispatchAddMenuAction('add_transform', handlers);
+		dispatchAddMenuAction('add_model', handlers);
 		dispatchAddMenuAction('add_llm', handlers);
 		dispatchAddMenuAction('add_tool', handlers);
 		dispatchAddMenuAction('add_component', handlers);
@@ -147,6 +149,7 @@ describe('flowToolbarModel', () => {
 		expect(handlers.addStarterTemplate).toHaveBeenCalledTimes(1);
 		expect(handlers.addSource).toHaveBeenCalledTimes(1);
 		expect(handlers.addTransform).toHaveBeenCalledTimes(1);
+		expect(handlers.addModel).toHaveBeenCalledTimes(1);
 		expect(handlers.addLlm).toHaveBeenCalledTimes(1);
 		expect(handlers.addTool).toHaveBeenCalledTimes(1);
 		expect(handlers.addComponent).toHaveBeenCalledTimes(1);

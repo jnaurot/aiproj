@@ -39,7 +39,8 @@ export function pickValidation(
         defaults: defaultTransformParamsByKind[tk] };
     }
 
-    case "llm": {
+    case "llm":
+    case "model": {
       const lk = data.llmKind ?? "ollama"
       return {
         schema: LlmParamsSchemaByKind[lk],

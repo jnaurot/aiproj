@@ -4,7 +4,7 @@ import type { PipelineNodeData } from "$lib/flow/types";
 
 import { defaultSourceNodeData } from "$lib/flow/schema/sourceDefaults";
 import { defaultTransformNodeData } from "$lib/flow/schema/transformDefaults";
-import { defaultLlmNodeData } from "$lib/flow/schema/llmDefaults";
+import { defaultLlmNodeData, defaultModelNodeData } from "$lib/flow/schema/llmDefaults";
 import { defaultToolNodeData } from "$lib/flow/schema/toolDefaults";
 import { defaultComponentNodeData } from "$lib/flow/schema/componentDefaults";
 
@@ -15,6 +15,9 @@ export function defaultNodeData(kind: NodeKind): PipelineNodeData {
 
     case "transform":
       return structuredClone(defaultTransformNodeData) as any;
+
+    case "model":
+      return structuredClone(defaultModelNodeData) as any;
 
     case "llm":
       return structuredClone(defaultLlmNodeData) as any;

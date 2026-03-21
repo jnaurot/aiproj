@@ -43,7 +43,7 @@ function cloneRecord(value: Record<string, unknown> | undefined | null): Record<
 function normalizeSubtype(data: PipelineNodeData): NodeSubtype {
 	if (data.kind === 'source') return data.sourceKind;
 	if (data.kind === 'transform') return data.transformKind;
-	if (data.kind === 'llm') return data.llmKind;
+	if (data.kind === 'llm' || data.kind === 'model') return data.llmKind;
 	const provider = String((data.params as Record<string, unknown>)?.provider ?? 'mcp') as ToolProvider;
 	return provider;
 }
@@ -59,7 +59,7 @@ function parsePreset(raw: unknown): NodePreset | null {
 	const createdAt = String(v.createdAt ?? '').trim();
 	const updatedAt = String(v.updatedAt ?? '').trim();
 	if (!id || !name || !kind || !subtype || !createdAt || !updatedAt) return null;
-	if (kind !== 'source' && kind !== 'transform' && kind !== 'llm' && kind !== 'tool') return null;
+	if (kind !== 'source' && kind !== 'transform' && kind !== 'llm' && kind !== 'model' && kind !== 'tool') return null;
 	return {
 		id,
 		name,

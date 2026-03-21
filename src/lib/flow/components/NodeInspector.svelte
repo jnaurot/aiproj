@@ -35,7 +35,7 @@
 	// kind discriminators
 	$: kind = selectedNode?.data?.kind as PipelineNodeData['kind'] | undefined;
 	$: isSource = kind === 'source';
-	$: isLlm = kind === 'llm';
+	$: isLlm = kind === 'llm' || kind === 'model';
 	$: isTool = kind === 'tool';
 	$: isTransform = kind === 'transform';
 	$: isComponent = kind === 'component';

@@ -1054,6 +1054,7 @@ SCHEMA_REGISTRY: Dict[str, type[NodeParamSchema]] = {
     
     # LLM schemas (single schema with type field)
     "llm": LLMParams,
+    "model": LLMParams,
     
     # Tool schemas
     "tool:mcp": MCPToolParams,
@@ -1077,7 +1078,7 @@ def get_schema_for_node(node: Dict[str, Any]) -> Optional[type[NodeParamSchema]]
     elif kind == "tool":
         return SCHEMA_REGISTRY.get("tool")
 
-    elif kind == "llm":
+    elif kind in {"llm", "model"}:
         return SCHEMA_REGISTRY.get("llm")
     
     elif kind == "component":
@@ -1101,7 +1102,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
     params = node.get("data", {}).get("params", {}) or {}
 
     try:
-        if kind == "llm":
+        if kind in {"llm", "model"}:
             print("\n[SCHEMAS] LLM params BEFORE normalize:")
             print(pformat(params)[:8000])
 

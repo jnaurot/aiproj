@@ -7,6 +7,7 @@ import ComponentNode from "./nodes/ComponentNode.svelte";
 export const nodeTypes = {
   source: SourceNode,
   transform: TransformNode,
+	model: LLMNode,
 	llm: LLMNode,
 	tool: ToolNode,
 	component: ComponentNode,

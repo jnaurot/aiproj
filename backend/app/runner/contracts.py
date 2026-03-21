@@ -194,7 +194,7 @@ def default_contract_for_node(node: Dict[str, Any]) -> str:
     if kind == "transform":
         return TABLE_V1
 
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         return TEXT_V1
 
     if kind == "tool":

@@ -10,7 +10,7 @@ export type UpdateNodeConfig = {
   params?: unknown;
 };
 
-export type NodeKind = "source" | "transform" | "llm" | "tool" | "component";
+export type NodeKind = "source" | "transform" | "model" | "llm" | "tool" | "component";
 
 export type NodeStatus =
   | "idle"

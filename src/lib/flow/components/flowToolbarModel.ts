@@ -26,7 +26,7 @@ export function buildAddMenuItems(hasPresets: boolean): ToolbarMenuItem[] {
 		{ id: 'add_starter_template', label: 'Starter Template' },
 		{ id: 'add_source', label: 'Source' },
 		{ id: 'add_transform', label: 'Transform' },
-		{ id: 'add_llm', label: 'LLM' },
+		{ id: 'add_model', label: 'Model' },
 		{ id: 'add_tool', label: 'Tool' },
 		{ id: 'add_from_preset', label: 'Preset', disabled: !hasPresets },
 		{ id: 'add_component', label: 'Component' },
@@ -90,6 +90,7 @@ export type AddToolbarHandlers = {
 	addStarterTemplate: () => void;
 	addSource: () => void;
 	addTransform: () => void;
+	addModel: () => void;
 	addLlm: () => void;
 	addTool: () => void;
 	addComponent: () => void;
@@ -100,6 +101,7 @@ export function dispatchAddMenuAction(actionId: string, handlers: AddToolbarHand
 	if (actionId === 'add_starter_template') handlers.addStarterTemplate();
 	if (actionId === 'add_source') handlers.addSource();
 	if (actionId === 'add_transform') handlers.addTransform();
+	if (actionId === 'add_model') handlers.addModel();
 	if (actionId === 'add_llm') handlers.addLlm();
 	if (actionId === 'add_tool') handlers.addTool();
 	if (actionId === 'add_component') handlers.addComponent();

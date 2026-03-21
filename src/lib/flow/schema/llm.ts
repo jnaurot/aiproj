@@ -87,8 +87,12 @@ export const LlmOpenAI_compatParamsSchema = LlmParamsSchema;
 export const LlmNodeDataSchema = BaseNodeDataSchema('llm', LlmParamsSchema).extend({
 	llmKind: LlmKindSchema
 });
+export const ModelNodeDataSchema = BaseNodeDataSchema('model', LlmParamsSchema).extend({
+	llmKind: LlmKindSchema
+});
 
 export type LlmNodeData = z.infer<typeof LlmNodeDataSchema>;
+export type ModelNodeData = z.infer<typeof ModelNodeDataSchema>;
 export type LlmKind = z.infer<typeof LlmKindSchema>;
 
 export const LlmParamsSchemaByKind = {

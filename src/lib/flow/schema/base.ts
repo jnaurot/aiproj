@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PAYLOAD_TYPES } from "../types";
 
-export const NodeTypesSchema = z.enum(["source", "transform", "llm", "tool", "component"]);
+export const NodeTypesSchema = z.enum(["source", "transform", "model", "llm", "tool", "component"]);
 
 export const NodeStatusSchema = z.enum([
   "idle",

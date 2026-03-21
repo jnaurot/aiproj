@@ -153,7 +153,7 @@ class GraphValidator:
             if op == "table_to_json":
                 return "json"
             return "table"
-        if kind == "llm":
+        if kind in {"llm", "model"}:
             return "text"
         if kind == "tool":
             return "json"
@@ -175,7 +175,7 @@ class GraphValidator:
             if op == "table_to_json":
                 return "table"
             return "table"
-        if kind == "llm":
+        if kind in {"llm", "model"}:
             return "text"
         if kind == "tool":
             return "json"
@@ -304,7 +304,7 @@ class GraphValidator:
             
             
             #DEBUGGING LOGS START
-            if node.get("data", {}).get("kind") == "llm":
+            if node.get("data", {}).get("kind") in {"llm", "model"}:
                 print("\n[VALIDATOR] LLM NODE RAW:")
                 print(pformat({
                     "id": node_id,
@@ -613,7 +613,7 @@ class GraphValidator:
             incoming_counts[tgt] = incoming_counts.get(tgt, 0) + 1
 
         for node_id, node in nodes.items():
-            if node.get("data", {}).get("kind") != "llm":
+            if node.get("data", {}).get("kind") not in {"llm", "model"}:
                 continue
             count = incoming_counts.get(node_id, 0)
             if count > 1:
@@ -678,7 +678,7 @@ class GraphValidator:
                         node_id=node_id
                     ))
             
-            elif node_kind == "llm":
+            elif node_kind in {"llm", "model"}:
                 # LLM nodes might need prompts, model names, etc.
                 if not params.get("prompt") and not params.get("system"):
                     errors.append(ValidationError(
@@ -714,7 +714,7 @@ class GraphValidator:
 
 
 # Legacy compatibility helpers used by older unit tests
-_LEGACY_NODE_KINDS: Set[str] = {"source", "transform", "llm", "tool", "component"}
+_LEGACY_NODE_KINDS: Set[str] = {"source", "transform", "model", "llm", "tool", "component"}
 
 
 def validate_node_connections(edge: Dict[str, Any]) -> Dict[str, Any]:

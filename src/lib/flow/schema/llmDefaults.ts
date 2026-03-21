@@ -33,13 +33,20 @@ export const defaultLlmParamsByKind: Record<LlmKind, LlmParams> = {
 export const defaultLlmParams: LlmParams = defaultLlmOllamaParams;
 
 /**
- * Canonical default node.data for kind="llm"
- * (Used by defaultNodeData("llm") / addNode)
+ * Canonical default node.data for kind="model"
+ * (Used by defaultNodeData("model") / addNode)
  */
-export const defaultLlmNodeData = {
-    kind: "llm" as const,
+export const defaultModelNodeData = {
+    kind: "model" as const,
     llmKind: "ollama" as const,
-    label: "LLM",
+    label: "Model",
     params: defaultLlmParams,
     status: "idle" as const,
+} as const;
+
+// Legacy alias for imported graphs that still materialize kind="llm".
+export const defaultLlmNodeData = {
+    ...defaultModelNodeData,
+    kind: "llm" as const,
+    label: "LLM",
 } as const;

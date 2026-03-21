@@ -310,7 +310,7 @@ export function deriveNodeIoForData(data: PipelineNodeData): { in: PayloadType |
 		return { in: null, out: deriveSourceOutPort(data) };
 	}
 	const params = ((data as any)?.params ?? {}) as Record<string, any>;
-	if (data.kind === 'llm') {
+	if (data.kind === 'llm' || data.kind === 'model') {
 		return { in: 'text', out: deriveLlmOutPort(params) };
 	}
 	if (data.kind === 'transform') {
@@ -4316,7 +4316,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			// 2) replace params via your validated path (schema stripping happens here)
 			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
 			if (r.ok) {
-				applySemanticSubtypeReset(nodeId, { kind: 'llm', llmKind: nextKind });
+				const node = get({ subscribe } as any).nodes.find((n: any) => n.id === nodeId);
+				applySemanticSubtypeReset(nodeId, { kind: node?.data?.kind ?? 'model', llmKind: nextKind });
 			}
 
 			// 3) ensure inspector draft matches immediately after type switch

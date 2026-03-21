@@ -526,7 +526,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
 		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
 		{ id: 'cmd_add_transform', label: 'Add Transform', run: () => void addNode('transform') },
-		{ id: 'cmd_add_llm', label: 'Add LLM', run: () => void addNode('llm') },
+		{ id: 'cmd_add_model', label: 'Add Model', run: () => void addNode('model') },
 		{ id: 'cmd_add_tool', label: 'Add Tool', run: () => void addNode('tool') },
 		{ id: 'cmd_add_component', label: 'Add Component', run: () => void addComponentNodeWithPicker() },
 		{ id: 'cmd_add_starter_template', label: 'Add Starter Template', run: () => void openStarterTemplatePicker() },
@@ -791,7 +791,7 @@ async function scrollToBottom() {
 		if (kind === 'source') {
 			graphStore.setSourceKind(cloneId, ((original.data as any)?.sourceKind ?? 'file') as SourceKind);
 		}
-		if (kind === 'llm') {
+		if (kind === 'llm' || kind === 'model') {
 			graphStore.setLlmKind(cloneId, ((original.data as any)?.llmKind ?? 'ollama') as LlmKind);
 		}
 		if (kind === 'transform') {
@@ -1169,7 +1169,7 @@ async function scrollToBottom() {
 			graphStore.setSourceKind(nodeId, preset.subtype as SourceKind);
 		} else if (preset.kind === 'transform') {
 			graphStore.setTransformKind(nodeId, preset.subtype as TransformKind);
-		} else if (preset.kind === 'llm') {
+		} else if (preset.kind === 'llm' || preset.kind === 'model') {
 			graphStore.setLlmKind(nodeId, preset.subtype as LlmKind);
 		} else {
 			graphStore.setToolProvider(nodeId, preset.subtype as ToolProvider);
@@ -1511,7 +1511,8 @@ async function scrollToBottom() {
 			addStarterTemplate: openStarterTemplatePicker,
 			addSource: () => addNode('source'),
 			addTransform: () => addNode('transform'),
-			addLlm: () => addNode('llm'),
+			addModel: () => addNode('model'),
+			addLlm: () => addNode('model'),
 			addTool: () => addNode('tool'),
 			addComponent: () => void addComponentNodeWithPicker(),
 			addFromPreset: openAddFromPresetPicker
@@ -1597,7 +1598,7 @@ async function scrollToBottom() {
 			clearSubtypeError();
 			return;
 		}
-		if (kind === 'llm') {
+		if (kind === 'llm' || kind === 'model') {
 			graphStore.setLlmKind(nodeId, value as LlmKind);
 			clearSubtypeError();
 			return;
@@ -2685,7 +2686,7 @@ async function scrollToBottom() {
 										value={
 											$selectedNode.data.kind === 'source'
 												? selectedSourceKind
-												: $selectedNode.data.kind === 'llm'
+												: ($selectedNode.data.kind === 'llm' || $selectedNode.data.kind === 'model')
 													? selectedLlmKind
 													: $selectedNode.data.kind === 'transform'
 														? selectedTransformKind
@@ -2701,7 +2702,7 @@ async function scrollToBottom() {
 											<option value="api">api</option>
 											<option value="object_store">object_store</option>
 											<option value="warehouse">warehouse</option>
-										{:else if $selectedNode.data.kind === 'llm'}
+										{:else if $selectedNode.data.kind === 'llm' || $selectedNode.data.kind === 'model'}
 											<option value="ollama">ollama</option>
 											<option value="openai_compat">openai_compat</option>
 										{:else if $selectedNode.data.kind === 'transform'}

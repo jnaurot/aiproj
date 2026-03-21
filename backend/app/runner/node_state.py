@@ -355,7 +355,7 @@ def build_node_state_hash(
         node_kind=kind,
         raw_schema=data.get("schema") or data.get("contract") or {},
     )
-    if kind == "llm":
+    if kind in {"llm", "model"}:
         output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}
         output_type = _schema_declared_type_from_cache_view(schema_view) or "text"
         output_strict = (

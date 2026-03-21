@@ -9,6 +9,7 @@ _DEFAULT_CAPABILITIES: Dict[str, Any] = {
     "schemaVersion": 1,
     "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings"],
     "nodes": {
+        "model": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "llm": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "transform": {"in": ["table"], "out": ["table"]},
         "source": {"in": [], "out": ["table", "json", "text", "binary"]},
