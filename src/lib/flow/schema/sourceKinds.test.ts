@@ -85,6 +85,7 @@ describe('source kinds schema coverage', () => {
 			thousands_separator: '.',
 			date_columns: ['created_at'],
 			date_format: '%d.%m.%Y',
+			json_mode: 'auto',
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -97,5 +98,6 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.parquet_columns).toEqual(['id']);
 		expect(parsed.parquet_row_groups).toEqual([0]);
 		expect(parsed.parquet_max_rows).toBe(100);
+		expect(parsed.json_mode).toBe('auto');
 	});
 });

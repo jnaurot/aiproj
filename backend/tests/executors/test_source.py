@@ -325,6 +325,51 @@ async def test_source_file_not_found_returns_failed():
 
 
 @pytest.mark.asyncio
+async def test_source_file_json_document_mode(tmp_path):
+	file_path = tmp_path / "doc.json"
+	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")
+	node = {
+		"id": "n_source_json_doc",
+		"data": {"params": {"source_type": "file", "file_path": str(file_path), "file_format": "json", "json_mode": "document", "output_mode": "json"}},
+	}
+	result = await exec_source("run_json_doc", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	assert result.data["name"] == "alice"
+	assert (result.metadata.data_schema or {}).get("json_mode_resolved") == "document"
+
+
+@pytest.mark.asyncio
+async def test_source_file_json_ndjson_mode_to_table(tmp_path):
+	file_path = tmp_path / "rows.ndjson"
+	file_path.write_text('{"id":1,"name":"alice"}\n{"id":2,"name":"bob"}\n', encoding="utf-8")
+	node = {
+		"id": "n_source_json_ndjson",
+		"data": {"params": {"source_type": "file", "file_path": str(file_path), "file_format": "json", "json_mode": "ndjson", "output_mode": "table"}},
+	}
+	result = await exec_source("run_json_ndjson", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert set(result.data[0].keys()) == {"id", "name"}
+	assert (result.metadata.data_schema or {}).get("json_mode_resolved") == "ndjson"
+
+
+@pytest.mark.asyncio
+async def test_source_file_json_auto_mode_detects_ndjson(tmp_path):
+	file_path = tmp_path / "auto.ndjson"
+	file_path.write_text('{"x":1}\n{"x":2}\n', encoding="utf-8")
+	node = {
+		"id": "n_source_json_auto",
+		"data": {"params": {"source_type": "file", "file_path": str(file_path), "file_format": "json", "json_mode": "auto", "output_mode": "json"}},
+	}
+	result = await exec_source("run_json_auto", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert (result.metadata.data_schema or {}).get("json_mode_resolved") == "ndjson"
+
+
+@pytest.mark.asyncio
 async def test_source_api_success(monkeypatch):
 	class _Resp:
 		headers = {"content-type": "application/json"}

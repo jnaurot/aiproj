@@ -350,6 +350,7 @@ class TestSourceFileParams:
             "thousands_separator": ".",
             "date_columns": ["d"],
             "date_format": "%d.%m.%Y",
+            "json_mode": "ndjson",
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -362,6 +363,7 @@ class TestSourceFileParams:
         assert source_params.thousands_separator == "."
         assert source_params.date_columns == ["d"]
         assert source_params.date_format == "%d.%m.%Y"
+        assert source_params.json_mode == "ndjson"
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -731,6 +733,7 @@ class TestNormalizeSourceParamsFrontend:
                 "thousandsSeparator": ".",
                 "dateColumns": ["created_at"],
                 "dateFormat": "%d.%m.%Y",
+                "jsonMode": "document",
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -743,6 +746,7 @@ class TestNormalizeSourceParamsFrontend:
         assert out["thousands_separator"] == "."
         assert out["date_columns"] == ["created_at"]
         assert out["date_format"] == "%d.%m.%Y"
+        assert out["json_mode"] == "document"
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25

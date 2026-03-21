@@ -99,6 +99,7 @@
 				.join(', ')
 		: '';
 	$: dateFormat = asString((params as any)?.date_format, '');
+	$: jsonMode = asString((params as any)?.json_mode, 'auto');
 	$: sheet_name = asString(params?.sheet_name, '');
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
@@ -212,6 +213,15 @@
 			patch.sheet_name = asString(params?.sheet_name, '') || 'Sheet1';
 			patch.delimiter = undefined;
 			patch.has_header = undefined;
+		} else if (next === 'json') {
+			patch.json_mode = asString((params as any)?.json_mode, 'auto') as any;
+			const currentMode = asString((params as any)?.output?.mode, '').trim().toLowerCase();
+			if (currentMode === '' || currentMode === 'text' || currentMode === 'json') {
+				patch.output = {
+					...(((params as any)?.output as Record<string, unknown> | undefined) ?? {}),
+					mode: 'json'
+				} as any;
+			}
 		} else {
 			patch.delimiter = undefined;
 			patch.has_header = undefined;
@@ -577,6 +587,24 @@
 					onInput={(event) => draft({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
 					onBlur={(event) => commit({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
 				/>
+			</Field>
+		{/if}
+
+		{#if file_format === 'json'}
+			<Field label="json mode">
+				<select
+					class="full"
+					value={jsonMode}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value as 'document' | 'ndjson' | 'auto';
+						draft({ json_mode: value as any });
+						commit({ json_mode: value as any });
+					}}
+				>
+					<option value="auto">auto</option>
+					<option value="document">document</option>
+					<option value="ndjson">ndjson</option>
+				</select>
 			</Field>
 		{/if}
 

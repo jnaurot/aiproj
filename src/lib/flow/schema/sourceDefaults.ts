@@ -23,6 +23,7 @@ export const defaultSourceFileParams: SourceFileParams = {
     thousands_separator: undefined,
     date_columns: [],
     date_format: undefined,
+    json_mode: "auto",
     parquet_columns: [],
     parquet_row_groups: [],
     parquet_max_rows: undefined,

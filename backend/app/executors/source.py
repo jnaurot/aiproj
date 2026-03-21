@@ -403,6 +403,37 @@ def _table_rows_from_json_array(items: list[Any]) -> tuple[list[dict[str, Any]],
     return rows, "json_scalar_array_rows"
 
 
+def _parse_json_payload(raw_json: str, mode: str) -> tuple[Any, str]:
+    text = str(raw_json or "")
+    selected = str(mode or "auto").strip().lower() or "auto"
+    if selected == "document":
+        return json.loads(text), "document"
+    if selected == "ndjson":
+        rows: list[Any] = []
+        for line in text.splitlines():
+            ln = str(line).strip()
+            if not ln:
+                continue
+            rows.append(json.loads(ln))
+        return rows, "ndjson"
+    # auto
+    trimmed = text.lstrip()
+    if trimmed.startswith("{") or trimmed.startswith("["):
+        try:
+            return json.loads(text), "document"
+        except Exception:
+            pass
+    rows = []
+    for line in text.splitlines():
+        ln = str(line).strip()
+        if not ln:
+            continue
+        rows.append(json.loads(ln))
+    if rows:
+        return rows, "ndjson"
+    return json.loads(text), "document"
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1418,7 +1449,8 @@ async def _handle_file_source(
             if file_bytes is not None
             else Path(file_path).read_text(encoding=schema.encoding)
         )
-        json_data = json.loads(raw_json)
+        json_data, resolved_json_mode = _parse_json_payload(raw_json, str(getattr(schema, "json_mode", "auto") or "auto"))
+        format_specific_metadata["json_mode_resolved"] = resolved_json_mode
         if isinstance(json_data, list):
             rows = json_data
     elif schema.file_format == "excel":

@@ -105,6 +105,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["date_columns"] = p.pop("dateColumns")
     if "dateFormat" in p and "date_format" not in p:
         p["date_format"] = p.pop("dateFormat")
+    if "jsonMode" in p and "json_mode" not in p:
+        p["json_mode"] = p.pop("jsonMode")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -356,6 +358,7 @@ class SourceFileParams(NodeParamSchema):
     thousands_separator: Optional[str] = None
     date_columns: List[str] = Field(default_factory=list)
     date_format: Optional[str] = None
+    json_mode: Literal["document", "ndjson", "auto"] = "auto"
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

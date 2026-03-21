@@ -146,6 +146,7 @@ export const SourceFileParamsSchema = z
 		thousands_separator: z.string().max(1).optional(),
 		date_columns: z.array(z.string().min(1)).optional(),
 		date_format: z.string().optional(),
+		json_mode: z.enum(["document", "ndjson", "auto"]).optional(),
 		parquet_columns: z.array(z.string().min(1)).optional(),
 		parquet_row_groups: z.array(z.number().int().nonnegative()).optional(),
 		parquet_max_rows: z.number().int().positive().optional(),
