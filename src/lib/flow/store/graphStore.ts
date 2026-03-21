@@ -2384,6 +2384,248 @@ function targetPayloadHint(node: Node<PipelineNodeData>) {
 			};
 		}
 	}
+	if (op === 'null_policy') {
+		const cols = Array.isArray(params?.null_policy?.columns) ? params.null_policy.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'outlier_policy') {
+		const cols = Array.isArray(params?.outlier_policy?.columns) ? params.outlier_policy.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'text_clean') {
+		const cols = Array.isArray(params?.text_clean?.columns) ? params.text_clean.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'nlp_normalize') {
+		const cols = Array.isArray(params?.nlp_normalize?.columns) ? params.nlp_normalize.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'tokenize_chunk') {
+		const cols = Array.isArray(params?.tokenize_chunk?.columns) ? params.tokenize_chunk.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'dataset_split') {
+		const spec = params?.dataset_split ?? {};
+		const strategy = String(spec?.strategy ?? '').trim().toLowerCase();
+		const required: string[] = [];
+		if (strategy === 'stratified') required.push(String(spec?.stratifyColumn ?? '').trim());
+		if (strategy === 'group') required.push(String(spec?.groupColumn ?? '').trim());
+		if (strategy === 'time') required.push(String(spec?.timeColumn ?? '').trim());
+		const cols = required.filter((c) => c.length > 0);
+		if (cols.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(cols);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'class_imbalance') {
+		const label = String(params?.class_imbalance?.labelColumn ?? '').trim();
+		if (label) {
+			const requiredFields = makeSchemaFieldsFromColumns([label]);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'categorical_encode') {
+		const cols = Array.isArray(params?.categorical_encode?.columns) ? params.categorical_encode.columns : [];
+		const required = cols.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'numeric_scale') {
+		const cols = Array.isArray(params?.numeric_scale?.columns) ? params.numeric_scale.columns : [];
+		const required = cols.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'embedding') {
+		const cols = Array.isArray(params?.embedding?.columns) ? params.embedding.columns : [];
+		const required = cols.map((c: unknown) => String(c ?? '').trim()).filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'feature_selection') {
+		const spec = params?.feature_selection ?? {};
+		const required = new Set<string>();
+		const cols = Array.isArray(spec?.columns) ? spec.columns : [];
+		for (const c of cols) {
+			const col = String(c ?? '').trim();
+			if (col) required.add(col);
+		}
+		const selected = Array.isArray(spec?.selectedColumns) ? spec.selectedColumns : [];
+		for (const c of selected) {
+			const col = String(c ?? '').trim();
+			if (col) required.add(col);
+		}
+		if (required.size > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(Array.from(required));
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'leakage_detect') {
+		const spec = params?.leakage_detect ?? {};
+		const required = new Set<string>();
+		const splitCol = String(spec?.splitColumn ?? '').trim();
+		if (splitCol) required.add(splitCol);
+		const keys = Array.isArray(spec?.keyColumns) ? spec.keyColumns : [];
+		for (const k of keys) {
+			const col = String(k ?? '').trim();
+			if (col) required.add(col);
+		}
+		const label = String(spec?.labelColumn ?? '').trim();
+		if (label) required.add(label);
+		if (required.size > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(Array.from(required));
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'quality_profile' || op === 'drift_compare' || op === 'determinism_profile' || op === 'fit_state_registry' || op === 'pii_guard' || op === 'inference_parity') {
+		const fieldCandidates: string[] = [];
+		if (op === 'quality_profile') {
+			const cols = Array.isArray(params?.quality_profile?.columns) ? params.quality_profile.columns : [];
+			fieldCandidates.push(...cols.map((c: unknown) => String(c ?? '').trim()));
+		}
+		if (op === 'drift_compare') {
+			const cols = Array.isArray(params?.drift_compare?.compareColumns) ? params.drift_compare.compareColumns : [];
+			fieldCandidates.push(...cols.map((c: unknown) => String(c ?? '').trim()));
+		}
+		if (op === 'fit_state_registry') {
+			const cols = Array.isArray(params?.fit_state_registry?.includeColumns) ? params.fit_state_registry.includeColumns : [];
+			fieldCandidates.push(...cols.map((c: unknown) => String(c ?? '').trim()));
+		}
+		if (op === 'pii_guard') {
+			const cols = Array.isArray(params?.pii_guard?.columns) ? params.pii_guard.columns : [];
+			fieldCandidates.push(...cols.map((c: unknown) => String(c ?? '').trim()));
+		}
+		const required = fieldCandidates.filter((c) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'tokenize_chunk') {
+		const cols = Array.isArray(params?.tokenize_chunk?.columns) ? params.tokenize_chunk.columns : [];
+		const required = cols
+			.map((c: unknown) => String(c ?? '').trim())
+			.filter((c: string) => c.length > 0);
+		if (required.length > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(required);
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
+	if (op === 'ml_contract') {
+		const spec = params?.ml_contract ?? {};
+		const required = new Set<string>();
+		const label = String(spec?.labelColumn ?? '').trim();
+		if (label) required.add(label);
+		const features = Array.isArray(spec?.featureColumns) ? spec.featureColumns : [];
+		for (const feature of features) {
+			const col = String(feature ?? '').trim();
+			if (col) required.add(col);
+		}
+		const id = String(spec?.idColumn ?? '').trim();
+		if (id) required.add(id);
+		const ts = String(spec?.timestampColumn ?? '').trim();
+		if (ts) required.add(ts);
+		if (required.size > 0) {
+			const requiredFields = makeSchemaFieldsFromColumns(Array.from(required));
+			return {
+				type: 'table',
+				required_fields: requiredFields,
+				required_columns: schemaFieldNames(requiredFields)
+			};
+		}
+	}
 	return sourcePayloadHint(node, 'in');
 }
 

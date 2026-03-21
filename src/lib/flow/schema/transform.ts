@@ -11,8 +11,27 @@ const TransformKindSchema = z.enum(["filter",
   "sort",
   "limit",
   "dedupe",
+  "null_policy",
+  "outlier_policy",
+  "text_clean",
+  "nlp_normalize",
+  "tokenize_chunk",
+  "dataset_split",
+  "class_imbalance",
+  "categorical_encode",
+  "numeric_scale",
+  "embedding",
+  "feature_selection",
+  "leakage_detect",
+  "quality_profile",
+  "drift_compare",
+  "determinism_profile",
+  "fit_state_registry",
+  "pii_guard",
+  "inference_parity",
   "split",
   "quality_gate",
+  "ml_contract",
   "sql",
   "json_to_table",
   "text_to_table",
@@ -197,6 +216,272 @@ export const TransformDedupeParamsSchema = z.object({
 	}
 }).strip();
 
+const TransformNullPolicyModeSchema = z.enum([
+	'report',
+	'drop_rows',
+	'fill_constant',
+	'fill_stat'
+]);
+
+const TransformNullPolicyStatSchema = z.enum(['mean', 'median', 'mode']);
+
+const TransformNullPolicyRuleSchema = z
+	.object({
+		column: z.string().min(1),
+		mode: TransformNullPolicyModeSchema.optional(),
+		fillValue: z.any().optional(),
+		stat: TransformNullPolicyStatSchema.optional()
+	})
+	.strip();
+
+export const TransformNullPolicyParamsSchema = z
+	.object({
+		mode: TransformNullPolicyModeSchema.default('report'),
+		columns: z.array(z.string().min(1)).default([]),
+		fillValue: z.any().optional(),
+		stat: TransformNullPolicyStatSchema.default('mean'),
+		rules: z.array(TransformNullPolicyRuleSchema).default([])
+	})
+	.strip();
+
+const TransformOutlierPolicyModeSchema = z.enum(['clip', 'winsorize', 'drop']);
+const TransformOutlierPolicyMethodSchema = z.enum(['iqr', 'zscore', 'quantile']);
+
+export const TransformOutlierPolicyParamsSchema = z
+	.object({
+		mode: TransformOutlierPolicyModeSchema.default('clip'),
+		method: TransformOutlierPolicyMethodSchema.default('iqr'),
+		columns: z.array(z.string().min(1)).default([]),
+		iqrMultiplier: z.number().positive().default(1.5),
+		zscoreThreshold: z.number().positive().default(3),
+		lowerQuantile: z.number().min(0).max(1).default(0.01),
+		upperQuantile: z.number().min(0).max(1).default(0.99)
+	})
+	.superRefine((v, ctx) => {
+		if (v.lowerQuantile >= v.upperQuantile) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['upperQuantile'],
+				message: 'upperQuantile must be greater than lowerQuantile'
+			});
+		}
+	})
+	.strip();
+
+export const TransformTextCleanParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		lowercase: z.boolean().default(true),
+		unicodeNormalize: z.enum(['none', 'nfc', 'nfkc']).default('nfkc'),
+		removePunctuation: z.boolean().default(false),
+		removeUrls: z.boolean().default(true),
+		removeEmails: z.boolean().default(true),
+		removeEmoji: z.boolean().default(false),
+		normalizeWhitespace: z.boolean().default(true)
+	})
+	.strip();
+
+export const TransformNlpNormalizeParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		language: z.string().min(2).default('en'),
+		removeStopwords: z.boolean().default(true),
+		stemmer: z.enum(['none', 'porter']).default('none'),
+		lemmatizer: z.enum(['none', 'rule_based']).default('none'),
+		tokenPattern: z.string().min(1).default('\\w+')
+	})
+	.strip();
+
+export const TransformTokenizeChunkParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		tokenizer: z.enum(['whitespace', 'regex']).default('whitespace'),
+		tokenPattern: z.string().min(1).default('\\w+'),
+		maxTokens: z.number().int().min(1).max(100000).default(256),
+		overlap: z.number().int().min(0).max(50000).default(32),
+		sentenceAware: z.boolean().default(true),
+		outColumn: z.string().min(1).default('chunk')
+	})
+	.superRefine((v, ctx) => {
+		if (v.overlap >= v.maxTokens) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['overlap'],
+				message: 'overlap must be less than maxTokens'
+			});
+		}
+	})
+	.strip();
+
+export const TransformDatasetSplitParamsSchema = z
+	.object({
+		strategy: z.enum(['random', 'stratified', 'group', 'time']).default('random'),
+		trainRatio: z.number().min(0).max(1).default(0.8),
+		valRatio: z.number().min(0).max(1).default(0.1),
+		testRatio: z.number().min(0).max(1).default(0.1),
+		seed: z.number().int().default(42),
+		shuffle: z.boolean().default(true),
+		stratifyColumn: z.string().default(''),
+		groupColumn: z.string().default(''),
+		timeColumn: z.string().default(''),
+		leakageGuard: z.boolean().default(true)
+	})
+	.superRefine((v, ctx) => {
+		const sum = Number(v.trainRatio) + Number(v.valRatio) + Number(v.testRatio);
+		if (Math.abs(sum - 1) > 1e-6) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['testRatio'],
+				message: 'trainRatio + valRatio + testRatio must equal 1'
+			});
+		}
+		if (v.strategy === 'stratified' && !String(v.stratifyColumn).trim()) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['stratifyColumn'],
+				message: 'stratifyColumn is required when strategy=stratified'
+			});
+		}
+		if (v.strategy === 'group' && !String(v.groupColumn).trim()) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['groupColumn'],
+				message: 'groupColumn is required when strategy=group'
+			});
+		}
+		if (v.strategy === 'time' && !String(v.timeColumn).trim()) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['timeColumn'],
+				message: 'timeColumn is required when strategy=time'
+			});
+		}
+	})
+	.strip();
+
+export const TransformClassImbalanceParamsSchema = z
+	.object({
+		strategy: z.enum(['report', 'undersample', 'oversample', 'class_weight']).default('report'),
+		labelColumn: z.string().min(1).default('label'),
+		targetRatio: z.number().min(0).max(1).default(1),
+		seed: z.number().int().default(42)
+	})
+	.strip();
+
+export const TransformCategoricalEncodeParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		encoding: z.enum(['one_hot', 'ordinal', 'frequency']).default('one_hot'),
+		unknownPolicy: z.enum(['ignore', 'error', 'impute']).default('ignore'),
+		rareThreshold: z.number().min(0).max(1).default(0),
+		dropFirst: z.boolean().default(false)
+	})
+	.strip();
+
+export const TransformNumericScaleParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		method: z.enum(['standard', 'minmax', 'robust']).default('standard'),
+		withCenter: z.boolean().default(true),
+		withScale: z.boolean().default(true),
+		clip: z.boolean().default(false),
+		clipMin: z.number().optional(),
+		clipMax: z.number().optional()
+	})
+	.superRefine((v, ctx) => {
+		if (v.clip && v.clipMin !== undefined && v.clipMax !== undefined && v.clipMin > v.clipMax) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['clipMax'],
+				message: 'clipMax must be >= clipMin'
+			});
+		}
+	})
+	.strip();
+
+export const TransformEmbeddingParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		provider: z.enum(['local_hash', 'openai', 'ollama']).default('local_hash'),
+		model: z.string().min(1).default('text-embedding-3-small'),
+		dimensions: z.number().int().min(1).max(4096).default(16),
+		batchSize: z.number().int().min(1).max(2048).default(64),
+		cacheEmbeddings: z.boolean().default(true),
+		outputColumn: z.string().min(1).default('embedding')
+	})
+	.strip();
+
+export const TransformFeatureSelectionParamsSchema = z
+	.object({
+		method: z.enum(['variance', 'mutual_info', 'model_importance', 'manual']).default('variance'),
+		columns: z.array(z.string().min(1)).default([]),
+		topK: z.number().int().min(1).default(50),
+		varianceThreshold: z.number().min(0).default(0),
+		targetColumn: z.string().min(1).default('label'),
+		selectedColumns: z.array(z.string().min(1)).default([])
+	})
+	.strip();
+
+export const TransformLeakageDetectParamsSchema = z
+	.object({
+		splitColumn: z.string().min(1).default('split'),
+		keyColumns: z.array(z.string().min(1)).default([]),
+		labelColumn: z.string().default(''),
+		maxAllowedOverlap: z.number().min(0).max(1).default(0)
+	})
+	.strip();
+
+export const TransformQualityProfileParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		includeHistograms: z.boolean().default(true),
+		includeSamples: z.boolean().default(true)
+	})
+	.strip();
+
+export const TransformDriftCompareParamsSchema = z
+	.object({
+		baselineRef: z.string().default(''),
+		compareColumns: z.array(z.string().min(1)).default([]),
+		metric: z.enum(['psi', 'jsd', 'ks']).default('psi'),
+		threshold: z.number().min(0).default(0.2),
+		failOnDrift: z.boolean().default(false)
+	})
+	.strip();
+
+export const TransformDeterminismProfileParamsSchema = z
+	.object({
+		strict: z.boolean().default(true),
+		seed: z.number().int().default(42),
+		stableSort: z.boolean().default(true),
+		stableCoercion: z.boolean().default(true)
+	})
+	.strip();
+
+export const TransformFitStateRegistryParamsSchema = z
+	.object({
+		mode: z.enum(['fit', 'apply']).default('fit'),
+		stateKey: z.string().min(1).default('default'),
+		includeColumns: z.array(z.string().min(1)).default([])
+	})
+	.strip();
+
+export const TransformPiiGuardParamsSchema = z
+	.object({
+		columns: z.array(z.string().min(1)).default([]),
+		action: z.enum(['report', 'mask', 'drop_rows']).default('report'),
+		failOnDetect: z.boolean().default(false)
+	})
+	.strip();
+
+export const TransformInferenceParityParamsSchema = z
+	.object({
+		trainSignature: z.string().default(''),
+		inferenceSignature: z.string().default(''),
+		failOnMismatch: z.boolean().default(true)
+	})
+	.strip();
+
 export const TransformSqlParamsSchema = z.object({
   dialect: z.enum(["duckdb", "postgres", "sqlite"]).optional().default("duckdb"),
   query: z.string().min(1, "SQL query cannot be empty"),
@@ -329,6 +614,20 @@ export const TransformQualityGateParamsSchema = z
 	})
 	.strip();
 
+export const TransformMlContractParamsSchema = z
+	.object({
+		taskType: z
+			.enum(['classification', 'regression', 'ranking', 'generation', 'embedding', 'pretraining', 'finetuning', 'other'])
+			.default('other'),
+		labelColumn: z.string().min(1).default('label'),
+		featureColumns: z.array(z.string().min(1)).min(1).default(['text']),
+		idColumn: z.string().optional().default(''),
+		timestampColumn: z.string().optional().default(''),
+		allowExtraFeatures: z.boolean().default(true),
+		requireNonNullLabel: z.boolean().default(true)
+	})
+	.strip();
+
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
   select: TransformSelectParamsSchema,
@@ -339,8 +638,27 @@ export const TransformParamsSchemaByKind = {
   sort: TransformSortParamsSchema,
   limit: TransformLimitParamsSchema,
   dedupe: TransformDedupeParamsSchema,
+  null_policy: TransformNullPolicyParamsSchema,
+  outlier_policy: TransformOutlierPolicyParamsSchema,
+  text_clean: TransformTextCleanParamsSchema,
+  nlp_normalize: TransformNlpNormalizeParamsSchema,
+  tokenize_chunk: TransformTokenizeChunkParamsSchema,
+  dataset_split: TransformDatasetSplitParamsSchema,
+  class_imbalance: TransformClassImbalanceParamsSchema,
+  categorical_encode: TransformCategoricalEncodeParamsSchema,
+  numeric_scale: TransformNumericScaleParamsSchema,
+  embedding: TransformEmbeddingParamsSchema,
+  feature_selection: TransformFeatureSelectionParamsSchema,
+  leakage_detect: TransformLeakageDetectParamsSchema,
+  quality_profile: TransformQualityProfileParamsSchema,
+  drift_compare: TransformDriftCompareParamsSchema,
+  determinism_profile: TransformDeterminismProfileParamsSchema,
+  fit_state_registry: TransformFitStateRegistryParamsSchema,
+  pii_guard: TransformPiiGuardParamsSchema,
+  inference_parity: TransformInferenceParityParamsSchema,
   split: TransformSplitParamsSchema,
   quality_gate: TransformQualityGateParamsSchema,
+  ml_contract: TransformMlContractParamsSchema,
   sql: TransformSqlParamsSchema,
   json_to_table: TransformJsonToTableParamsSchema,
   text_to_table: TransformTextToTableParamsSchema,
@@ -357,9 +675,28 @@ export type TransformJoinParams  = z.infer<typeof   TransformJoinParamsSchema>;
 export type TransformSortParams  = z.infer<typeof   TransformSortParamsSchema>;
 export type TransformLimitParams  = z.infer<typeof   TransformLimitParamsSchema>;
 export type  TransformDedupeParams = z.infer<typeof   TransformDedupeParamsSchema>;
+export type TransformNullPolicyParams = z.infer<typeof TransformNullPolicyParamsSchema>;
+export type TransformOutlierPolicyParams = z.infer<typeof TransformOutlierPolicyParamsSchema>;
+export type TransformTextCleanParams = z.infer<typeof TransformTextCleanParamsSchema>;
+export type TransformNlpNormalizeParams = z.infer<typeof TransformNlpNormalizeParamsSchema>;
+export type TransformTokenizeChunkParams = z.infer<typeof TransformTokenizeChunkParamsSchema>;
+export type TransformDatasetSplitParams = z.infer<typeof TransformDatasetSplitParamsSchema>;
+export type TransformClassImbalanceParams = z.infer<typeof TransformClassImbalanceParamsSchema>;
+export type TransformCategoricalEncodeParams = z.infer<typeof TransformCategoricalEncodeParamsSchema>;
+export type TransformNumericScaleParams = z.infer<typeof TransformNumericScaleParamsSchema>;
+export type TransformEmbeddingParams = z.infer<typeof TransformEmbeddingParamsSchema>;
+export type TransformFeatureSelectionParams = z.infer<typeof TransformFeatureSelectionParamsSchema>;
+export type TransformLeakageDetectParams = z.infer<typeof TransformLeakageDetectParamsSchema>;
+export type TransformQualityProfileParams = z.infer<typeof TransformQualityProfileParamsSchema>;
+export type TransformDriftCompareParams = z.infer<typeof TransformDriftCompareParamsSchema>;
+export type TransformDeterminismProfileParams = z.infer<typeof TransformDeterminismProfileParamsSchema>;
+export type TransformFitStateRegistryParams = z.infer<typeof TransformFitStateRegistryParamsSchema>;
+export type TransformPiiGuardParams = z.infer<typeof TransformPiiGuardParamsSchema>;
+export type TransformInferenceParityParams = z.infer<typeof TransformInferenceParityParamsSchema>;
 export type  TransformSqlParams = z.infer<typeof   TransformSqlParamsSchema>;
 export type TransformSplitParams = z.infer<typeof TransformSplitParamsSchema>;
 export type TransformQualityGateParams = z.infer<typeof TransformQualityGateParamsSchema>;
+export type TransformMlContractParams = z.infer<typeof TransformMlContractParamsSchema>;
 export type TransformJsonToTableParams = z.infer<typeof TransformJsonToTableParamsSchema>;
 export type TransformTextToTableParams = z.infer<typeof TransformTextToTableParamsSchema>;
 export type TransformTableToJsonParams = z.infer<typeof TransformTableToJsonParamsSchema>;
@@ -429,6 +766,96 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   }).strip(),
 
   TransformCommonSchema.extend({
+    op: z.literal("null_policy"),
+    null_policy: TransformNullPolicyParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("outlier_policy"),
+    outlier_policy: TransformOutlierPolicyParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("text_clean"),
+    text_clean: TransformTextCleanParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("nlp_normalize"),
+    nlp_normalize: TransformNlpNormalizeParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("tokenize_chunk"),
+    tokenize_chunk: TransformTokenizeChunkParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("dataset_split"),
+    dataset_split: TransformDatasetSplitParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("class_imbalance"),
+    class_imbalance: TransformClassImbalanceParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("categorical_encode"),
+    categorical_encode: TransformCategoricalEncodeParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("numeric_scale"),
+    numeric_scale: TransformNumericScaleParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("embedding"),
+    embedding: TransformEmbeddingParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("feature_selection"),
+    feature_selection: TransformFeatureSelectionParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("leakage_detect"),
+    leakage_detect: TransformLeakageDetectParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("quality_profile"),
+    quality_profile: TransformQualityProfileParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("drift_compare"),
+    drift_compare: TransformDriftCompareParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("determinism_profile"),
+    determinism_profile: TransformDeterminismProfileParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("fit_state_registry"),
+    fit_state_registry: TransformFitStateRegistryParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("pii_guard"),
+    pii_guard: TransformPiiGuardParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("inference_parity"),
+    inference_parity: TransformInferenceParityParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
     op: z.literal("split"),
     split: TransformSplitParamsSchema
   }).strip(),
@@ -436,6 +863,11 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("quality_gate"),
     quality_gate: TransformQualityGateParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("ml_contract"),
+    ml_contract: TransformMlContractParamsSchema
   }).strip(),
 
   TransformCommonSchema.extend({

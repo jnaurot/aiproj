@@ -447,8 +447,27 @@ class TransformParamsCurrent(NodeParamSchema):
         "sort",
         "limit",
         "dedupe",
+        "null_policy",
+        "outlier_policy",
+        "text_clean",
+        "nlp_normalize",
+        "tokenize_chunk",
+        "dataset_split",
+        "class_imbalance",
+        "categorical_encode",
+        "numeric_scale",
+        "embedding",
+        "feature_selection",
+        "leakage_detect",
+        "quality_profile",
+        "drift_compare",
+        "determinism_profile",
+        "fit_state_registry",
+        "pii_guard",
+        "inference_parity",
         "split",
         "quality_gate",
+        "ml_contract",
         "sql",
         "json_to_table",
         "text_to_table",
@@ -466,8 +485,27 @@ class TransformParamsCurrent(NodeParamSchema):
     sort: Optional[Dict[str, Any]] = None
     limit: Optional[Dict[str, Any]] = None
     dedupe: Optional[Dict[str, Any]] = None
+    null_policy: Optional[Dict[str, Any]] = None
+    outlier_policy: Optional[Dict[str, Any]] = None
+    text_clean: Optional[Dict[str, Any]] = None
+    nlp_normalize: Optional[Dict[str, Any]] = None
+    tokenize_chunk: Optional[Dict[str, Any]] = None
+    dataset_split: Optional[Dict[str, Any]] = None
+    class_imbalance: Optional[Dict[str, Any]] = None
+    categorical_encode: Optional[Dict[str, Any]] = None
+    numeric_scale: Optional[Dict[str, Any]] = None
+    embedding: Optional[Dict[str, Any]] = None
+    feature_selection: Optional[Dict[str, Any]] = None
+    leakage_detect: Optional[Dict[str, Any]] = None
+    quality_profile: Optional[Dict[str, Any]] = None
+    drift_compare: Optional[Dict[str, Any]] = None
+    determinism_profile: Optional[Dict[str, Any]] = None
+    fit_state_registry: Optional[Dict[str, Any]] = None
+    pii_guard: Optional[Dict[str, Any]] = None
+    inference_parity: Optional[Dict[str, Any]] = None
     split: Optional[Dict[str, Any]] = None
     quality_gate: Optional[Dict[str, Any]] = None
+    ml_contract: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
     json_to_table: Optional[Dict[str, Any]] = None
     text_to_table: Optional[Dict[str, Any]] = None
@@ -484,8 +522,27 @@ class TransformParamsCurrent(NodeParamSchema):
             "sort": "sort",
             "limit": "limit",
             "dedupe": "dedupe",
+            "null_policy": "null_policy",
+            "outlier_policy": "outlier_policy",
+            "text_clean": "text_clean",
+            "nlp_normalize": "nlp_normalize",
+            "tokenize_chunk": "tokenize_chunk",
+            "dataset_split": "dataset_split",
+            "class_imbalance": "class_imbalance",
+            "categorical_encode": "categorical_encode",
+            "numeric_scale": "numeric_scale",
+            "embedding": "embedding",
+            "feature_selection": "feature_selection",
+            "leakage_detect": "leakage_detect",
+            "quality_profile": "quality_profile",
+            "drift_compare": "drift_compare",
+            "determinism_profile": "determinism_profile",
+            "fit_state_registry": "fit_state_registry",
+            "pii_guard": "pii_guard",
+            "inference_parity": "inference_parity",
             "split": "split",
             "quality_gate": "quality_gate",
+            "ml_contract": "ml_contract",
             "sql": "sql",
             "json_to_table": "json_to_table",
             "text_to_table": "text_to_table",
@@ -936,8 +993,27 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "sort": "sort",
                 "limit": "limit",
                 "dedupe": "dedupe",
+                "null_policy": "null_policy",
+                "outlier_policy": "outlier_policy",
+                "text_clean": "text_clean",
+                "nlp_normalize": "nlp_normalize",
+                "tokenize_chunk": "tokenize_chunk",
+                "dataset_split": "dataset_split",
+                "class_imbalance": "class_imbalance",
+                "categorical_encode": "categorical_encode",
+                "numeric_scale": "numeric_scale",
+                "embedding": "embedding",
+                "feature_selection": "feature_selection",
+                "leakage_detect": "leakage_detect",
+                "quality_profile": "quality_profile",
+                "drift_compare": "drift_compare",
+                "determinism_profile": "determinism_profile",
+                "fit_state_registry": "fit_state_registry",
+                "pii_guard": "pii_guard",
+                "inference_parity": "inference_parity",
                 "split": "split",
                 "quality_gate": "quality_gate",
+                "ml_contract": "ml_contract",
                 "sql": "sql",
                 "json_to_table": "json_to_table",
                 "text_to_table": "text_to_table",
@@ -1076,6 +1152,198 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         errors.append("dedupe.by cannot contain empty column names")
                     if keep is not None and str(keep) != "first":
                         errors.append("dedupe.keep must be 'first'")
+                elif op == "null_policy":
+                    mode = str(payload.get("mode") or "report").strip().lower()
+                    if mode not in {"report", "drop_rows", "fill_constant", "fill_stat"}:
+                        errors.append("null_policy.mode must be one of: report, drop_rows, fill_constant, fill_stat")
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("null_policy.columns must be an array of non-empty column names")
+                    stat = str(payload.get("stat") or "mean").strip().lower()
+                    if stat not in {"mean", "median", "mode"}:
+                        errors.append("null_policy.stat must be one of: mean, median, mode")
+                    rules = payload.get("rules")
+                    if rules is not None:
+                        if not isinstance(rules, list):
+                            errors.append("null_policy.rules must be an array")
+                        else:
+                            for i, rule in enumerate(rules):
+                                if not isinstance(rule, dict):
+                                    errors.append(f"null_policy.rules[{i}] must be an object")
+                                    continue
+                                if not str(rule.get("column") or "").strip():
+                                    errors.append(f"null_policy.rules[{i}].column is required")
+                elif op == "outlier_policy":
+                    mode = str(payload.get("mode") or "clip").strip().lower()
+                    if mode not in {"clip", "winsorize", "drop"}:
+                        errors.append("outlier_policy.mode must be one of: clip, winsorize, drop")
+                    method = str(payload.get("method") or "iqr").strip().lower()
+                    if method not in {"iqr", "zscore", "quantile"}:
+                        errors.append("outlier_policy.method must be one of: iqr, zscore, quantile")
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("outlier_policy.columns must be an array of non-empty column names")
+                    lower_q = payload.get("lowerQuantile")
+                    upper_q = payload.get("upperQuantile")
+                    if lower_q is not None and upper_q is not None:
+                        try:
+                            if float(lower_q) >= float(upper_q):
+                                errors.append("outlier_policy.upperQuantile must be greater than lowerQuantile")
+                        except Exception:
+                            errors.append("outlier_policy quantiles must be numeric")
+                elif op == "text_clean":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("text_clean.columns must be an array of non-empty column names")
+                    normalize_mode = str(payload.get("unicodeNormalize") or "nfkc").strip().lower()
+                    if normalize_mode not in {"none", "nfc", "nfkc"}:
+                        errors.append("text_clean.unicodeNormalize must be one of: none, nfc, nfkc")
+                elif op == "nlp_normalize":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("nlp_normalize.columns must be an array of non-empty column names")
+                    if not str(payload.get("language") or "").strip():
+                        errors.append("nlp_normalize.language is required")
+                    stemmer = str(payload.get("stemmer") or "none").strip().lower()
+                    if stemmer not in {"none", "porter"}:
+                        errors.append("nlp_normalize.stemmer must be one of: none, porter")
+                    lemmatizer = str(payload.get("lemmatizer") or "none").strip().lower()
+                    if lemmatizer not in {"none", "rule_based"}:
+                        errors.append("nlp_normalize.lemmatizer must be one of: none, rule_based")
+                    if not str(payload.get("tokenPattern") or "").strip():
+                        errors.append("nlp_normalize.tokenPattern is required")
+                elif op == "tokenize_chunk":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("tokenize_chunk.columns must be an array of non-empty column names")
+                    tokenizer = str(payload.get("tokenizer") or "whitespace").strip().lower()
+                    if tokenizer not in {"whitespace", "regex"}:
+                        errors.append("tokenize_chunk.tokenizer must be one of: whitespace, regex")
+                    max_tokens = payload.get("maxTokens")
+                    overlap = payload.get("overlap")
+                    if not isinstance(max_tokens, int) or max_tokens < 1:
+                        errors.append("tokenize_chunk.maxTokens must be an integer >= 1")
+                    if not isinstance(overlap, int) or overlap < 0:
+                        errors.append("tokenize_chunk.overlap must be an integer >= 0")
+                    if isinstance(max_tokens, int) and isinstance(overlap, int) and overlap >= max_tokens:
+                        errors.append("tokenize_chunk.overlap must be less than maxTokens")
+                    if not str(payload.get("outColumn") or "").strip():
+                        errors.append("tokenize_chunk.outColumn is required")
+                elif op == "dataset_split":
+                    strategy = str(payload.get("strategy") or "random").strip().lower()
+                    if strategy not in {"random", "stratified", "group", "time"}:
+                        errors.append("dataset_split.strategy must be one of: random, stratified, group, time")
+                    for key in ("trainRatio", "valRatio", "testRatio"):
+                        try:
+                            ratio = float(payload.get(key))
+                            if ratio < 0 or ratio > 1:
+                                errors.append(f"dataset_split.{key} must be between 0 and 1")
+                        except Exception:
+                            errors.append(f"dataset_split.{key} must be numeric")
+                    if strategy == "stratified" and not str(payload.get("stratifyColumn") or "").strip():
+                        errors.append("dataset_split.stratifyColumn is required when strategy=stratified")
+                    if strategy == "group" and not str(payload.get("groupColumn") or "").strip():
+                        errors.append("dataset_split.groupColumn is required when strategy=group")
+                    if strategy == "time" and not str(payload.get("timeColumn") or "").strip():
+                        errors.append("dataset_split.timeColumn is required when strategy=time")
+                elif op == "class_imbalance":
+                    strategy = str(payload.get("strategy") or "report").strip().lower()
+                    if strategy not in {"report", "undersample", "oversample", "class_weight"}:
+                        errors.append("class_imbalance.strategy must be one of: report, undersample, oversample, class_weight")
+                    if not str(payload.get("labelColumn") or "").strip():
+                        errors.append("class_imbalance.labelColumn is required")
+                    try:
+                        target_ratio = float(payload.get("targetRatio"))
+                        if target_ratio < 0 or target_ratio > 1:
+                            errors.append("class_imbalance.targetRatio must be between 0 and 1")
+                    except Exception:
+                        errors.append("class_imbalance.targetRatio must be numeric")
+                elif op == "categorical_encode":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("categorical_encode.columns must be an array of non-empty column names")
+                    encoding = str(payload.get("encoding") or "one_hot").strip().lower()
+                    if encoding not in {"one_hot", "ordinal", "frequency"}:
+                        errors.append("categorical_encode.encoding must be one of: one_hot, ordinal, frequency")
+                    unknown_policy = str(payload.get("unknownPolicy") or "ignore").strip().lower()
+                    if unknown_policy not in {"ignore", "error", "impute"}:
+                        errors.append("categorical_encode.unknownPolicy must be one of: ignore, error, impute")
+                elif op == "numeric_scale":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("numeric_scale.columns must be an array of non-empty column names")
+                    method = str(payload.get("method") or "standard").strip().lower()
+                    if method not in {"standard", "minmax", "robust"}:
+                        errors.append("numeric_scale.method must be one of: standard, minmax, robust")
+                elif op == "embedding":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("embedding.columns must be an array of non-empty column names")
+                    provider = str(payload.get("provider") or "local_hash").strip().lower()
+                    if provider not in {"local_hash", "openai", "ollama"}:
+                        errors.append("embedding.provider must be one of: local_hash, openai, ollama")
+                    dims = payload.get("dimensions")
+                    if not isinstance(dims, int) or dims < 1 or dims > 4096:
+                        errors.append("embedding.dimensions must be an integer between 1 and 4096")
+                    if not str(payload.get("outputColumn") or "").strip():
+                        errors.append("embedding.outputColumn is required")
+                elif op == "feature_selection":
+                    method = str(payload.get("method") or "variance").strip().lower()
+                    if method not in {"variance", "mutual_info", "model_importance", "manual"}:
+                        errors.append("feature_selection.method must be one of: variance, mutual_info, model_importance, manual")
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("feature_selection.columns must be an array of non-empty column names")
+                    selected = payload.get("selectedColumns")
+                    if selected is not None and (not isinstance(selected, list) or any(not str(c).strip() for c in selected)):
+                        errors.append("feature_selection.selectedColumns must be an array of non-empty column names")
+                elif op == "leakage_detect":
+                    if not str(payload.get("splitColumn") or "").strip():
+                        errors.append("leakage_detect.splitColumn is required")
+                    keys = payload.get("keyColumns")
+                    if keys is not None and (not isinstance(keys, list) or any(not str(c).strip() for c in keys)):
+                        errors.append("leakage_detect.keyColumns must be an array of non-empty column names")
+                    try:
+                        overlap = float(payload.get("maxAllowedOverlap"))
+                        if overlap < 0 or overlap > 1:
+                            errors.append("leakage_detect.maxAllowedOverlap must be between 0 and 1")
+                    except Exception:
+                        errors.append("leakage_detect.maxAllowedOverlap must be numeric")
+                elif op == "quality_profile":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("quality_profile.columns must be an array of non-empty column names")
+                elif op == "drift_compare":
+                    cols = payload.get("compareColumns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("drift_compare.compareColumns must be an array of non-empty column names")
+                    metric = str(payload.get("metric") or "psi").strip().lower()
+                    if metric not in {"psi", "jsd", "ks"}:
+                        errors.append("drift_compare.metric must be one of: psi, jsd, ks")
+                elif op == "determinism_profile":
+                    if "strict" in payload and not isinstance(payload.get("strict"), bool):
+                        errors.append("determinism_profile.strict must be boolean")
+                    if "seed" in payload and not isinstance(payload.get("seed"), int):
+                        errors.append("determinism_profile.seed must be integer")
+                elif op == "fit_state_registry":
+                    mode = str(payload.get("mode") or "fit").strip().lower()
+                    if mode not in {"fit", "apply"}:
+                        errors.append("fit_state_registry.mode must be one of: fit, apply")
+                    if not str(payload.get("stateKey") or "").strip():
+                        errors.append("fit_state_registry.stateKey is required")
+                    cols = payload.get("includeColumns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("fit_state_registry.includeColumns must be an array of non-empty column names")
+                elif op == "pii_guard":
+                    cols = payload.get("columns")
+                    if cols is not None and (not isinstance(cols, list) or any(not str(c).strip() for c in cols)):
+                        errors.append("pii_guard.columns must be an array of non-empty column names")
+                    action = str(payload.get("action") or "report").strip().lower()
+                    if action not in {"report", "mask", "drop_rows"}:
+                        errors.append("pii_guard.action must be one of: report, mask, drop_rows")
+                elif op == "inference_parity":
+                    if "failOnMismatch" in payload and not isinstance(payload.get("failOnMismatch"), bool):
+                        errors.append("inference_parity.failOnMismatch must be boolean")
                 elif op == "sql" and not str(payload.get("query") or "").strip():
                     errors.append("sql.query is required")
                 elif op == "json_to_table":
@@ -1154,6 +1422,33 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                                     errors.append(f"quality_gate.checks[{i}].featureColumn is required")
                                 if not str(check.get("targetColumn") or "").strip():
                                     errors.append(f"quality_gate.checks[{i}].targetColumn is required")
+                elif op == "ml_contract":
+                    task_type = str(payload.get("taskType") or "other").strip().lower()
+                    if task_type not in {
+                        "classification",
+                        "regression",
+                        "ranking",
+                        "generation",
+                        "embedding",
+                        "pretraining",
+                        "finetuning",
+                        "other",
+                    }:
+                        errors.append(
+                            "ml_contract.taskType must be one of: classification, regression, ranking, generation, embedding, pretraining, finetuning, other"
+                        )
+                    label = str(payload.get("labelColumn") or "").strip()
+                    if not label:
+                        errors.append("ml_contract.labelColumn is required")
+                    features = payload.get("featureColumns")
+                    if not isinstance(features, list) or len(features) == 0:
+                        errors.append("ml_contract.featureColumns must be a non-empty array")
+                    elif any(not str(c).strip() for c in features):
+                        errors.append("ml_contract.featureColumns cannot contain empty values")
+                    if "allowExtraFeatures" in payload and not isinstance(payload.get("allowExtraFeatures"), bool):
+                        errors.append("ml_contract.allowExtraFeatures must be boolean")
+                    if "requireNonNullLabel" in payload and not isinstance(payload.get("requireNonNullLabel"), bool):
+                        errors.append("ml_contract.requireNonNullLabel must be boolean")
         elif kind == "tool":
             norm_tool = normalize_tool_params_frontend(params)
             tool_model = ToolProviderParams.model_validate(norm_tool)

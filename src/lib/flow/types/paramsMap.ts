@@ -36,8 +36,27 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
+	TransformNullPolicyParams,
+	TransformOutlierPolicyParams,
+	TransformTextCleanParams,
+	TransformNlpNormalizeParams,
+	TransformTokenizeChunkParams,
+	TransformDatasetSplitParams,
+	TransformClassImbalanceParams,
+	TransformCategoricalEncodeParams,
+	TransformNumericScaleParams,
+	TransformEmbeddingParams,
+	TransformFeatureSelectionParams,
+	TransformLeakageDetectParams,
+	TransformQualityProfileParams,
+	TransformDriftCompareParams,
+	TransformDeterminismProfileParams,
+	TransformFitStateRegistryParams,
+	TransformPiiGuardParams,
+	TransformInferenceParityParams,
 	TransformSplitParams,
 	TransformQualityGateParams,
+	TransformMlContractParams,
 	TransformSqlParams,
 	TransformJsonToTableParams,
 	TransformTextToTableParams,
@@ -53,8 +72,27 @@ export type TransformKind =
 	| 'sort'
 	| 'limit'
 	| 'dedupe'
+	| 'null_policy'
+	| 'outlier_policy'
+	| 'text_clean'
+	| 'nlp_normalize'
+	| 'tokenize_chunk'
+	| 'dataset_split'
+	| 'class_imbalance'
+	| 'categorical_encode'
+	| 'numeric_scale'
+	| 'embedding'
+	| 'feature_selection'
+	| 'leakage_detect'
+	| 'quality_profile'
+	| 'drift_compare'
+	| 'determinism_profile'
+	| 'fit_state_registry'
+	| 'pii_guard'
+	| 'inference_parity'
 	| 'split'
 	| 'quality_gate'
+	| 'ml_contract'
 	| 'sql'
 	| 'json_to_table'
 	| 'text_to_table'
@@ -70,8 +108,27 @@ export type TransformParamsByKind = {
 	sort: TransformSortParams;
 	limit: TransformLimitParams;
 	dedupe: TransformDedupeParams;
+	null_policy: TransformNullPolicyParams;
+	outlier_policy: TransformOutlierPolicyParams;
+	text_clean: TransformTextCleanParams;
+	nlp_normalize: TransformNlpNormalizeParams;
+	tokenize_chunk: TransformTokenizeChunkParams;
+	dataset_split: TransformDatasetSplitParams;
+	class_imbalance: TransformClassImbalanceParams;
+	categorical_encode: TransformCategoricalEncodeParams;
+	numeric_scale: TransformNumericScaleParams;
+	embedding: TransformEmbeddingParams;
+	feature_selection: TransformFeatureSelectionParams;
+	leakage_detect: TransformLeakageDetectParams;
+	quality_profile: TransformQualityProfileParams;
+	drift_compare: TransformDriftCompareParams;
+	determinism_profile: TransformDeterminismProfileParams;
+	fit_state_registry: TransformFitStateRegistryParams;
+	pii_guard: TransformPiiGuardParams;
+	inference_parity: TransformInferenceParityParams;
 	split: TransformSplitParams;
 	quality_gate: TransformQualityGateParams;
+	ml_contract: TransformMlContractParams;
 	sql: TransformSqlParams;
 	json_to_table: TransformJsonToTableParams;
 	text_to_table: TransformTextToTableParams;

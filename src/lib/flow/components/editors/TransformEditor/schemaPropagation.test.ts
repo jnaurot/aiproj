@@ -63,9 +63,31 @@ describe('schemaPropagation', () => {
 			'sort',
 			'limit',
 			'dedupe',
+			'null_policy',
+			'outlier_policy',
+			'text_clean',
+			'nlp_normalize',
+			'tokenize_chunk',
+			'dataset_split',
+			'class_imbalance',
+			'categorical_encode',
+			'numeric_scale',
+			'embedding',
+			'feature_selection',
+			'leakage_detect',
+			'quality_profile',
+			'drift_compare',
+			'determinism_profile',
+			'fit_state_registry',
+			'pii_guard',
+			'inference_parity',
 			'split',
 			'quality_gate',
-			'sql'
+			'ml_contract',
+			'sql',
+			'json_to_table',
+			'text_to_table',
+			'table_to_json'
 		];
 		for (const kind of kinds) {
 			const props = buildTransformSchemaProps(kind, inputSchemas);

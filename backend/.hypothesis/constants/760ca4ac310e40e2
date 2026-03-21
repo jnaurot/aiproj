@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\llm_ollama.py
+# hypothesis_version: 6.151.9
+
+[0.0, 2.0, 8.0, 10.0, 1000.0, 300, ',', '/', ':', '<missing-node-id>', 'POST', 'TEXT: ', '[llm] upstream_ids:', '[ollama] node_id:', 'application/json', 'at', 'bus', 'choices', 'content', 'context is None', 'context missing bus', 'delta', 'done', 'embeddings', 'error', 'failed', 'format', 'hidden', 'id', 'info', 'json', 'len:', 'level', 'llm_delta', 'llm_thinking_delta', 'log', 'message', 'messages', 'model', 'nodeId', 'none', 'num_predict', 'options', 'output', 'preview', 'preview_text', 'reasoning', 'reasoning_content', 'repeat_penalty', 'response', 'role', 'runId', 'seed', 'snippet', 'stop', 'stream', 'succeeded', 'system', 'temperature', 'text', 'think', 'thinking', 'top_p', 'txt', 'type', 'user', 'utf-8', 'visible', 'warn', '{input}']

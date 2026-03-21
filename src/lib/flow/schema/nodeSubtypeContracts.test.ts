@@ -80,6 +80,202 @@ describe('node subtype contract schemas', () => {
 		).toBe(true);
 
 		expect(
+			TransformParamsSchemaByKind.ml_contract.safeParse({
+				taskType: 'classification',
+				labelColumn: 'label',
+				featureColumns: ['text'],
+				idColumn: 'id',
+				timestampColumn: '',
+				allowExtraFeatures: true,
+				requireNonNullLabel: true
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.null_policy.safeParse({
+				mode: 'fill_stat',
+				columns: ['text'],
+				stat: 'mean',
+				rules: []
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.outlier_policy.safeParse({
+				mode: 'clip',
+				method: 'iqr',
+				columns: ['score'],
+				iqrMultiplier: 1.5,
+				zscoreThreshold: 3,
+				lowerQuantile: 0.01,
+				upperQuantile: 0.99
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.text_clean.safeParse({
+				columns: ['text'],
+				lowercase: true,
+				unicodeNormalize: 'nfkc',
+				removePunctuation: false,
+				removeUrls: true,
+				removeEmails: true,
+				removeEmoji: false,
+				normalizeWhitespace: true
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.nlp_normalize.safeParse({
+				columns: ['text'],
+				language: 'en',
+				removeStopwords: true,
+				stemmer: 'none',
+				lemmatizer: 'none',
+				tokenPattern: '\\w+'
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.tokenize_chunk.safeParse({
+				columns: ['text'],
+				tokenizer: 'whitespace',
+				tokenPattern: '\\w+',
+				maxTokens: 128,
+				overlap: 16,
+				sentenceAware: true,
+				outColumn: 'chunk'
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.dataset_split.safeParse({
+				strategy: 'random',
+				trainRatio: 0.8,
+				valRatio: 0.1,
+				testRatio: 0.1,
+				seed: 42,
+				shuffle: true,
+				stratifyColumn: '',
+				groupColumn: '',
+				timeColumn: '',
+				leakageGuard: true
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.class_imbalance.safeParse({
+				strategy: 'report',
+				labelColumn: 'label',
+				targetRatio: 1,
+				seed: 42
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.categorical_encode.safeParse({
+				columns: ['category'],
+				encoding: 'one_hot',
+				unknownPolicy: 'ignore',
+				rareThreshold: 0.01,
+				dropFirst: false
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.numeric_scale.safeParse({
+				columns: ['x'],
+				method: 'standard',
+				withCenter: true,
+				withScale: true,
+				clip: false
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.embedding.safeParse({
+				columns: ['text'],
+				provider: 'local_hash',
+				model: 'text-embedding-3-small',
+				dimensions: 16,
+				batchSize: 64,
+				cacheEmbeddings: true,
+				outputColumn: 'embedding'
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.feature_selection.safeParse({
+				method: 'variance',
+				columns: ['x', 'y'],
+				topK: 2,
+				varianceThreshold: 0,
+				targetColumn: 'label',
+				selectedColumns: []
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.leakage_detect.safeParse({
+				splitColumn: 'split',
+				keyColumns: ['id'],
+				labelColumn: 'label',
+				maxAllowedOverlap: 0
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.quality_profile.safeParse({
+				columns: ['text'],
+				includeHistograms: true,
+				includeSamples: true
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.drift_compare.safeParse({
+				baselineRef: '',
+				compareColumns: ['x'],
+				metric: 'psi',
+				threshold: 0.2,
+				failOnDrift: false
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.determinism_profile.safeParse({
+				strict: true,
+				seed: 42,
+				stableSort: true,
+				stableCoercion: true
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.fit_state_registry.safeParse({
+				mode: 'fit',
+				stateKey: 'default',
+				includeColumns: ['x']
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.pii_guard.safeParse({
+				columns: ['text'],
+				action: 'report',
+				failOnDetect: false
+			}).success
+		).toBe(true);
+
+		expect(
+			TransformParamsSchemaByKind.inference_parity.safeParse({
+				trainSignature: 'a',
+				inferenceSignature: 'a',
+				failOnMismatch: true
+			}).success
+		).toBe(true);
+
+		expect(
 			TransformParamsSchemaByKind.json_to_table.safeParse({
 				orient: 'records',
 				rowsKey: 'rows',

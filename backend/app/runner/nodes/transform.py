@@ -4,6 +4,7 @@ import io
 import json
 import hashlib
 import re
+import unicodedata
 import logging
 import time
 from dataclasses import dataclass
@@ -34,8 +35,27 @@ OP_KEYS = {
     "sort": "sort",
     "limit": "limit",
     "dedupe": "dedupe",
+    "null_policy": "null_policy",
+    "outlier_policy": "outlier_policy",
+    "text_clean": "text_clean",
+    "nlp_normalize": "nlp_normalize",
+    "tokenize_chunk": "tokenize_chunk",
+    "dataset_split": "dataset_split",
+    "class_imbalance": "class_imbalance",
+    "categorical_encode": "categorical_encode",
+    "numeric_scale": "numeric_scale",
+    "embedding": "embedding",
+    "feature_selection": "feature_selection",
+    "leakage_detect": "leakage_detect",
+    "quality_profile": "quality_profile",
+    "drift_compare": "drift_compare",
+    "determinism_profile": "determinism_profile",
+    "fit_state_registry": "fit_state_registry",
+    "pii_guard": "pii_guard",
+    "inference_parity": "inference_parity",
     "split": "split",
     "quality_gate": "quality_gate",
+    "ml_contract": "ml_contract",
     "sql": "sql",
     "json_to_table": "json_to_table",
     "text_to_table": "text_to_table",
@@ -81,6 +101,18 @@ def canonical_json(obj: Any) -> str:
     # stable serialization for hashing / caching
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
+
+def _stable_unique_strings(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
 def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str] = None) -> Dict[str, Any]:
     p = dict(params)
 
@@ -120,7 +152,7 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
     # keep only the active op payload
     keep_key = OP_KEYS[op]
-    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","split","quality_gate","sql","json_to_table","text_to_table","table_to_json","code"):
+    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","null_policy","outlier_policy","text_clean","nlp_normalize","tokenize_chunk","dataset_split","class_imbalance","categorical_encode","numeric_scale","embedding","feature_selection","leakage_detect","quality_profile","drift_compare","determinism_profile","fit_state_registry","pii_guard","inference_parity","split","quality_gate","ml_contract","sql","json_to_table","text_to_table","table_to_json","code"):
         if k != keep_key:
             p.pop(k, None)
 
@@ -172,6 +204,431 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         if emit_dropped_count:
             dedupe_payload["emitDroppedCount"] = True
         p["dedupe"] = dedupe_payload
+
+    if op == "null_policy":
+        raw = p.get("null_policy") if isinstance(p.get("null_policy"), dict) else {}
+        mode = str(raw.get("mode") or "report").strip().lower()
+        if mode not in {"report", "drop_rows", "fill_constant", "fill_stat"}:
+            mode = "report"
+        columns_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(columns_raw, list):
+            seen: set[str] = set()
+            for item in columns_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        stat = str(raw.get("stat") or "mean").strip().lower()
+        if stat not in {"mean", "median", "mode"}:
+            stat = "mean"
+        rules_raw = raw.get("rules")
+        rules: List[Dict[str, Any]] = []
+        if isinstance(rules_raw, list):
+            for rule in rules_raw:
+                if not isinstance(rule, dict):
+                    continue
+                column = str(rule.get("column") or "").strip()
+                if not column:
+                    continue
+                rule_mode = str(rule.get("mode") or mode).strip().lower()
+                if rule_mode not in {"report", "drop_rows", "fill_constant", "fill_stat"}:
+                    rule_mode = mode
+                rule_stat = str(rule.get("stat") or stat).strip().lower()
+                if rule_stat not in {"mean", "median", "mode"}:
+                    rule_stat = stat
+                out_rule: Dict[str, Any] = {
+                    "column": column,
+                    "mode": rule_mode,
+                    "stat": rule_stat,
+                }
+                if "fillValue" in rule:
+                    out_rule["fillValue"] = rule.get("fillValue")
+                rules.append(out_rule)
+        p["null_policy"] = {
+            "mode": mode,
+            "columns": columns,
+            "fillValue": raw.get("fillValue"),
+            "stat": stat,
+            "rules": rules,
+        }
+
+    if op == "outlier_policy":
+        raw = p.get("outlier_policy") if isinstance(p.get("outlier_policy"), dict) else {}
+        mode = str(raw.get("mode") or "clip").strip().lower()
+        if mode not in {"clip", "winsorize", "drop"}:
+            mode = "clip"
+        method = str(raw.get("method") or "iqr").strip().lower()
+        if method not in {"iqr", "zscore", "quantile"}:
+            method = "iqr"
+        columns_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(columns_raw, list):
+            seen: set[str] = set()
+            for item in columns_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        iqr_multiplier = float(raw.get("iqrMultiplier") or 1.5)
+        zscore_threshold = float(raw.get("zscoreThreshold") or 3.0)
+        lower_quantile = float(raw.get("lowerQuantile") or 0.01)
+        upper_quantile = float(raw.get("upperQuantile") or 0.99)
+        if iqr_multiplier <= 0:
+            iqr_multiplier = 1.5
+        if zscore_threshold <= 0:
+            zscore_threshold = 3.0
+        lower_quantile = min(0.99, max(0.0, lower_quantile))
+        upper_quantile = min(1.0, max(lower_quantile + 1e-6, upper_quantile))
+        p["outlier_policy"] = {
+            "mode": mode,
+            "method": method,
+            "columns": columns,
+            "iqrMultiplier": iqr_multiplier,
+            "zscoreThreshold": zscore_threshold,
+            "lowerQuantile": lower_quantile,
+            "upperQuantile": upper_quantile,
+        }
+
+    if op == "text_clean":
+        raw = p.get("text_clean") if isinstance(p.get("text_clean"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        unicode_normalize = str(raw.get("unicodeNormalize") or "nfkc").strip().lower()
+        if unicode_normalize not in {"none", "nfc", "nfkc"}:
+            unicode_normalize = "nfkc"
+        p["text_clean"] = {
+            "columns": columns,
+            "lowercase": bool(raw.get("lowercase", True)),
+            "unicodeNormalize": unicode_normalize,
+            "removePunctuation": bool(raw.get("removePunctuation", False)),
+            "removeUrls": bool(raw.get("removeUrls", True)),
+            "removeEmails": bool(raw.get("removeEmails", True)),
+            "removeEmoji": bool(raw.get("removeEmoji", False)),
+            "normalizeWhitespace": bool(raw.get("normalizeWhitespace", True)),
+        }
+
+    if op == "nlp_normalize":
+        raw = p.get("nlp_normalize") if isinstance(p.get("nlp_normalize"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        p["nlp_normalize"] = {
+            "columns": columns,
+            "language": str(raw.get("language") or "en").strip().lower() or "en",
+            "removeStopwords": bool(raw.get("removeStopwords", True)),
+            "stemmer": str(raw.get("stemmer") or "none").strip().lower() or "none",
+            "lemmatizer": str(raw.get("lemmatizer") or "none").strip().lower() or "none",
+            "tokenPattern": str(raw.get("tokenPattern") or r"\w+"),
+        }
+
+    if op == "tokenize_chunk":
+        raw = p.get("tokenize_chunk") if isinstance(p.get("tokenize_chunk"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        tokenizer = str(raw.get("tokenizer") or "whitespace").strip().lower()
+        if tokenizer not in {"whitespace", "regex"}:
+            tokenizer = "whitespace"
+        token_pattern = str(raw.get("tokenPattern") or r"\w+")
+        max_tokens = int(raw.get("maxTokens") or 256)
+        overlap = int(raw.get("overlap") or 32)
+        if max_tokens < 1:
+            max_tokens = 1
+        if overlap < 0:
+            overlap = 0
+        if overlap >= max_tokens:
+            overlap = max_tokens - 1
+        p["tokenize_chunk"] = {
+            "columns": columns,
+            "tokenizer": tokenizer,
+            "tokenPattern": token_pattern,
+            "maxTokens": max_tokens,
+            "overlap": overlap,
+            "sentenceAware": bool(raw.get("sentenceAware", True)),
+            "outColumn": str(raw.get("outColumn") or "chunk").strip() or "chunk",
+        }
+
+    if op == "dataset_split":
+        raw = p.get("dataset_split") if isinstance(p.get("dataset_split"), dict) else {}
+        strategy = str(raw.get("strategy") or "random").strip().lower()
+        if strategy not in {"random", "stratified", "group", "time"}:
+            strategy = "random"
+        train_ratio = float(raw.get("trainRatio") or 0.8)
+        val_ratio = float(raw.get("valRatio") or 0.1)
+        test_ratio = float(raw.get("testRatio") or 0.1)
+        if train_ratio < 0:
+            train_ratio = 0.8
+        if val_ratio < 0:
+            val_ratio = 0.1
+        if test_ratio < 0:
+            test_ratio = 0.1
+        ratio_sum = train_ratio + val_ratio + test_ratio
+        if ratio_sum <= 0:
+            train_ratio, val_ratio, test_ratio = 0.8, 0.1, 0.1
+            ratio_sum = 1.0
+        train_ratio /= ratio_sum
+        val_ratio /= ratio_sum
+        test_ratio = max(0.0, 1.0 - train_ratio - val_ratio)
+        p["dataset_split"] = {
+            "strategy": strategy,
+            "trainRatio": train_ratio,
+            "valRatio": val_ratio,
+            "testRatio": test_ratio,
+            "seed": int(raw.get("seed") or 42),
+            "shuffle": bool(raw.get("shuffle", True)),
+            "stratifyColumn": str(raw.get("stratifyColumn") or "").strip(),
+            "groupColumn": str(raw.get("groupColumn") or "").strip(),
+            "timeColumn": str(raw.get("timeColumn") or "").strip(),
+            "leakageGuard": bool(raw.get("leakageGuard", True)),
+        }
+
+    if op == "class_imbalance":
+        raw = p.get("class_imbalance") if isinstance(p.get("class_imbalance"), dict) else {}
+        strategy = str(raw.get("strategy") or "report").strip().lower()
+        if strategy not in {"report", "undersample", "oversample", "class_weight"}:
+            strategy = "report"
+        target_ratio = float(raw.get("targetRatio") or 1.0)
+        target_ratio = max(0.0, min(1.0, target_ratio))
+        p["class_imbalance"] = {
+            "strategy": strategy,
+            "labelColumn": str(raw.get("labelColumn") or "label").strip() or "label",
+            "targetRatio": target_ratio,
+            "seed": int(raw.get("seed") or 42),
+        }
+
+    if op == "categorical_encode":
+        raw = p.get("categorical_encode") if isinstance(p.get("categorical_encode"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        encoding = str(raw.get("encoding") or "one_hot").strip().lower()
+        if encoding not in {"one_hot", "ordinal", "frequency"}:
+            encoding = "one_hot"
+        unknown_policy = str(raw.get("unknownPolicy") or "ignore").strip().lower()
+        if unknown_policy not in {"ignore", "error", "impute"}:
+            unknown_policy = "ignore"
+        rare_threshold = float(raw.get("rareThreshold") or 0.0)
+        rare_threshold = max(0.0, min(1.0, rare_threshold))
+        p["categorical_encode"] = {
+            "columns": columns,
+            "encoding": encoding,
+            "unknownPolicy": unknown_policy,
+            "rareThreshold": rare_threshold,
+            "dropFirst": bool(raw.get("dropFirst", False)),
+        }
+
+    if op == "numeric_scale":
+        raw = p.get("numeric_scale") if isinstance(p.get("numeric_scale"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        method = str(raw.get("method") or "standard").strip().lower()
+        if method not in {"standard", "minmax", "robust"}:
+            method = "standard"
+        clip = bool(raw.get("clip", False))
+        p["numeric_scale"] = {
+            "columns": columns,
+            "method": method,
+            "withCenter": bool(raw.get("withCenter", True)),
+            "withScale": bool(raw.get("withScale", True)),
+            "clip": clip,
+            "clipMin": raw.get("clipMin"),
+            "clipMax": raw.get("clipMax"),
+        }
+
+    if op == "embedding":
+        raw = p.get("embedding") if isinstance(p.get("embedding"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        provider = str(raw.get("provider") or "local_hash").strip().lower()
+        if provider not in {"local_hash", "openai", "ollama"}:
+            provider = "local_hash"
+        dimensions = int(raw.get("dimensions") or 16)
+        if dimensions < 1:
+            dimensions = 1
+        if dimensions > 4096:
+            dimensions = 4096
+        p["embedding"] = {
+            "columns": columns,
+            "provider": provider,
+            "model": str(raw.get("model") or "text-embedding-3-small"),
+            "dimensions": dimensions,
+            "batchSize": int(raw.get("batchSize") or 64),
+            "cacheEmbeddings": bool(raw.get("cacheEmbeddings", True)),
+            "outputColumn": str(raw.get("outputColumn") or "embedding").strip() or "embedding",
+        }
+
+    if op == "feature_selection":
+        raw = p.get("feature_selection") if isinstance(p.get("feature_selection"), dict) else {}
+        method = str(raw.get("method") or "variance").strip().lower()
+        if method not in {"variance", "mutual_info", "model_importance", "manual"}:
+            method = "variance"
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            seen: set[str] = set()
+            for item in cols_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                columns.append(col)
+        selected_raw = raw.get("selectedColumns")
+        selected_columns: List[str] = []
+        if isinstance(selected_raw, list):
+            seen_sel: set[str] = set()
+            for item in selected_raw:
+                col = str(item or "").strip()
+                if not col or col in seen_sel:
+                    continue
+                seen_sel.add(col)
+                selected_columns.append(col)
+        p["feature_selection"] = {
+            "method": method,
+            "columns": columns,
+            "topK": max(1, int(raw.get("topK") or 50)),
+            "varianceThreshold": max(0.0, float(raw.get("varianceThreshold") or 0.0)),
+            "targetColumn": str(raw.get("targetColumn") or "label").strip() or "label",
+            "selectedColumns": selected_columns,
+        }
+
+    if op == "leakage_detect":
+        raw = p.get("leakage_detect") if isinstance(p.get("leakage_detect"), dict) else {}
+        keys_raw = raw.get("keyColumns")
+        key_columns: List[str] = []
+        if isinstance(keys_raw, list):
+            seen: set[str] = set()
+            for item in keys_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                key_columns.append(col)
+        p["leakage_detect"] = {
+            "splitColumn": str(raw.get("splitColumn") or "split").strip() or "split",
+            "keyColumns": key_columns,
+            "labelColumn": str(raw.get("labelColumn") or "").strip(),
+            "maxAllowedOverlap": max(0.0, min(1.0, float(raw.get("maxAllowedOverlap") or 0.0))),
+        }
+
+    if op == "quality_profile":
+        raw = p.get("quality_profile") if isinstance(p.get("quality_profile"), dict) else {}
+        cols_raw = raw.get("columns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            columns = [str(c).strip() for c in cols_raw if str(c).strip()]
+        p["quality_profile"] = {
+            "columns": _stable_unique_strings(columns),
+            "includeHistograms": bool(raw.get("includeHistograms", True)),
+            "includeSamples": bool(raw.get("includeSamples", True)),
+        }
+
+    if op == "drift_compare":
+        raw = p.get("drift_compare") if isinstance(p.get("drift_compare"), dict) else {}
+        cols_raw = raw.get("compareColumns")
+        columns: List[str] = []
+        if isinstance(cols_raw, list):
+            columns = [str(c).strip() for c in cols_raw if str(c).strip()]
+        metric = str(raw.get("metric") or "psi").strip().lower()
+        if metric not in {"psi", "jsd", "ks"}:
+            metric = "psi"
+        p["drift_compare"] = {
+            "baselineRef": str(raw.get("baselineRef") or "").strip(),
+            "compareColumns": _stable_unique_strings(columns),
+            "metric": metric,
+            "threshold": max(0.0, float(raw.get("threshold") or 0.2)),
+            "failOnDrift": bool(raw.get("failOnDrift", False)),
+        }
+
+    if op == "determinism_profile":
+        raw = p.get("determinism_profile") if isinstance(p.get("determinism_profile"), dict) else {}
+        p["determinism_profile"] = {
+            "strict": bool(raw.get("strict", True)),
+            "seed": int(raw.get("seed") or 42),
+            "stableSort": bool(raw.get("stableSort", True)),
+            "stableCoercion": bool(raw.get("stableCoercion", True)),
+        }
+
+    if op == "fit_state_registry":
+        raw = p.get("fit_state_registry") if isinstance(p.get("fit_state_registry"), dict) else {}
+        mode = str(raw.get("mode") or "fit").strip().lower()
+        if mode not in {"fit", "apply"}:
+            mode = "fit"
+        cols_raw = raw.get("includeColumns")
+        columns = [str(c).strip() for c in cols_raw if str(c).strip()] if isinstance(cols_raw, list) else []
+        p["fit_state_registry"] = {
+            "mode": mode,
+            "stateKey": str(raw.get("stateKey") or "default").strip() or "default",
+            "includeColumns": _stable_unique_strings(columns),
+        }
+
+    if op == "pii_guard":
+        raw = p.get("pii_guard") if isinstance(p.get("pii_guard"), dict) else {}
+        action = str(raw.get("action") or "report").strip().lower()
+        if action not in {"report", "mask", "drop_rows"}:
+            action = "report"
+        cols_raw = raw.get("columns")
+        columns = [str(c).strip() for c in cols_raw if str(c).strip()] if isinstance(cols_raw, list) else []
+        p["pii_guard"] = {
+            "columns": _stable_unique_strings(columns),
+            "action": action,
+            "failOnDetect": bool(raw.get("failOnDetect", False)),
+        }
+
+    if op == "inference_parity":
+        raw = p.get("inference_parity") if isinstance(p.get("inference_parity"), dict) else {}
+        p["inference_parity"] = {
+            "trainSignature": str(raw.get("trainSignature") or "").strip(),
+            "inferenceSignature": str(raw.get("inferenceSignature") or "").strip(),
+            "failOnMismatch": bool(raw.get("failOnMismatch", True)),
+        }
 
     if op == "join":
         raw = p.get("join") if isinstance(p.get("join"), dict) else {}
@@ -365,6 +822,46 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         p["quality_gate"] = {
             "checks": checks,
             "stopOnFail": bool(raw.get("stopOnFail", True)),
+        }
+
+    if op == "ml_contract":
+        raw = p.get("ml_contract") if isinstance(p.get("ml_contract"), dict) else {}
+        task_type = str(raw.get("taskType") or "other").strip().lower()
+        allowed_task_types = {
+            "classification",
+            "regression",
+            "ranking",
+            "generation",
+            "embedding",
+            "pretraining",
+            "finetuning",
+            "other",
+        }
+        if task_type not in allowed_task_types:
+            task_type = "other"
+        label_column = str(raw.get("labelColumn") or "label").strip() or "label"
+        features_raw = raw.get("featureColumns")
+        feature_columns: List[str] = []
+        if isinstance(features_raw, list):
+            seen: set[str] = set()
+            for item in features_raw:
+                col = str(item or "").strip()
+                if not col or col in seen:
+                    continue
+                seen.add(col)
+                feature_columns.append(col)
+        if not feature_columns:
+            feature_columns = ["text"]
+        id_column = str(raw.get("idColumn") or "").strip()
+        timestamp_column = str(raw.get("timestampColumn") or "").strip()
+        p["ml_contract"] = {
+            "taskType": task_type,
+            "labelColumn": label_column,
+            "featureColumns": feature_columns,
+            "idColumn": id_column,
+            "timestampColumn": timestamp_column,
+            "allowExtraFeatures": bool(raw.get("allowExtraFeatures", True)),
+            "requireNonNullLabel": bool(raw.get("requireNonNullLabel", True)),
         }
 
     if op == "json_to_table":
@@ -1230,6 +1727,880 @@ def _execute_quality_gate_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> 
         raise ValueError(_quality_gate_failure_message(report))
     return primary_df
 
+
+def _execute_null_policy_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    mode = str(spec.get("mode") or "report").strip().lower()
+    if mode not in {"report", "drop_rows", "fill_constant", "fill_stat"}:
+        mode = "report"
+    columns_raw = spec.get("columns")
+    selected_columns = (
+        [str(c).strip() for c in columns_raw if str(c).strip()]
+        if isinstance(columns_raw, list)
+        else []
+    )
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected_columns if c in set(existing_cols)] if selected_columns else existing_cols
+    rules_raw = spec.get("rules")
+    rules = [r for r in rules_raw if isinstance(r, dict)] if isinstance(rules_raw, list) else []
+    rule_by_column = {
+        str(r.get("column") or "").strip(): r
+        for r in rules
+        if str(r.get("column") or "").strip()
+    }
+    working = primary_df.copy()
+    before_null_counts = {
+        col: int(working[col].isna().sum()) if col in working.columns else 0
+        for col in target_cols
+    }
+    dropped_rows = 0
+    filled_by_column: Dict[str, int] = {}
+    fill_value_global = spec.get("fillValue")
+    stat_global = str(spec.get("stat") or "mean").strip().lower()
+    if stat_global not in {"mean", "median", "mode"}:
+        stat_global = "mean"
+
+    if mode == "drop_rows":
+        if target_cols:
+            before_rows = int(len(working))
+            working = working.dropna(subset=target_cols).reset_index(drop=True)
+            dropped_rows = before_rows - int(len(working))
+    elif mode in {"fill_constant", "fill_stat"}:
+        for col in target_cols:
+            rule = rule_by_column.get(col) or {}
+            rule_mode = str(rule.get("mode") or mode).strip().lower()
+            if rule_mode == "report":
+                continue
+            if rule_mode == "drop_rows":
+                before_rows = int(len(working))
+                working = working.dropna(subset=[col]).reset_index(drop=True)
+                dropped_rows += before_rows - int(len(working))
+                continue
+            if rule_mode == "fill_constant":
+                fill_value = rule.get("fillValue", fill_value_global)
+                null_mask = working[col].isna()
+                count = int(null_mask.sum())
+                if count > 0:
+                    working.loc[null_mask, col] = fill_value
+                filled_by_column[col] = filled_by_column.get(col, 0) + count
+                continue
+            if rule_mode == "fill_stat":
+                stat = str(rule.get("stat") or stat_global).strip().lower()
+                if stat not in {"mean", "median", "mode"}:
+                    stat = stat_global
+                series = working[col]
+                non_null = series.dropna()
+                if len(non_null) == 0:
+                    fill_value = fill_value_global
+                elif stat == "mean":
+                    fill_value = float(non_null.mean())
+                elif stat == "median":
+                    fill_value = float(non_null.median())
+                else:
+                    modes = non_null.mode()
+                    fill_value = modes.iloc[0] if len(modes) > 0 else fill_value_global
+                null_mask = series.isna()
+                count = int(null_mask.sum())
+                if count > 0:
+                    working.loc[null_mask, col] = fill_value
+                filled_by_column[col] = filled_by_column.get(col, 0) + count
+
+    after_null_counts = {
+        col: int(working[col].isna().sum()) if col in working.columns else 0
+        for col in target_cols
+    }
+    report = {
+        "mode": mode,
+        "targetColumns": target_cols,
+        "beforeNullCountByColumn": before_null_counts,
+        "afterNullCountByColumn": after_null_counts,
+        "filledCountByColumn": filled_by_column,
+        "droppedRows": int(dropped_rows),
+    }
+    return working, report
+
+
+def _execute_outlier_policy_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    mode = str(spec.get("mode") or "clip").strip().lower()
+    if mode not in {"clip", "winsorize", "drop"}:
+        mode = "clip"
+    method = str(spec.get("method") or "iqr").strip().lower()
+    if method not in {"iqr", "zscore", "quantile"}:
+        method = "iqr"
+    selected_raw = spec.get("columns")
+    selected = (
+        [str(c).strip() for c in selected_raw if str(c).strip()]
+        if isinstance(selected_raw, list)
+        else []
+    )
+    numeric_cols = [
+        str(c)
+        for c in list(primary_df.columns)
+        if pd.api.types.is_numeric_dtype(primary_df[c])
+    ]
+    target_cols = [c for c in selected if c in set(numeric_cols)] if selected else numeric_cols
+    working = primary_df.copy()
+    per_column: Dict[str, Any] = {}
+    drop_mask = pd.Series(False, index=working.index)
+    iqr_multiplier = float(spec.get("iqrMultiplier") or 1.5)
+    zscore_threshold = float(spec.get("zscoreThreshold") or 3.0)
+    lower_q = float(spec.get("lowerQuantile") or 0.01)
+    upper_q = float(spec.get("upperQuantile") or 0.99)
+
+    for col in target_cols:
+        series = pd.to_numeric(working[col], errors="coerce")
+        non_null = series.dropna()
+        if len(non_null) == 0:
+            continue
+        lower = float(non_null.min())
+        upper = float(non_null.max())
+        if method == "iqr":
+            q1 = float(non_null.quantile(0.25))
+            q3 = float(non_null.quantile(0.75))
+            iqr = q3 - q1
+            lower = q1 - (iqr_multiplier * iqr)
+            upper = q3 + (iqr_multiplier * iqr)
+        elif method == "zscore":
+            mean = float(non_null.mean())
+            std = float(non_null.std(ddof=0))
+            if std > 0:
+                lower = mean - (zscore_threshold * std)
+                upper = mean + (zscore_threshold * std)
+        else:
+            lower = float(non_null.quantile(lower_q))
+            upper = float(non_null.quantile(upper_q))
+        outlier_mask = (series < lower) | (series > upper)
+        outlier_count = int(outlier_mask.fillna(False).sum())
+        if mode in {"clip", "winsorize"} and outlier_count > 0:
+            working[col] = series.clip(lower=lower, upper=upper)
+        elif mode == "drop":
+            drop_mask = drop_mask | outlier_mask.fillna(False)
+        per_column[col] = {
+            "lower": lower,
+            "upper": upper,
+            "outlierCount": outlier_count,
+        }
+    dropped_rows = int(drop_mask.sum()) if mode == "drop" else 0
+    if mode == "drop" and dropped_rows > 0:
+        working = working.loc[~drop_mask].reset_index(drop=True)
+    report = {
+        "mode": mode,
+        "method": method,
+        "targetColumns": target_cols,
+        "perColumn": per_column,
+        "droppedRows": dropped_rows,
+    }
+    return working, report
+
+
+def _execute_text_clean_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    cols_raw = spec.get("columns")
+    selected = (
+        [str(c).strip() for c in cols_raw if str(c).strip()]
+        if isinstance(cols_raw, list)
+        else []
+    )
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected if c in set(existing_cols)] if selected else existing_cols
+    lowercase = bool(spec.get("lowercase", True))
+    unicode_norm = str(spec.get("unicodeNormalize") or "nfkc").strip().lower()
+    remove_punct = bool(spec.get("removePunctuation", False))
+    remove_urls = bool(spec.get("removeUrls", True))
+    remove_emails = bool(spec.get("removeEmails", True))
+    remove_emoji = bool(spec.get("removeEmoji", False))
+    normalize_ws = bool(spec.get("normalizeWhitespace", True))
+    if unicode_norm not in {"none", "nfc", "nfkc"}:
+        unicode_norm = "nfkc"
+
+    url_re = re.compile(r"https?://\S+|www\.\S+", flags=re.IGNORECASE)
+    email_re = re.compile(r"\b[\w.\-+]+@[\w.\-]+\.\w+\b", flags=re.IGNORECASE)
+    punct_re = re.compile(r"[^\w\s]")
+    emoji_re = re.compile(r"[\U00010000-\U0010ffff]", flags=re.UNICODE)
+    ws_re = re.compile(r"\s+")
+
+    def clean_text(value: Any) -> str:
+        text = "" if value is None else str(value)
+        if unicode_norm != "none":
+            text = unicodedata.normalize(unicode_norm.upper(), text)
+        if lowercase:
+            text = text.lower()
+        if remove_urls:
+            text = url_re.sub(" ", text)
+        if remove_emails:
+            text = email_re.sub(" ", text)
+        if remove_emoji:
+            text = emoji_re.sub(" ", text)
+        if remove_punct:
+            text = punct_re.sub(" ", text)
+        if normalize_ws:
+            text = ws_re.sub(" ", text).strip()
+        return text
+
+    working = primary_df.copy()
+    changed_by_column: Dict[str, int] = {}
+    for col in target_cols:
+        series = working[col]
+        as_text = series.map(lambda v: "" if v is None else str(v))
+        cleaned = series.map(clean_text)
+        changed = int((as_text != cleaned).sum())
+        working[col] = cleaned
+        changed_by_column[col] = changed
+    report = {
+        "targetColumns": target_cols,
+        "changedRowsByColumn": changed_by_column,
+        "options": {
+            "lowercase": lowercase,
+            "unicodeNormalize": unicode_norm,
+            "removePunctuation": remove_punct,
+            "removeUrls": remove_urls,
+            "removeEmails": remove_emails,
+            "removeEmoji": remove_emoji,
+            "normalizeWhitespace": normalize_ws,
+        },
+    }
+    return working, report
+
+
+def _simple_porter_stem(token: str) -> str:
+    t = token.lower()
+    for suffix in ("ingly", "edly", "ing", "ed", "ies", "sses", "s"):
+        if t.endswith(suffix) and len(t) > (len(suffix) + 2):
+            if suffix == "ies":
+                return t[:-3] + "y"
+            if suffix == "sses":
+                return t[:-2]
+            return t[: -len(suffix)]
+    return t
+
+
+def _simple_rule_lemma(token: str) -> str:
+    t = token.lower()
+    irregular = {"mice": "mouse", "geese": "goose", "children": "child", "men": "man", "women": "woman"}
+    if t in irregular:
+        return irregular[t]
+    if t.endswith("ies") and len(t) > 4:
+        return t[:-3] + "y"
+    if t.endswith("ves") and len(t) > 4:
+        return t[:-3] + "f"
+    if t.endswith("s") and len(t) > 3 and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def _execute_nlp_normalize_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    language = str(spec.get("language") or "en").strip().lower()
+    if language != "en":
+        raise ValueError(f"nlp_normalize.language '{language}' is not supported; supported languages: en")
+    pattern = str(spec.get("tokenPattern") or r"\w+")
+    token_re = re.compile(pattern, flags=re.UNICODE)
+    remove_stopwords = bool(spec.get("removeStopwords", True))
+    stemmer = str(spec.get("stemmer") or "none").strip().lower()
+    lemmatizer = str(spec.get("lemmatizer") or "none").strip().lower()
+    if stemmer not in {"none", "porter"}:
+        stemmer = "none"
+    if lemmatizer not in {"none", "rule_based"}:
+        lemmatizer = "none"
+
+    stopwords_en = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+        "in", "is", "it", "of", "on", "or", "that", "the", "to", "was", "were", "with",
+    }
+
+    cols_raw = spec.get("columns")
+    selected = (
+        [str(c).strip() for c in cols_raw if str(c).strip()]
+        if isinstance(cols_raw, list)
+        else []
+    )
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected if c in set(existing_cols)] if selected else existing_cols
+    working = primary_df.copy()
+    changed_by_column: Dict[str, int] = {}
+    removed_stopwords_by_column: Dict[str, int] = {}
+    token_count_by_column: Dict[str, int] = {}
+
+    for col in target_cols:
+        original = working[col].map(lambda v: "" if v is None else str(v))
+        changed = 0
+        removed_stopwords = 0
+        token_total = 0
+        normalized_values: List[str] = []
+        for value in original:
+            tokens = token_re.findall(str(value).lower())
+            token_total += len(tokens)
+            out_tokens: List[str] = []
+            for tok in tokens:
+                next_tok = tok
+                if remove_stopwords and next_tok in stopwords_en:
+                    removed_stopwords += 1
+                    continue
+                if stemmer == "porter":
+                    next_tok = _simple_porter_stem(next_tok)
+                if lemmatizer == "rule_based":
+                    next_tok = _simple_rule_lemma(next_tok)
+                out_tokens.append(next_tok)
+            normalized = " ".join(out_tokens)
+            if normalized != value:
+                changed += 1
+            normalized_values.append(normalized)
+        working[col] = normalized_values
+        changed_by_column[col] = changed
+        removed_stopwords_by_column[col] = removed_stopwords
+        token_count_by_column[col] = token_total
+
+    report = {
+        "language": language,
+        "targetColumns": target_cols,
+        "changedRowsByColumn": changed_by_column,
+        "removedStopwordsByColumn": removed_stopwords_by_column,
+        "inputTokenCountByColumn": token_count_by_column,
+        "stemmer": stemmer,
+        "lemmatizer": lemmatizer,
+    }
+    return working, report
+
+
+def _execute_tokenize_chunk_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    tokenizer = str(spec.get("tokenizer") or "whitespace").strip().lower()
+    if tokenizer not in {"whitespace", "regex"}:
+        tokenizer = "whitespace"
+    token_pattern = str(spec.get("tokenPattern") or r"\w+")
+    max_tokens = int(spec.get("maxTokens") or 256)
+    overlap = int(spec.get("overlap") or 32)
+    sentence_aware = bool(spec.get("sentenceAware", True))
+    out_col = str(spec.get("outColumn") or "chunk").strip() or "chunk"
+    if max_tokens < 1:
+        max_tokens = 1
+    if overlap < 0:
+        overlap = 0
+    if overlap >= max_tokens:
+        overlap = max_tokens - 1
+
+    cols_raw = spec.get("columns")
+    selected = (
+        [str(c).strip() for c in cols_raw if str(c).strip()]
+        if isinstance(cols_raw, list)
+        else []
+    )
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected if c in set(existing_cols)] if selected else existing_cols
+
+    token_re = re.compile(token_pattern, flags=re.UNICODE)
+    sentence_re = re.compile(r"(?<=[.!?])\s+")
+
+    out_rows: List[Dict[str, Any]] = []
+    dropped_token_count = 0
+    total_chunks = 0
+    token_histogram: Dict[str, int] = {}
+    for row_idx, row in enumerate(primary_df.to_dict(orient="records")):
+        for col in target_cols:
+            raw_text = "" if row.get(col) is None else str(row.get(col))
+            segments = sentence_re.split(raw_text) if sentence_aware else [raw_text]
+            tokens: List[str] = []
+            if tokenizer == "whitespace":
+                for seg in segments:
+                    tokens.extend([t for t in seg.split() if t])
+            else:
+                for seg in segments:
+                    tokens.extend(token_re.findall(seg))
+            if not tokens:
+                continue
+            start = 0
+            step = max(1, max_tokens - overlap)
+            chunk_index = 0
+            while start < len(tokens):
+                chunk_tokens = tokens[start : start + max_tokens]
+                if not chunk_tokens:
+                    break
+                out_rows.append(
+                    {
+                        out_col: " ".join(chunk_tokens),
+                        "source_row": row_idx,
+                        "source_column": col,
+                        "chunk_index": chunk_index,
+                        "token_count": len(chunk_tokens),
+                    }
+                )
+                token_histogram[str(len(chunk_tokens))] = int(token_histogram.get(str(len(chunk_tokens)), 0)) + 1
+                total_chunks += 1
+                chunk_index += 1
+                start += step
+            consumed = max_tokens + max(0, (chunk_index - 1) * step) if chunk_index > 0 else 0
+            if consumed < len(tokens):
+                dropped_token_count += (len(tokens) - consumed)
+    out_df = pd.DataFrame(out_rows)
+    report = {
+        "targetColumns": target_cols,
+        "tokenizer": tokenizer,
+        "maxTokens": max_tokens,
+        "overlap": overlap,
+        "sentenceAware": sentence_aware,
+        "chunkStats": {
+            "numChunks": total_chunks,
+            "tokenHistogram": token_histogram,
+            "droppedTokens": dropped_token_count,
+        },
+    }
+    return out_df, report
+
+
+def _stable_shuffle_indices(size: int, seed: int) -> List[int]:
+    if size <= 0:
+        return []
+    rng = pd.Series(range(size)).sample(frac=1.0, random_state=seed)
+    return [int(i) for i in rng.tolist()]
+
+
+def _execute_dataset_split_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    n = int(len(primary_df))
+    if n == 0:
+        out = primary_df.copy()
+        out["split"] = pd.Series(dtype="string")
+        return out, {"strategy": str(spec.get("strategy") or "random"), "counts": {"train": 0, "val": 0, "test": 0}}
+
+    strategy = str(spec.get("strategy") or "random").strip().lower()
+    train_ratio = float(spec.get("trainRatio") or 0.8)
+    val_ratio = float(spec.get("valRatio") or 0.1)
+    seed = int(spec.get("seed") or 42)
+    shuffle = bool(spec.get("shuffle", True))
+    stratify_col = str(spec.get("stratifyColumn") or "").strip()
+    group_col = str(spec.get("groupColumn") or "").strip()
+    time_col = str(spec.get("timeColumn") or "").strip()
+
+    labels = pd.Series(["test"] * n, index=primary_df.index, dtype="string")
+
+    def assign_by_index(order_idx: List[int]) -> None:
+        train_n = int(round(n * train_ratio))
+        val_n = int(round(n * val_ratio))
+        train_n = max(0, min(n, train_n))
+        val_n = max(0, min(n - train_n, val_n))
+        train_ids = order_idx[:train_n]
+        val_ids = order_idx[train_n : train_n + val_n]
+        if train_ids:
+            labels.iloc[train_ids] = "train"
+        if val_ids:
+            labels.iloc[val_ids] = "val"
+
+    if strategy == "time" and time_col and time_col in set(primary_df.columns):
+        ordered = primary_df.reset_index(drop=True).sort_values(by=time_col, kind="mergesort")
+        assign_by_index([int(i) for i in ordered.index.tolist()])
+    elif strategy == "group" and group_col and group_col in set(primary_df.columns):
+        group_series = primary_df[group_col].astype("string")
+        group_keys = [str(v) for v in group_series.fillna("__null_group__").tolist()]
+        unique_groups = sorted(set(group_keys))
+        if shuffle:
+            shuffled = _stable_shuffle_indices(len(unique_groups), seed)
+            unique_groups = [unique_groups[i] for i in shuffled]
+        group_to_split: Dict[str, str] = {}
+        g_total = len(unique_groups)
+        g_train = int(round(g_total * train_ratio))
+        g_val = int(round(g_total * val_ratio))
+        for idx, grp in enumerate(unique_groups):
+            if idx < g_train:
+                group_to_split[grp] = "train"
+            elif idx < g_train + g_val:
+                group_to_split[grp] = "val"
+            else:
+                group_to_split[grp] = "test"
+        labels = pd.Series([group_to_split.get(k, "test") for k in group_keys], index=primary_df.index, dtype="string")
+    elif strategy == "stratified" and stratify_col and stratify_col in set(primary_df.columns):
+        strat = primary_df[stratify_col].astype("string").fillna("__null__")
+        labels = pd.Series(["test"] * n, index=primary_df.index, dtype="string")
+        for _, idx_values in strat.groupby(strat).groups.items():
+            idx_list = [int(primary_df.index.get_loc(idx)) for idx in list(idx_values)]
+            if shuffle:
+                idx_list = [idx_list[i] for i in _stable_shuffle_indices(len(idx_list), seed)]
+            sub_n = len(idx_list)
+            sub_train = int(round(sub_n * train_ratio))
+            sub_val = int(round(sub_n * val_ratio))
+            for i in idx_list[:sub_train]:
+                labels.iloc[i] = "train"
+            for i in idx_list[sub_train : sub_train + sub_val]:
+                labels.iloc[i] = "val"
+    else:
+        order = list(range(n))
+        if shuffle:
+            order = _stable_shuffle_indices(n, seed)
+        assign_by_index(order)
+
+    out_df = primary_df.copy()
+    out_df["split"] = labels.values
+    split_counts = labels.value_counts(dropna=False).to_dict()
+    report: Dict[str, Any] = {
+        "strategy": strategy,
+        "seed": seed,
+        "counts": {
+            "train": int(split_counts.get("train", 0)),
+            "val": int(split_counts.get("val", 0)),
+            "test": int(split_counts.get("test", 0)),
+        },
+    }
+    if strategy == "stratified" and stratify_col in set(primary_df.columns):
+        per_split: Dict[str, Dict[str, int]] = {}
+        series = primary_df[stratify_col].astype("string").fillna("__null__")
+        for split_name in ("train", "val", "test"):
+            mask = out_df["split"] == split_name
+            per_split[split_name] = {str(k): int(v) for k, v in series[mask].value_counts(dropna=False).to_dict().items()}
+        report["stratifiedDistributions"] = per_split
+    return out_df, report
+
+
+def _execute_class_imbalance_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    strategy = str(spec.get("strategy") or "report").strip().lower()
+    label_col = str(spec.get("labelColumn") or "label").strip() or "label"
+    seed = int(spec.get("seed") or 42)
+    target_ratio = float(spec.get("targetRatio") or 1.0)
+    if label_col not in set(primary_df.columns):
+        raise ValueError(f"class_imbalance.labelColumn '{label_col}' not found")
+    out_df = primary_df.copy()
+    y = out_df[label_col].astype("string")
+    before = {str(k): int(v) for k, v in y.value_counts(dropna=False).to_dict().items()}
+    class_weights: Dict[str, float] = {}
+    if strategy in {"undersample", "oversample"} and len(before) > 1:
+        major = max(before.values())
+        minor = min(before.values())
+        target = int(round(major * target_ratio))
+        target = max(minor, target)
+        parts: List[pd.DataFrame] = []
+        for cls, count in before.items():
+            cls_df = out_df[y == cls]
+            if strategy == "undersample" and count > target:
+                cls_df = cls_df.sample(n=target, random_state=seed)
+            elif strategy == "oversample" and count < target:
+                extra = cls_df.sample(n=(target - count), replace=True, random_state=seed)
+                cls_df = pd.concat([cls_df, extra], ignore_index=False)
+            parts.append(cls_df)
+        out_df = pd.concat(parts, ignore_index=True)
+    elif strategy == "class_weight":
+        total = max(1, int(len(out_df)))
+        n_classes = max(1, int(len(before)))
+        for cls, count in before.items():
+            class_weights[str(cls)] = float(total / (n_classes * max(1, int(count))))
+    after = {str(k): int(v) for k, v in out_df[label_col].astype("string").value_counts(dropna=False).to_dict().items()}
+    report: Dict[str, Any] = {
+        "strategy": strategy,
+        "labelColumn": label_col,
+        "before": before,
+        "after": after,
+    }
+    if class_weights:
+        report["classWeights"] = class_weights
+    return out_df, report
+
+
+def _execute_categorical_encode_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    encoding = str(spec.get("encoding") or "one_hot").strip().lower()
+    columns_raw = spec.get("columns")
+    selected = [str(c).strip() for c in columns_raw if str(c).strip()] if isinstance(columns_raw, list) else []
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected if c in set(existing_cols)] if selected else [
+        c for c in existing_cols if is_string_dtype(primary_df[c]) or str(primary_df[c].dtype) == "category"
+    ]
+    out_df = primary_df.copy()
+    mapping: Dict[str, Any] = {}
+    if encoding == "one_hot":
+        dummies = pd.get_dummies(out_df[target_cols], prefix=target_cols, drop_first=bool(spec.get("dropFirst", False)))
+        out_df = pd.concat([out_df.drop(columns=target_cols), dummies], axis=1)
+        mapping["emittedColumns"] = [str(c) for c in list(dummies.columns)]
+    elif encoding == "ordinal":
+        for col in target_cols:
+            vals = out_df[col].astype("string").fillna("__null__")
+            cats = sorted(set([str(v) for v in vals.tolist()]))
+            cat_to_idx = {cat: idx for idx, cat in enumerate(cats)}
+            out_df[col] = vals.map(cat_to_idx).astype("int64")
+            mapping[col] = cat_to_idx
+    else:
+        for col in target_cols:
+            vals = out_df[col].astype("string").fillna("__null__")
+            freqs = vals.value_counts(normalize=True, dropna=False).to_dict()
+            out_df[col] = vals.map(freqs).astype("float64")
+            mapping[col] = {str(k): float(v) for k, v in freqs.items()}
+    return out_df, {"encoding": encoding, "columns": target_cols, "mapping": mapping}
+
+
+def _execute_numeric_scale_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    method = str(spec.get("method") or "standard").strip().lower()
+    columns_raw = spec.get("columns")
+    selected = [str(c).strip() for c in columns_raw if str(c).strip()] if isinstance(columns_raw, list) else []
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    if selected:
+        target_cols = [c for c in selected if c in set(existing_cols)]
+    else:
+        target_cols = [c for c in existing_cols if is_integer_dtype(primary_df[c]) or is_float_dtype(primary_df[c])]
+    out = primary_df.copy()
+    params_out: Dict[str, Dict[str, float]] = {}
+    for col in target_cols:
+        s = pd.to_numeric(out[col], errors="coerce")
+        if method == "minmax":
+            mn = float(s.min()) if pd.notna(s.min()) else 0.0
+            mx = float(s.max()) if pd.notna(s.max()) else 1.0
+            denom = (mx - mn) if (mx - mn) != 0 else 1.0
+            out[col] = (s - mn) / denom
+            params_out[col] = {"min": mn, "max": mx}
+        elif method == "robust":
+            q1 = float(s.quantile(0.25)) if not s.empty else 0.0
+            q3 = float(s.quantile(0.75)) if not s.empty else 1.0
+            med = float(s.median()) if not s.empty else 0.0
+            iqr = (q3 - q1) if (q3 - q1) != 0 else 1.0
+            out[col] = (s - med) / iqr
+            params_out[col] = {"median": med, "iqr": iqr}
+        else:
+            mean = float(s.mean()) if not s.empty else 0.0
+            std = float(s.std(ddof=0)) if not s.empty else 1.0
+            if std == 0:
+                std = 1.0
+            out[col] = (s - mean) / std
+            params_out[col] = {"mean": mean, "std": std}
+    if bool(spec.get("clip", False)):
+        clip_min = spec.get("clipMin")
+        clip_max = spec.get("clipMax")
+        out[target_cols] = out[target_cols].clip(lower=clip_min, upper=clip_max)
+    return out, {"method": method, "columns": target_cols, "state": params_out}
+
+
+def _stable_embedding_vector(text: str, dimensions: int) -> List[float]:
+    dims = max(1, int(dimensions))
+    digest = hashlib.sha256(text.encode("utf-8", errors="ignore")).digest()
+    values: List[float] = []
+    needed = dims
+    seed_bytes = digest
+    while needed > 0:
+        for b in seed_bytes:
+            values.append((float(b) / 255.0) * 2.0 - 1.0)
+            needed -= 1
+            if needed <= 0:
+                break
+        seed_bytes = hashlib.sha256(seed_bytes).digest()
+    return values[:dims]
+
+
+def _execute_embedding_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    provider = str(spec.get("provider") or "local_hash").strip().lower()
+    model = str(spec.get("model") or "text-embedding-3-small")
+    dimensions = int(spec.get("dimensions") or 16)
+    out_col = str(spec.get("outputColumn") or "embedding").strip() or "embedding"
+    columns_raw = spec.get("columns")
+    selected = [str(c).strip() for c in columns_raw if str(c).strip()] if isinstance(columns_raw, list) else []
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    target_cols = [c for c in selected if c in set(existing_cols)] if selected else existing_cols[:1]
+    if not target_cols:
+        target_cols = []
+    out = primary_df.copy()
+    vectors: List[List[float]] = []
+    token_estimate = 0
+    for _, row in out.iterrows():
+        text = " ".join([str(row.get(c) or "") for c in target_cols]).strip()
+        token_estimate += len(text.split())
+        vectors.append(_stable_embedding_vector(text, dimensions))
+    out[out_col] = vectors
+    report = {
+        "provider": provider,
+        "model": model,
+        "dimensions": dimensions,
+        "columns": target_cols,
+        "tokenEstimate": token_estimate,
+        "costEstimateUsd": float(token_estimate) * 0.0,
+    }
+    return out, report
+
+
+def _execute_feature_selection_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    method = str(spec.get("method") or "variance").strip().lower()
+    columns_raw = spec.get("columns")
+    selected = [str(c).strip() for c in columns_raw if str(c).strip()] if isinstance(columns_raw, list) else []
+    existing_cols = [str(c) for c in list(primary_df.columns)]
+    candidate_cols = [c for c in selected if c in set(existing_cols)] if selected else [
+        c for c in existing_cols if is_integer_dtype(primary_df[c]) or is_float_dtype(primary_df[c])
+    ]
+    top_k = max(1, int(spec.get("topK") or 50))
+    variance_threshold = max(0.0, float(spec.get("varianceThreshold") or 0.0))
+    chosen: List[str] = []
+    scores: Dict[str, float] = {}
+    if method == "manual":
+        manual = spec.get("selectedColumns")
+        chosen = [str(c).strip() for c in manual if str(c).strip() in set(existing_cols)] if isinstance(manual, list) else []
+    else:
+        for col in candidate_cols:
+            s = pd.to_numeric(primary_df[col], errors="coerce")
+            score = float(s.var(ddof=0)) if not s.empty else 0.0
+            scores[col] = score
+        if method == "variance":
+            chosen = [c for c in candidate_cols if scores.get(c, 0.0) >= variance_threshold]
+        else:
+            ranked = sorted(candidate_cols, key=lambda c: scores.get(c, 0.0), reverse=True)
+            chosen = ranked[:top_k]
+    if not chosen:
+        chosen = candidate_cols[:top_k]
+    out = primary_df[chosen].copy() if chosen else primary_df.iloc[:, 0:0].copy()
+    return out, {"method": method, "selectedColumns": chosen, "scores": scores}
+
+
+def _execute_leakage_detect_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    split_col = str(spec.get("splitColumn") or "split").strip() or "split"
+    key_cols = [str(c).strip() for c in (spec.get("keyColumns") or []) if str(c).strip()]
+    label_col = str(spec.get("labelColumn") or "").strip()
+    max_allowed = float(spec.get("maxAllowedOverlap") or 0.0)
+    if split_col not in set(primary_df.columns):
+        raise ValueError(f"leakage_detect.splitColumn '{split_col}' not found")
+    if not key_cols:
+        key_cols = [c for c in list(primary_df.columns) if c != split_col][:1]
+    keyed = primary_df.copy()
+    keyed["_leak_key"] = keyed[key_cols].astype("string").agg("|".join, axis=1)
+    overlap_pairs: List[Dict[str, Any]] = []
+    splits = [str(v) for v in keyed[split_col].astype("string").fillna("__null__").unique().tolist()]
+    split_to_keys: Dict[str, set[str]] = {
+        sp: set(keyed[keyed[split_col].astype("string") == sp]["_leak_key"].tolist()) for sp in splits
+    }
+    max_overlap = 0.0
+    for i, a in enumerate(splits):
+        for b in splits[i + 1 :]:
+            inter = split_to_keys[a].intersection(split_to_keys[b])
+            union = split_to_keys[a].union(split_to_keys[b]) or {""}
+            ratio = float(len(inter)) / float(len(union))
+            max_overlap = max(max_overlap, ratio)
+            overlap_pairs.append({"left": a, "right": b, "overlapRatio": ratio, "overlapCount": len(inter)})
+    report = {
+        "splitColumn": split_col,
+        "keyColumns": key_cols,
+        "labelColumn": label_col,
+        "maxAllowedOverlap": max_allowed,
+        "maxObservedOverlap": max_overlap,
+        "violated": bool(max_overlap > max_allowed),
+        "pairs": overlap_pairs,
+    }
+    return primary_df.copy(), report
+
+
+def _execute_quality_profile_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    cols_raw = spec.get("columns")
+    selected = [str(c).strip() for c in cols_raw if str(c).strip()] if isinstance(cols_raw, list) else []
+    target_cols = [c for c in selected if c in set(primary_df.columns)] if selected else [str(c) for c in list(primary_df.columns)]
+    profile: Dict[str, Any] = {"rowCount": int(len(primary_df)), "columns": {}}
+    include_hist = bool(spec.get("includeHistograms", True))
+    include_samples = bool(spec.get("includeSamples", True))
+    for col in target_cols:
+        s = primary_df[col]
+        col_profile: Dict[str, Any] = {
+            "dtype": str(s.dtype),
+            "nullCount": int(s.isna().sum()),
+            "nullPct": float(s.isna().mean()) if len(s) else 0.0,
+            "nUnique": int(s.nunique(dropna=True)),
+        }
+        if is_integer_dtype(s) or is_float_dtype(s):
+            col_profile["mean"] = float(pd.to_numeric(s, errors="coerce").mean())
+            col_profile["std"] = float(pd.to_numeric(s, errors="coerce").std(ddof=0))
+        if include_hist:
+            top = s.astype("string").value_counts(dropna=False).head(10).to_dict()
+            col_profile["topValues"] = {str(k): int(v) for k, v in top.items()}
+        if include_samples:
+            col_profile["samples"] = [None if pd.isna(v) else str(v) for v in s.head(5).tolist()]
+        profile["columns"][col] = col_profile
+    return primary_df.copy(), profile
+
+
+def _execute_drift_compare_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    compare_raw = spec.get("compareColumns")
+    compare_cols = [str(c).strip() for c in compare_raw if str(c).strip()] if isinstance(compare_raw, list) else []
+    metric = str(spec.get("metric") or "psi").strip().lower()
+    threshold = float(spec.get("threshold") or 0.2)
+    if "split" not in set(primary_df.columns):
+        return primary_df.copy(), {"metric": metric, "threshold": threshold, "skipped": "missing split column"}
+    train_df = primary_df[primary_df["split"].astype("string") == "train"]
+    ref_df = primary_df[primary_df["split"].astype("string") == "test"]
+    cols = [c for c in compare_cols if c in set(primary_df.columns)] if compare_cols else [
+        c for c in list(primary_df.columns) if c not in {"split"}
+    ]
+    per_col: Dict[str, Any] = {}
+    drifted: List[str] = []
+    for col in cols:
+        a = train_df[col].astype("string").value_counts(normalize=True, dropna=False)
+        b = ref_df[col].astype("string").value_counts(normalize=True, dropna=False)
+        keys = sorted(set(a.index.tolist()) | set(b.index.tolist()))
+        score = 0.0
+        for k in keys:
+            pa = float(a.get(k, 1e-9))
+            pb = float(b.get(k, 1e-9))
+            if metric == "psi":
+                score += (pb - pa) * float((pb / pa) if pa > 0 else 0)
+            elif metric == "jsd":
+                m = 0.5 * (pa + pb)
+                score += 0.5 * abs(pa - m) + 0.5 * abs(pb - m)
+            else:
+                score = max(score, abs(pa - pb))
+        per_col[col] = {"score": float(score)}
+        if score > threshold:
+            drifted.append(col)
+    return primary_df.copy(), {"metric": metric, "threshold": threshold, "driftedColumns": drifted, "perColumn": per_col, "failed": bool(spec.get("failOnDrift", False) and len(drifted) > 0)}
+
+
+def _execute_determinism_profile_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    normalized = primary_df.copy()
+    if bool(spec.get("stableSort", True)) and len(normalized.columns) > 0:
+        sort_cols = [str(c) for c in list(normalized.columns)]
+        normalized = normalized.sort_values(by=sort_cols, kind="mergesort").reset_index(drop=True)
+    payload_hash = hashlib.sha256(df_to_csv_bytes(normalized)).hexdigest()
+    return normalized, {"strict": bool(spec.get("strict", True)), "seed": int(spec.get("seed") or 42), "stableSort": bool(spec.get("stableSort", True)), "stableCoercion": bool(spec.get("stableCoercion", True)), "fingerprint": payload_hash}
+
+
+def _execute_fit_state_registry_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    cols_raw = spec.get("includeColumns")
+    include_cols = [str(c).strip() for c in cols_raw if str(c).strip()] if isinstance(cols_raw, list) else []
+    cols = [c for c in include_cols if c in set(primary_df.columns)] if include_cols else [str(c) for c in list(primary_df.columns)]
+    state_payload = {"columns": cols, "dtypes": {c: str(primary_df[c].dtype) for c in cols}}
+    state_fingerprint = hashlib.sha256(canonical_json(state_payload).encode("utf-8")).hexdigest()
+    return primary_df.copy(), {"mode": str(spec.get("mode") or "fit"), "stateKey": str(spec.get("stateKey") or "default"), "stateFingerprint": state_fingerprint, "state": state_payload}
+
+
+def _execute_pii_guard_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    cols_raw = spec.get("columns")
+    selected = [str(c).strip() for c in cols_raw if str(c).strip()] if isinstance(cols_raw, list) else []
+    target_cols = [c for c in selected if c in set(primary_df.columns)] if selected else [str(c) for c in list(primary_df.columns)]
+    action = str(spec.get("action") or "report").strip().lower()
+    out = primary_df.copy()
+    email_re = re.compile(r"\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b")
+    phone_re = re.compile(r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b")
+    detected_rows: set[int] = set()
+    detections_by_col: Dict[str, int] = {}
+    for col in target_cols:
+        col_count = 0
+        values = []
+        for idx, v in enumerate(out[col].tolist()):
+            text = "" if v is None else str(v)
+            has_pii = bool(email_re.search(text) or phone_re.search(text))
+            if has_pii:
+                col_count += 1
+                detected_rows.add(idx)
+                if action == "mask":
+                    text = email_re.sub("[EMAIL]", text)
+                    text = phone_re.sub("[PHONE]", text)
+            values.append(text)
+        if action == "mask":
+            out[col] = values
+        detections_by_col[col] = col_count
+    if action == "drop_rows" and detected_rows:
+        keep_mask = [i not in detected_rows for i in range(len(out))]
+        out = out[keep_mask].reset_index(drop=True)
+    report = {
+        "columns": target_cols,
+        "action": action,
+        "detectedRows": int(len(detected_rows)),
+        "detectionsByColumn": detections_by_col,
+        "failed": bool(spec.get("failOnDetect", False) and len(detected_rows) > 0),
+    }
+    return out, report
+
+
+def _execute_inference_parity_op(primary_df: pd.DataFrame, spec: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    train_sig = str(spec.get("trainSignature") or "").strip()
+    infer_sig = str(spec.get("inferenceSignature") or "").strip()
+    mismatch = bool(train_sig and infer_sig and train_sig != infer_sig)
+    report = {
+        "trainSignature": train_sig,
+        "inferenceSignature": infer_sig,
+        "matched": not mismatch,
+        "failed": bool(mismatch and bool(spec.get("failOnMismatch", True))),
+    }
+    return primary_df.copy(), report
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
@@ -1256,12 +2627,86 @@ def execute_transform_op(
     if op == "dedupe":
         spec = params["dedupe"]
         return _execute_dedupe_op(primary_df, spec)
+    if op == "null_policy":
+        spec = params["null_policy"]
+        out_df, _ = _execute_null_policy_op(primary_df, spec)
+        return out_df
+    if op == "outlier_policy":
+        spec = params["outlier_policy"]
+        out_df, _ = _execute_outlier_policy_op(primary_df, spec)
+        return out_df
+    if op == "text_clean":
+        spec = params["text_clean"]
+        out_df, _ = _execute_text_clean_op(primary_df, spec)
+        return out_df
+    if op == "nlp_normalize":
+        spec = params["nlp_normalize"]
+        out_df, _ = _execute_nlp_normalize_op(primary_df, spec)
+        return out_df
+    if op == "tokenize_chunk":
+        spec = params["tokenize_chunk"]
+        out_df, _ = _execute_tokenize_chunk_op(primary_df, spec)
+        return out_df
+    if op == "dataset_split":
+        spec = params["dataset_split"]
+        out_df, _ = _execute_dataset_split_op(primary_df, spec)
+        return out_df
+    if op == "class_imbalance":
+        spec = params["class_imbalance"]
+        out_df, _ = _execute_class_imbalance_op(primary_df, spec)
+        return out_df
+    if op == "categorical_encode":
+        spec = params["categorical_encode"]
+        out_df, _ = _execute_categorical_encode_op(primary_df, spec)
+        return out_df
+    if op == "numeric_scale":
+        spec = params["numeric_scale"]
+        out_df, _ = _execute_numeric_scale_op(primary_df, spec)
+        return out_df
+    if op == "embedding":
+        spec = params["embedding"]
+        out_df, _ = _execute_embedding_op(primary_df, spec)
+        return out_df
+    if op == "feature_selection":
+        spec = params["feature_selection"]
+        out_df, _ = _execute_feature_selection_op(primary_df, spec)
+        return out_df
+    if op == "leakage_detect":
+        spec = params["leakage_detect"]
+        out_df, _ = _execute_leakage_detect_op(primary_df, spec)
+        return out_df
+    if op == "quality_profile":
+        spec = params["quality_profile"]
+        out_df, _ = _execute_quality_profile_op(primary_df, spec)
+        return out_df
+    if op == "drift_compare":
+        spec = params["drift_compare"]
+        out_df, _ = _execute_drift_compare_op(primary_df, spec)
+        return out_df
+    if op == "determinism_profile":
+        spec = params["determinism_profile"]
+        out_df, _ = _execute_determinism_profile_op(primary_df, spec)
+        return out_df
+    if op == "fit_state_registry":
+        spec = params["fit_state_registry"]
+        out_df, _ = _execute_fit_state_registry_op(primary_df, spec)
+        return out_df
+    if op == "pii_guard":
+        spec = params["pii_guard"]
+        out_df, _ = _execute_pii_guard_op(primary_df, spec)
+        return out_df
+    if op == "inference_parity":
+        spec = params["inference_parity"]
+        out_df, _ = _execute_inference_parity_op(primary_df, spec)
+        return out_df
     if op == "aggregate":
         spec = params["aggregate"]
         return _execute_aggregate_op(primary_df, spec)
     if op == "quality_gate":
         spec = params["quality_gate"]
         return _execute_quality_gate_op(primary_df, spec)
+    if op == "ml_contract":
+        return primary_df
     if op == "json_to_table":
         return primary_df
     if op == "text_to_table":
@@ -1469,6 +2914,24 @@ def run_transform(
     if primary_input is None:
         primary_input = next(iter(input_tables.values())) if input_tables else pd.DataFrame()
     quality_gate_report: Optional[Dict[str, Any]] = None
+    null_policy_report: Optional[Dict[str, Any]] = None
+    outlier_policy_report: Optional[Dict[str, Any]] = None
+    text_clean_report: Optional[Dict[str, Any]] = None
+    nlp_normalize_report: Optional[Dict[str, Any]] = None
+    tokenize_chunk_report: Optional[Dict[str, Any]] = None
+    dataset_split_report: Optional[Dict[str, Any]] = None
+    class_imbalance_report: Optional[Dict[str, Any]] = None
+    categorical_encode_report: Optional[Dict[str, Any]] = None
+    numeric_scale_report: Optional[Dict[str, Any]] = None
+    embedding_report: Optional[Dict[str, Any]] = None
+    feature_selection_report: Optional[Dict[str, Any]] = None
+    leakage_detect_report: Optional[Dict[str, Any]] = None
+    quality_profile_report: Optional[Dict[str, Any]] = None
+    drift_compare_report: Optional[Dict[str, Any]] = None
+    determinism_profile_report: Optional[Dict[str, Any]] = None
+    fit_state_registry_report: Optional[Dict[str, Any]] = None
+    pii_guard_report: Optional[Dict[str, Any]] = None
+    inference_parity_report: Optional[Dict[str, Any]] = None
     if op == "quality_gate":
         spec = params["quality_gate"]
         primary_df = input_tables.get("in")
@@ -1480,6 +2943,68 @@ def run_transform(
         if bool(quality_gate_report.get("failed")):
             raise ValueError(_quality_gate_failure_message(quality_gate_report))
         out_df = primary_df
+    elif op == "null_policy":
+        spec = params["null_policy"]
+        out_df, null_policy_report = _execute_null_policy_op(primary_input, spec)
+    elif op == "outlier_policy":
+        spec = params["outlier_policy"]
+        out_df, outlier_policy_report = _execute_outlier_policy_op(primary_input, spec)
+    elif op == "text_clean":
+        spec = params["text_clean"]
+        out_df, text_clean_report = _execute_text_clean_op(primary_input, spec)
+    elif op == "nlp_normalize":
+        spec = params["nlp_normalize"]
+        out_df, nlp_normalize_report = _execute_nlp_normalize_op(primary_input, spec)
+    elif op == "tokenize_chunk":
+        spec = params["tokenize_chunk"]
+        out_df, tokenize_chunk_report = _execute_tokenize_chunk_op(primary_input, spec)
+    elif op == "dataset_split":
+        spec = params["dataset_split"]
+        out_df, dataset_split_report = _execute_dataset_split_op(primary_input, spec)
+    elif op == "class_imbalance":
+        spec = params["class_imbalance"]
+        out_df, class_imbalance_report = _execute_class_imbalance_op(primary_input, spec)
+    elif op == "categorical_encode":
+        spec = params["categorical_encode"]
+        out_df, categorical_encode_report = _execute_categorical_encode_op(primary_input, spec)
+    elif op == "numeric_scale":
+        spec = params["numeric_scale"]
+        out_df, numeric_scale_report = _execute_numeric_scale_op(primary_input, spec)
+    elif op == "embedding":
+        spec = params["embedding"]
+        out_df, embedding_report = _execute_embedding_op(primary_input, spec)
+    elif op == "feature_selection":
+        spec = params["feature_selection"]
+        out_df, feature_selection_report = _execute_feature_selection_op(primary_input, spec)
+    elif op == "leakage_detect":
+        spec = params["leakage_detect"]
+        out_df, leakage_detect_report = _execute_leakage_detect_op(primary_input, spec)
+        if bool((leakage_detect_report or {}).get("violated")):
+            raise ValueError("leakage_detect failed: overlap exceeds configured maxAllowedOverlap")
+    elif op == "quality_profile":
+        spec = params["quality_profile"]
+        out_df, quality_profile_report = _execute_quality_profile_op(primary_input, spec)
+    elif op == "drift_compare":
+        spec = params["drift_compare"]
+        out_df, drift_compare_report = _execute_drift_compare_op(primary_input, spec)
+        if bool((drift_compare_report or {}).get("failed")):
+            raise ValueError("drift_compare failed: drift exceeds configured threshold")
+    elif op == "determinism_profile":
+        spec = params["determinism_profile"]
+        out_df, determinism_profile_report = _execute_determinism_profile_op(primary_input, spec)
+    elif op == "fit_state_registry":
+        spec = params["fit_state_registry"]
+        out_df, fit_state_registry_report = _execute_fit_state_registry_op(primary_input, spec)
+    elif op == "pii_guard":
+        spec = params["pii_guard"]
+        out_df, pii_guard_report = _execute_pii_guard_op(primary_input, spec)
+        if bool((pii_guard_report or {}).get("failed")):
+            raise ValueError("pii_guard failed: PII detected and failOnDetect=true")
+    elif op == "inference_parity":
+        spec = params["inference_parity"]
+        out_df, inference_parity_report = _execute_inference_parity_op(primary_input, spec)
+        if bool((inference_parity_report or {}).get("failed")):
+            raise ValueError("inference_parity failed: train/inference signatures mismatch")
     else:
         out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
 
@@ -1520,5 +3045,52 @@ def run_transform(
     }
     if quality_gate_report is not None:
         meta["quality_gate"] = quality_gate_report
+    if null_policy_report is not None:
+        meta["null_policy"] = null_policy_report
+    if outlier_policy_report is not None:
+        meta["outlier_policy"] = outlier_policy_report
+    if text_clean_report is not None:
+        meta["text_clean"] = text_clean_report
+    if nlp_normalize_report is not None:
+        meta["nlp_normalize"] = nlp_normalize_report
+    if tokenize_chunk_report is not None:
+        meta["tokenize_chunk"] = tokenize_chunk_report
+    if dataset_split_report is not None:
+        meta["dataset_split"] = dataset_split_report
+    if class_imbalance_report is not None:
+        meta["class_imbalance"] = class_imbalance_report
+    if categorical_encode_report is not None:
+        meta["categorical_encode"] = categorical_encode_report
+    if numeric_scale_report is not None:
+        meta["numeric_scale"] = numeric_scale_report
+    if embedding_report is not None:
+        meta["embedding"] = embedding_report
+    if feature_selection_report is not None:
+        meta["feature_selection"] = feature_selection_report
+    if leakage_detect_report is not None:
+        meta["leakage_detect"] = leakage_detect_report
+    if quality_profile_report is not None:
+        meta["quality_profile"] = quality_profile_report
+    if drift_compare_report is not None:
+        meta["drift_compare"] = drift_compare_report
+    if determinism_profile_report is not None:
+        meta["determinism_profile"] = determinism_profile_report
+    if fit_state_registry_report is not None:
+        meta["fit_state_registry"] = fit_state_registry_report
+    if pii_guard_report is not None:
+        meta["pii_guard"] = pii_guard_report
+    if inference_parity_report is not None:
+        meta["inference_parity"] = inference_parity_report
+    if op == "ml_contract":
+        contract_spec = params.get("ml_contract") if isinstance(params.get("ml_contract"), dict) else {}
+        meta["ml_contract"] = {
+            "taskType": str(contract_spec.get("taskType") or "other"),
+            "labelColumn": str(contract_spec.get("labelColumn") or ""),
+            "featureColumns": [str(c) for c in (contract_spec.get("featureColumns") or []) if str(c).strip()],
+            "idColumn": str(contract_spec.get("idColumn") or ""),
+            "timestampColumn": str(contract_spec.get("timestampColumn") or ""),
+            "allowExtraFeatures": bool(contract_spec.get("allowExtraFeatures", True)),
+            "requireNonNullLabel": bool(contract_spec.get("requireNonNullLabel", True)),
+        }
     return TransformResult(payload_bytes=payload, mime_type="text/csv; charset=utf-8", meta=meta)
 

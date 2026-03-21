@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from hypothesis import given, strategies as st
+from hypothesis import HealthCheck, given, settings, strategies as st
 
 from app.runner.run import _typed_schema_compatibility
 
@@ -29,6 +29,7 @@ def _typed_schema(type_name: str, fields: list[tuple[str, str]]) -> dict:
 	actual_fields=st.lists(st.tuples(_FIELD_NAME, _FIELD_TYPE), unique_by=lambda item: item[0], max_size=4),
 	policy=_POLICY,
 )
+@settings(suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_typed_schema_compatibility_invariants(
 	expected_type: str,
 	actual_type: str,

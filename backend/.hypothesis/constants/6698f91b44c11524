@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\materialize.py
+# hypothesis_version: 6.151.9
+
+[200, 20000, '"', ',', '0', '1', ';', '=', 'LLM_PROMPT_MAX_CHARS', 'LLM_TABLE_MAX_COLS', 'LLM_TABLE_MAX_ROWS', 'LLM_TABLE_SORT_ROWS', 'charset=', 'csv', 'false', 'graph_id', 'mime_type', 'no', 'off', 'on', 'payload_schema', 'payload_type', 'replace', 'tab-separated-values', 'table', 'true', 'type', 'utf-8', 'yes', '\ufeff']

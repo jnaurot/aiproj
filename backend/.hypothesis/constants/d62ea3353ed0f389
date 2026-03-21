@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\llm_openai_compat.py
+# hypothesis_version: 6.151.9
+
+[2.0, 8.0, 10.0, 1000.0, ',', '/', '1d', ':', '<missing-node-id>', 'Authorization', 'Content-Type', 'POST', '[DONE]', 'application/json', 'at', 'bus', 'choices', 'content', 'context is None', 'context missing bus', 'data', 'data:', 'delta', 'dims', 'dtype', 'embedding', 'embeddings', 'error', 'failed', 'float32', 'frequency_penalty', 'id', 'info', 'input', 'json', 'json_object', 'layout', 'level', 'llm_delta', 'log', 'max_tokens', 'message', 'messages', 'mode', 'model', 'nodeId', 'presence_penalty', 'response_format', 'role', 'runId', 'seed', 'stop', 'stream', 'succeeded', 'system', 'temperature', 'text', 'top_p', 'txt', 'type', 'user', 'utf-8', 'warn', '{input}']

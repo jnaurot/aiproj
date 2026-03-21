@@ -155,6 +155,76 @@ export const DSML_STARTER_TEMPLATES: GuidedStarterTemplate[] = [
 			{ id: 'e_quality_train', source: 'quality', target: 'train' },
 		],
 	},
+	{
+		id: 'starter_llm_prep_rag',
+		name: 'LLM Prep (RAG)',
+		description: 'Source -> text clean -> tokenize/chunk -> embedding',
+		nodes: [
+			{
+				id: 'src',
+				kind: 'source',
+				label: 'Corpus',
+				position: { x: 0, y: 0 },
+				sourceKind: 'file',
+				params: {
+					source_type: 'file',
+					filename: 'corpus.txt',
+					file_format: 'txt',
+					cache_enabled: true,
+				},
+			},
+			{
+				id: 'tt',
+				kind: 'transform',
+				label: 'Text to Table',
+				position: { x: 250, y: 0 },
+				transformKind: 'text_to_table',
+				params: {
+					op: 'text_to_table',
+					text_to_table: { mode: 'lines', column: 'text', delimiter: ',', hasHeader: true },
+				},
+			},
+			{
+				id: 'clean',
+				kind: 'transform',
+				label: 'Text Clean',
+				position: { x: 500, y: 0 },
+				transformKind: 'text_clean',
+				params: {
+					op: 'text_clean',
+					text_clean: { columns: ['text'], lowercase: true, removeUrls: true, removeEmails: true, normalizeWhitespace: true },
+				},
+			},
+			{
+				id: 'chunk',
+				kind: 'transform',
+				label: 'Chunk',
+				position: { x: 750, y: 0 },
+				transformKind: 'tokenize_chunk',
+				params: {
+					op: 'tokenize_chunk',
+					tokenize_chunk: { columns: ['text'], tokenizer: 'whitespace', maxTokens: 256, overlap: 32, outColumn: 'chunk' },
+				},
+			},
+			{
+				id: 'embed',
+				kind: 'transform',
+				label: 'Embed',
+				position: { x: 1000, y: 0 },
+				transformKind: 'embedding',
+				params: {
+					op: 'embedding',
+					embedding: { columns: ['chunk'], provider: 'local_hash', model: 'text-embedding-3-small', dimensions: 16, outputColumn: 'embedding' },
+				},
+			},
+		],
+		edges: [
+			{ id: 'e_src_tt', source: 'src', target: 'tt' },
+			{ id: 'e_tt_clean', source: 'tt', target: 'clean' },
+			{ id: 'e_clean_chunk', source: 'clean', target: 'chunk' },
+			{ id: 'e_chunk_embed', source: 'chunk', target: 'embed' },
+		],
+	},
 ];
 
 export const DSML_OPERATION_PRESETS: GuidedOperationPreset[] = [
@@ -199,6 +269,25 @@ export const DSML_OPERATION_PRESETS: GuidedOperationPreset[] = [
 				profileId: 'ml',
 				toolId: 'ml.sklearn.train_regressor',
 				args: { label_col: 'target', feature_cols: ['x1', 'x2'] },
+			},
+		},
+	},
+	{
+		id: 'preset_transform_ml_contract_classification',
+		name: 'ML Contract (Classification)',
+		description: 'Declare label/features before train/test split.',
+		kind: 'transform',
+		transformKind: 'ml_contract',
+		params: {
+			op: 'ml_contract',
+			ml_contract: {
+				taskType: 'classification',
+				labelColumn: 'label',
+				featureColumns: ['text'],
+				idColumn: 'id',
+				timestampColumn: '',
+				allowExtraFeatures: true,
+				requireNonNullLabel: true,
 			},
 		},
 	},

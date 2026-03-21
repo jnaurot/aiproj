@@ -92,6 +92,96 @@ export function guidedControlsForTransform(kind: TransformKind): TransformGuided
 			{ id: 'by', label: 'Key Columns', description: 'Choose dedupe keys when not all-columns.' },
 			{ id: 'keep', label: 'Keep Policy', description: 'Control deterministic first-row retention.' }
 		],
+		null_policy: [
+			{ id: 'mode', label: 'Mode', description: 'Report, drop, or fill nulls.' },
+			{ id: 'columns', label: 'Columns', description: 'Target selected columns or all columns.' },
+			{ id: 'fill', label: 'Fill Strategy', description: 'Choose constant or statistic-based fills.' }
+		],
+		outlier_policy: [
+			{ id: 'mode', label: 'Mode', description: 'Clip, winsorize, or drop outliers.' },
+			{ id: 'method', label: 'Method', description: 'Use IQR, z-score, or quantile thresholds.' },
+			{ id: 'columns', label: 'Columns', description: 'Apply policy to chosen numeric columns.' }
+		],
+		text_clean: [
+			{ id: 'columns', label: 'Columns', description: 'Select text columns to normalize.' },
+			{ id: 'normalize', label: 'Normalization', description: 'Apply lowercase/unicode/whitespace cleanup.' },
+			{ id: 'remove_noise', label: 'Noise Removal', description: 'Strip urls, emails, punctuation, or emoji.' }
+		],
+		nlp_normalize: [
+			{ id: 'language', label: 'Language', description: 'Choose supported language for stopword/stem/lemma.' },
+			{ id: 'stopwords', label: 'Stopwords', description: 'Toggle language-aware stopword removal.' },
+			{ id: 'morphology', label: 'Stem/Lemma', description: 'Apply stemming or rule-based lemmatization.' }
+		],
+		tokenize_chunk: [
+			{ id: 'tokenizer', label: 'Tokenizer', description: 'Choose whitespace or regex tokenization.' },
+			{ id: 'budget', label: 'Token Budget', description: 'Set max tokens and overlap for chunk windows.' },
+			{ id: 'boundaries', label: 'Boundaries', description: 'Use sentence-aware boundaries when possible.' }
+		],
+		dataset_split: [
+			{ id: 'strategy', label: 'Split Strategy', description: 'Choose random/stratified/group/time split.' },
+			{ id: 'ratios', label: 'Ratios', description: 'Set reproducible train/val/test ratios.' },
+			{ id: 'seed', label: 'Seed', description: 'Lock deterministic split behavior.' }
+		],
+		class_imbalance: [
+			{ id: 'label', label: 'Label Column', description: 'Select supervised label column.' },
+			{ id: 'strategy', label: 'Strategy', description: 'Report, re-sample, or emit class weights.' },
+			{ id: 'ratio', label: 'Target Ratio', description: 'Set minority/majority balancing goal.' }
+		],
+		categorical_encode: [
+			{ id: 'columns', label: 'Columns', description: 'Target categorical columns to encode.' },
+			{ id: 'encoding', label: 'Encoding', description: 'Choose one-hot, ordinal, or frequency.' },
+			{ id: 'unknown', label: 'Unknown Policy', description: 'Control behavior for unseen categories.' }
+		],
+		numeric_scale: [
+			{ id: 'columns', label: 'Columns', description: 'Select numeric columns to scale.' },
+			{ id: 'method', label: 'Method', description: 'Use standard, minmax, or robust scaling.' },
+			{ id: 'clip', label: 'Clip', description: 'Clamp extreme values after scaling if needed.' }
+		],
+		embedding: [
+			{ id: 'columns', label: 'Columns', description: 'Choose text columns to embed.' },
+			{ id: 'model', label: 'Model', description: 'Pick provider and model/version.' },
+			{ id: 'dimensions', label: 'Dimensions', description: 'Set embedding width for downstream compatibility.' }
+		],
+		feature_selection: [
+			{ id: 'method', label: 'Method', description: 'Pick variance, MI, model, or manual selection.' },
+			{ id: 'candidates', label: 'Candidates', description: 'Choose candidate feature columns.' },
+			{ id: 'budget', label: 'Top K', description: 'Limit final selected features.' }
+		],
+		leakage_detect: [
+			{ id: 'split', label: 'Split Column', description: 'Point to train/val/test split marker column.' },
+			{ id: 'keys', label: 'Key Columns', description: 'Detect duplicate overlap across split boundaries.' },
+			{ id: 'threshold', label: 'Overlap Threshold', description: 'Set maximum allowed leakage overlap.' }
+		],
+		quality_profile: [
+			{ id: 'columns', label: 'Columns', description: 'Profile selected columns or full table.' },
+			{ id: 'hist', label: 'Histograms', description: 'Enable distribution diagnostics.' },
+			{ id: 'samples', label: 'Samples', description: 'Attach sample records for quick review.' }
+		],
+		drift_compare: [
+			{ id: 'metric', label: 'Metric', description: 'Choose PSI, JSD, or KS drift metric.' },
+			{ id: 'threshold', label: 'Threshold', description: 'Set fail/warn drift threshold.' },
+			{ id: 'columns', label: 'Columns', description: 'Limit drift checks to critical features.' }
+		],
+		determinism_profile: [
+			{ id: 'strict', label: 'Strict Mode', description: 'Enforce reproducible transform behavior.' },
+			{ id: 'seed', label: 'Seed', description: 'Set deterministic seed for stochastic stages.' },
+			{ id: 'stable', label: 'Stable Ops', description: 'Use stable sort and coercion policy.' }
+		],
+		fit_state_registry: [
+			{ id: 'mode', label: 'Mode', description: 'Choose fit or apply state behavior.' },
+			{ id: 'stateKey', label: 'State Key', description: 'Persist/reuse named preprocessing state.' },
+			{ id: 'columns', label: 'Columns', description: 'Track columns participating in fit/apply.' }
+		],
+		pii_guard: [
+			{ id: 'columns', label: 'Columns', description: 'Scan columns for PII patterns.' },
+			{ id: 'action', label: 'Action', description: 'Report, mask, or drop rows with PII.' },
+			{ id: 'fail', label: 'Fail Policy', description: 'Optionally fail pipeline when PII appears.' }
+		],
+		inference_parity: [
+			{ id: 'train', label: 'Train Signature', description: 'Provide train-time preprocessing signature.' },
+			{ id: 'infer', label: 'Inference Signature', description: 'Provide inference-time signature.' },
+			{ id: 'fail', label: 'Fail On Mismatch', description: 'Block run when parity check fails.' }
+		],
 		split: [
 			{ id: 'source', label: 'Source Column', description: 'Select text column to split.' },
 			{ id: 'mode', label: 'Split Mode', description: 'Pick sentence/line/regex/delimiter.' },
@@ -101,6 +191,11 @@ export function guidedControlsForTransform(kind: TransformKind): TransformGuided
 			{ id: 'checks', label: 'Checks', description: 'Add high-value quality checks first.' },
 			{ id: 'severity', label: 'Severity', description: 'Set warn/fail behavior per check.' },
 			{ id: 'stop', label: 'Stop On Fail', description: 'Block downstream when quality fails.' }
+		],
+		ml_contract: [
+			{ id: 'label', label: 'Label Column', description: 'Set the supervised target column.' },
+			{ id: 'features', label: 'Feature Columns', description: 'Choose canonical feature columns.' },
+			{ id: 'constraints', label: 'Contract Checks', description: 'Enforce required label/features before train.' }
 		],
 		sql: [
 			{ id: 'dialect', label: 'Dialect', description: 'Set SQL dialect compatibility.' },
@@ -174,6 +269,38 @@ export function buildTransformAutoFixes(input: {
 				label: 'Drop Missing Dedupe Keys',
 				patch: { op: 'dedupe', dedupe: { ...nested, allColumns: by.length === 0, by } }
 			});
+		}
+		if (input.kind === 'ml_contract') {
+			const nested = readNestedParams(input.params, 'ml_contract');
+			const label = String(nested.labelColumn ?? 'label').trim();
+			const features = uniq(((nested.featureColumns as unknown[]) ?? []).map((v) => String(v))).filter((c) => !missing.includes(c));
+			const idCol = String(nested.idColumn ?? '').trim();
+			const tsCol = String(nested.timestampColumn ?? '').trim();
+			fixes.push({
+				id: 'ml_contract_drop_missing',
+				label: 'Use Available Contract Columns',
+				patch: {
+					op: 'ml_contract',
+					ml_contract: {
+						...nested,
+						labelColumn: missing.includes(label) ? (features[0] ?? label) : label,
+						featureColumns: features,
+						idColumn: missing.includes(idCol) ? '' : idCol,
+						timestampColumn: missing.includes(tsCol) ? '' : tsCol
+					}
+				}
+			});
+		}
+		if (input.kind === 'dataset_split') {
+			const nested = readNestedParams(input.params, 'dataset_split');
+			const strategy = String(nested.strategy ?? 'random');
+			if (strategy === 'stratified') {
+				fixes.push({
+					id: 'dataset_split_random',
+					label: 'Switch To Random Split',
+					patch: { op: 'dataset_split', dataset_split: { ...nested, strategy: 'random', stratifyColumn: '' } }
+				});
+			}
 		}
 	}
 	if (code === 'COLUMN_SELECTION_REQUIRED' && input.kind === 'dedupe') {

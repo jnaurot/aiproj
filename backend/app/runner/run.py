@@ -1049,7 +1049,35 @@ def _transform_output_columns(
         if emit_source_row:
             out.append({"name": "source_row", "type": "int"})
         return canonical_table_columns(out)
-    if op_l in {"sort", "limit", "dedupe", "filter", "quality_gate", "sql", "json_to_table", "text_to_table"}:
+    if op_l == "tokenize_chunk":
+        spec = norm.get("tokenize_chunk") or {}
+        out_col = str(spec.get("outColumn") or "chunk")
+        out = [
+            {"name": out_col, "type": "string"},
+            {"name": "source_row", "type": "int"},
+            {"name": "source_column", "type": "string"},
+            {"name": "chunk_index", "type": "int"},
+            {"name": "token_count", "type": "int"},
+        ]
+        return canonical_table_columns(out)
+    if op_l == "dataset_split":
+        out = list(primary)
+        if "split" not in out:
+            out.append("split")
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "embedding":
+        spec = norm.get("embedding") or {}
+        out_col = str(spec.get("outputColumn") or "embedding")
+        out = [c for c in primary if c != out_col] + [out_col]
+        return canonical_table_columns([{"name": c, "type": "unknown"} for c in out])
+    if op_l == "feature_selection":
+        spec = norm.get("feature_selection") or {}
+        method = str(spec.get("method") or "variance").strip().lower()
+        if method == "manual":
+            selected = [str(c) for c in (spec.get("selectedColumns") or []) if str(c).strip() in set(primary)]
+            if selected:
+                return canonical_table_columns([{"name": c, "type": "unknown"} for c in selected])
+    if op_l in {"sort", "limit", "dedupe", "null_policy", "outlier_policy", "text_clean", "nlp_normalize", "filter", "quality_gate", "ml_contract", "sql", "json_to_table", "text_to_table", "class_imbalance", "categorical_encode", "numeric_scale", "leakage_detect", "quality_profile", "drift_compare", "determinism_profile", "fit_state_registry", "pii_guard", "inference_parity"}:
         # sql may differ but keep deterministic fallback if no parser.
         return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
     return canonical_table_columns([{"name": c, "type": "unknown"} for c in primary])
@@ -4176,6 +4204,529 @@ async def run_graph(
                                         "availableColumnsSource": "schema",
                                     },
                                 )
+                        elif op == "null_policy":
+                            null_spec = norm.get("null_policy") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (null_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            rules = null_spec.get("rules") if isinstance(null_spec.get("rules"), list) else []
+                            for rule in rules:
+                                if isinstance(rule, dict):
+                                    col = str(rule.get("column") or "").strip()
+                                    if col:
+                                        cols.append(col)
+                            cols = _stable_unique_strings(cols)
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in cols if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: null_policy references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="null_policy",
+                                            param_path="params.null_policy",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "outlier_policy":
+                            outlier_spec = norm.get("outlier_policy") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (outlier_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in cols if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: outlier_policy references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="outlier_policy",
+                                            param_path="params.outlier_policy.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "text_clean":
+                            clean_spec = norm.get("text_clean") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (clean_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in cols if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: text_clean references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="text_clean",
+                                            param_path="params.text_clean.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "nlp_normalize":
+                            nlp_spec = norm.get("nlp_normalize") or {}
+                            language = str(nlp_spec.get("language") or "en").strip().lower()
+                            if language != "en":
+                                raise ContractMismatchError(
+                                    f"Transform config mismatch: unsupported nlp_normalize.language '{language}'",
+                                    code="CONTRACT_MISMATCH",
+                                    details={
+                                        "errorCode": "CONTRACT_MISMATCH",
+                                        "op": "nlp_normalize",
+                                        "paramPath": "params.nlp_normalize.language",
+                                        "expected": {"supportedLanguages": ["en"]},
+                                        "actual": {"language": language},
+                                    },
+                                )
+                            cols = [
+                                str(c).strip()
+                                for c in (nlp_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in cols if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: nlp_normalize references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="nlp_normalize",
+                                            param_path="params.nlp_normalize.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "tokenize_chunk":
+                            chunk_spec = norm.get("tokenize_chunk") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (chunk_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                available_set = set(available_cols)
+                                missing_cols = [c for c in cols if c not in available_set]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: tokenize_chunk references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="tokenize_chunk",
+                                            param_path="params.tokenize_chunk.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                            max_tokens = int(chunk_spec.get("maxTokens") or 256)
+                            overlap = int(chunk_spec.get("overlap") or 0)
+                            if overlap >= max_tokens:
+                                raise ContractMismatchError(
+                                    "Transform config mismatch: tokenize_chunk overlap must be less than maxTokens",
+                                    code="CONTRACT_MISMATCH",
+                                    details={
+                                        "errorCode": "CONTRACT_MISMATCH",
+                                        "op": "tokenize_chunk",
+                                        "paramPath": "params.tokenize_chunk.overlap",
+                                        "expected": {"overlapLtMaxTokens": True},
+                                        "actual": {"overlap": overlap, "maxTokens": max_tokens},
+                                    },
+                                )
+                        elif op == "dataset_split":
+                            split_spec = norm.get("dataset_split") or {}
+                            strategy = str(split_spec.get("strategy") or "random").strip().lower()
+                            required_col = ""
+                            required_path = ""
+                            if strategy == "stratified":
+                                required_col = str(split_spec.get("stratifyColumn") or "").strip()
+                                required_path = "params.dataset_split.stratifyColumn"
+                            elif strategy == "group":
+                                required_col = str(split_spec.get("groupColumn") or "").strip()
+                                required_path = "params.dataset_split.groupColumn"
+                            elif strategy == "time":
+                                required_col = str(split_spec.get("timeColumn") or "").strip()
+                                required_path = "params.dataset_split.timeColumn"
+                            if required_col:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                if required_col not in set(available_cols):
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: dataset_split references missing column '{required_col}'",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="dataset_split",
+                                            param_path=required_path,
+                                            missing_columns=[required_col],
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "class_imbalance":
+                            imb_spec = norm.get("class_imbalance") or {}
+                            label_col = str(imb_spec.get("labelColumn") or "label").strip()
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                input_columns=input_columns,
+                            )
+                            if label_col and label_col not in set(available_cols):
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: class_imbalance references missing label column '{label_col}'",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="class_imbalance",
+                                        param_path="params.class_imbalance.labelColumn",
+                                        missing_columns=[label_col],
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
+                        elif op == "categorical_encode":
+                            cat_spec = norm.get("categorical_encode") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (cat_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: categorical_encode references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="categorical_encode",
+                                            param_path="params.categorical_encode.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "numeric_scale":
+                            scale_spec = norm.get("numeric_scale") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (scale_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: numeric_scale references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="numeric_scale",
+                                            param_path="params.numeric_scale.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "embedding":
+                            emb_spec = norm.get("embedding") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (emb_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: embedding references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="embedding",
+                                            param_path="params.embedding.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "feature_selection":
+                            fs_spec = norm.get("feature_selection") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (fs_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            manual_selected = [
+                                str(c).strip()
+                                for c in (fs_spec.get("selectedColumns") or [])
+                                if str(c).strip()
+                            ]
+                            referenced = cols + manual_selected
+                            if referenced:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in referenced if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: feature_selection references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="feature_selection",
+                                            param_path="params.feature_selection",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "leakage_detect":
+                            leak_spec = norm.get("leakage_detect") or {}
+                            split_col = str(leak_spec.get("splitColumn") or "split").strip()
+                            referenced = [split_col] + [
+                                str(c).strip()
+                                for c in (leak_spec.get("keyColumns") or [])
+                                if str(c).strip()
+                            ]
+                            label_col = str(leak_spec.get("labelColumn") or "").strip()
+                            if label_col:
+                                referenced.append(label_col)
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                input_columns=input_columns,
+                            )
+                            missing_cols = [c for c in referenced if c not in set(available_cols)]
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: leakage_detect references missing columns {missing_cols}",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="leakage_detect",
+                                        param_path="params.leakage_detect",
+                                        missing_columns=missing_cols,
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
+                        elif op == "quality_profile":
+                            qp_spec = norm.get("quality_profile") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (qp_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: quality_profile references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="quality_profile",
+                                            param_path="params.quality_profile.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "drift_compare":
+                            dc_spec = norm.get("drift_compare") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (dc_spec.get("compareColumns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: drift_compare references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="drift_compare",
+                                            param_path="params.drift_compare.compareColumns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "fit_state_registry":
+                            fsr_spec = norm.get("fit_state_registry") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (fsr_spec.get("includeColumns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: fit_state_registry references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="fit_state_registry",
+                                            param_path="params.fit_state_registry.includeColumns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "pii_guard":
+                            pii_spec = norm.get("pii_guard") or {}
+                            cols = [
+                                str(c).strip()
+                                for c in (pii_spec.get("columns") or [])
+                                if str(c).strip()
+                            ]
+                            if cols:
+                                available_cols, available_source = _available_columns_for_input_handle(
+                                    input_handle=primary_input_handle,
+                                    input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                    input_columns=input_columns,
+                                )
+                                missing_cols = [c for c in cols if c not in set(available_cols)]
+                                if missing_cols:
+                                    raise ContractMismatchError(
+                                        f"Transform payload schema mismatch: pii_guard references missing columns {missing_cols}",
+                                        code="MISSING_COLUMN",
+                                        details=_missing_column_details(
+                                            op="pii_guard",
+                                            param_path="params.pii_guard.columns",
+                                            missing_columns=missing_cols,
+                                            available_columns=available_cols,
+                                            available_source=available_source,
+                                        ),
+                                    )
+                        elif op == "ml_contract":
+                            contract_spec = norm.get("ml_contract") or {}
+                            label_col = str(contract_spec.get("labelColumn") or "").strip()
+                            feature_cols = _stable_unique_strings(
+                                [
+                                    str(c).strip()
+                                    for c in (contract_spec.get("featureColumns") or [])
+                                    if str(c).strip()
+                                ]
+                            )
+                            optional_cols = []
+                            id_col = str(contract_spec.get("idColumn") or "").strip()
+                            ts_col = str(contract_spec.get("timestampColumn") or "").strip()
+                            if id_col:
+                                optional_cols.append(id_col)
+                            if ts_col:
+                                optional_cols.append(ts_col)
+                            required_cols = _stable_unique_strings(
+                                [label_col, *feature_cols, *optional_cols]
+                            )
+                            available_cols, available_source = _available_columns_for_input_handle(
+                                input_handle=primary_input_handle,
+                                input_schema_cols_by_handle=input_schema_cols_by_handle,
+                                input_columns=input_columns,
+                            )
+                            available_set = set(available_cols)
+                            missing_cols = [c for c in required_cols if c and c not in available_set]
+                            if missing_cols:
+                                raise ContractMismatchError(
+                                    f"Transform payload schema mismatch: ml_contract references missing columns {missing_cols}",
+                                    code="MISSING_COLUMN",
+                                    details=_missing_column_details(
+                                        op="ml_contract",
+                                        param_path="params.ml_contract",
+                                        missing_columns=missing_cols,
+                                        available_columns=available_cols,
+                                        available_source=available_source,
+                                    ),
+                                )
+                            require_non_null_label = bool(contract_spec.get("requireNonNullLabel", True))
+                            if require_non_null_label and label_col:
+                                primary_df = input_tables.get(primary_input_handle)
+                                if primary_df is None and input_tables:
+                                    primary_df = next(iter(input_tables.values()))
+                                if primary_df is not None and label_col in list(getattr(primary_df, "columns", [])):
+                                    series = primary_df[label_col]
+                                    null_like = int(series.isna().sum())
+                                    if null_like > 0:
+                                        raise ContractMismatchError(
+                                            f"Transform payload schema mismatch: ml_contract label column '{label_col}' has null values",
+                                            code="CONTRACT_MISMATCH",
+                                            details={
+                                                "errorCode": "CONTRACT_MISMATCH",
+                                                "op": "ml_contract",
+                                                "paramPath": "params.ml_contract.requireNonNullLabel",
+                                                "expected": {"requireNonNullLabel": True, "column": label_col},
+                                                "actual": {"nullCount": int(null_like), "column": label_col},
+                                            },
+                                        )
                         elif op == "dedupe":
                             dedupe_spec = norm.get("dedupe") or {}
                             by_cols = [str(c) for c in (dedupe_spec.get("by") or []) if str(c).strip()]
@@ -4420,7 +4971,33 @@ async def run_graph(
                                 }
 
                             enriched_cols: list[dict[str, str]] = []
-                            passthrough_ops = {"filter", "sort", "limit", "dedupe", "quality_gate", "sql", "select"}
+                            passthrough_ops = {
+                                "filter",
+                                "sort",
+                                "limit",
+                                "dedupe",
+                                "null_policy",
+                                "outlier_policy",
+                                "text_clean",
+                                "nlp_normalize",
+                                "dataset_split",
+                                "class_imbalance",
+                                "categorical_encode",
+                                "numeric_scale",
+                                "embedding",
+                                "feature_selection",
+                                "leakage_detect",
+                                "quality_profile",
+                                "drift_compare",
+                                "determinism_profile",
+                                "fit_state_registry",
+                                "pii_guard",
+                                "inference_parity",
+                                "quality_gate",
+                                "ml_contract",
+                                "sql",
+                                "select",
+                            }
                             for c in output_cols:
                                 if not isinstance(c, dict):
                                     continue

@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\AppData\Roaming\Python\Python314\site-packages\fastapi\param_functions.py
+# hypothesis_version: 6.151.9
+
+['application/json', 'function', 'multipart/form-data', 'request']

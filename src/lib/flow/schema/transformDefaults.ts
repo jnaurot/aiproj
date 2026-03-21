@@ -9,12 +9,31 @@ import type {
 	TransformSortParams,
 	TransformLimitParams,
 	TransformDedupeParams,
+	TransformNullPolicyParams,
+	TransformOutlierPolicyParams,
+	TransformTextCleanParams,
+	TransformNlpNormalizeParams,
+	TransformTokenizeChunkParams,
+	TransformDatasetSplitParams,
+	TransformClassImbalanceParams,
+	TransformCategoricalEncodeParams,
+	TransformNumericScaleParams,
+	TransformEmbeddingParams,
+	TransformFeatureSelectionParams,
+	TransformLeakageDetectParams,
+	TransformQualityProfileParams,
+	TransformDriftCompareParams,
+	TransformDeterminismProfileParams,
+	TransformFitStateRegistryParams,
+	TransformPiiGuardParams,
+	TransformInferenceParityParams,
 	TransformQualityGateParams,
 	TransformSqlParams,
 	TransformSplitParams,
 	TransformJsonToTableParams,
 	TransformTextToTableParams,
-	TransformTableToJsonParams
+	TransformTableToJsonParams,
+	TransformMlContractParams
 } from '$lib/flow/schema/transform';
 
 export const defaultTransformFilterParams: TransformFilterParams = {
@@ -86,6 +105,155 @@ export const defaultTransformDedupeParams: TransformDedupeParams = {
 	by: []
 };
 
+export const defaultTransformNullPolicyParams: TransformNullPolicyParams = {
+	mode: 'report',
+	columns: [],
+	fillValue: '',
+	stat: 'mean',
+	rules: []
+};
+
+export const defaultTransformOutlierPolicyParams: TransformOutlierPolicyParams = {
+	mode: 'clip',
+	method: 'iqr',
+	columns: [],
+	iqrMultiplier: 1.5,
+	zscoreThreshold: 3,
+	lowerQuantile: 0.01,
+	upperQuantile: 0.99
+};
+
+export const defaultTransformTextCleanParams: TransformTextCleanParams = {
+	columns: [],
+	lowercase: true,
+	unicodeNormalize: 'nfkc',
+	removePunctuation: false,
+	removeUrls: true,
+	removeEmails: true,
+	removeEmoji: false,
+	normalizeWhitespace: true
+};
+
+export const defaultTransformNlpNormalizeParams: TransformNlpNormalizeParams = {
+	columns: [],
+	language: 'en',
+	removeStopwords: true,
+	stemmer: 'none',
+	lemmatizer: 'none',
+	tokenPattern: '\\w+'
+};
+
+export const defaultTransformTokenizeChunkParams: TransformTokenizeChunkParams = {
+	columns: [],
+	tokenizer: 'whitespace',
+	tokenPattern: '\\w+',
+	maxTokens: 256,
+	overlap: 32,
+	sentenceAware: true,
+	outColumn: 'chunk'
+};
+
+export const defaultTransformDatasetSplitParams: TransformDatasetSplitParams = {
+	strategy: 'random',
+	trainRatio: 0.8,
+	valRatio: 0.1,
+	testRatio: 0.1,
+	seed: 42,
+	shuffle: true,
+	stratifyColumn: '',
+	groupColumn: '',
+	timeColumn: '',
+	leakageGuard: true
+};
+
+export const defaultTransformClassImbalanceParams: TransformClassImbalanceParams = {
+	strategy: 'report',
+	labelColumn: 'label',
+	targetRatio: 1,
+	seed: 42
+};
+
+export const defaultTransformCategoricalEncodeParams: TransformCategoricalEncodeParams = {
+	columns: [],
+	encoding: 'one_hot',
+	unknownPolicy: 'ignore',
+	rareThreshold: 0,
+	dropFirst: false
+};
+
+export const defaultTransformNumericScaleParams: TransformNumericScaleParams = {
+	columns: [],
+	method: 'standard',
+	withCenter: true,
+	withScale: true,
+	clip: false
+};
+
+export const defaultTransformEmbeddingParams: TransformEmbeddingParams = {
+	columns: [],
+	provider: 'local_hash',
+	model: 'text-embedding-3-small',
+	dimensions: 16,
+	batchSize: 64,
+	cacheEmbeddings: true,
+	outputColumn: 'embedding'
+};
+
+export const defaultTransformFeatureSelectionParams: TransformFeatureSelectionParams = {
+	method: 'variance',
+	columns: [],
+	topK: 50,
+	varianceThreshold: 0,
+	targetColumn: 'label',
+	selectedColumns: []
+};
+
+export const defaultTransformLeakageDetectParams: TransformLeakageDetectParams = {
+	splitColumn: 'split',
+	keyColumns: ['id'],
+	labelColumn: 'label',
+	maxAllowedOverlap: 0
+};
+
+export const defaultTransformQualityProfileParams: TransformQualityProfileParams = {
+	columns: [],
+	includeHistograms: true,
+	includeSamples: true
+};
+
+export const defaultTransformDriftCompareParams: TransformDriftCompareParams = {
+	baselineRef: '',
+	compareColumns: [],
+	metric: 'psi',
+	threshold: 0.2,
+	failOnDrift: false
+};
+
+export const defaultTransformDeterminismProfileParams: TransformDeterminismProfileParams = {
+	strict: true,
+	seed: 42,
+	stableSort: true,
+	stableCoercion: true
+};
+
+export const defaultTransformFitStateRegistryParams: TransformFitStateRegistryParams = {
+	mode: 'fit',
+	stateKey: 'default',
+	includeColumns: []
+};
+
+export const defaultTransformPiiGuardParams: TransformPiiGuardParams = {
+	columns: [],
+	action: 'report',
+	failOnDetect: false
+};
+
+export const defaultTransformInferenceParityParams: TransformInferenceParityParams = {
+	trainSignature: '',
+	inferenceSignature: '',
+	failOnMismatch: true
+};
+
 export const defaultTransformSqlParams: TransformSqlParams = {
 	dialect: 'duckdb',
 	query: 'SELECT * FROM input LIMIT 10'
@@ -126,6 +294,16 @@ export const defaultTransformSplitParams: TransformSplitParams = {
 export const defaultTransformQualityGateParams: TransformQualityGateParams = {
 	checks: [],
 	stopOnFail: true
+};
+
+export const defaultTransformMlContractParams: TransformMlContractParams = {
+	taskType: 'other',
+	labelColumn: 'label',
+	featureColumns: ['text'],
+	idColumn: '',
+	timestampColumn: '',
+	allowExtraFeatures: true,
+	requireNonNullLabel: true
 };
 
 export const defaultTransformParamsByKind = {
@@ -192,6 +370,132 @@ export const defaultTransformParamsByKind = {
 		cache: { enabled: false },
 		dedupe: defaultTransformDedupeParams
 	},
+	null_policy: {
+		op: 'null_policy',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		null_policy: defaultTransformNullPolicyParams
+	},
+	outlier_policy: {
+		op: 'outlier_policy',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		outlier_policy: defaultTransformOutlierPolicyParams
+	},
+	text_clean: {
+		op: 'text_clean',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		text_clean: defaultTransformTextCleanParams
+	},
+	nlp_normalize: {
+		op: 'nlp_normalize',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		nlp_normalize: defaultTransformNlpNormalizeParams
+	},
+	tokenize_chunk: {
+		op: 'tokenize_chunk',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		tokenize_chunk: defaultTransformTokenizeChunkParams
+	},
+	dataset_split: {
+		op: 'dataset_split',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		dataset_split: defaultTransformDatasetSplitParams
+	},
+	class_imbalance: {
+		op: 'class_imbalance',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		class_imbalance: defaultTransformClassImbalanceParams
+	},
+	categorical_encode: {
+		op: 'categorical_encode',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		categorical_encode: defaultTransformCategoricalEncodeParams
+	},
+	numeric_scale: {
+		op: 'numeric_scale',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		numeric_scale: defaultTransformNumericScaleParams
+	},
+	embedding: {
+		op: 'embedding',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		embedding: defaultTransformEmbeddingParams
+	},
+	feature_selection: {
+		op: 'feature_selection',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		feature_selection: defaultTransformFeatureSelectionParams
+	},
+	leakage_detect: {
+		op: 'leakage_detect',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		leakage_detect: defaultTransformLeakageDetectParams
+	},
+	quality_profile: {
+		op: 'quality_profile',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		quality_profile: defaultTransformQualityProfileParams
+	},
+	drift_compare: {
+		op: 'drift_compare',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		drift_compare: defaultTransformDriftCompareParams
+	},
+	determinism_profile: {
+		op: 'determinism_profile',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		determinism_profile: defaultTransformDeterminismProfileParams
+	},
+	fit_state_registry: {
+		op: 'fit_state_registry',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		fit_state_registry: defaultTransformFitStateRegistryParams
+	},
+	pii_guard: {
+		op: 'pii_guard',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		pii_guard: defaultTransformPiiGuardParams
+	},
+	inference_parity: {
+		op: 'inference_parity',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		inference_parity: defaultTransformInferenceParityParams
+	},
 	split: {
 		op: 'split',
 		enabled: true,
@@ -205,6 +509,13 @@ export const defaultTransformParamsByKind = {
 		notes: '',
 		cache: { enabled: false },
 		quality_gate: defaultTransformQualityGateParams
+	},
+	ml_contract: {
+		op: 'ml_contract',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		ml_contract: defaultTransformMlContractParams
 	},
 	sql: {
 		op: 'sql',
