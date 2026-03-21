@@ -1,0 +1,29 @@
+{
+	"version": 1,
+	"cases": [
+		{ "file_format": "csv", "expected_output": "table" },
+		{ "file_format": "tsv", "expected_output": "table" },
+		{ "file_format": "parquet", "expected_output": "table" },
+		{ "file_format": "excel", "expected_output": "table" },
+		{ "file_format": "json", "expected_output": "json" },
+		{ "file_format": "txt", "expected_output": "text" },
+		{ "file_format": "pdf", "expected_output": "text" },
+		{ "file_format": "jpg", "expected_output": "binary" },
+		{ "file_format": "jpeg", "expected_output": "binary" },
+		{ "file_format": "png", "expected_output": "binary" },
+		{ "file_format": "webp", "expected_output": "binary" },
+		{ "file_format": "gif", "expected_output": "binary" },
+		{ "file_format": "svg", "expected_output": "binary" },
+		{ "file_format": "tif", "expected_output": "binary" },
+		{ "file_format": "tiff", "expected_output": "binary" },
+		{ "file_format": "mp3", "expected_output": "binary" },
+		{ "file_format": "wav", "expected_output": "binary" },
+		{ "file_format": "flac", "expected_output": "binary" },
+		{ "file_format": "ogg", "expected_output": "binary" },
+		{ "file_format": "m4a", "expected_output": "binary" },
+		{ "file_format": "aac", "expected_output": "binary" },
+		{ "file_format": "mp4", "expected_output": "binary" },
+		{ "file_format": "mov", "expected_output": "binary" },
+		{ "file_format": "webm", "expected_output": "binary" }
+	]
+}
