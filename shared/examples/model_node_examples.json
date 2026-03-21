@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "kind": "model",
+      "label": "Text Generate",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "llm",
+      "taskKind": "generate",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "gpt-4.1-mini",
+        "user_prompt": "Summarize {input}",
+        "output": { "mode": "text" }
+      }
+    },
+    {
+      "kind": "model",
+      "label": "JSON Extract",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "llm",
+      "taskKind": "extract",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "gpt-4.1-mini",
+        "user_prompt": "Extract entities",
+        "output": {
+          "mode": "json",
+          "validationMode": "strict",
+          "jsonSchema": { "type": "object", "properties": { "entities": { "type": "array" } } }
+        }
+      }
+    },
+    {
+      "kind": "model",
+      "label": "Embedding",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "embedding",
+      "taskKind": "embed",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "text-embedding-3-small",
+        "user_prompt": "Embed input",
+        "output": { "mode": "embeddings", "embedding": { "dims": 1536 } },
+        "requestPolicy": { "batching": { "enabled": true, "max_items": 64 } }
+      }
+    },
+    {
+      "kind": "model",
+      "label": "Vision Caption",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "vision",
+      "taskKind": "caption",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "gpt-4.1-mini",
+        "user_prompt": "Caption this image",
+        "output": { "mode": "text" }
+      }
+    },
+    {
+      "kind": "model",
+      "label": "Audio Transcribe",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "audio",
+      "taskKind": "transcribe",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "gpt-4o-mini-transcribe",
+        "user_prompt": "Transcribe the audio",
+        "output": { "mode": "text" }
+      }
+    },
+    {
+      "kind": "model",
+      "label": "Multimodal Extract",
+      "status": "idle",
+      "llmKind": "openai_compat",
+      "modelKind": "multimodal",
+      "taskKind": "extract",
+      "params": {
+        "baseUrl": "https://api.openai.com",
+        "model": "gpt-4.1-mini",
+        "user_prompt": "Analyze multimodal input",
+        "inputEnvelope": [
+          { "type": "text", "text": "context block" },
+          { "type": "image", "dataUrl": "data:image/png;base64,QUJD" }
+        ],
+        "output": { "mode": "json", "validationMode": "soft", "jsonSchema": { "type": "object" } },
+        "requestPolicy": {
+          "determinism": { "enabled": true, "seed": 42, "stable_order": true },
+          "fallback_chain": [{ "llmKind": "openai_compat", "baseUrl": "https://backup.local", "model": "gpt-4.1-mini" }]
+        }
+      }
+    }
+  ]
+}

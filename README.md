@@ -47,3 +47,8 @@ npm run build
 You can preview the production build with `npm run preview`.
 
 > To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+
+## Model Node Docs
+
+- Taxonomy and provider/task matrix: `docs/model-node-taxonomy.md`
+- Migration command for legacy `llm` graphs: `backend/scripts/migrate_llm_to_model.py`
