@@ -7,9 +7,12 @@ from typing import Any, Dict, List, Set
 
 _DEFAULT_CAPABILITIES: Dict[str, Any] = {
     "schemaVersion": 1,
-    "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings"],
+    "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings", "image", "audio", "video"],
     "nodes": {
-        "model": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
+        "model": {
+            "in": ["text", "json", "table", "image", "audio", "video"],
+            "out": ["text", "json", "embeddings", "image", "audio", "video"],
+        },
         "llm": {"in": ["text", "json", "table"], "out": ["text", "json", "embeddings"]},
         "transform": {"in": ["table"], "out": ["table"]},
         "source": {"in": [], "out": ["table", "json", "text", "binary"]},

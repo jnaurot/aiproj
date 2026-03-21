@@ -197,7 +197,7 @@ export type ComponentEditSession = {
 
 const IDLE: NodeStatus = 'idle';
 const SUCCEEDED: NodeStatus = 'succeeded';
-const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings']);
+const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
 const initialInspector: InspectorState = {
 	nodeId: null,

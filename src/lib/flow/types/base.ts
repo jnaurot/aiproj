@@ -1,7 +1,7 @@
 import type { Node, Edge } from "@xyflow/svelte";
 import type { NodeSchemaEnvelope } from "$lib/flow/schema/schemaContract";
 
-export const PAYLOAD_TYPES = ["table", "text", "json", "binary", "embeddings"];
+export const PAYLOAD_TYPES = ["table", "text", "json", "binary", "embeddings", "image", "audio", "video"];
 export type PayloadType = typeof PAYLOAD_TYPES[number];
 export function isPayloadType(value: unknown): value is PayloadType {
   return typeof value === "string" && PAYLOAD_TYPES.includes(value as any);

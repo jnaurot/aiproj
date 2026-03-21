@@ -1891,6 +1891,12 @@ def _expected_mime_for_payload_type(payload_type: str) -> str:
         return "text/plain; charset=utf-8"
     if p == "embeddings":
         return "application/json"
+    if p == "image":
+        return "image/*"
+    if p == "audio":
+        return "audio/*"
+    if p == "video":
+        return "video/*"
     return "application/octet-stream"
 
 

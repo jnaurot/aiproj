@@ -35,7 +35,9 @@ function asPayloadTypes(values: unknown): PayloadType[] {
 	if (!Array.isArray(values)) return [];
 	return values
 		.map((v) => String(v))
-		.filter((v): v is PayloadType => ['table', 'json', 'text', 'binary', 'embeddings'].includes(v));
+		.filter((v): v is PayloadType =>
+			['table', 'json', 'text', 'binary', 'embeddings', 'image', 'audio', 'video'].includes(v)
+		);
 }
 
 function buildNodeCapabilities(): Record<

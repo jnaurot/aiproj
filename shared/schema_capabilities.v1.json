@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings"],
+  "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings", "image", "audio", "video"],
   "nodes": {
     "model": {
-      "in": ["text", "json", "table"],
-      "out": ["text", "json", "embeddings"]
+      "in": ["text", "json", "table", "image", "audio", "video"],
+      "out": ["text", "json", "embeddings", "image", "audio", "video"]
     },
     "llm": {
       "in": ["text", "json", "table"],
