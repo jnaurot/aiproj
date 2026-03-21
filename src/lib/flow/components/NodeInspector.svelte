@@ -8,6 +8,7 @@
 		taskKindsForModelKind
 	} from '$lib/flow/components/editors/LlmEditor/modelAssist';
 	import { buildModelAutoFixes } from '$lib/flow/components/editors/LlmEditor/modelErrorAssist';
+	import { buildModelPreviewDiff } from '$lib/flow/components/editors/LlmEditor/modelPreview';
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
@@ -121,6 +122,21 @@
 				schemaEdges: schemaContract.edges ?? []
 			})
 		: [];
+	$: modelPreviewDiff = isLlm
+		? buildModelPreviewDiff({
+				params: (params ?? {}) as Record<string, unknown>,
+				inputSchemas,
+				sampleRows: inputPreviewRows
+			})
+		: {
+				inputType: 'unknown',
+				outputType: 'text',
+				inputColumns: [],
+				outputColumns: [],
+				sampleInput: null,
+				sampleOutput: null,
+				notes: []
+			};
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
@@ -368,7 +384,7 @@
 		}
 	}
 
-	$: if (selectedNode?.id && isTransform) {
+	$: if (selectedNode?.id && (isTransform || isLlm)) {
 		const nodeId = selectedNode.id;
 		const edges = $graphStore?.edges ?? [];
 		const nodeBindings = $graphStore?.nodeBindings ?? {};
@@ -870,6 +886,35 @@
 					{/if}
 				</div>
 			{/if}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Live Preview Diff</div>
+				<div class="schemaSuggestions">
+					Input: {modelPreviewDiff.inputType} | Output: {modelPreviewDiff.outputType}
+				</div>
+				<div class="previewDiffCols">
+					<div>
+						<div class="guidedAssistLabel">Input columns ({modelPreviewDiff.inputColumns.length})</div>
+						<div class="schemaSuggestions">{modelPreviewDiff.inputColumns.join(', ') || '-'}</div>
+					</div>
+					<div>
+						<div class="guidedAssistLabel">Output columns ({modelPreviewDiff.outputColumns.length})</div>
+						<div class="schemaSuggestions">{modelPreviewDiff.outputColumns.join(', ') || '-'}</div>
+					</div>
+				</div>
+				<div class="previewDiffRows">
+					<div>
+						<div class="guidedAssistLabel">Sample input</div>
+						<pre>{JSON.stringify(modelPreviewDiff.sampleInput, null, 2)}</pre>
+					</div>
+					<div>
+						<div class="guidedAssistLabel">Sample output</div>
+						<pre>{JSON.stringify(modelPreviewDiff.sampleOutput, null, 2)}</pre>
+					</div>
+				</div>
+				{#if modelPreviewDiff.notes.length > 0}
+					<div class="schemaSuggestions">{modelPreviewDiff.notes.join(' ')}</div>
+				{/if}
+			</div>
 		{/if}
 		{#if !modelGuidedMode || modelAdvancedOpen}
 			<div class="advancedEditor">
