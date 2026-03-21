@@ -1,0 +1,1297 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "llm_generate_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "llm_generate_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "llm_generate_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "llm_classify_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "llm_classify_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "llm_classify_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "llm_extract_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "llm_extract_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "llm_extract_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "llm",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "vision_caption_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "vision_caption_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "vision_caption_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "vision_classify_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "vision_classify_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "vision_classify_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "vision_extract_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "vision_extract_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "vision_extract_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "vision_generate_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "vision_generate_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "vision_generate_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "vision",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "audio_transcribe_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "audio_transcribe_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "audio_transcribe_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "audio_extract_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "audio_extract_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "audio_extract_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "audio_classify_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "audio_classify_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "audio_classify_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "audio",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "embedding_embed_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "embedding",
+        "taskKind": "embed",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "embedding_embed_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "embedding",
+        "taskKind": "embed",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "embedding_embed_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "embedding",
+        "taskKind": "embed",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "reranker_rerank_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "reranker",
+        "taskKind": "rerank",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "reranker_rerank_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "reranker",
+        "taskKind": "rerank",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "reranker_rerank_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "reranker",
+        "taskKind": "rerank",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "multimodal_generate_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "multimodal_generate_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "multimodal_generate_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "generate",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "multimodal_classify_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "multimodal_classify_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "multimodal_classify_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "classify",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "multimodal_extract_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "multimodal_extract_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "multimodal_extract_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "extract",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "multimodal_caption_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "multimodal_caption_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "multimodal_caption_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "caption",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    },
+    {
+      "id": "multimodal_transcribe_text",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "text",
+            "strict": true
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "text"
+    },
+    {
+      "id": "multimodal_transcribe_json",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "json",
+            "strict": true,
+            "jsonSchema": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "ok"
+              ]
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "json"
+    },
+    {
+      "id": "multimodal_transcribe_embeddings",
+      "nodeData": {
+        "kind": "model",
+        "llmKind": "ollama",
+        "modelKind": "multimodal",
+        "taskKind": "transcribe",
+        "params": {
+          "baseUrl": "http://localhost:11434",
+          "model": "demo-model",
+          "user_prompt": "hello",
+          "output": {
+            "mode": "embeddings",
+            "strict": true,
+            "embedding": {
+              "dims": 8,
+              "dtype": "float32",
+              "layout": "1d"
+            }
+          }
+        }
+      },
+      "expectedInType": "text",
+      "expectedOutType": "embeddings"
+    }
+  ]
+}
