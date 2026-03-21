@@ -86,6 +86,7 @@
 	$: file_format = (asString(params?.file_format, 'csv') as FileFormat) ?? 'csv';
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
 	$: delimiterDisplay = delimiter === '\t' ? '\\t' : delimiter;
+	$: hasHeaderMode = params?.has_header === true ? 'yes' : params?.has_header === false ? 'no' : 'auto';
 	$: sheet_name = asString(params?.sheet_name, '');
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
@@ -128,6 +129,20 @@
 		};
 	}
 
+	function asNonEmptyString(value: unknown): string | undefined {
+		const text = asString(value, '').trim();
+		return text.length > 0 ? text : undefined;
+	}
+
+	function resolveFilename(overrides: SourceFilePatch = {}): string {
+		return (
+			asNonEmptyString((overrides as any).filename) ??
+			asNonEmptyString((overrides as any)?.snapshotMetadata?.originalFilename) ??
+			asNonEmptyString((params as any)?.filename) ??
+			'data.txt'
+		);
+	}
+
 	function canonicalFileParams(overrides: SourceFilePatch = {}): SourceFilePatch {
 		const format = (asString(overrides.file_format, file_format) as FileFormat) || 'txt';
 		const normalizedRecent = normalizeRecentSnapshots(
@@ -142,7 +157,7 @@
 			recentSnapshots: normalizedRecent,
 			recentSnapshotIds: normalizedRecent.map((e) => e.id),
 			rel_path: asString((overrides as any).rel_path, asString((params as any)?.rel_path, '.')),
-			filename: asString((overrides as any).filename, asString((params as any)?.filename, 'data.txt')),
+			filename: resolveFilename(overrides),
 			file_size: Number.isFinite(sizeNum) && sizeNum >= 0 ? sizeNum : undefined,
 			file_mime: asString((overrides as any).file_mime, asString((params as any)?.file_mime, '')) || undefined,
 			file_format: format,
@@ -164,12 +179,23 @@
 		const patch: SourceFilePatch = { file_format: next };
 		if (next === 'csv' || next === 'tsv') {
 			patch.delimiter = next === 'tsv' ? '\t' : ',';
+			patch.has_header = params?.has_header;
 			patch.sheet_name = undefined;
+			const currentMode = asString((params as any)?.output?.mode, '').trim().toLowerCase();
+			// Auto-switch to table for csv/tsv unless user already selected a non-text mode.
+			if (currentMode === '' || currentMode === 'text' || currentMode === 'table') {
+				patch.output = {
+					...(((params as any)?.output as Record<string, unknown> | undefined) ?? {}),
+					mode: 'table'
+				} as any;
+			}
 		} else if (next === 'excel') {
 			patch.sheet_name = asString(params?.sheet_name, '') || 'Sheet1';
 			patch.delimiter = undefined;
+			patch.has_header = undefined;
 		} else {
 			patch.delimiter = undefined;
+			patch.has_header = undefined;
 			patch.sheet_name = undefined;
 		}
 		return patch;
@@ -235,6 +261,7 @@
 			const patch: SourceFilePatch = {
 				snapshotId: incoming.id,
 				snapshotMetadata: result.metadata,
+				filename: incoming.filename ?? file.name,
 				...patchForDetectedFormat(detectFileFormatFromFilename(incoming.filename ?? file.name)),
 				...withRecentPatch(nextRecent)
 			};
@@ -307,6 +334,7 @@
 				byteSize: resolved?.size,
 				mimeType: resolved?.mimeType
 			},
+			filename: resolved?.filename,
 			...patchForDetectedFormat(detectFileFormatFromFilename(resolved?.filename)),
 			...withRecentPatch(nextRecent)
 		};
@@ -433,6 +461,22 @@
 					onBlur={(event) =>
 						commit({ delimiter: decodeDelimiterInput((event.currentTarget as HTMLInputElement).value) })}
 				/>
+			</Field>
+			<Field label="first row is header">
+				<select
+					class="full"
+					value={hasHeaderMode}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value;
+						const has_header = value === 'yes' ? true : value === 'no' ? false : undefined;
+						draft({ has_header });
+						commit({ has_header });
+					}}
+				>
+					<option value="auto">auto</option>
+					<option value="yes">yes</option>
+					<option value="no">no</option>
+				</select>
 			</Field>
 		{/if}
 

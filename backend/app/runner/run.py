@@ -1673,12 +1673,28 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
     ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
     direct = ps.get("source_observability")
     if isinstance(direct, dict):
-        return direct
+        out = dict(direct)
+        table_columns = ps.get("table_columns")
+        if not isinstance(table_columns, list):
+            table_columns = ps.get("columns")
+        if isinstance(table_columns, list):
+            out["table_columns"] = canonical_table_columns(table_columns)
+        if "header_detected" in ps:
+            out["header_detected"] = ps.get("header_detected")
+        return out
     schema_env = ps.get("schema")
     if isinstance(schema_env, dict):
         nested = schema_env.get("source_observability")
         if isinstance(nested, dict):
-            return nested
+            out = dict(nested)
+            table_columns = schema_env.get("table_columns")
+            if not isinstance(table_columns, list):
+                table_columns = schema_env.get("columns")
+            if isinstance(table_columns, list):
+                out["table_columns"] = canonical_table_columns(table_columns)
+            if "header_detected" in schema_env:
+                out["header_detected"] = schema_env.get("header_detected")
+            return out
     return None
 
 

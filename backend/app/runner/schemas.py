@@ -89,6 +89,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["recent_snapshot_ids"] = p.pop("recentSnapshotIds")
     if "snapshotMetadata" in p and "snapshot_metadata" not in p:
         p["snapshot_metadata"] = p.pop("snapshotMetadata")
+    if "hasHeader" in p and "has_header" not in p:
+        p["has_header"] = p.pop("hasHeader")
     if "rootId" in p and "rel_path" not in p:
         p["rel_path"] = p.pop("rootId")
     if "relPath" in p and "filename" not in p:
@@ -326,6 +328,7 @@ class SourceFileParams(NodeParamSchema):
         "webm",
     ] = "csv"
     delimiter: Optional[str] = None  # for CSV
+    has_header: Optional[bool] = None
     sheet_name: Optional[str] = None  # for Excel
     encoding: str = "utf-8"
     cache_enabled: bool = True

@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import hashlib
 import io
 import json
@@ -118,6 +119,76 @@ def _file_format_mime(file_format: str) -> str:
         "webm": "video/webm",
     }
     return mapping.get(ff, "application/octet-stream")
+
+
+def _csv_sample_text(
+    file_bytes: Optional[bytes],
+    file_path: Optional[Path],
+    encoding: str,
+    max_bytes: int = 8192,
+) -> str:
+    if isinstance(file_bytes, (bytes, bytearray)):
+        return bytes(file_bytes[:max_bytes]).decode(encoding, errors="replace")
+    if isinstance(file_path, Path) and file_path.exists():
+        with file_path.open("rb") as fh:
+            return fh.read(max_bytes).decode(encoding, errors="replace")
+    return ""
+
+
+def _csv_heuristic_has_header(sample_text: str, delimiter: str) -> Optional[bool]:
+    lines = [ln for ln in sample_text.splitlines() if str(ln).strip()]
+    if len(lines) < 2:
+        return None
+    try:
+        reader = csv.reader(lines[:2], delimiter=delimiter)
+        first = next(reader, [])
+        second = next(reader, [])
+    except Exception:
+        return None
+    if not first or not second or len(first) != len(second):
+        return None
+
+    def _looks_numeric(cell: str) -> bool:
+        text = str(cell or "").strip()
+        if text == "":
+            return False
+        try:
+            float(text)
+            return True
+        except Exception:
+            return False
+
+    first_numeric = sum(1 for cell in first if _looks_numeric(cell))
+    second_numeric = sum(1 for cell in second if _looks_numeric(cell))
+    if first_numeric == 0 and second_numeric > 0:
+        return True
+    if first_numeric == len(first) and second_numeric == len(second):
+        return False
+    return None
+
+
+def _detect_csv_has_header(
+    file_bytes: Optional[bytes],
+    file_path: Optional[Path],
+    encoding: str,
+    delimiter: str,
+    explicit: Optional[bool],
+) -> bool:
+    if explicit is not None:
+        return bool(explicit)
+    sample_text = _csv_sample_text(file_bytes, file_path, encoding)
+    if not sample_text.strip():
+        return True
+    try:
+        sniff = bool(csv.Sniffer().has_header(sample_text))
+    except Exception:
+        sniff = False
+    guess = _csv_heuristic_has_header(sample_text, delimiter)
+    if guess is not None:
+        return bool(guess)
+    if sniff:
+        return True
+    return True
 
 
 def _canonical_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1166,14 +1237,26 @@ async def _handle_file_source(
     binary_data: bytes | None = None
     table_coercion: Dict[str, Any] | None = None
     table_columns: list[dict[str, str]] | None = None
+    csv_has_header: Optional[bool] = None
 
     if schema.file_format in {"csv", "tsv"}:
+        delimiter = schema.delimiter or ("\t" if schema.file_format == "tsv" else ",")
+        csv_has_header = _detect_csv_has_header(
+            file_bytes=file_bytes,
+            file_path=file_path,
+            encoding=schema.encoding,
+            delimiter=delimiter,
+            explicit=getattr(schema, "has_header", None),
+        )
         csv_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pd.read_csv(
             csv_input,
-            delimiter=schema.delimiter or ("\t" if schema.file_format == "tsv" else ","),
+            delimiter=delimiter,
             encoding=schema.encoding,
+            header=0 if csv_has_header else None,
         )
+        if not csv_has_header:
+            df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
         rows = df.to_dict(orient="records")
         table_columns = _infer_table_columns_from_dataframe(df)
     elif schema.file_format == "parquet":
@@ -1276,6 +1359,7 @@ async def _handle_file_source(
         mime_override=_file_format_mime(schema.file_format),
         schema_extra={
             "file_format": schema.file_format,
+            **({"header_detected": csv_has_header} if schema.file_format in {"csv", "tsv"} else {}),
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
         },

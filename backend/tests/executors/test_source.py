@@ -42,6 +42,54 @@ async def test_source_file_csv_success(tmp_path):
 	assert isinstance(result.data, list)
 	assert result.metadata is not None
 	assert result.metadata.row_count == 2
+	assert isinstance(result.data[0], dict)
+	assert set(result.data[0].keys()) == {"a", "b"}
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_without_header_uses_generated_columns(tmp_path):
+	file_path = tmp_path / "no_header.csv"
+	file_path.write_text("1,alpha\n2,beta\n", encoding="utf-8")
+	node = {
+		"id": "n_source_no_header",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"has_header": False,
+			}
+		},
+	}
+	result = await exec_source("run_no_header", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert set(result.data[0].keys()) == {"column_1", "column_2"}
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_auto_detects_header_row(tmp_path):
+	file_path = tmp_path / "with_header.csv"
+	file_path.write_text("name,age\nalice,31\nbob,28\n", encoding="utf-8")
+	node = {
+		"id": "n_source_header_auto",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+			}
+		},
+	}
+	result = await exec_source("run_header_auto", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert set(result.data[0].keys()) == {"name", "age"}
+	assert (result.metadata.data_schema or {}).get("header_detected") is True
 
 
 @pytest.mark.asyncio

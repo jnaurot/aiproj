@@ -111,5 +111,36 @@ describe('graphStore schema inference envelope', () => {
 		expect(Array.isArray(observed?.fields)).toBe(true);
 		expect(observed?.fields?.[0]?.name).toBe('id');
 	});
+
+	it('uses runtime sourceObservability.table_columns for source observed schema fields', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('source', { x: 6, y: 6 });
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_output',
+				runId: 'run_schema_source_obs_cols',
+				at: '2026-03-11T12:05:00Z',
+				nodeId,
+				artifactId: 'artifact_table_cols',
+				payloadType: 'table',
+				mimeType: 'text/csv',
+				sourceObservability: {
+					source_kind: 'file',
+					table_columns: [
+						{ name: 'name', type: 'string' },
+						{ name: 'age', type: 'int' }
+					]
+				}
+			},
+			'run_schema_source_obs_cols'
+		);
+		const observed = (next.nodes.find((n) => n.id === nodeId)?.data as any)?.schema?.observedSchema?.typedSchema;
+		expect(observed?.type).toBe('table');
+		expect(Array.isArray(observed?.fields)).toBe(true);
+		expect(observed?.fields?.[0]?.name).toBe('name');
+		expect(observed?.fields?.[1]?.name).toBe('age');
+	});
 });
 

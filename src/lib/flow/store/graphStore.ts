@@ -2891,6 +2891,15 @@ function deriveObservedSchemaObservationFromNodeOutput(
 ): NodeSchemaObservation | null {
 	const observedType = normalizeTypedSchemaPrimitive((evt as any)?.payloadType ?? '');
 	if (observedType === 'unknown') return null;
+	const sourceObs = (evt as any)?.sourceObservability;
+	const sourceObsColumns = Array.isArray(sourceObs?.table_columns)
+		? normalizeTypedSchemaFields(
+				(sourceObs.table_columns as any[]).map((col) => ({
+					name: col?.name,
+					type: col?.type
+				}))
+			)
+		: [];
 	const primingInferred = ((evt as any)?.primingArtifact?.inferred_schema ?? null) as Record<string, any> | null;
 	const primingFields = Array.isArray(primingInferred?.fields)
 		? normalizeTypedSchemaFields((primingInferred?.fields as any[]).map((f) => ({ name: f?.name, type: f?.type })))
@@ -2900,7 +2909,12 @@ function deriveObservedSchemaObservationFromNodeOutput(
 		Array.isArray((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
 			? normalizeTypedSchemaFields((node?.data as any)?.schema?.inferredSchema?.typedSchema?.fields)
 			: [];
-	const resolvedFields = primingFields.length > 0 ? primingFields : inferredFields;
+	const resolvedFields =
+		sourceObsColumns.length > 0
+			? sourceObsColumns
+			: primingFields.length > 0
+				? primingFields
+				: inferredFields;
 	const typedSchema =
 		observedType === 'table'
 			? { type: 'table' as const, fields: resolvedFields }

@@ -138,6 +138,7 @@ export const SourceFileParamsSchema = z
 			])
 			.default("txt"),
 		delimiter: z.string().optional(),
+		has_header: z.boolean().optional(),
 		sheet_name: z.string().optional(),
 		encoding: z.string().default("utf-8"),
 		cache_enabled: z.boolean().default(true),

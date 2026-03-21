@@ -327,6 +327,16 @@ class TestSourceFileParams:
         
         source_params = SourceFileParams.model_validate(params)
         assert source_params.delimiter == "|"
+
+    def test_csv_has_header_flag(self):
+        params = {
+            "rel_path": ".",
+            "filename": "data.csv",
+            "file_format": "csv",
+            "has_header": False,
+        }
+        source_params = SourceFileParams.model_validate(params)
+        assert source_params.has_header is False
     
     def test_valid_file_formats(self):
         """Test all valid file formats"""
@@ -668,6 +678,17 @@ class TestNormalizeSourceParamsFrontend:
         assert out["priming"]["sample_rows"] == 25
         assert out["priming"]["sample_bytes"] == 1024
         assert out["priming"]["timeout_ms"] == 400
+
+    def test_file_has_header_camel_case_is_normalized(self):
+        out = normalize_source_params_frontend(
+            {
+                "source_type": "file",
+                "filename": "data.csv",
+                "file_format": "csv",
+                "hasHeader": True,
+            }
+        )
+        assert out["has_header"] is True
 
 
 class TestFilterTransformParams:
