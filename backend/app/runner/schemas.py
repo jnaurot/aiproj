@@ -1113,6 +1113,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
 
             llm_kind = node.get("data", {}).get("llmKind") or "ollama"
             model_kind = node.get("data", {}).get("modelKind") or "llm"
+            task_kind = node.get("data", {}).get("taskKind") or "generate"
             if model_kind not in {"llm", "vision", "audio", "embedding", "reranker", "multimodal"}:
                 errors.append(
                     _machine_error(
@@ -1122,6 +1123,35 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                             "modelKind must be one of: llm, vision, audio, embedding, reranker, multimodal"
                         ),
                         value=model_kind,
+                    )
+                )
+            task_allowed = {
+                "llm": {"generate", "classify", "extract"},
+                "vision": {"caption", "classify", "extract", "generate"},
+                "audio": {"transcribe", "extract", "classify"},
+                "embedding": {"embed"},
+                "reranker": {"rerank"},
+                "multimodal": {"generate", "classify", "extract", "caption", "transcribe"},
+            }
+            if task_kind not in {"generate", "classify", "extract", "embed", "rerank", "transcribe", "caption"}:
+                errors.append(
+                    _machine_error(
+                        code="INVALID_VALUE",
+                        param_path="data.taskKind",
+                        message=(
+                            "taskKind must be one of: generate, classify, extract, embed, rerank, transcribe, caption"
+                        ),
+                        value=task_kind,
+                    )
+                )
+            elif task_kind not in task_allowed.get(model_kind, {"generate"}):
+                errors.append(
+                    _machine_error(
+                        code="INVALID_VALUE",
+                        param_path="data.taskKind",
+                        message=f"taskKind '{task_kind}' is not valid for modelKind '{model_kind}'",
+                        modelKind=model_kind,
+                        taskKind=task_kind,
                     )
                 )
 

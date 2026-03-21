@@ -21,6 +21,14 @@ import type { LlmParams } from '$lib/flow/schema/llm';
 
 export type LlmKind = 'ollama' | 'openai_compat';
 export type ModelKind = 'llm' | 'vision' | 'audio' | 'embedding' | 'reranker' | 'multimodal';
+export type ModelTaskKind =
+	| 'generate'
+	| 'classify'
+	| 'extract'
+	| 'embed'
+	| 'rerank'
+	| 'transcribe'
+	| 'caption';
 
 /**
  * If/when you later split params by kind, update this mapping.

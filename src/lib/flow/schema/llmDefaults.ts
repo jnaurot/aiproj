@@ -69,6 +69,7 @@ export const defaultModelParamsByKind: Record<ModelKind, LlmParams> = {
 export const defaultModelNodeData = {
     kind: "model" as const,
 	modelKind: "llm" as const,
+	taskKind: "generate" as const,
     llmKind: "ollama" as const,
     label: "Model",
     params: defaultModelParamsByKind.llm,
@@ -80,5 +81,6 @@ export const defaultLlmNodeData = {
     ...defaultModelNodeData,
     kind: "llm" as const,
 	modelKind: "llm" as const,
+	taskKind: "generate" as const,
     label: "LLM",
 } as const;

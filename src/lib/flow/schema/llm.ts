@@ -5,6 +5,24 @@ import { BaseNodeDataSchema } from './base';
 export const LlmOutputModeSchema = z.enum(['text', 'json', 'embeddings']);
 export const LlmKindSchema = z.enum(['ollama', 'openai_compat']);
 export const ModelKindSchema = z.enum(['llm', 'vision', 'audio', 'embedding', 'reranker', 'multimodal']);
+export const ModelTaskKindSchema = z.enum([
+	'generate',
+	'classify',
+	'extract',
+	'embed',
+	'rerank',
+	'transcribe',
+	'caption'
+]);
+
+const ModelTaskKindsByModelKind: Record<z.infer<typeof ModelKindSchema>, ReadonlySet<string>> = {
+	llm: new Set(['generate', 'classify', 'extract']),
+	vision: new Set(['caption', 'classify', 'extract', 'generate']),
+	audio: new Set(['transcribe', 'extract', 'classify']),
+	embedding: new Set(['embed']),
+	reranker: new Set(['rerank']),
+	multimodal: new Set(['generate', 'classify', 'extract', 'caption', 'transcribe'])
+};
 
 export const LlmParamsSchema = z
 	.object({
@@ -87,17 +105,31 @@ export const LlmOpenAI_compatParamsSchema = LlmParamsSchema;
 // Node-level discriminator: llmKind (Source-style)
 export const LlmNodeDataSchema = BaseNodeDataSchema('llm', LlmParamsSchema).extend({
 	llmKind: LlmKindSchema,
-	modelKind: ModelKindSchema.optional().default('llm')
+	modelKind: ModelKindSchema.optional().default('llm'),
+	taskKind: ModelTaskKindSchema.optional().default('generate')
 });
 export const ModelNodeDataSchema = BaseNodeDataSchema('model', LlmParamsSchema).extend({
 	llmKind: LlmKindSchema,
-	modelKind: ModelKindSchema.optional().default('llm')
-});
+	modelKind: ModelKindSchema.optional().default('llm'),
+	taskKind: ModelTaskKindSchema.optional().default('generate')
+})
+	.superRefine((v, ctx) => {
+		const modelKind = v.modelKind ?? 'llm';
+		const taskKind = v.taskKind ?? 'generate';
+		const allowed = ModelTaskKindsByModelKind[modelKind];
+		if (!allowed?.has(taskKind)) {
+			ctx.addIssue({
+				code: 'custom',
+				message: `taskKind='${taskKind}' is not valid for modelKind='${modelKind}'`
+			});
+		}
+	});
 
 export type LlmNodeData = z.infer<typeof LlmNodeDataSchema>;
 export type ModelNodeData = z.infer<typeof ModelNodeDataSchema>;
 export type LlmKind = z.infer<typeof LlmKindSchema>;
 export type ModelKind = z.infer<typeof ModelKindSchema>;
+export type ModelTaskKind = z.infer<typeof ModelTaskKindSchema>;
 
 export const LlmParamsSchemaByKind = {
 	ollama: LlmOllamaParamsSchema,

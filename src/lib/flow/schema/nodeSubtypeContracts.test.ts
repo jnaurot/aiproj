@@ -68,6 +68,23 @@ describe('node subtype contract schemas', () => {
 				}
 			}).success
 		).toBe(true);
+
+		expect(
+			ModelNodeDataSchema.safeParse({
+				kind: 'model',
+				modelKind: 'embedding',
+				taskKind: 'generate',
+				llmKind: 'openai_compat',
+				label: 'Model',
+				status: 'idle',
+				params: {
+					baseUrl: 'https://api.openai.com',
+					model: 'text-embedding-3-small',
+					user_prompt: 'Generate embeddings',
+					output: { mode: 'embeddings', embedding: { dims: 1536 } }
+				}
+			}).success
+		).toBe(false);
 	});
 
 	it('accepts valid transform subtype payloads', () => {

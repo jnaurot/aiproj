@@ -294,6 +294,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						transformKind?: string;
 							llmKind?: string;
 							modelKind?: string;
+							taskKind?: string;
 							componentKind?: string;
 							params?: unknown;
 						};
@@ -607,6 +608,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
 							llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
 							modelKind: typeof data.modelKind === 'string' ? data.modelKind : undefined,
+							taskKind: typeof data.taskKind === 'string' ? data.taskKind : undefined,
 							componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
 							params: stableCanonicalValue(data.params ?? {})
 						}

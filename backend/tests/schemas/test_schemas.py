@@ -1039,3 +1039,21 @@ class TestValidateNodeParamsModelKind:
         }
         errors = validate_node_params(node)
         assert any("modelKind must be one of" in err for err in errors)
+
+    def test_task_kind_validation_rejects_invalid_combo(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "modelKind": "embedding",
+                "taskKind": "generate",
+                "llmKind": "openai_compat",
+                "params": {
+                    "connectionRef": "OPENAI_API_KEY",
+                    "model": "text-embedding-3-small",
+                    "user_prompt": "embed this",
+                    "output": {"mode": "embeddings", "embedding": {"dims": 1536}},
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("not valid for modelKind" in err for err in errors)
