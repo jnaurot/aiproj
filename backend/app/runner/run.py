@@ -159,7 +159,7 @@ def _normalize_typed_schema_for_runtime(raw: Any) -> Optional[Dict[str, Any]]:
 
 def _typed_schema_type_to_payload_type(typed_schema: Optional[Dict[str, Any]]) -> str:
     t = str((typed_schema or {}).get("type") or "").strip().lower()
-    if t in {"table", "json", "text", "binary", "embeddings"}:
+    if t in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
         return t
     return "unknown"
 
@@ -1937,7 +1937,7 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         declared_typed = _declared_expected_typed_schema_from_node(node)
         if isinstance(declared_typed, dict):
             declared_type = str(declared_typed.get("type") or "").strip().lower()
-            if declared_type in {"table", "text", "json", "binary"}:
+            if declared_type in {"table", "text", "json", "binary", "image", "audio", "video"}:
                 return declared_type
         source_kind = str(params.get("sourceKind") or params.get("source_type") or "file").strip().lower()
         if source_kind in {"file", "object_store"}:
@@ -1957,17 +1957,23 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
                 "svg",
                 "tif",
                 "tiff",
+            }:
+                return "image"
+            if file_format in {
                 "mp3",
                 "wav",
                 "flac",
                 "ogg",
                 "m4a",
                 "aac",
+            }:
+                return "audio"
+            if file_format in {
                 "mp4",
                 "mov",
                 "webm",
             }:
-                return "binary"
+                return "video"
             return "text"
         if source_kind == "api":
             return "json"
@@ -2013,7 +2019,14 @@ def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         if transform_op == "table_to_json":
             return "table"
         return "table"
-    if kind in {"llm", "model"}:
+    if kind == "llm":
+        return "text"
+    if kind == "model":
+        model_kind = str(node.get("data", {}).get("modelKind") or "").strip().lower()
+        if model_kind == "vision":
+            return "image"
+        if model_kind == "audio":
+            return "audio"
         return "text"
     if kind == "tool":
         return None
@@ -5262,7 +5275,7 @@ async def run_graph(
                     print("[run_graph] LLM upstream_ids:", upstream_ids)
                     print("[run_graph] bound node ids:", [b.node_id for b in context.bindings.all()])
 
-                    llm_in_contract = str((_declared_in_port("llm", n) or "text"))
+                    llm_in_contract = str((_declared_in_port(kind, n) or "text"))
 
                     # Canonical upstream artifact list (preserve input-handle mapping order if present)
                     llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
@@ -5610,10 +5623,10 @@ async def run_graph(
                                 )
                             payload_bytes = data_value.encode("utf-8")
                             mime_type = "text/plain; charset=utf-8"
-                        elif out_contract == "binary":
+                        elif out_contract in {"binary", "image", "audio", "video"}:
                             if not isinstance(data_value, (bytes, bytearray)):
                                 raise RuntimeError(
-                                    f"Source output contract mismatch: out=binary expects bytes, got {type(data_value)}"
+                                    f"Source output contract mismatch: out={out_contract} expects bytes, got {type(data_value)}"
                                 )
                             payload_bytes = bytes(data_value)
                             source_meta = getattr(output, "metadata", None)
@@ -5622,7 +5635,14 @@ async def run_graph(
                                 if source_meta is not None
                                 else ""
                             )
-                            mime_type = source_meta_mime or "application/octet-stream"
+                            if out_contract == "image":
+                                mime_type = source_meta_mime or "image/png"
+                            elif out_contract == "audio":
+                                mime_type = source_meta_mime or "audio/wav"
+                            elif out_contract == "video":
+                                mime_type = source_meta_mime or "video/mp4"
+                            else:
+                                mime_type = source_meta_mime or "application/octet-stream"
                         else:
                             raise RuntimeError(
                                 f"Source output contract mismatch: unsupported output type '{out_contract}'"

@@ -279,6 +279,15 @@ function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 		) {
 			return 'table';
 		}
+		if (fileFormat === 'jpg' || fileFormat === 'jpeg' || fileFormat === 'png' || fileFormat === 'webp' || fileFormat === 'gif' || fileFormat === 'svg' || fileFormat === 'tif' || fileFormat === 'tiff') {
+			return 'image';
+		}
+		if (fileFormat === 'mp3' || fileFormat === 'wav' || fileFormat === 'flac' || fileFormat === 'ogg' || fileFormat === 'm4a' || fileFormat === 'aac') {
+			return 'audio';
+		}
+		if (fileFormat === 'mp4' || fileFormat === 'mov' || fileFormat === 'webm') {
+			return 'video';
+		}
 		return 'binary';
 	}
 	return 'text';
@@ -301,6 +310,13 @@ function deriveLlmOutPort(data: PipelineNodeData, params: Record<string, any>): 
 	return 'text';
 }
 
+function deriveModelInPort(data: PipelineNodeData): PayloadType {
+	const modelKind = String((data as any)?.modelKind ?? 'llm').trim().toLowerCase();
+	if (modelKind === 'vision') return 'image';
+	if (modelKind === 'audio') return 'audio';
+	return 'text';
+}
+
 function deriveTransformIo(params: Record<string, any>, transformKindRaw: unknown): { in: PayloadType; out: PayloadType } {
 	const op = String(params?.op ?? transformKindRaw ?? '').trim().toLowerCase();
 	if (op === 'json_to_table') return { in: 'json', out: 'table' };
@@ -318,8 +334,11 @@ export function deriveNodeIoForData(data: PipelineNodeData): { in: PayloadType |
 		return { in: null, out: deriveSourceOutPort(data) };
 	}
 	const params = ((data as any)?.params ?? {}) as Record<string, any>;
-	if (data.kind === 'llm' || data.kind === 'model') {
+	if (data.kind === 'llm') {
 		return { in: 'text', out: deriveLlmOutPort(data, params) };
+	}
+	if (data.kind === 'model') {
+		return { in: deriveModelInPort(data), out: deriveLlmOutPort(data, params) };
 	}
 	if (data.kind === 'transform') {
 		return deriveTransformIo(params, (data as any)?.transformKind);

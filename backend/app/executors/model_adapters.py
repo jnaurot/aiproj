@@ -31,6 +31,7 @@ class ModelProviderAdapter(Protocol):
 		params: LLMParams,
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
+		input_media: Optional[List[Dict[str, Any]]] = None,
 	) -> AdapterPreparedRequest: ...
 
 	def parse_response(self, output_mode: str, raw_data: str) -> AdapterParsedResponse: ...
@@ -67,6 +68,7 @@ class OpenAICompatAdapter:
 		params: LLMParams,
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
+		input_media: Optional[List[Dict[str, Any]]] = None,
 	) -> AdapterPreparedRequest:
 		base_url = (params.base_url or "").rstrip("/")
 		if not base_url:
@@ -82,9 +84,23 @@ class OpenAICompatAdapter:
 				"input": input_items if (input_items and len(input_items) > 1) else (input_items[0] if input_items else upstream_text),
 			}
 		else:
+			messages: List[Dict[str, Any]] = build_messages(params, upstream_text)
+			if input_media:
+				user_content = str(messages[-1].get("content") or "")
+				media_parts = []
+				for media in input_media:
+					data_url = str(media.get("dataUrl") or "").strip()
+					if not data_url:
+						continue
+					media_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+				if media_parts:
+					messages[-1] = {
+						"role": "user",
+						"content": [{"type": "text", "text": user_content}, *media_parts],
+					}
 			payload = {
 				"model": params.model,
-				"messages": build_messages(params, upstream_text),
+				"messages": messages,
 				"temperature": params.temperature,
 				"max_tokens": params.max_tokens,
 				"stream": True,
@@ -142,6 +158,7 @@ class OllamaAdapter:
 		params: LLMParams,
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
+		input_media: Optional[List[Dict[str, Any]]] = None,
 	) -> AdapterPreparedRequest:
 		base_url = (params.base_url or "").rstrip("/")
 		if not base_url:

@@ -1,4 +1,5 @@
 import json
+import base64
 from typing import Any, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
@@ -150,6 +151,25 @@ async def _serialize_artifact_input(context: GraphContext, artifact_id: str, inp
 
     raise ValueError(f"Unsupported input_encoding: {input_encoding}")
 
+
+async def _serialize_image_media(context: GraphContext, artifact_id: str) -> Optional[Dict[str, Any]]:
+    art = await context.artifact_store.get(artifact_id)
+    mime = str(getattr(art, "mime_type", "") or "").strip().lower()
+    payload_type = str(getattr(art, "payload_type", "") or "").strip().lower()
+    if payload_type != "image" and not mime.startswith("image/"):
+        return None
+    payload = await context.artifact_store.read(artifact_id)
+    if not isinstance(payload, (bytes, bytearray)):
+        return None
+    if not mime:
+        mime = "image/png"
+    b64 = base64.b64encode(bytes(payload)).decode("ascii")
+    return {
+        "type": "image",
+        "mimeType": mime,
+        "dataUrl": f"data:{mime};base64,{b64}",
+    }
+
 async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
@@ -181,17 +201,28 @@ async def exec_llm(
 
     llm_kind = node.get("data", {}).get("llmKind") or "ollama"
     adapter = get_model_adapter(llm_kind)
+    model_kind = str(node.get("data", {}).get("modelKind") or "llm").strip().lower()
 
     input_encoding = llm_params.input_encoding or "text"
     serialized_inputs: List[str] = []
+    serialized_media: List[Dict[str, Any]] = []
     if not upstream_artifact_ids:
         text = ""
     elif len(upstream_artifact_ids) == 1:
-        text = await _serialize_artifact_input(context, upstream_artifact_ids[0], input_encoding)
-        serialized_inputs = [text]
+        aid = upstream_artifact_ids[0]
+        if model_kind in {"vision", "multimodal"}:
+            media = await _serialize_image_media(context, aid)
+            if media is not None:
+                serialized_media.append(media)
+        text = await _serialize_artifact_input(context, aid, input_encoding)
+        serialized_inputs = [text] if text else []
     else:
         text_parts: List[str] = []
         for idx, aid in enumerate(upstream_artifact_ids, start=1):
+            if model_kind in {"vision", "multimodal"}:
+                media = await _serialize_image_media(context, aid)
+                if media is not None:
+                    serialized_media.append(media)
             payload = await _serialize_artifact_input(context, aid, input_encoding)
             serialized_inputs.append(payload)
             text_parts.append(f"### INPUT {idx} artifact={aid}\n{payload}")
@@ -220,6 +251,7 @@ async def exec_llm(
             llm_params,
             input_text=text,
             input_items=serialized_inputs,
+            input_media=serialized_media,
             upstream_artifact_ids=upstream_artifact_ids,
         )
 
@@ -233,6 +265,7 @@ async def exec_llm(
             llm_params,
             input_text=text,
             input_items=serialized_inputs,
+            input_media=serialized_media,
             upstream_artifact_ids=upstream_artifact_ids,
         )
 

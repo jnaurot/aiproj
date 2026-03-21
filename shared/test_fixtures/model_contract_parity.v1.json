@@ -246,7 +246,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "text"
     },
     {
@@ -277,7 +277,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "json"
     },
     {
@@ -302,7 +302,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "embeddings"
     },
     {
@@ -322,7 +322,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "text"
     },
     {
@@ -353,7 +353,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "json"
     },
     {
@@ -378,7 +378,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "embeddings"
     },
     {
@@ -398,7 +398,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "text"
     },
     {
@@ -429,7 +429,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "json"
     },
     {
@@ -454,7 +454,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "embeddings"
     },
     {
@@ -474,7 +474,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "text"
     },
     {
@@ -505,7 +505,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "json"
     },
     {
@@ -530,7 +530,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "image",
       "expectedOutType": "embeddings"
     },
     {
@@ -550,7 +550,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "text"
     },
     {
@@ -581,7 +581,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "json"
     },
     {
@@ -606,7 +606,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "embeddings"
     },
     {
@@ -626,7 +626,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "text"
     },
     {
@@ -657,7 +657,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "json"
     },
     {
@@ -682,7 +682,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "embeddings"
     },
     {
@@ -702,7 +702,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "text"
     },
     {
@@ -733,7 +733,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "json"
     },
     {
@@ -758,7 +758,7 @@
           }
         }
       },
-      "expectedInType": "text",
+      "expectedInType": "audio",
       "expectedOutType": "embeddings"
     },
     {

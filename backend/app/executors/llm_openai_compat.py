@@ -79,6 +79,7 @@ async def exec_llm_openai_compat(
     params: LLMParams,
     input_text: Optional[str] = None,
     input_items: Optional[list[str]] = None,
+    input_media: Optional[list[Dict[str, Any]]] = None,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     node_id = node.get("id", "<missing-node-id>")
@@ -110,7 +111,12 @@ async def exec_llm_openai_compat(
     input_items = input_items or ([upstream_text] if upstream_text else [])
     adapter = OpenAICompatAdapter()
     try:
-        prepared = adapter.prepare_request(params, upstream_text, input_items=input_items)
+        prepared = adapter.prepare_request(
+            params,
+            upstream_text,
+            input_items=input_items,
+            input_media=input_media,
+        )
     except Exception as e:
         return NodeOutput(
             status="failed",

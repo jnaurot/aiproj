@@ -186,6 +186,7 @@ async def exec_llm_ollama(
     params: LLMParams,
     input_text: Optional[str] = None,
     input_items: Optional[list[str]] = None,
+    input_media: Optional[list[Dict[str, Any]]] = None,
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """
@@ -233,7 +234,12 @@ async def exec_llm_ollama(
     if params.thinking and params.thinking.enabled:
         thinking_mode = params.thinking.mode
     try:
-        prepared = adapter.prepare_request(params, text, input_items=input_items)
+        prepared = adapter.prepare_request(
+            params,
+            text,
+            input_items=input_items,
+            input_media=input_media,
+        )
     except Exception as e:
         return NodeOutput(
             status="failed",

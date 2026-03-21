@@ -138,6 +138,12 @@ class GraphValidator:
                     return "table"
                 if file_format in {"json", "jsonl"}:
                     return "json"
+                if file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+                    return "image"
+                if file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+                    return "audio"
+                if file_format in {"mp4", "mov", "webm"}:
+                    return "video"
                 return "text"
             if source_kind == "api":
                 return "json"
@@ -153,7 +159,14 @@ class GraphValidator:
             if op == "table_to_json":
                 return "json"
             return "table"
-        if kind in {"llm", "model"}:
+        if kind == "model":
+            model_kind = str(data.get("modelKind") or "").strip().lower()
+            if model_kind == "vision":
+                return "image"
+            if model_kind == "audio":
+                return "audio"
+            return "text"
+        if kind == "llm":
             return "text"
         if kind == "tool":
             return "json"
@@ -175,7 +188,14 @@ class GraphValidator:
             if op == "table_to_json":
                 return "table"
             return "table"
-        if kind in {"llm", "model"}:
+        if kind == "llm":
+            return "text"
+        if kind == "model":
+            model_kind = str(data.get("modelKind") or "").strip().lower()
+            if model_kind == "vision":
+                return "image"
+            if model_kind == "audio":
+                return "audio"
             return "text"
         if kind == "tool":
             return "json"

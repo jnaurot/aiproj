@@ -16,7 +16,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
-_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
+_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}
 _ARTIFACT_METADATA_VERSION = 1
 _REQUIRED_ARTIFACT_META_KEYS = {
     "metadataVersion",
@@ -63,6 +63,12 @@ def _infer_payload_type(
         return "text"
     if "csv" in mt or "tsv" in mt or "parquet" in mt:
         return "table"
+    if mt.startswith("image/"):
+        return "image"
+    if mt.startswith("audio/"):
+        return "audio"
+    if mt.startswith("video/"):
+        return "video"
     if node_kind == "transform":
         return "table"
     return "binary"
