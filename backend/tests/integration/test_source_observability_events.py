@@ -3,6 +3,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from decimal import Decimal
 from types import SimpleNamespace
+import array
+import wave
 
 import app.executors.source as source_mod
 from app.runner.artifacts import DiskArtifactStore
@@ -498,3 +500,54 @@ async def test_source_node_output_event_includes_image_metadata(tmp_path):
     assert isinstance(img_meta, dict)
     assert img_meta.get("width") == 6
     assert img_meta.get("height") == 5
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_audio_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-10"
+    source_dir = tmp_path / "source-10"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.wav"
+    with wave.open(str(source_file), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(8000)
+        wf.writeframes(array.array("h", [500] * 800).tobytes())
+    bus = RunEventBus("run-source-obs-10", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-10",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_audio_meta",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.wav",
+                            "file_format": "wav",
+                            "audio_normalize": True,
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-10",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_audio_meta"]
+    assert node_outputs, "Expected node_output for source_audio_meta"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    audio_meta = source_obs.get("audio_metadata")
+    assert isinstance(audio_meta, dict)
+    assert audio_meta.get("sample_rate") == 8000

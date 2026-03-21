@@ -1,7 +1,9 @@
 import asyncio
+import array
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+import wave
 
 import httpx
 import pandas as pd
@@ -742,6 +744,60 @@ async def test_source_file_tiff_multipage_metadata(tmp_path):
 	meta = (result.metadata.data_schema or {}).get("image_metadata") if result.metadata else None
 	assert isinstance(meta, dict)
 	assert int(meta.get("tiff_pages", 0)) >= 2
+
+
+@pytest.mark.asyncio
+async def test_source_file_audio_wav_metadata_and_normalize(tmp_path):
+	file_path = tmp_path / "tone.wav"
+	with wave.open(str(file_path), "wb") as wf:
+		wf.setnchannels(1)
+		wf.setsampwidth(2)
+		wf.setframerate(16000)
+		samples = array.array("h", [1000] * 1600)
+		wf.writeframes(samples.tobytes())
+	node = {
+		"id": "n_source_audio_wav",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "wav",
+				"audio_normalize": True,
+				"audio_target_peak": 0.8,
+			}
+		},
+	}
+	result = await exec_source("run_audio_wav", node, _ctx())
+	assert result.status == "succeeded"
+	meta = (result.metadata.data_schema or {}).get("audio_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("sample_rate") == 16000
+	assert meta.get("channels") == 1
+	assert isinstance(meta.get("normalize"), dict)
+	assert meta.get("normalize", {}).get("applied") is True
+
+
+@pytest.mark.asyncio
+async def test_source_file_audio_non_wav_normalize_fallback(tmp_path):
+	file_path = tmp_path / "fake.mp3"
+	file_path.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00")
+	node = {
+		"id": "n_source_audio_mp3",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "mp3",
+				"audio_normalize": True,
+			}
+		},
+	}
+	result = await exec_source("run_audio_mp3", node, _ctx())
+	assert result.status == "succeeded"
+	meta = (result.metadata.data_schema or {}).get("audio_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("format") == "mp3"
+	assert meta.get("normalize", {}).get("applied") is False
 
 
 @pytest.mark.asyncio

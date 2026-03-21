@@ -145,6 +145,14 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["image_svg_policy"] = p.pop("imageSvgPolicy")
     if "imageTiffPagesMode" in p and "image_tiff_pages_mode" not in p:
         p["image_tiff_pages_mode"] = p.pop("imageTiffPagesMode")
+    if "audioExtractMetadata" in p and "audio_extract_metadata" not in p:
+        p["audio_extract_metadata"] = p.pop("audioExtractMetadata")
+    if "audioNormalize" in p and "audio_normalize" not in p:
+        p["audio_normalize"] = p.pop("audioNormalize")
+    if "audioTargetPeak" in p and "audio_target_peak" not in p:
+        p["audio_target_peak"] = p.pop("audioTargetPeak")
+    if "audioTranscodeFormat" in p and "audio_transcode_format" not in p:
+        p["audio_transcode_format"] = p.pop("audioTranscodeFormat")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -416,6 +424,10 @@ class SourceFileParams(NodeParamSchema):
     image_extract_metadata: bool = True
     image_svg_policy: Literal["pass", "sanitize", "reject"] = "sanitize"
     image_tiff_pages_mode: Literal["first", "all"] = "first"
+    audio_extract_metadata: bool = True
+    audio_normalize: bool = False
+    audio_target_peak: float = Field(default=0.9, ge=0.01, le=1.0)
+    audio_transcode_format: Optional[Literal["mp3", "wav", "flac", "ogg", "m4a", "aac"]] = None
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

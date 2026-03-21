@@ -1,4 +1,5 @@
 import asyncio
+import array
 import csv
 import hashlib
 import io
@@ -8,6 +9,7 @@ import os
 import random
 import re
 import time
+import wave
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -693,6 +695,59 @@ def _extract_image_metadata(file_bytes: bytes, file_format: str, tiff_pages_mode
     except Exception:
         return meta
     return meta
+
+
+def _extract_wav_metadata(file_bytes: bytes) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {}
+    try:
+        with wave.open(io.BytesIO(file_bytes), "rb") as wf:
+            channels = int(wf.getnchannels())
+            sample_rate = int(wf.getframerate())
+            nframes = int(wf.getnframes())
+            sampwidth = int(wf.getsampwidth())
+            duration = float(nframes / sample_rate) if sample_rate > 0 else 0.0
+            meta.update(
+                {
+                    "channels": channels,
+                    "sample_rate": sample_rate,
+                    "frame_count": nframes,
+                    "sample_width_bytes": sampwidth,
+                    "duration_sec": round(duration, 6),
+                    "codec": "pcm",
+                }
+            )
+    except Exception:
+        return meta
+    return meta
+
+
+def _normalize_wav_bytes(file_bytes: bytes, target_peak: float) -> tuple[bytes, Dict[str, Any]]:
+    target = max(0.01, min(1.0, float(target_peak)))
+    try:
+        with wave.open(io.BytesIO(file_bytes), "rb") as wf:
+            params = wf.getparams()
+            raw_frames = wf.readframes(wf.getnframes())
+    except Exception:
+        return file_bytes, {"applied": False, "reason": "wav_decode_failed"}
+    if int(params.sampwidth) != 2:
+        return file_bytes, {"applied": False, "reason": "unsupported_sample_width"}
+    samples = array.array("h")
+    samples.frombytes(raw_frames)
+    if len(samples) == 0:
+        return file_bytes, {"applied": False, "reason": "empty_audio"}
+    peak = max(abs(int(s)) for s in samples)
+    if peak <= 0:
+        return file_bytes, {"applied": False, "reason": "silent_audio"}
+    desired_peak = int(32767 * target)
+    gain = float(desired_peak / peak)
+    if gain <= 0:
+        return file_bytes, {"applied": False, "reason": "invalid_gain"}
+    normalized = array.array("h", [max(-32768, min(32767, int(round(int(s) * gain)))) for s in samples])
+    out_buf = io.BytesIO()
+    with wave.open(out_buf, "wb") as out_wf:
+        out_wf.setparams(params)
+        out_wf.writeframes(normalized.tobytes())
+    return out_buf.getvalue(), {"applied": True, "gain": round(gain, 6), "target_peak": target}
 
 
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
@@ -1927,6 +1982,31 @@ async def _handle_file_source(
                 str(getattr(schema, "image_tiff_pages_mode", "first") or "first"),
             )
             format_specific_metadata["image_metadata"]["svg_policy"] = svg_policy if schema.file_format == "svg" else "n/a"
+    elif schema.file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+        raw = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
+        normalize_audio = bool(getattr(schema, "audio_normalize", False))
+        target_peak = float(getattr(schema, "audio_target_peak", 0.9) or 0.9)
+        transcode_target = str(getattr(schema, "audio_transcode_format", "") or "").strip().lower() or None
+        normalize_meta: Dict[str, Any] = {"applied": False}
+        transcode_meta: Dict[str, Any] = {"applied": False}
+        if normalize_audio:
+            if schema.file_format == "wav":
+                raw, normalize_meta = _normalize_wav_bytes(raw, target_peak)
+            else:
+                normalize_meta = {"applied": False, "reason": "normalize_supported_for_wav_only"}
+        if transcode_target and transcode_target != schema.file_format:
+            transcode_meta = {"applied": False, "reason": "transcode_not_available"}
+        binary_data = raw
+        if bool(getattr(schema, "audio_extract_metadata", True)):
+            audio_meta: Dict[str, Any] = {
+                "format": schema.file_format,
+                "codec": "unknown",
+                "normalize": normalize_meta,
+                "transcode": transcode_meta,
+            }
+            if schema.file_format == "wav":
+                audio_meta.update(_extract_wav_metadata(binary_data))
+            format_specific_metadata["audio_metadata"] = audio_meta
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 

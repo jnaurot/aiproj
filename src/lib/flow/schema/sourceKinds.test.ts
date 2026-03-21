@@ -99,6 +99,10 @@ describe('source kinds schema coverage', () => {
 			image_extract_metadata: true,
 			image_svg_policy: 'sanitize',
 			image_tiff_pages_mode: 'all',
+			audio_extract_metadata: true,
+			audio_normalize: true,
+			audio_target_peak: 0.8,
+			audio_transcode_format: 'wav',
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -125,5 +129,9 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.image_extract_metadata).toBe(true);
 		expect(parsed.image_svg_policy).toBe('sanitize');
 		expect(parsed.image_tiff_pages_mode).toBe('all');
+		expect(parsed.audio_extract_metadata).toBe(true);
+		expect(parsed.audio_normalize).toBe(true);
+		expect(parsed.audio_target_peak).toBe(0.8);
+		expect(parsed.audio_transcode_format).toBe('wav');
 	});
 });
