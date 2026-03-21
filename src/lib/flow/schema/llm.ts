@@ -4,6 +4,7 @@ import { BaseNodeDataSchema } from './base';
 
 export const LlmOutputModeSchema = z.enum(['text', 'json', 'embeddings']);
 export const LlmKindSchema = z.enum(['ollama', 'openai_compat']);
+export const ModelKindSchema = z.enum(['llm', 'vision', 'audio', 'embedding', 'reranker', 'multimodal']);
 
 export const LlmParamsSchema = z
 	.object({
@@ -85,15 +86,18 @@ export const LlmOpenAI_compatParamsSchema = LlmParamsSchema;
 
 // Node-level discriminator: llmKind (Source-style)
 export const LlmNodeDataSchema = BaseNodeDataSchema('llm', LlmParamsSchema).extend({
-	llmKind: LlmKindSchema
+	llmKind: LlmKindSchema,
+	modelKind: ModelKindSchema.optional().default('llm')
 });
 export const ModelNodeDataSchema = BaseNodeDataSchema('model', LlmParamsSchema).extend({
-	llmKind: LlmKindSchema
+	llmKind: LlmKindSchema,
+	modelKind: ModelKindSchema.optional().default('llm')
 });
 
 export type LlmNodeData = z.infer<typeof LlmNodeDataSchema>;
 export type ModelNodeData = z.infer<typeof ModelNodeDataSchema>;
 export type LlmKind = z.infer<typeof LlmKindSchema>;
+export type ModelKind = z.infer<typeof ModelKindSchema>;
 
 export const LlmParamsSchemaByKind = {
 	ollama: LlmOllamaParamsSchema,

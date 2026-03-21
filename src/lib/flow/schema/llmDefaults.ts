@@ -1,5 +1,5 @@
 // src/lib/flow/schema/llmDefaults.ts
-import type { LlmKind, LlmParams } from "$lib/flow/schema/llm";
+import type { LlmKind, LlmParams, ModelKind } from "$lib/flow/schema/llm";
 
 /**
  * Canonical default params by llmKind.
@@ -32,15 +32,46 @@ export const defaultLlmParamsByKind: Record<LlmKind, LlmParams> = {
 
 export const defaultLlmParams: LlmParams = defaultLlmOllamaParams;
 
+export const defaultModelParamsByKind: Record<ModelKind, LlmParams> = {
+	llm: defaultLlmOllamaParams,
+	vision: {
+		...defaultLlmOpenAICompatParams,
+		model: "gpt-4.1-mini",
+		user_prompt: "Describe the visual input."
+	},
+	audio: {
+		...defaultLlmOpenAICompatParams,
+		model: "gpt-4o-mini-transcribe",
+		user_prompt: "Transcribe and summarize the audio input."
+	},
+	embedding: {
+		...defaultLlmOpenAICompatParams,
+		model: "text-embedding-3-small",
+		user_prompt: "Generate embeddings for the input.",
+		output: { mode: "embeddings", embedding: { dims: 1536 } }
+	},
+	reranker: {
+		...defaultLlmOpenAICompatParams,
+		model: "gpt-4o-mini",
+		user_prompt: "Rank candidates by relevance to the query."
+	},
+	multimodal: {
+		...defaultLlmOpenAICompatParams,
+		model: "gpt-4o-mini",
+		user_prompt: "Analyze the multimodal input and return the result."
+	}
+};
+
 /**
  * Canonical default node.data for kind="model"
  * (Used by defaultNodeData("model") / addNode)
  */
 export const defaultModelNodeData = {
     kind: "model" as const,
+	modelKind: "llm" as const,
     llmKind: "ollama" as const,
     label: "Model",
-    params: defaultLlmParams,
+    params: defaultModelParamsByKind.llm,
     status: "idle" as const,
 } as const;
 
@@ -48,5 +79,6 @@ export const defaultModelNodeData = {
 export const defaultLlmNodeData = {
     ...defaultModelNodeData,
     kind: "llm" as const,
+	modelKind: "llm" as const,
     label: "LLM",
 } as const;

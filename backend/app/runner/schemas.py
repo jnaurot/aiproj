@@ -1112,6 +1112,18 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
             print(pformat(norm)[:8000])
 
             llm_kind = node.get("data", {}).get("llmKind") or "ollama"
+            model_kind = node.get("data", {}).get("modelKind") or "llm"
+            if model_kind not in {"llm", "vision", "audio", "embedding", "reranker", "multimodal"}:
+                errors.append(
+                    _machine_error(
+                        code="INVALID_VALUE",
+                        param_path="data.modelKind",
+                        message=(
+                            "modelKind must be one of: llm, vision, audio, embedding, reranker, multimodal"
+                        ),
+                        value=model_kind,
+                    )
+                )
 
             llm_params = LLMParams.model_validate(norm)
         elif kind == "source":

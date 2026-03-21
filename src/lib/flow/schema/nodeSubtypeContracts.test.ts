@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { SourceParamsSchemaByKind } from './source';
-import { LlmParamsSchemaByKind } from './llm';
+import { LlmParamsSchemaByKind, ModelNodeDataSchema } from './llm';
 import { TransformParamsSchemaByKind, TransformParamsSchema } from './transform';
 import { ToolParamsSchema } from './tool';
 import { ComponentParamsSchema } from './component';
@@ -50,6 +50,22 @@ describe('node subtype contract schemas', () => {
 				model: 'gpt-4.1-mini',
 				user_prompt: 'Return json',
 				output: { mode: 'json', jsonSchema: { type: 'object' } },
+			}).success
+		).toBe(true);
+
+		expect(
+			ModelNodeDataSchema.safeParse({
+				kind: 'model',
+				modelKind: 'vision',
+				llmKind: 'openai_compat',
+				label: 'Model',
+				status: 'idle',
+				params: {
+					baseUrl: 'https://api.openai.com',
+					model: 'gpt-4.1-mini',
+					user_prompt: 'Describe the image',
+					output: { mode: 'text' }
+				}
 			}).success
 		).toBe(true);
 	});

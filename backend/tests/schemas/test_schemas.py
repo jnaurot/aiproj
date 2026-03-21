@@ -843,6 +843,16 @@ class TestGetSchemaForNode:
         
         schema = get_schema_for_node(node)
         assert schema == LLMParams
+
+    def test_model_node_schema(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "params": {}
+            }
+        }
+        schema = get_schema_for_node(node)
+        assert schema == LLMParams
     
     def test_source_file_node_schema(self):
         """Test schema retrieval for file source node"""
@@ -1010,3 +1020,22 @@ class TestValidateNodeParamsSourceNormalization:
         )
         assert isinstance(normalized.get("partition"), dict)
         assert normalized.get("partition", {}).get("on_error") == "skip_failed"
+
+
+class TestValidateNodeParamsModelKind:
+    def test_model_kind_validation_rejects_unknown(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "modelKind": "unknown_mode",
+                "llmKind": "openai_compat",
+                "params": {
+                    "connectionRef": "OPENAI_API_KEY",
+                    "model": "gpt-4o-mini",
+                    "user_prompt": "hello",
+                    "output": {"mode": "text"},
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("modelKind must be one of" in err for err in errors)

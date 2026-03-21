@@ -20,6 +20,7 @@ export type SourceParamsByKind = {
 import type { LlmParams } from '$lib/flow/schema/llm';
 
 export type LlmKind = 'ollama' | 'openai_compat';
+export type ModelKind = 'llm' | 'vision' | 'audio' | 'embedding' | 'reranker' | 'multimodal';
 
 /**
  * If/when you later split params by kind, update this mapping.

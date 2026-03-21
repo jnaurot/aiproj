@@ -3,7 +3,7 @@ import type { PipelineNodeData } from "$lib/flow/types";
 import { normalizeWithDefaults } from "$lib/flow/util/normalize";
 import { defaultSourceParamsByKind } from "$lib/flow/schema/sourceDefaults";
 import { SourceParamsSchemaByKind } from "$lib/flow/schema/source";
-import { defaultLlmParamsByKind } from "$lib/flow/schema/llmDefaults";
+import { defaultLlmParamsByKind, defaultModelParamsByKind } from "$lib/flow/schema/llmDefaults";
 import { LlmParamsSchemaByKind } from "$lib/flow/schema/llm";
 import { defaultTransformParamsByKind } from "$lib/flow/schema/transformDefaults"
 import { TransformParamsSchema } from "$lib/flow/schema/transform"
@@ -42,9 +42,10 @@ export function pickValidation(
     case "llm":
     case "model": {
       const lk = data.llmKind ?? "ollama"
+      const mk = (data as any).modelKind ?? "llm"
       return {
         schema: LlmParamsSchemaByKind[lk],
-        defaults: defaultLlmParamsByKind[lk]
+        defaults: data.kind === "model" ? defaultModelParamsByKind[mk] : defaultLlmParamsByKind[lk]
       };
     }
 

@@ -287,15 +287,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			id: string;
 			type: string;
 			position: { x: number; y: number };
-			data: {
-				kind?: string;
-				label?: string;
-				sourceKind?: string;
-				transformKind?: string;
-					llmKind?: string;
-					componentKind?: string;
-					params?: unknown;
-				};
+					data: {
+						kind?: string;
+						label?: string;
+						sourceKind?: string;
+						transformKind?: string;
+							llmKind?: string;
+							modelKind?: string;
+							componentKind?: string;
+							params?: unknown;
+						};
 		}>;
 		edges: Array<{
 			id: string;
@@ -605,6 +606,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
 							transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
 							llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
+							modelKind: typeof data.modelKind === 'string' ? data.modelKind : undefined,
 							componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
 							params: stableCanonicalValue(data.params ?? {})
 						}
