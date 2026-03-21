@@ -68,6 +68,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["api_key_ref"] = p.pop("apiKeyRef")
     if "promptRevisionId" in p and "prompt_revision_id" not in p:
         p["prompt_revision_id"] = p.pop("promptRevisionId")
+    if "evalGate" in p and "eval_gate" not in p:
+        p["eval_gate"] = p.pop("evalGate")
 
     # nested output -> flattened output schema controls
     out = p.get("output")

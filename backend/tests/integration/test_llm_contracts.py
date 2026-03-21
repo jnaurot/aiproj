@@ -419,3 +419,69 @@ async def test_ollama_visible_thinking_emits_delta_but_output_is_final_only(monk
 	assert out
 	payload = await store.read(out[-1]["artifactId"])
 	assert payload.decode("utf-8") == "hello"
+
+
+@pytest.mark.asyncio
+async def test_llm_eval_gate_blocks_promotion_on_threshold_fail(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+	state = {
+		"stream_lines": [
+			'data: {"choices":[{"delta":{"content":"ok"}}]}',
+			"data: [DONE]",
+		],
+		"post_payload": {"choices": [{"message": {"content": "ok"}}]},
+		"embedding_payload": {},
+		"chat_calls": 0,
+		"post_calls": 0,
+		"urls": [],
+	}
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _FakeAsyncClient(state))
+
+	events = []
+	artifact_root = tmp_path / "artifacts-eval-gate-fail"
+	await run_mod.run_graph(
+		run_id="run-eval-gate-fail",
+		graph=_graph("text", {"output_schema": None, "eval_gate": {"enabled": True, "min_output_chars": 10}}),
+		run_from=None,
+		bus=RunEventBus("run-eval-gate-fail", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-eval-gate-fail",
+	)
+	assert any(e.get("type") == "node_finished" and e.get("nodeId") == "llm_1" and e.get("status") == "failed" for e in events)
+	assert any("MODEL_EVAL_GATE_FAILED" in str(e.get("error") or "") for e in events if e.get("type") == "node_finished")
+
+
+@pytest.mark.asyncio
+async def test_llm_eval_gate_allows_promotion_on_pass(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+	state = {
+		"stream_lines": [
+			'data: {"choices":[{"delta":{"content":"hello-world"}}]}',
+			"data: [DONE]",
+		],
+		"post_payload": {"choices": [{"message": {"content": "hello-world"}}]},
+		"embedding_payload": {},
+		"chat_calls": 0,
+		"post_calls": 0,
+		"urls": [],
+	}
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _FakeAsyncClient(state))
+
+	events = []
+	artifact_root = tmp_path / "artifacts-eval-gate-pass"
+	await run_mod.run_graph(
+		run_id="run-eval-gate-pass",
+		graph=_graph("text", {"output_schema": None, "eval_gate": {"enabled": True, "required_substring": "hello"}}),
+		run_from=None,
+		bus=RunEventBus("run-eval-gate-pass", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-eval-gate-pass",
+	)
+	assert any(e.get("type") == "node_output" and e.get("nodeId") == "llm_1" for e in events)
+	assert any("MODEL_EVAL_GATE: passed" in str(e.get("message") or "") for e in events if e.get("type") == "log")

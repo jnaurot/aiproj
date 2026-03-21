@@ -12,6 +12,7 @@ from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 from .model_adapters import OpenAICompatAdapter
+from .model_eval_gate import evaluate_model_output_gate
 from .model_policy import (
     circuit_guard_allows,
     circuit_record_failure,
@@ -379,6 +380,24 @@ async def exec_llm_openai_compat(
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
             parsed = adapter.parse_response(output_mode, data or "")
             data = parsed.data
+            gate_ok, gate_reason = evaluate_model_output_gate(params, output_mode, data or "")
+            if not gate_ok:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                    error=f"MODEL_EVAL_GATE_FAILED: {gate_reason}",
+                )
+            await context.bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": f"MODEL_EVAL_GATE: passed ({gate_reason})",
+                }
+            )
             mime_type = parsed.mime_type
             file_type = parsed.file_type
             file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.{parsed.file_suffix}"

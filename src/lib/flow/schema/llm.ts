@@ -55,6 +55,16 @@ export const LlmParamsSchema = z
 		system_prompt: z.string().optional(),
 		user_prompt: z.string().min(1),
 		promptRevisionId: z.string().min(1).optional(),
+		evalGate: z
+			.object({
+				enabled: z.boolean().optional(),
+				min_output_chars: z.number().int().min(0).optional(),
+				fail_on_warnings: z.boolean().optional(),
+				required_substring: z.string().optional(),
+				required_json_keys: z.array(z.string().min(1)).optional()
+			})
+			.strip()
+			.optional(),
 
 		temperature: z.number().min(0).max(2).optional(),
 		top_p: z.number().min(0).max(1).optional(),

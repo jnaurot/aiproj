@@ -101,10 +101,12 @@ class TestLLMParams:
                 "model": "gpt-4",
                 "user_prompt": "hi",
                 "baseUrl": "https://api.example.com",
+                "evalGate": {"enabled": True, "min_output_chars": 5},
                 "output": {"mode": "json", "jsonSchema": {"type": "object"}, "validationMode": "soft"},
             }
         )
         assert result["output_validation_mode"] == "soft"
+        assert result["eval_gate"] == {"enabled": True, "min_output_chars": 5}
     
     def test_success_with_base_url(self):
         """Test successful validation with base_url"""
