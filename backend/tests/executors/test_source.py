@@ -343,3 +343,48 @@ async def test_source_database_incremental_filters_by_saved_cursor(monkeypatch, 
 	assert second.status == "succeeded"
 	assert isinstance(second.data, list)
 	assert len(second.data) == 0
+
+
+@pytest.mark.asyncio
+async def test_source_object_store_mock_text_succeeds():
+	node = {
+		"id": "n_obj_store",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+				"mock_text": "id,name\n1,alice\n2,bob\n",
+			},
+		},
+	}
+	result = await exec_source("run_obj_store", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert isinstance(result.metadata.data_schema.get("source_observability"), dict)
+	assert result.metadata.data_schema.get("source_observability", {}).get("source_kind") == "object_store"
+
+
+@pytest.mark.asyncio
+async def test_source_warehouse_mock_rows_succeeds():
+	node = {
+		"id": "n_wh",
+		"data": {
+			"sourceKind": "warehouse",
+			"params": {
+				"provider": "snowflake",
+				"connection_ref": "conn:warehouse_default",
+				"query": "select * from demo",
+				"mock_rows": [{"id": 1, "name": "alice"}, {"id": 2, "name": "bob"}],
+			},
+		},
+	}
+	result = await exec_source("run_wh", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert isinstance(result.metadata.data_schema.get("source_observability"), dict)
+	assert result.metadata.data_schema.get("source_observability", {}).get("source_kind") == "warehouse"

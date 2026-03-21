@@ -2699,6 +2699,8 @@ async function scrollToBottom() {
 											<option value="file">file</option>
 											<option value="database">database</option>
 											<option value="api">api</option>
+											<option value="object_store">object_store</option>
+											<option value="warehouse">warehouse</option>
 										{:else if $selectedNode.data.kind === 'llm'}
 											<option value="ollama">ollama</option>
 											<option value="openai_compat">openai_compat</option>

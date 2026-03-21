@@ -314,6 +314,31 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
             }
         )
+    elif source_kind == "object_store":
+        fp.update(
+            {
+                "provider": p.get("provider"),
+                "connection_ref": p.get("connection_ref"),
+                "bucket": p.get("bucket"),
+                "key": p.get("key"),
+                "file_format": p.get("file_format"),
+                "encoding": p.get("encoding"),
+                "output_type": source_output_type,
+                "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+            }
+        )
+    elif source_kind == "warehouse":
+        fp.update(
+            {
+                "provider": p.get("provider"),
+                "connection_ref": p.get("connection_ref"),
+                "connection_redacted": bool(p.get("connection_string")),
+                "query": p.get("query"),
+                "limit": p.get("limit"),
+                "output_type": source_output_type,
+                "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+            }
+        )
     return _sanitize(fp)
 
 

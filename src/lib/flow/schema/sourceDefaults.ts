@@ -1,5 +1,11 @@
 //lib/flow/schema/sourceDefaults.ts
-import type { SourceFileParams, SourceDatabaseParams, SourceAPIParams } from "$lib/flow/schema/source";
+import type {
+	SourceFileParams,
+	SourceDatabaseParams,
+	SourceAPIParams,
+	SourceObjectStoreParams,
+	SourceWarehouseParams
+} from "$lib/flow/schema/source";
 
 export const defaultSourceFileParams: SourceFileParams = {
     snapshotId: undefined,
@@ -24,6 +30,16 @@ export const defaultSourceDatabaseParams: SourceDatabaseParams = {
 		enabled: false,
 		cursor_type: "auto"
 	},
+	partition: {
+		enabled: false,
+		kind: "static_list",
+		on_error: "fail_fast",
+		bind_key: "partition",
+		parallelism_cap: 2,
+		static_values: [],
+		numeric_step: 1,
+		date_every_days: 1
+	},
     output: { mode: "table" },
 };
 
@@ -45,6 +61,16 @@ export const defaultSourceAPIParams: SourceAPIParams = {
 		enabled: false,
 		cursor_type: "auto"
 	},
+	partition: {
+		enabled: false,
+		kind: "static_list",
+		on_error: "fail_fast",
+		bind_key: "partition",
+		parallelism_cap: 2,
+		static_values: [],
+		numeric_step: 1,
+		date_every_days: 1
+	},
 	retry: {
 		max_attempts: 1,
 		backoff_seconds: 0.25,
@@ -58,10 +84,30 @@ export const defaultSourceAPIParams: SourceAPIParams = {
 	output: { mode: "json" }
 };
 
+export const defaultSourceObjectStoreParams: SourceObjectStoreParams = {
+	provider: "s3",
+	connection_ref: "conn:object_store_default",
+	bucket: "my-bucket",
+	key: "data.txt",
+	file_format: "txt",
+	encoding: "utf-8",
+	output: { mode: "text" }
+};
+
+export const defaultSourceWarehouseParams: SourceWarehouseParams = {
+	provider: "snowflake",
+	connection_ref: "conn:warehouse_default",
+	query: "select * from my_table",
+	limit: 1000,
+	output: { mode: "table" }
+};
+
 export const defaultSourceParamsByKind = {
-    file: defaultSourceFileParams,
-    database: defaultSourceDatabaseParams,
-    api: defaultSourceAPIParams,
+	file: defaultSourceFileParams,
+	database: defaultSourceDatabaseParams,
+	api: defaultSourceAPIParams,
+	object_store: defaultSourceObjectStoreParams,
+	warehouse: defaultSourceWarehouseParams
 } as const;
 
 // Optional: keep your original name as "file default"

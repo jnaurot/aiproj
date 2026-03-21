@@ -1,6 +1,7 @@
 <script lang="ts">
 	// lib/flow/components/NodeInspector.svelte
 	import { SourceEditorByKind } from '$lib/flow/components/editors/SourceEditor/SourceEditor';
+	import SourceGuidedQuickEditor from '$lib/flow/components/editors/SourceEditor/SourceGuidedQuickEditor.svelte';
 	import { LlmEditorByKind } from '$lib/flow/components/editors/LlmEditor/LlmEditor'; // <-- your new registry
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
@@ -42,6 +43,22 @@
 	// inspector draft params (single source of truth for editors)
 	$: params = $graphStore.inspector?.draftParams ?? {};
 	$: nodeError = selectedNode ? ($graphStore.nodeOutputs?.[selectedNode.id]?.lastError ?? null) : null;
+	$: sourceObservability = selectedNode
+		? (($graphStore.nodeOutputs?.[selectedNode.id]?.sourceObservability ?? null) as Record<string, unknown> | null)
+		: null;
+	$: sourceObsWarnings = (() => {
+		if (!sourceObservability) return [] as string[];
+		const warnings: string[] = [];
+		const nullRatio = Number(sourceObservability?.null_ratio ?? 0);
+		if (Number.isFinite(nullRatio) && nullRatio >= 0.2) {
+			warnings.push(`High null ratio: ${(nullRatio * 100).toFixed(1)}%`);
+		}
+		const retryCount = Number(sourceObservability?.retry_count ?? 0);
+		if (Number.isFinite(retryCount) && retryCount > 0) {
+			warnings.push(`Retries observed: ${retryCount}`);
+		}
+		return warnings;
+	})();
 
 	// sub-kinds / kinds
 	$: sourceKind = (selectedNode?.data as any)?.sourceKind ?? 'file';
@@ -92,6 +109,7 @@
 	let inputSchemaReqSeq = 0;
 	let lastInputSignature = '';
 	let transformGuidedMode = true;
+	let sourceGuidedMode = true;
 	let inputPreviewRows: Array<Record<string, unknown>> = [];
 	let inputPreviewColumns: string[] = [];
 	type SchemaAssistState = 'fresh' | 'partial' | 'stale' | 'unknown';
@@ -488,6 +506,102 @@
 		graphStore.commitInspectorImmediate(patch as Record<string, any>);
 	}
 
+	function sourceGuidedControlsForKind(kind: string): Array<{ id: string; label: string; description: string }> {
+		const k = String(kind ?? 'file').trim().toLowerCase();
+		if (k === 'database' || k === 'warehouse') {
+			return [
+				{ id: 'conn', label: 'Connection', description: 'Set connection_ref or connection_string first.' },
+				{ id: 'query', label: 'Query/Table', description: 'Provide query (or table_name for database).' },
+				{ id: 'output', label: 'Output mode', description: 'Default table output for downstream transforms.' },
+				{ id: 'limits', label: 'Limit/Incremental', description: 'Add limit and incremental cursor for safe runs.' }
+			];
+		}
+		if (k === 'api') {
+			return [
+				{ id: 'url', label: 'Endpoint', description: 'Set method + URL first.' },
+				{ id: 'auth', label: 'Auth', description: 'Provide auth token ref only if auth is enabled.' },
+				{ id: 'retry', label: 'Retry/Rate', description: 'Set retry and rate limits for resilient ingestion.' },
+				{ id: 'output', label: 'Output mode', description: 'Use json/table mode to match downstream schema.' }
+			];
+		}
+		if (k === 'object_store') {
+			return [
+				{ id: 'provider', label: 'Provider', description: 'Choose s3/azure_blob/gcs.' },
+				{ id: 'path', label: 'Bucket + key', description: 'Set object path before run.' },
+				{ id: 'format', label: 'File format', description: 'Declare file format for deterministic parsing.' },
+				{ id: 'output', label: 'Output mode', description: 'Use table/text/json/binary to fit downstream node.' }
+			];
+		}
+		return [
+			{ id: 'file', label: 'File selection', description: 'Pick snapshot/file first.' },
+			{ id: 'format', label: 'Format', description: 'Use detected file format or override explicitly.' },
+			{ id: 'output', label: 'Output mode', description: 'Set output mode to match downstream contract.' },
+			{ id: 'cache', label: 'Cache', description: 'Keep cache on for repeatable local workflows.' }
+		];
+	}
+
+	$: sourceGuidedControls = isSource ? sourceGuidedControlsForKind(sourceKind) : [];
+
+	function computeSourceAutoFixes(
+		kind: string,
+		error: Record<string, any> | null,
+		currentParams: Record<string, unknown>
+	): Array<{ id: string; label: string; patch: Record<string, unknown> }> {
+		if (!error) return [];
+		const fixes: Array<{ id: string; label: string; patch: Record<string, unknown> }> = [];
+		const code = String(error.errorCode ?? '').trim().toUpperCase();
+		const expectedInputType = String((error as any)?.expected?.inputType ?? '').trim().toLowerCase();
+		if (code === 'CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH' && expectedInputType) {
+			fixes.push({
+				id: 'set_output_mode',
+				label: `Set output mode to ${expectedInputType}`,
+				patch: {
+					output: {
+						...((currentParams?.output as Record<string, unknown> | undefined) ?? {}),
+						mode: expectedInputType
+					}
+				}
+			});
+		}
+		if (code === 'MISSING_SECRET') {
+			if (String(kind).toLowerCase() === 'api') {
+				fixes.push({
+					id: 'disable_auth',
+					label: 'Disable auth for now',
+					patch: { auth_type: 'none', auth_token_ref: undefined }
+				});
+			}
+			if (String(kind).toLowerCase() === 'database' || String(kind).toLowerCase() === 'warehouse') {
+				fixes.push({
+					id: 'clear_conn_ref',
+					label: 'Clear invalid connection_ref',
+					patch: { connection_ref: undefined }
+				});
+			}
+		}
+		if (code === 'INVALID_IDENTIFIER') {
+			fixes.push({
+				id: 'clear_table_name',
+				label: 'Clear unsafe table_name',
+				patch: { table_name: undefined }
+			});
+		}
+		return fixes;
+	}
+
+	$: sourceAutoFixes = isSource
+		? computeSourceAutoFixes(
+				sourceKind,
+				nodeError as Record<string, any> | null,
+				((params ?? {}) as Record<string, unknown>)
+			)
+		: [];
+
+	function applySourceAutoFix(patch: Record<string, unknown>): void {
+		if (!isSource) return;
+		graphStore.commitInspectorImmediate(patch as Record<string, any>);
+	}
+
 	function switchTransformOp(nextOp: TransformKind): void {
 		if (!selectedNode?.id) return;
 		graphStore.setTransformKind(selectedNode.id, nextOp);
@@ -525,14 +639,76 @@
 
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
+	{#if sourceObservability}
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Source Observability</div>
+			<div class="schemaSuggestions">
+				kind: {String(sourceObservability.source_kind ?? '-')} | mode: {String(sourceObservability.output_mode ?? '-')}
+			</div>
+			<div class="schemaSuggestions">
+				input bytes: {String(sourceObservability.input_bytes ?? '-')} | output rows: {String(sourceObservability.output_rows ?? '-')}
+			</div>
+			<div class="schemaSuggestions">
+				null ratio: {String(sourceObservability.null_ratio ?? '-')} | retries: {String(sourceObservability.retry_count ?? 0)} | partitions: {String(sourceObservability.partition_count ?? 1)}
+			</div>
+			{#if sourceObsWarnings.length > 0}
+				<div class="guidedAssistDesc">{sourceObsWarnings.join(' | ')}</div>
+			{/if}
+		</div>
+	{/if}
 	{#if isSource}
-		<svelte:component
-			this={SourceEditorByKind[sourceKind] ?? SourceEditorByKind.file}
-			{selectedNode}
-			{params}
-			{onDraft}
-			{onCommit}
-		/>
+		<div class="guidedModeRow">
+			<label class="guidedToggle">
+				<input type="checkbox" bind:checked={sourceGuidedMode} />
+				<span>Guided source mode</span>
+			</label>
+			<span class="guidedHint">Start with high-value setup controls, then tune advanced fields.</span>
+		</div>
+		{#if sourceGuidedMode}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Source Setup Checklist</div>
+				<div class="guidedAssistList">
+					{#each sourceGuidedControls as control (control.id)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">{control.label}</div>
+							<div class="guidedAssistDesc">{control.description}</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if nodeError}
+			<div class="guidedAssistCard guidedAssistError">
+				<div class="guidedAssistHead">Why This Failed</div>
+				<div class="guidedAssistDesc">{nodeError.message || 'Source failed. Review diagnostics.'}</div>
+				{#if sourceAutoFixes.length > 0}
+					<div class="assistActionRow">
+						{#each sourceAutoFixes as fix (fix.id)}
+							<button type="button" class="small" on:click={() => applySourceAutoFix(fix.patch)}>
+								{fix.label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+		{/if}
+		{#if sourceGuidedMode}
+			<SourceGuidedQuickEditor
+				{selectedNode}
+				sourceKind={sourceKind}
+				params={params as Record<string, unknown>}
+				{onDraft}
+				{onCommit}
+			/>
+		{:else}
+			<svelte:component
+				this={SourceEditorByKind[sourceKind] ?? SourceEditorByKind.file}
+				{selectedNode}
+				{params}
+				{onDraft}
+				{onCommit}
+			/>
+		{/if}
 	{:else if isLlm}
 		<svelte:component
 			this={LlmEditorByKind[llmKind] ?? LlmEditorByKind.ollama}

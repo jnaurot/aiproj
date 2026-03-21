@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "file_csv_default",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "file",
+        "params": {
+          "file_format": "csv"
+        }
+      },
+      "expectedOutType": "table"
+    },
+    {
+      "id": "file_txt_default",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "file",
+        "params": {
+          "file_format": "txt"
+        }
+      },
+      "expectedOutType": "text"
+    },
+    {
+      "id": "file_output_override_json",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "file",
+        "params": {
+          "file_format": "csv",
+          "output": { "mode": "json" }
+        }
+      },
+      "expectedOutType": "json"
+    },
+    {
+      "id": "database_default",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "database",
+        "params": {
+          "query": "select 1"
+        }
+      },
+      "expectedOutType": "table"
+    },
+    {
+      "id": "api_default",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "api",
+        "params": {
+          "url": "https://example.com",
+          "method": "GET"
+        }
+      },
+      "expectedOutType": "json"
+    },
+    {
+      "id": "object_store_json",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "object_store",
+        "params": {
+          "bucket": "demo",
+          "key": "file.json",
+          "file_format": "json"
+        }
+      },
+      "expectedOutType": "json"
+    },
+    {
+      "id": "object_store_binary",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "object_store",
+        "params": {
+          "bucket": "demo",
+          "key": "img.png",
+          "file_format": "png"
+        }
+      },
+      "expectedOutType": "binary"
+    },
+    {
+      "id": "warehouse_default",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "warehouse",
+        "params": {
+          "query": "select * from table"
+        }
+      },
+      "expectedOutType": "table"
+    },
+    {
+      "id": "expected_schema_wins",
+      "nodeData": {
+        "kind": "source",
+        "sourceKind": "api",
+        "params": {
+          "url": "https://example.com",
+          "output": { "mode": "json" }
+        },
+        "schema": {
+          "expectedSchema": {
+            "typedSchema": { "type": "text", "fields": [] }
+          }
+        }
+      },
+      "expectedOutType": "text"
+    }
+  ]
+}

@@ -1088,16 +1088,20 @@ def _source_payload_schema(
     data_value: Any,
     source_metadata: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
+    source_data_schema = (
+        getattr(source_metadata, "data_schema", {}) if isinstance(getattr(source_metadata, "data_schema", None), dict) else {}
+    )
     if out_contract == "table" and isinstance(data_value, list):
         payload = _table_payload_schema_from_rows(data_value)
-        if isinstance(getattr(source_metadata, "data_schema", None), dict):
-            ds = getattr(source_metadata, "data_schema", {}) or {}
-            table_columns = ds.get("table_columns")
-            if isinstance(table_columns, list):
-                payload["columns"] = canonical_table_columns(table_columns)
-            coercion = ds.get("table_coercion")
-            if isinstance(coercion, dict):
-                payload["coercion"] = coercion
+        table_columns = source_data_schema.get("table_columns")
+        if isinstance(table_columns, list):
+            payload["columns"] = canonical_table_columns(table_columns)
+        coercion = source_data_schema.get("table_coercion")
+        if isinstance(coercion, dict):
+            payload["coercion"] = coercion
+        source_observability = source_data_schema.get("source_observability")
+        if isinstance(source_observability, dict):
+            payload["source_observability"] = source_observability
         resolved_columns = payload.get("columns")
         if isinstance(resolved_columns, list):
             node_id = str(getattr(source_metadata, "node_id", "") or "")
@@ -1121,11 +1125,22 @@ def _source_payload_schema(
         }
         if isinstance(data_value, dict):
             out["keys_sample"] = sorted(list(data_value.keys()))
+        source_observability = source_data_schema.get("source_observability")
+        if isinstance(source_observability, dict):
+            out["source_observability"] = source_observability
         return out
     if out_contract == "text":
-        return {"schema_version": 1, "type": "text", "encoding": "utf-8"}
+        out = {"schema_version": 1, "type": "text", "encoding": "utf-8"}
+        source_observability = source_data_schema.get("source_observability")
+        if isinstance(source_observability, dict):
+            out["source_observability"] = source_observability
+        return out
     if out_contract == "binary":
-        return {"schema_version": 1, "type": "binary"}
+        out = {"schema_version": 1, "type": "binary"}
+        source_observability = source_data_schema.get("source_observability")
+        if isinstance(source_observability, dict):
+            out["source_observability"] = source_observability
+        return out
     return None
 
 
@@ -1640,6 +1655,19 @@ def _infer_artifact_payload_type(artifact: Artifact) -> str:
     return "binary"
 
 
+def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str, Any]]:
+    ps = artifact.payload_schema if isinstance(artifact.payload_schema, dict) else {}
+    direct = ps.get("source_observability")
+    if isinstance(direct, dict):
+        return direct
+    schema_env = ps.get("schema")
+    if isinstance(schema_env, dict):
+        nested = schema_env.get("source_observability")
+        if isinstance(nested, dict):
+            return nested
+    return None
+
+
 def _explicit_schema_from_node(node: Dict[str, Any]) -> Optional[Any]:
     params = (node.get("data", {}).get("params", {}) or {}) if isinstance(node, dict) else {}
     schema_obj = (
@@ -1744,6 +1772,23 @@ def _source_table_provenance(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 out["endpoint"] = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", parsed.fragment))
             except Exception:
                 out["endpoint"] = endpoint
+    elif source_kind == "object_store":
+        bucket = str(params.get("bucket") or "").strip()
+        key = str(params.get("key") or "").strip()
+        provider = str(params.get("provider") or "").strip()
+        if provider:
+            out["provider"] = provider
+        if bucket:
+            out["bucket"] = bucket
+        if key:
+            out["key"] = key
+    elif source_kind == "warehouse":
+        provider = str(params.get("provider") or "").strip()
+        query = str(params.get("query") or "").strip()
+        if provider:
+            out["provider"] = provider
+        if query:
+            out["query"] = query
     return out
 
 
@@ -1888,7 +1933,7 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
             if declared_type in {"table", "text", "json", "binary"}:
                 return declared_type
         source_kind = str(params.get("sourceKind") or params.get("source_type") or "file").strip().lower()
-        if source_kind == "file":
+        if source_kind in {"file", "object_store"}:
             file_format = str(params.get("file_format") or "").strip().lower()
             if file_format in {"csv", "tsv", "parquet", "arrow", "feather", "xlsx", "xls"}:
                 return "table"
@@ -1919,7 +1964,7 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
             return "text"
         if source_kind == "api":
             return "json"
-        if source_kind == "database":
+        if source_kind in {"database", "warehouse"}:
             return "table"
         if source_kind == "json":
             return "json"
@@ -3572,6 +3617,7 @@ async def run_graph(
                         "artifactId": cached_artifact_id,
                         "mimeType": cached_art.mime_type,
                         "payloadType": _infer_artifact_payload_type(cached_art),
+                        "sourceObservability": _source_observability_from_artifact(cached_art),
                         "cached": True,
                     })
 
@@ -5189,6 +5235,7 @@ async def run_graph(
                             "artifactId": committed_artifact_id,
                             "mimeType": res.mime_type,
                             "payloadType": transform_payload_type,
+                            "sourceObservability": _source_observability_from_artifact(artifact),
                         })
 
                         # return a NodeOutput for legacy metadata flow
@@ -5856,6 +5903,7 @@ async def run_graph(
                         "artifactId": committed_artifact_id,
                         "mimeType": artifact.mime_type,
                         "payloadType": _infer_artifact_payload_type(artifact),
+                        "sourceObservability": _source_observability_from_artifact(artifact),
                     })
 
                     # Update cache index

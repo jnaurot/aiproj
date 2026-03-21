@@ -882,6 +882,32 @@ class TestGetSchemaForNode:
         
         schema = get_schema_for_node(node)
         assert schema == SourceAPIParams
+
+    def test_source_object_store_node_schema(self):
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "object_store",
+                "params": {}
+            }
+        }
+        schema = get_schema_for_node(node)
+        from app.runner.schemas import SourceObjectStoreParams
+
+        assert schema == SourceObjectStoreParams
+
+    def test_source_warehouse_node_schema(self):
+        node = {
+            "data": {
+                "kind": "source",
+                "sourceKind": "warehouse",
+                "params": {}
+            }
+        }
+        schema = get_schema_for_node(node)
+        from app.runner.schemas import SourceWarehouseParams
+
+        assert schema == SourceWarehouseParams
     
     def test_invalid_kind(self):
         """Test None returned for invalid node kind"""
@@ -926,6 +952,8 @@ class TestSCHEMA_REGISTRY:
         assert "source:file" in SCHEMA_REGISTRY
         assert "source:database" in SCHEMA_REGISTRY
         assert "source:api" in SCHEMA_REGISTRY
+        assert "source:object_store" in SCHEMA_REGISTRY
+        assert "source:warehouse" in SCHEMA_REGISTRY
         assert "llm" in SCHEMA_REGISTRY
         assert "transform" in SCHEMA_REGISTRY
         assert "tool:mcp" in SCHEMA_REGISTRY
@@ -968,3 +996,17 @@ class TestValidateNodeParamsSourceNormalization:
         }
         errors = validate_node_params(node)
         assert errors == []
+
+    def test_partition_on_error_camel_case_normalizes(self):
+        from app.runner.schemas import normalize_source_params_frontend
+
+        normalized = normalize_source_params_frontend(
+            {
+                "source_type": "api",
+                "url": "https://example.com",
+                "method": "GET",
+                "partitionConfig": {"enabled": True, "kind": "static_list", "onError": "skip_failed"},
+            }
+        )
+        assert isinstance(normalized.get("partition"), dict)
+        assert normalized.get("partition", {}).get("on_error") == "skip_failed"

@@ -71,7 +71,18 @@ export type KnownRunEvent =
       nodeId?: string;
       componentPath?: string[];
     }
-  | { type: "node_output"; runId: string; at: string; nodeId: string; artifactId: string; mimeType?: string; payloadType?: string; preview?: string; cached?: boolean }
+  | {
+      type: "node_output";
+      runId: string;
+      at: string;
+      nodeId: string;
+      artifactId: string;
+      mimeType?: string;
+      payloadType?: string;
+      preview?: string;
+      cached?: boolean;
+      sourceObservability?: Record<string, unknown>;
+    }
   | { type: "cache_decision"; schema_version?: number; runId: string; at: string; nodeId: string; nodeKind: string; decision: "cache_hit" | "cache_miss" | "cache_hit_contract_mismatch"; execKey: string; artifactId?: string; expectedType?: string; actualType?: string; producerExecKey?: string }
   | { type: "cache_summary"; schema_version?: number; runId: string; at: string; cache_hit: number; cache_miss: number; cache_hit_contract_mismatch: number }
   | {

@@ -132,13 +132,17 @@ class GraphValidator:
         params = (data.get("params") or {})
         if kind == "source":
             source_kind = str(params.get("sourceKind") or params.get("source_type") or "file").strip().lower()
-            if source_kind == "file":
+            if source_kind in {"file", "object_store"}:
                 file_format = str(params.get("file_format") or "").strip().lower()
                 if file_format in {"csv", "tsv", "parquet", "arrow", "feather", "xlsx", "xls"}:
                     return "table"
                 if file_format in {"json", "jsonl"}:
                     return "json"
                 return "text"
+            if source_kind == "api":
+                return "json"
+            if source_kind in {"database", "warehouse"}:
+                return "table"
             if source_kind == "json":
                 return "json"
             if source_kind == "table":

@@ -123,6 +123,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["body_raw"] = p.pop("bodyRaw")
     if "incrementalConfig" in p and "incremental" not in p:
         p["incremental"] = p.pop("incrementalConfig")
+    if "partitionConfig" in p and "partition" not in p:
+        p["partition"] = p.pop("partitionConfig")
     if "retryPolicy" in p and "retry" not in p:
         p["retry"] = p.pop("retryPolicy")
     if "rateLimit" in p and "rate_limit" not in p:
@@ -146,9 +148,11 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     if source_type == "api":
         if "query" in p and not isinstance(p.get("query"), dict):
             p["query"] = {}
-    elif source_type == "database":
+    elif source_type in {"database", "warehouse"}:
         if "query" in p and not isinstance(p.get("query"), str):
             p["query"] = None
+    elif source_type == "object_store":
+        pass
     else:
         # Unknown/legacy shape: preserve historical API-safe behavior.
         if "query" in p and not isinstance(p.get("query"), dict):
@@ -182,6 +186,28 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             incremental["window_start"] = incremental.pop("windowStart")
         if "windowEnd" in incremental and "window_end" not in incremental:
             incremental["window_end"] = incremental.pop("windowEnd")
+    partition = p.get("partition")
+    if isinstance(partition, dict):
+        if "onError" in partition and "on_error" not in partition:
+            partition["on_error"] = partition.pop("onError")
+        if "staticValues" in partition and "static_values" not in partition:
+            partition["static_values"] = partition.pop("staticValues")
+        if "numericStart" in partition and "numeric_start" not in partition:
+            partition["numeric_start"] = partition.pop("numericStart")
+        if "numericEnd" in partition and "numeric_end" not in partition:
+            partition["numeric_end"] = partition.pop("numericEnd")
+        if "numericStep" in partition and "numeric_step" not in partition:
+            partition["numeric_step"] = partition.pop("numericStep")
+        if "dateStart" in partition and "date_start" not in partition:
+            partition["date_start"] = partition.pop("dateStart")
+        if "dateEnd" in partition and "date_end" not in partition:
+            partition["date_end"] = partition.pop("dateEnd")
+        if "dateEveryDays" in partition and "date_every_days" not in partition:
+            partition["date_every_days"] = partition.pop("dateEveryDays")
+        if "bindKey" in partition and "bind_key" not in partition:
+            partition["bind_key"] = partition.pop("bindKey")
+        if "parallelismCap" in partition and "parallelism_cap" not in partition:
+            partition["parallelism_cap"] = partition.pop("parallelismCap")
     return p
 
 
@@ -230,6 +256,8 @@ class SourceKind(str, Enum):
     FILE = "file"
     DATABASE = "database"
     API = "api"
+    OBJECT_STORE = "object_store"
+    WAREHOUSE = "warehouse"
 
 class SourceFileParams(NodeParamSchema):
     snapshot_id: Optional[str] = None
@@ -311,6 +339,9 @@ class SourceDatabaseParams(NodeParamSchema):
     table_name: Optional[str] = None
     limit: Optional[int] = None
     incremental: Dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "cursor_type": "auto"})
+    partition: Dict[str, Any] = Field(
+        default_factory=lambda: {"enabled": False, "kind": "static_list", "on_error": "fail_fast", "bind_key": "partition", "parallelism_cap": 2}
+    )
     output_mode: Literal["table", "text", "json", "binary"] = "table"
     output_schema: Optional[Dict[str, Any]] = None
     
@@ -346,6 +377,9 @@ class SourceAPIParams(NodeParamSchema):
     auth_token_ref: Optional[str] = None
     timeout_seconds: int = 30
     incremental: Dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "cursor_type": "auto"})
+    partition: Dict[str, Any] = Field(
+        default_factory=lambda: {"enabled": False, "kind": "static_list", "on_error": "fail_fast", "bind_key": "partition", "parallelism_cap": 2}
+    )
     retry: Dict[str, Any] = Field(
         default_factory=lambda: {
             "max_attempts": 1,
@@ -396,8 +430,90 @@ class SourceAPIParams(NodeParamSchema):
             errors.append("auth_token_ref required when using authentication")
         return errors
 
+
+class SourceObjectStoreParams(NodeParamSchema):
+    provider: Literal["s3", "azure_blob", "gcs"] = "s3"
+    connection_ref: Optional[str] = None
+    bucket: Optional[str] = None
+    key: Optional[str] = None
+    file_format: Literal[
+        "csv",
+        "tsv",
+        "parquet",
+        "json",
+        "excel",
+        "txt",
+        "pdf",
+        "jpg",
+        "jpeg",
+        "png",
+        "webp",
+        "gif",
+        "svg",
+        "tif",
+        "tiff",
+        "mp3",
+        "wav",
+        "flac",
+        "ogg",
+        "m4a",
+        "aac",
+        "mp4",
+        "mov",
+        "webm",
+    ] = "txt"
+    encoding: str = "utf-8"
+    output_mode: Optional[Literal["table", "text", "json", "binary"]] = None
+    output_schema: Optional[Dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _derive_output_mode(self):
+        if self.output_mode is not None:
+            return self
+        if self.file_format in {"csv", "tsv", "parquet", "excel"}:
+            self.output_mode = "table"
+        elif self.file_format == "json":
+            self.output_mode = "json"
+        elif self.file_format in {"txt", "pdf"}:
+            self.output_mode = "text"
+        else:
+            self.output_mode = "binary"
+        return self
+
+    def validate_required(self) -> List[str]:
+        errors = []
+        if not self.bucket:
+            errors.append("bucket is required")
+        if not self.key:
+            errors.append("key is required")
+        return errors
+
+
+class SourceWarehouseParams(NodeParamSchema):
+    provider: Literal["snowflake", "bigquery", "databricks_sql"] = "snowflake"
+    connection_string: Optional[str] = None
+    connection_ref: Optional[str] = None
+    query: Optional[str] = None
+    limit: Optional[int] = None
+    output_mode: Literal["table", "text", "json", "binary"] = "table"
+    output_schema: Optional[Dict[str, Any]] = None
+
+    def validate_required(self) -> List[str]:
+        errors = []
+        if not self.connection_string and not self.connection_ref:
+            errors.append("Either connection_string or connection_ref required")
+        if not self.query:
+            errors.append("query is required")
+        return errors
+
 # Union type for all source params
-SourceParams = Union[SourceFileParams, SourceDatabaseParams, SourceAPIParams]
+SourceParams = Union[
+    SourceFileParams,
+    SourceDatabaseParams,
+    SourceAPIParams,
+    SourceObjectStoreParams,
+    SourceWarehouseParams,
+]
 
 # ============================================================================
 # TRANSFORM NODE SCHEMAS
@@ -930,6 +1046,8 @@ SCHEMA_REGISTRY: Dict[str, type[NodeParamSchema]] = {
     "source:file": SourceFileParams,
     "source:database": SourceDatabaseParams,
     "source:api": SourceAPIParams,
+    "source:object_store": SourceObjectStoreParams,
+    "source:warehouse": SourceWarehouseParams,
     
     # Transform schema (current op union contract)
     "transform": TransformParamsCurrent,
@@ -1016,6 +1134,12 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 errors.extend(model.validate_required())
             elif source_kind == "api":
                 model = SourceAPIParams.model_validate(norm_source)
+                errors.extend(model.validate_required())
+            elif source_kind == "object_store":
+                model = SourceObjectStoreParams.model_validate(norm_source)
+                errors.extend(model.validate_required())
+            elif source_kind == "warehouse":
+                model = SourceWarehouseParams.model_validate(norm_source)
                 errors.extend(model.validate_required())
             else:
                 errors.append(f"Unsupported source kind: {source_kind}")

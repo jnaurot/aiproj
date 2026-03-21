@@ -24,9 +24,17 @@
 	$: incrementalStateKey = asString(params?.incremental?.state_key, '');
 	$: incrementalCursorColumn = asString(params?.incremental?.cursor_column, '');
 	$: incrementalCursorType = asString(params?.incremental?.cursor_type, 'auto');
+	$: partitionEnabled = Boolean(params?.partition?.enabled ?? false);
+	$: partitionKind = asString(params?.partition?.kind, 'static_list');
+	$: partitionOnError = asString(params?.partition?.on_error, 'fail_fast');
+	$: partitionValues = Array.isArray(params?.partition?.static_values) ? (params?.partition?.static_values ?? []).join(',') : '';
+	$: partitionBindKey = asString(params?.partition?.bind_key, 'partition');
+	$: partitionParallelism = asNumberOrEmpty(params?.partition?.parallelism_cap ?? 2);
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
+	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
+	const partitionErrorPolicies = ['fail_fast', 'skip_failed'] as const;
 
 	function draft(patch: SourceDatabasePatch): void {
 		onDraft?.(patch);
@@ -219,6 +227,153 @@
 						})}
 				/>
 			</Field>
+		{/if}
+
+		<Field label="partition.enabled">
+			<select
+				value={String(partitionEnabled)}
+				on:change={(event) => {
+					const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+					const patch = {
+						partition: {
+							...(params?.partition ?? {}),
+							enabled
+						}
+					};
+					draft(patch);
+					commit(patch);
+				}}
+			>
+				<option value="false">false</option>
+				<option value="true">true</option>
+			</select>
+		</Field>
+
+		{#if partitionEnabled}
+			<Field label="partition.kind">
+				<select
+					value={partitionKind}
+					on:change={(event) => {
+						const kind = (event.currentTarget as HTMLSelectElement).value;
+						const patch = {
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								kind
+							}
+						};
+						draft(patch);
+						commit(patch);
+					}}
+				>
+					{#each partitionKinds as pk}
+						<option value={pk}>{pk}</option>
+					{/each}
+				</select>
+			</Field>
+
+			<Field label="partition.on_error">
+				<select
+					value={partitionOnError}
+					on:change={(event) => {
+						const on_error = (event.currentTarget as HTMLSelectElement).value;
+						const patch = {
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								on_error
+							}
+						};
+						draft(patch);
+						commit(patch);
+					}}
+				>
+					{#each partitionErrorPolicies as policy}
+						<option value={policy}>{policy}</option>
+					{/each}
+				</select>
+			</Field>
+
+			<Field label="partition.bind_key">
+				<Input
+					value={partitionBindKey}
+					placeholder="partition"
+					onInput={(event) =>
+						draft({
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="partition.parallelism_cap">
+				<Input
+					type="number"
+					min="1"
+					step="1"
+					value={partitionParallelism}
+					onInput={(event) =>
+						draft({
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							partition: {
+								...(params?.partition ?? {}),
+								enabled: true,
+								parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
+							}
+						})}
+				/>
+			</Field>
+
+			{#if partitionKind === 'static_list'}
+				<Field label="partition.static_values">
+					<Input
+						value={partitionValues}
+						placeholder="a,b,c"
+						onInput={(event) =>
+							draft({
+								partition: {
+									...(params?.partition ?? {}),
+									enabled: true,
+									kind: 'static_list',
+									static_values: String((event.currentTarget as HTMLInputElement).value ?? '')
+										.split(',')
+										.map((s) => s.trim())
+										.filter((s) => s.length > 0)
+								}
+							})}
+						onBlur={(event) =>
+							commit({
+								partition: {
+									...(params?.partition ?? {}),
+									enabled: true,
+									kind: 'static_list',
+									static_values: String((event.currentTarget as HTMLInputElement).value ?? '')
+										.split(',')
+										.map((s) => s.trim())
+										.filter((s) => s.length > 0)
+								}
+							})}
+					/>
+				</Field>
+			{/if}
 		{/if}
 
 		<Field label="output mode">

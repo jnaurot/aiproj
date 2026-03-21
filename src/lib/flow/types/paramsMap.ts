@@ -2,14 +2,18 @@
 import type {
 	SourceFileParams,
 	SourceDatabaseParams,
-	SourceAPIParams
+	SourceAPIParams,
+	SourceObjectStoreParams,
+	SourceWarehouseParams
 } from '$lib/flow/schema/source';
 import type { ComponentParams } from '$lib/flow/schema/component';
-export type SourceKind = 'file' | 'database' | 'api';
+export type SourceKind = 'file' | 'database' | 'api' | 'object_store' | 'warehouse';
 export type SourceParamsByKind = {
 	file: SourceFileParams;
 	database: SourceDatabaseParams;
 	api: SourceAPIParams;
+	object_store: SourceObjectStoreParams;
+	warehouse: SourceWarehouseParams;
 };
 
 // --- LLM ---

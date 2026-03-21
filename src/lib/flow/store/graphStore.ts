@@ -71,6 +71,7 @@ type NodeOutputInfo = {
 	mimeType?: string;
 	payloadType?: string;
 	preview?: string;
+	sourceObservability?: Record<string, unknown>;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
 	expectedContractFingerprint?: string;
@@ -265,8 +266,8 @@ function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 	if (isPayloadType(observedType)) return observedType;
 	const sourceKind = String((data as any)?.sourceKind ?? '').trim().toLowerCase();
 	if (sourceKind === 'api') return 'json';
-	if (sourceKind === 'database') return 'table';
-	if (sourceKind === 'file') {
+	if (sourceKind === 'database' || sourceKind === 'warehouse') return 'table';
+	if (sourceKind === 'file' || sourceKind === 'object_store') {
 		const fileFormat = String(params?.file_format ?? '').trim().toLowerCase();
 		if (fileFormat === 'json') return 'json';
 		if (fileFormat === 'txt' || fileFormat === 'pdf') return 'text';
@@ -1376,6 +1377,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					mimeType: evt.mimeType,
 					payloadType: evt.payloadType,
 					preview: evt.preview ?? undefined,
+					sourceObservability:
+						evt.sourceObservability && typeof evt.sourceObservability === 'object'
+							? (evt.sourceObservability as Record<string, unknown>)
+							: undefined,
 					cached: evt.cached ?? false,
 					cacheDecision: nextCacheDecision
 				}

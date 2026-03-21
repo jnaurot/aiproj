@@ -160,14 +160,31 @@ def default_contract_for_node(node: Dict[str, Any]) -> str:
     if kind == "source":
         source_kind = str(data.get("sourceKind") or params.get("source_type") or "").strip().lower()
         file_format = str(params.get("file_format") or "").strip().lower()
-        if source_kind == "file" and file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
-            return IMAGE_V1
-        if source_kind == "file" and file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
-            return AUDIO_V1
-        if source_kind == "file" and file_format in {"mp4", "mov", "webm"}:
-            return VIDEO_V1
-        if source_kind in {"file", "database"}:
+        if source_kind == "file":
+            if file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+                return IMAGE_V1
+            if file_format in {"mp3", "wav", "flac", "ogg", "m4a", "aac"}:
+                return AUDIO_V1
+            if file_format in {"mp4", "mov", "webm"}:
+                return VIDEO_V1
+            if file_format in {"csv", "tsv", "parquet", "excel"}:
+                return TABLE_V1
+            if file_format in {"json"}:
+                return JSON_ANY_V1
+            if file_format in {"txt", "pdf"}:
+                return TEXT_V1
+            return BINARY_V1
+        if source_kind in {"database", "warehouse"}:
             fallback = TABLE_V1
+        elif source_kind == "object_store":
+            if file_format in {"json"}:
+                fallback = JSON_ANY_V1
+            elif file_format in {"txt", "pdf"}:
+                fallback = TEXT_V1
+            elif file_format in {"csv", "tsv", "parquet", "excel"}:
+                fallback = TABLE_V1
+            else:
+                fallback = BINARY_V1
         elif source_kind == "api":
             fallback = JSON_ANY_V1
         else:

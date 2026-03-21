@@ -25,7 +25,14 @@ from pandas.api.types import (
 
 from ..runner.events import RunEventBus
 from ..runner.metadata import GraphContext, NodeOutput, FileMetadata
-from ..runner.schemas import SourceAPIParams, SourceDatabaseParams, SourceFileParams, normalize_source_params_frontend
+from ..runner.schemas import (
+    SourceAPIParams,
+    SourceDatabaseParams,
+    SourceFileParams,
+    SourceObjectStoreParams,
+    SourceWarehouseParams,
+    normalize_source_params_frontend,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,11 +284,14 @@ def _metadata_for_output(
     params: Dict[str, Any],
     mime_override: Optional[str] = None,
     schema_extra: Optional[Dict[str, Any]] = None,
+    source_observability: Optional[Dict[str, Any]] = None,
 ) -> FileMetadata:
     payload_bytes = _payload_bytes_for_mode(data, output_mode)
     data_schema: Dict[str, Any] = {"source_kind": source_kind, "output_mode": output_mode}
     if isinstance(schema_extra, dict):
         data_schema.update(schema_extra)
+    if isinstance(source_observability, dict):
+        data_schema["source_observability"] = source_observability
     return FileMetadata(
         file_path=f"artifact://{graph_id}/{node_id}/{source_kind}",
         file_type=_mode_to_file_type(output_mode),
@@ -296,6 +306,49 @@ def _metadata_for_output(
             json.dumps(params, sort_keys=True, default=str, separators=(",", ":")).encode("utf-8")
         ).hexdigest(),
     )
+
+
+def _build_source_observability(
+    *,
+    source_kind: str,
+    output_mode: str,
+    input_bytes: Optional[int] = None,
+    output_rows: Optional[int] = None,
+    null_ratio: Optional[float] = None,
+    type_drift: Optional[int] = None,
+    retry_count: Optional[int] = None,
+    partition_count: Optional[int] = None,
+    execution_ms: Optional[float] = None,
+    cost_estimate_usd: Optional[float] = None,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "source_kind": source_kind,
+        "output_mode": output_mode,
+        "input_bytes": int(input_bytes) if isinstance(input_bytes, (int, float)) and input_bytes >= 0 else None,
+        "output_rows": int(output_rows) if isinstance(output_rows, (int, float)) and output_rows >= 0 else None,
+        "null_ratio": float(null_ratio) if isinstance(null_ratio, (int, float)) else None,
+        "type_drift": int(type_drift) if isinstance(type_drift, (int, float)) else None,
+        "retry_count": int(retry_count) if isinstance(retry_count, (int, float)) and retry_count >= 0 else 0,
+        "partition_count": int(partition_count) if isinstance(partition_count, (int, float)) and partition_count >= 0 else 1,
+        "execution_ms": float(execution_ms) if isinstance(execution_ms, (int, float)) else None,
+        "cost_estimate_usd": float(cost_estimate_usd) if isinstance(cost_estimate_usd, (int, float)) else 0.0,
+    }
+    return out
+
+
+def _table_null_ratio(rows: list[dict[str, Any]]) -> float:
+    if not rows:
+        return 0.0
+    total = 0
+    nulls = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for value in row.values():
+            total += 1
+            if value is None:
+                nulls += 1
+    return float(nulls / total) if total > 0 else 0.0
 
 
 def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
@@ -320,9 +373,9 @@ def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
         return source_kind
     if source_kind == "api":
         return "json"
-    if source_kind == "database":
+    if source_kind in {"database", "warehouse"}:
         return "table"
-    if source_kind == "file":
+    if source_kind in {"file", "object_store"}:
         file_format = str(params.get("file_format") or "").strip().lower()
         return _default_file_output_mode(file_format)
     return None
@@ -519,6 +572,89 @@ def _apply_incremental_rows(
     return filtered, meta
 
 
+def _plan_partitions(spec: Optional[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    cfg = spec if isinstance(spec, dict) else {}
+    if not bool(cfg.get("enabled")):
+        return []
+    kind = str(cfg.get("kind") or "static_list").strip().lower()
+    out: list[Dict[str, Any]] = []
+    if kind == "static_list":
+        values = cfg.get("static_values") if isinstance(cfg.get("static_values"), list) else []
+        for idx, value in enumerate(values):
+            out.append({"index": idx, "partition_id": str(value), "value": value})
+        return out
+    if kind == "numeric_shards":
+        start = cfg.get("numeric_start")
+        end = cfg.get("numeric_end")
+        step = cfg.get("numeric_step")
+        if start is None or end is None:
+            return []
+        try:
+            s = float(start)
+            e = float(end)
+            st = float(step if step is not None else 1)
+        except Exception:
+            return []
+        if st <= 0:
+            return []
+        idx = 0
+        cur = s
+        while cur <= e:
+            value = int(cur) if float(cur).is_integer() else cur
+            out.append({"index": idx, "partition_id": str(value), "value": value})
+            cur += st
+            idx += 1
+        return out
+    if kind == "date_range":
+        start_raw = str(cfg.get("date_start") or "").strip()
+        end_raw = str(cfg.get("date_end") or "").strip()
+        if not start_raw or not end_raw:
+            return []
+        start_dt = pd.to_datetime(start_raw, utc=True, errors="coerce")
+        end_dt = pd.to_datetime(end_raw, utc=True, errors="coerce")
+        if pd.isna(start_dt) or pd.isna(end_dt):
+            return []
+        every_days = int(cfg.get("date_every_days") or 1)
+        every_days = max(1, every_days)
+        idx = 0
+        cur = start_dt
+        while cur <= end_dt:
+            value = str(cur.date())
+            out.append({"index": idx, "partition_id": value, "value": value})
+            cur = cur + pd.Timedelta(days=every_days)
+            idx += 1
+        return out
+    return []
+
+
+def _merge_partition_results(output_mode: str, results: list[Dict[str, Any]]) -> Any:
+    ordered = sorted(results, key=lambda item: int(item.get("index") or 0))
+    payloads = [item.get("data") for item in ordered]
+    if output_mode == "binary":
+        chunks = [p for p in payloads if isinstance(p, (bytes, bytearray))]
+        return b"".join([bytes(c) for c in chunks])
+    if output_mode == "text":
+        return "\n".join([str(p) for p in payloads if p is not None])
+    if output_mode == "json":
+        if all(isinstance(p, list) for p in payloads):
+            merged: list[Any] = []
+            for part in payloads:
+                merged.extend(part)
+            return merged
+        if all(isinstance(p, dict) for p in payloads):
+            return [{"partition_id": str(ordered[i].get("partition_id")), **dict(payloads[i])} for i in range(len(ordered))]
+        return payloads
+    # table/default
+    merged_rows: list[dict[str, Any]] = []
+    for i, payload in enumerate(payloads):
+        part_id = str(ordered[i].get("partition_id") or "")
+        if isinstance(payload, list):
+            for row in payload:
+                if isinstance(row, dict):
+                    merged_rows.append({"__partition_id": part_id, **row})
+    return _canonical_table_rows(merged_rows)
+
+
 async def exec_source(
     run_id: str,
     node: Dict[str, Any],
@@ -557,6 +693,24 @@ async def exec_source(
             )
         elif source_type == "api":
             output = await _handle_api_source(
+                node_id,
+                params,
+                context.bus,
+                run_id,
+                context.graph_id,
+                forced_output_mode=_source_out_mode_from_node(node),
+            )
+        elif source_type == "object_store":
+            output = await _handle_object_store_source(
+                node_id,
+                params,
+                context.bus,
+                run_id,
+                context.graph_id,
+                forced_output_mode=_source_out_mode_from_node(node),
+            )
+        elif source_type == "warehouse":
+            output = await _handle_warehouse_source(
                 node_id,
                 params,
                 context.bus,
@@ -761,6 +915,22 @@ async def _handle_file_source(
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
         },
+        source_observability=_build_source_observability(
+            source_kind="file",
+            output_mode=output_mode,
+            input_bytes=(
+                len(file_bytes)
+                if isinstance(file_bytes, (bytes, bytearray))
+                else (int(file_path.stat().st_size) if isinstance(file_path, Path) and file_path.exists() else None)
+            ),
+            output_rows=(len(data) if isinstance(data, list) else None),
+            null_ratio=(
+                _table_null_ratio(data)
+                if output_mode == "table" and isinstance(data, list) and all(isinstance(r, dict) for r in data)
+                else None
+            ),
+            partition_count=1,
+        ),
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
 
@@ -842,6 +1012,17 @@ async def _handle_database_source(
                 if (output_mode == "table" or incremental_meta)
                 else None
             ),
+            source_observability=_build_source_observability(
+                source_kind="database",
+                output_mode=output_mode,
+                output_rows=(len(data) if isinstance(data, list) else len(rows)),
+                null_ratio=(
+                    _table_null_ratio(data)
+                    if output_mode == "table" and isinstance(data, list) and all(isinstance(r, dict) for r in data)
+                    else None
+                ),
+                partition_count=1,
+            ),
         )
         return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
     finally:
@@ -878,23 +1059,23 @@ async def _handle_api_source(
             str(schema.auth_token_ref or ""), param_path="params.auth_token_ref"
         )
 
-    final_url = _merge_query_into_url(schema.url, schema.query)
-    request_kwargs: Dict[str, Any] = {
+    base_url = _merge_query_into_url(schema.url, schema.query)
+    base_request_kwargs: Dict[str, Any] = {
         "method": schema.method,
-        "url": final_url,
+        "url": base_url,
         "headers": headers,
         "timeout": schema.timeout_seconds,
     }
 
     if schema.body_mode == "json":
-        request_kwargs["json"] = schema.body_json or {}
+        base_request_kwargs["json"] = schema.body_json or {}
     elif schema.body_mode == "form":
-        request_kwargs["data"] = _sorted_string_map(schema.body_form)
+        base_request_kwargs["data"] = _sorted_string_map(schema.body_form)
     elif schema.body_mode == "multipart":
         form = _sorted_string_map(schema.body_form)
-        request_kwargs["files"] = [(k, (None, v)) for k, v in form.items()]
+        base_request_kwargs["files"] = [(k, (None, v)) for k, v in form.items()]
     elif schema.body_mode == "raw":
-        request_kwargs["content"] = (schema.body_raw or "").encode("utf-8")
+        base_request_kwargs["content"] = (schema.body_raw or "").encode("utf-8")
 
     retry_cfg = schema.retry if isinstance(schema.retry, dict) else {}
     max_attempts = int(retry_cfg.get("max_attempts") or 1)
@@ -909,10 +1090,22 @@ async def _handle_api_source(
     rps = float(rate_cfg.get("rps") or 0.0)
     min_interval = (1.0 / rps) if rps > 0 else 0.0
     last_request_monotonic = 0.0
+    retry_attempts_total = 0
 
-    response = None
-    async with httpx.AsyncClient() as client:
+    partition_spec = schema.partition if isinstance(schema.partition, dict) else {}
+    planned_partitions = _plan_partitions(partition_spec)
+    bind_key = str(partition_spec.get("bind_key") or "partition").strip() or "partition"
+    parallelism_cap = int(partition_spec.get("parallelism_cap") or 2)
+    parallelism_cap = max(1, parallelism_cap)
+    partition_on_error = str(partition_spec.get("on_error") or "fail_fast").strip().lower()
+    if partition_on_error not in {"fail_fast", "skip_failed"}:
+        partition_on_error = "fail_fast"
+
+    async def _request_with_retry(client: httpx.AsyncClient, request_kwargs: Dict[str, Any]) -> httpx.Response:
+        nonlocal last_request_monotonic, retry_attempts_total
+        response = None
         for attempt in range(1, max_attempts + 1):
+            retry_attempts_total += 1
             now_mono = time.monotonic()
             if min_interval > 0:
                 wait_for = (last_request_monotonic + min_interval) - now_mono
@@ -922,7 +1115,7 @@ async def _handle_api_source(
             try:
                 response = await client.request(**request_kwargs)
                 response.raise_for_status()
-                break
+                return response
             except httpx.HTTPStatusError as exc:
                 status = int(exc.response.status_code) if exc.response is not None else 0
                 retryable = status in retry_on_status
@@ -946,48 +1139,122 @@ async def _handle_api_source(
             )
             if delay > 0:
                 await asyncio.sleep(delay)
-    if response is None:
-        raise RuntimeError("API request produced no response")
+        if response is None:
+            raise RuntimeError("API request produced no response")
+        return response
 
-    content_type = response.headers.get("content-type", "")
-    is_json = "application/json" in content_type
-    json_payload: Any = response.json() if is_json else None
-    text_payload = response.text if not is_json else json.dumps(json_payload, sort_keys=True, separators=(",", ":"))
+    async def _decode_partition_response(idx: int, part_id: str, response: httpx.Response) -> Dict[str, Any]:
+        content_type = response.headers.get("content-type", "")
+        is_json = "application/json" in content_type
+        json_payload: Any = response.json() if is_json else None
+        text_payload = response.text if not is_json else json.dumps(json_payload, sort_keys=True, separators=(",", ":"))
+        if output_mode == "table":
+            if isinstance(json_payload, list):
+                rows, _json_mode = _table_rows_from_json_array(json_payload)
+                part_data = _canonical_table_rows(rows)
+            elif isinstance(json_payload, dict):
+                part_data = [json_payload]
+            else:
+                part_data = [{"text": line} for line in text_payload.splitlines() if line.strip()]
+        elif output_mode == "json":
+            part_data = json_payload if json_payload is not None else {"text": text_payload}
+        elif output_mode == "binary":
+            part_data = response.content
+        else:
+            part_data = text_payload
+        return {"index": idx, "partition_id": part_id, "data": part_data}
+
+    partition_results: list[Dict[str, Any]] = []
+    if planned_partitions:
+        sem = asyncio.Semaphore(parallelism_cap)
+
+        async def _run_partition(part: Dict[str, Any], client: httpx.AsyncClient) -> Dict[str, Any]:
+            idx = int(part.get("index") or 0)
+            part_id = str(part.get("partition_id") or idx)
+            value = part.get("value")
+            req = dict(base_request_kwargs)
+            req["url"] = _merge_query_into_url(str(base_request_kwargs.get("url") or ""), {bind_key: value})
+            await bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": _iso_now(),
+                    "level": "info",
+                    "message": f"partition:start id={part_id} index={idx}",
+                    "nodeId": node_id,
+                }
+            )
+            try:
+                async with sem:
+                    resp = await _request_with_retry(client, req)
+                    decoded = await _decode_partition_response(idx, part_id, resp)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"PARTITION_FAILED: id={part_id} index={idx} bind_key={bind_key} reason={str(exc)}"
+                ) from exc
+            await bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": _iso_now(),
+                    "level": "info",
+                    "message": f"partition:done id={part_id} index={idx}",
+                    "nodeId": node_id,
+                }
+            )
+            return decoded
+
+        failed_partitions: list[Dict[str, Any]] = []
+        async with httpx.AsyncClient() as client:
+            gathered = await asyncio.gather(
+                *[_run_partition(p, client) for p in planned_partitions],
+                return_exceptions=(partition_on_error == "skip_failed"),
+            )
+        if partition_on_error == "skip_failed":
+            for idx, item in enumerate(gathered):
+                if isinstance(item, Exception):
+                    spec = planned_partitions[idx] if idx < len(planned_partitions) else {}
+                    failed_partitions.append(
+                        {
+                            "index": int(spec.get("index") or idx),
+                            "partition_id": str(spec.get("partition_id") or idx),
+                            "error": str(item),
+                        }
+                    )
+                elif isinstance(item, dict):
+                    partition_results.append(item)
+            if failed_partitions:
+                await bus.emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": _iso_now(),
+                        "level": "warning",
+                        "message": f"partition:skip_failed count={len(failed_partitions)}",
+                        "nodeId": node_id,
+                    }
+                )
+            if not partition_results:
+                raise RuntimeError("PARTITION_FAILED: all partitions failed under skip_failed policy")
+        else:
+            partition_results = [item for item in gathered if isinstance(item, dict)]
+        data = _merge_partition_results(output_mode, partition_results)
+    else:
+        async with httpx.AsyncClient() as client:
+            response = await _request_with_retry(client, dict(base_request_kwargs))
+        decoded = await _decode_partition_response(0, "default", response)
+        data = decoded.get("data")
     table_coercion: Dict[str, Any] | None = None
     table_columns: list[dict[str, str]] | None = None
     incremental_meta: Dict[str, Any] | None = None
     incremental_spec = schema.incremental if isinstance(schema.incremental, dict) else {}
 
     if output_mode == "table":
-        if isinstance(json_payload, list):
-            rows, json_mode = _table_rows_from_json_array(json_payload)
-            if bool(incremental_spec.get("enabled")) and all(isinstance(r, dict) for r in rows):
-                rows, incremental_meta = _apply_incremental_rows(
-                    rows=[dict(r) for r in rows if isinstance(r, dict)],
-                    graph_id=graph_id,
-                    node_id=node_id,
-                    incremental_spec=incremental_spec,
-                )
-            data = _canonical_table_rows(rows)
-            table_coercion = {"mode": json_mode, "lossy": False}
-        elif isinstance(json_payload, dict):
-            rows = [json_payload]
-            if bool(incremental_spec.get("enabled")):
-                rows, incremental_meta = _apply_incremental_rows(
-                    rows=rows,
-                    graph_id=graph_id,
-                    node_id=node_id,
-                    incremental_spec=incremental_spec,
-                )
-            data = rows
-            table_coercion = {"mode": "json_object_1row", "lossy": False}
-        else:
-            data = [{"text": line} for line in text_payload.splitlines() if line.strip()]
-            table_coercion = {"mode": "text_1row", "lossy": False}
+        if isinstance(data, list):
+            table_coercion = {"mode": "partition_merge" if planned_partitions else "native", "lossy": False}
         table_columns = _infer_table_columns_from_rows(data if isinstance(data, list) else [])
         _log_source_inference(node_id, "api", table_columns)
     elif output_mode == "json":
-        data = json_payload if json_payload is not None else {"text": text_payload}
         if bool(incremental_spec.get("enabled")) and isinstance(data, list) and all(isinstance(r, dict) for r in data):
             filtered_rows, incremental_meta = _apply_incremental_rows(
                 rows=[dict(r) for r in data if isinstance(r, dict)],
@@ -996,10 +1263,6 @@ async def _handle_api_source(
                 incremental_spec=incremental_spec,
             )
             data = filtered_rows
-    elif output_mode == "binary":
-        data = response.content
-    else:
-        data = text_payload
 
     metadata = _metadata_for_output(
         graph_id=graph_id,
@@ -1012,9 +1275,265 @@ async def _handle_api_source(
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
             **({"incremental": incremental_meta} if incremental_meta else {}),
+            **(
+                {
+                    "partitions": {
+                        "count": len(planned_partitions),
+                        "on_error": partition_on_error,
+                        "parallelism_cap": parallelism_cap,
+                        "ids": [str(p.get("partition_id") or "") for p in sorted(partition_results, key=lambda x: int(x.get("index") or 0))],
+                        "failed": (
+                            [
+                                {
+                                    "index": int(f.get("index") or 0),
+                                    "partition_id": str(f.get("partition_id") or ""),
+                                    "error": str(f.get("error") or ""),
+                                }
+                                for f in failed_partitions
+                            ]
+                            if "failed_partitions" in locals() and failed_partitions
+                            else []
+                        ),
+                    }
+                }
+                if planned_partitions
+                else {}
+            ),
         }
-        if output_mode in {"table", "json"} and (table_coercion or table_columns or incremental_meta)
+        if output_mode in {"table", "json"} and (table_coercion or table_columns or incremental_meta or planned_partitions)
         else None,
+        source_observability=_build_source_observability(
+            source_kind="api",
+            output_mode=output_mode,
+            output_rows=(len(data) if isinstance(data, list) else None),
+            null_ratio=(
+                _table_null_ratio(data)
+                if output_mode == "table" and isinstance(data, list) and all(isinstance(r, dict) for r in data)
+                else None
+            ),
+            retry_count=max(0, retry_attempts_total - (len(planned_partitions) if planned_partitions else 1)),
+            partition_count=(len(planned_partitions) if planned_partitions else 1),
+        ),
+    )
+    return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
+
+
+async def _handle_object_store_source(
+    node_id: str,
+    params: Dict[str, Any],
+    bus: RunEventBus,
+    run_id: str,
+    graph_id: str,
+    forced_output_mode: Optional[str] = None,
+) -> NodeOutput:
+    schema = SourceObjectStoreParams.model_validate(params)
+    output_mode = forced_output_mode or _default_file_output_mode(str(schema.file_format))
+
+    await bus.emit(
+        {
+            "type": "log",
+            "runId": run_id,
+            "at": _iso_now(),
+            "level": "info",
+            "message": f"object_store: provider={schema.provider} bucket={schema.bucket} key={schema.key}",
+            "nodeId": node_id,
+        }
+    )
+
+    data_bytes: Optional[bytes] = None
+    if isinstance(params.get("mock_text"), str):
+        data_bytes = str(params.get("mock_text") or "").encode(str(schema.encoding or "utf-8"), errors="replace")
+
+    if data_bytes is None:
+        root = str(os.getenv("OBJECT_STORE_MOCK_ROOT", "")).strip()
+        key_path = str(schema.key or "").strip()
+        candidate_paths: list[Path] = []
+        if root:
+            candidate_paths.append(Path(root) / str(schema.bucket or "") / key_path)
+        candidate_paths.append(Path(key_path))
+        for path in candidate_paths:
+            try:
+                if path.exists() and path.is_file():
+                    data_bytes = path.read_bytes()
+                    break
+            except Exception:
+                continue
+    if data_bytes is None:
+        raise FileNotFoundError(
+            f"Object not found for bucket/key ({schema.bucket}/{schema.key}). Set OBJECT_STORE_MOCK_ROOT or provide mock_text."
+        )
+
+    rows: Optional[list[dict[str, Any]]] = None
+    text_data: Optional[str] = None
+    json_data: Any = None
+    binary_data: Optional[bytes] = None
+    table_columns: Optional[list[dict[str, str]]] = None
+    ff = str(schema.file_format or "").strip().lower()
+
+    if ff in {"csv", "tsv"}:
+        df = pd.read_csv(
+            io.BytesIO(data_bytes),
+            delimiter=("\t" if ff == "tsv" else ","),
+            encoding=str(schema.encoding or "utf-8"),
+        )
+        rows = df.to_dict(orient="records")
+        table_columns = _infer_table_columns_from_dataframe(df)
+    elif ff == "json":
+        raw_json = data_bytes.decode(str(schema.encoding or "utf-8"), errors="replace")
+        json_data = json.loads(raw_json)
+        if isinstance(json_data, list):
+            rows = json_data
+    elif ff == "txt":
+        text_data = data_bytes.decode(str(schema.encoding or "utf-8"), errors="replace")
+    else:
+        binary_data = data_bytes
+
+    if output_mode == "table":
+        if rows is not None:
+            data = _canonical_table_rows(rows)
+        elif isinstance(json_data, dict):
+            data = [json_data]
+        elif text_data is not None:
+            data = [{"text": text_data}]
+        else:
+            data = [{"binary_hex": (binary_data or b"").hex()}]
+        if table_columns is None:
+            table_columns = _infer_table_columns_from_rows(data if isinstance(data, list) else [])
+        _log_source_inference(node_id, "object_store", table_columns)
+    elif output_mode == "json":
+        if json_data is not None:
+            data = json_data
+        elif rows is not None:
+            data = rows
+        elif text_data is not None:
+            data = {"text": text_data}
+        else:
+            data = {"binary_hex": (binary_data or b"").hex()}
+    elif output_mode == "binary":
+        if binary_data is not None:
+            data = binary_data
+        elif text_data is not None:
+            data = text_data.encode("utf-8")
+        elif json_data is not None:
+            data = _canon_json_bytes(json_data)
+        else:
+            data = _payload_bytes_for_mode(rows or [], "table")
+    else:
+        if text_data is not None:
+            data = text_data
+        elif rows is not None:
+            data = pd.DataFrame(rows).to_csv(index=False, lineterminator="\n")
+        elif json_data is not None:
+            data = json.dumps(json_data, sort_keys=True, separators=(",", ":"))
+        else:
+            data = (binary_data or b"").decode("utf-8", errors="replace")
+
+    metadata = _metadata_for_output(
+        graph_id=graph_id,
+        node_id=node_id,
+        source_kind="object_store",
+        output_mode=output_mode,
+        data=data,
+        params=params,
+        schema_extra={
+            "provider": schema.provider,
+            "bucket": schema.bucket,
+            "key": schema.key,
+            **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
+        },
+        source_observability=_build_source_observability(
+            source_kind="object_store",
+            output_mode=output_mode,
+            input_bytes=len(data_bytes),
+            output_rows=(len(data) if isinstance(data, list) else None),
+            null_ratio=(
+                _table_null_ratio(data)
+                if output_mode == "table" and isinstance(data, list) and all(isinstance(r, dict) for r in data)
+                else None
+            ),
+            partition_count=1,
+        ),
+    )
+    return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
+
+
+async def _handle_warehouse_source(
+    node_id: str,
+    params: Dict[str, Any],
+    bus: RunEventBus,
+    run_id: str,
+    graph_id: str,
+    forced_output_mode: Optional[str] = None,
+) -> NodeOutput:
+    schema = SourceWarehouseParams.model_validate(params)
+    output_mode = forced_output_mode or "table"
+
+    rows_override = params.get("mock_rows")
+    if isinstance(rows_override, list):
+        rows = [dict(r) for r in rows_override if isinstance(r, dict)]
+        df = pd.DataFrame(rows)
+    else:
+        if not HAS_DATABASE:
+            raise ImportError("Warehouse support requires sqlalchemy (or provide mock_rows for local testing)")
+        conn_string = schema.connection_string
+        if not conn_string and schema.connection_ref:
+            conn_string = _resolve_connection_ref(str(schema.connection_ref))
+        if not conn_string:
+            raise ValueError("connection_string or connection_ref required")
+        engine = sqlalchemy.create_engine(conn_string)
+        try:
+            query = str(schema.query or "")
+            if schema.limit:
+                query = f"{query.rstrip(';')} LIMIT {schema.limit}"
+            df = pd.read_sql(query, engine)
+        finally:
+            engine.dispose()
+        rows = df.to_dict(orient="records")
+
+    table_columns = _infer_table_columns_from_dataframe(df)
+    if output_mode == "table":
+        data: Any = _canonical_table_rows(rows)
+        _log_source_inference(node_id, "warehouse", table_columns)
+    elif output_mode == "json":
+        data = rows
+    elif output_mode == "binary":
+        data = df.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    else:
+        data = df.to_csv(index=False, lineterminator="\n")
+
+    await bus.emit(
+        {
+            "type": "log",
+            "runId": run_id,
+            "at": _iso_now(),
+            "level": "info",
+            "message": f"warehouse: provider={schema.provider} rows={len(rows)}",
+            "nodeId": node_id,
+        }
+    )
+
+    metadata = _metadata_for_output(
+        graph_id=graph_id,
+        node_id=node_id,
+        source_kind="warehouse",
+        output_mode=output_mode,
+        data=data,
+        params=params,
+        schema_extra={
+            "provider": schema.provider,
+            **({"table_columns": table_columns} if output_mode == "table" else {}),
+        },
+        source_observability=_build_source_observability(
+            source_kind="warehouse",
+            output_mode=output_mode,
+            output_rows=(len(data) if isinstance(data, list) else len(rows)),
+            null_ratio=(
+                _table_null_ratio(data)
+                if output_mode == "table" and isinstance(data, list) and all(isinstance(r, dict) for r in data)
+                else None
+            ),
+            partition_count=1,
+        ),
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
 

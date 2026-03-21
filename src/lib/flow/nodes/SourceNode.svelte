@@ -24,6 +24,8 @@
 			return params.filename ?? '-';
 		}
 		if (sourceKind === 'api') return params.url ?? '-';
+		if (sourceKind === 'object_store') return `${params.bucket ?? '-'} / ${params.key ?? '-'}`;
+		if (sourceKind === 'warehouse') return params.query ?? '-';
 		return params.query ?? params.table_name ?? '-';
 	}
 
