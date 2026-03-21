@@ -2685,7 +2685,8 @@ async def run_graph(
     max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
     max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
     max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
-    max_llm = _env_int("RUNNER_MAX_LLM", 2, minimum=1)
+    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
+    max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
     node_retry_max_attempts = _env_int_allow_zero("RUNNER_NODE_MAX_RETRIES", 0)
     node_retry_backoff_ms = _env_int_allow_zero("RUNNER_NODE_RETRY_BACKOFF_MS", 0)
@@ -2704,6 +2705,7 @@ async def run_graph(
                 "global": int(max_inflight),
                 "source": int(max_source),
                 "transform": int(max_transform),
+                "model": int(max_model),
                 "llm": int(max_llm),
                 "tool": int(max_tool),
             },
@@ -6104,7 +6106,7 @@ async def run_graph(
         kind_sems = {
             "source": asyncio.Semaphore(max_source),
             "transform": asyncio.Semaphore(max_transform),
-            "model": asyncio.Semaphore(max_llm),
+            "model": asyncio.Semaphore(max_model),
             "llm": asyncio.Semaphore(max_llm),
             "tool": asyncio.Semaphore(max_tool),
         }
@@ -6280,6 +6282,7 @@ async def run_graph(
                 "caps": {
                     "source": max_source,
                     "transform": max_transform,
+                    "model": max_model,
                     "llm": max_llm,
                     "tool": max_tool,
                 },
@@ -6292,7 +6295,7 @@ async def run_graph(
                 "level": "info",
                 "message": (
                     f"[scheduler] level {level_idx} start nodes={len(level_nodes)} "
-                    f"caps(g={max_inflight},s={max_source},t={max_transform},l={max_llm},tool={max_tool}) "
+                    f"caps(g={max_inflight},s={max_source},t={max_transform},m={max_model},l={max_llm},tool={max_tool}) "
                     f"kinds={kind_counts}"
                 ),
             })

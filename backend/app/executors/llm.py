@@ -1,5 +1,7 @@
 import json
 import base64
+import os
+import threading
 from typing import Any, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
@@ -15,6 +17,37 @@ from .model_policy import normalize_request_policy
 from pprint import pformat
 
 # print("[exec_llm] has bus?", hasattr(context, "bus"), type(context.bus))
+
+
+_MODEL_PROVIDER_SEMAPHORES: Dict[str, asyncio.Semaphore] = {}
+_MODEL_PROVIDER_LOCK = threading.Lock()
+
+
+def _provider_cap_value(provider: str) -> int:
+    key = str(provider or "").strip().upper().replace("-", "_")
+    specific = os.getenv(f"RUNNER_MAX_MODEL_PROVIDER_{key}")
+    default = os.getenv("RUNNER_MAX_MODEL_PROVIDER", "")
+    raw = specific if specific not in {None, ""} else default
+    if raw in {None, ""}:
+        return 0
+    try:
+        n = int(str(raw).strip())
+    except Exception:
+        return 0
+    return n if n > 0 else 0
+
+
+def _provider_semaphore(provider: str) -> Optional[asyncio.Semaphore]:
+    cap = _provider_cap_value(provider)
+    if cap <= 0:
+        return None
+    key = str(provider or "").strip().lower()
+    with _MODEL_PROVIDER_LOCK:
+        sem = _MODEL_PROVIDER_SEMAPHORES.get(key)
+        if sem is None:
+            sem = asyncio.Semaphore(cap)
+            _MODEL_PROVIDER_SEMAPHORES[key] = sem
+        return sem
 
 
 #
@@ -371,7 +404,12 @@ async def exec_llm(
                     "nodeId": node["id"],
                 }
             )
-        out = await _dispatch(kind, params_override)
+        sem = _provider_semaphore(kind)
+        if sem is not None:
+            async with sem:
+                out = await _dispatch(kind, params_override)
+        else:
+            out = await _dispatch(kind, params_override)
         if out.status == "succeeded":
             return out
         last_output = out
