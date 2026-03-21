@@ -2,7 +2,9 @@ import pytest
 import pyarrow as pa
 import pyarrow.parquet as pq
 from decimal import Decimal
+from types import SimpleNamespace
 
+import app.executors.source as source_mod
 from app.runner.artifacts import DiskArtifactStore
 from app.runner.cache import SqliteExecutionCache
 from app.runner.events import RunEventBus
@@ -373,3 +375,70 @@ async def test_source_node_output_event_includes_txt_recordization_metadata(tmp_
     txt_meta = source_obs.get("txt_recordization")
     assert isinstance(txt_meta, dict)
     assert txt_meta.get("mode") == "lines"
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_pdf_metadata(tmp_path, monkeypatch):
+    events = []
+    artifact_root = tmp_path / "artifact-root-8"
+    source_dir = tmp_path / "source-8"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.pdf"
+    source_file.write_bytes(b"%PDF-FAKE")
+
+    class _Page:
+        def extract_text(self):
+            return "page text"
+
+        def extract_tables(self):
+            return []
+
+    class _Pdf:
+        def __init__(self):
+            self.pages = [_Page()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(source_mod, "HAS_PDF", True)
+    monkeypatch.setattr(source_mod, "pdfplumber", SimpleNamespace(open=lambda *_args, **_kwargs: _Pdf()), raising=False)
+    bus = RunEventBus("run-source-obs-8", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-8",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_pdf_meta",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.pdf",
+                            "file_format": "pdf",
+                            "pdf_extraction_mode": "hybrid",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-8",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_pdf_meta"]
+    assert node_outputs, "Expected node_output for source_pdf_meta"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    pdf_meta = source_obs.get("pdf_metadata")
+    assert isinstance(pdf_meta, dict)
+    assert pdf_meta.get("requested_mode") == "hybrid"

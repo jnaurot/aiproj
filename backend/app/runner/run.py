@@ -1166,6 +1166,7 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        _copy_format_specific(out)
         if isinstance(source_priming_artifact, dict) and source_priming_artifact:
             out["priming_artifact"] = source_priming_artifact
         return out
@@ -1174,6 +1175,7 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        _copy_format_specific(out)
         if isinstance(source_priming_artifact, dict) and source_priming_artifact:
             out["priming_artifact"] = source_priming_artifact
         return out

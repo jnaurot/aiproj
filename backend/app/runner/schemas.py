@@ -131,6 +131,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["txt_record_mode"] = p.pop("txtRecordMode")
     if "txtChunkSize" in p and "txt_chunk_size" not in p:
         p["txt_chunk_size"] = p.pop("txtChunkSize")
+    if "pdfExtractionMode" in p and "pdf_extraction_mode" not in p:
+        p["pdf_extraction_mode"] = p.pop("pdfExtractionMode")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -395,6 +397,7 @@ class SourceFileParams(NodeParamSchema):
     excel_date_format: Optional[str] = None
     txt_record_mode: Literal["raw", "lines", "paragraphs", "fixed_chunk"] = "raw"
     txt_chunk_size: int = Field(default=1000, ge=1)
+    pdf_extraction_mode: Literal["text", "ocr", "tables", "hybrid"] = "text"
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

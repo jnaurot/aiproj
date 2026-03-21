@@ -33,6 +33,7 @@ export const defaultSourceFileParams: SourceFileParams = {
     excel_sheets: [],
     txt_record_mode: "raw",
     txt_chunk_size: 1000,
+    pdf_extraction_mode: "text",
     parquet_columns: [],
     parquet_row_groups: [],
     parquet_max_rows: undefined,

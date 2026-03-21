@@ -1749,9 +1749,53 @@ async def _handle_file_source(
     elif schema.file_format == "pdf":
         if not HAS_PDF:
             raise ImportError("PDF support requires PyPDF2 and pdfplumber")
+        requested_mode = str(getattr(schema, "pdf_extraction_mode", "text") or "text").strip().lower()
+        resolved_mode = requested_mode
         pdf_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         with pdfplumber.open(pdf_input) as pdf:
-            text_data = "\n\n".join((page.extract_text() or "") for page in pdf.pages)
+            pages = list(pdf.pages)
+            page_count = len(pages)
+            text_parts: list[str] = []
+            table_rows: list[dict[str, Any]] = []
+            if requested_mode in {"text", "hybrid", "ocr"}:
+                # OCR currently degrades gracefully to native text when OCR deps are unavailable.
+                if requested_mode == "ocr":
+                    resolved_mode = "ocr_fallback_text"
+                for page in pages:
+                    text_parts.append(page.extract_text() or "")
+            if requested_mode in {"tables", "hybrid"}:
+                for page_idx, page in enumerate(pages):
+                    try:
+                        tables = page.extract_tables() or []
+                    except Exception:
+                        tables = []
+                    for table_idx, table in enumerate(tables):
+                        if not isinstance(table, list) or not table:
+                            continue
+                        header = [str(c or f"column_{i+1}") for i, c in enumerate(table[0] or [])]
+                        for row in table[1:]:
+                            values = row if isinstance(row, list) else []
+                            record = {
+                                str(header[i]): (values[i] if i < len(values) else None) for i in range(len(header))
+                            }
+                            record["__page"] = page_idx
+                            record["__table"] = table_idx
+                            table_rows.append(record)
+            if requested_mode == "tables":
+                rows = table_rows
+            elif requested_mode == "hybrid":
+                if output_mode == "table" and table_rows:
+                    rows = table_rows
+                text_data = "\n\n".join(text_parts)
+            else:
+                text_data = "\n\n".join(text_parts)
+            format_specific_metadata["pdf_metadata"] = {
+                "requested_mode": requested_mode,
+                "resolved_mode": resolved_mode,
+                "page_count": page_count,
+                "table_rows": len(table_rows),
+                "confidence": 0.75 if resolved_mode.startswith("ocr") else 0.9,
+            }
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 

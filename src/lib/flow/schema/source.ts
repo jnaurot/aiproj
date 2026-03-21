@@ -156,6 +156,7 @@ export const SourceFileParamsSchema = z
 		excel_sheets: z.array(z.string().min(1)).optional(),
 		txt_record_mode: z.enum(["raw", "lines", "paragraphs", "fixed_chunk"]).optional(),
 		txt_chunk_size: z.number().int().positive().optional(),
+		pdf_extraction_mode: z.enum(["text", "ocr", "tables", "hybrid"]).optional(),
 		parquet_columns: z.array(z.string().min(1)).optional(),
 		parquet_row_groups: z.array(z.number().int().nonnegative()).optional(),
 		parquet_max_rows: z.number().int().positive().optional(),

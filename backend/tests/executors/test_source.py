@@ -10,6 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from app.executors.source import exec_source
+import app.executors.source as source_mod
 from app.runner.metadata import FileMetadata, NodeOutput
 
 
@@ -511,6 +512,96 @@ async def test_source_file_txt_record_modes_emit_indexed_rows(tmp_path, mode, ch
 	assert len(result.data) == expected_rows
 	assert "row_index" in result.data[0]
 	assert "text" in result.data[0]
+
+
+@pytest.mark.asyncio
+async def test_source_file_pdf_tables_mode_outputs_table_rows(tmp_path, monkeypatch):
+	file_path = tmp_path / "tables.pdf"
+	file_path.write_bytes(b"%PDF-FAKE")
+
+	class _Page:
+		def extract_text(self):
+			return "text"
+
+		def extract_tables(self):
+			return [[["name", "score"], ["alice", "9"]]]
+
+	class _Pdf:
+		def __init__(self):
+			self.pages = [_Page()]
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+	monkeypatch.setattr(source_mod, "HAS_PDF", True)
+	monkeypatch.setattr(source_mod, "pdfplumber", SimpleNamespace(open=lambda *_args, **_kwargs: _Pdf()), raising=False)
+	node = {
+		"id": "n_source_pdf_tables",
+		"data": {
+			"schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "pdf",
+				"pdf_extraction_mode": "tables",
+			}
+		},
+	}
+	result = await exec_source("run_pdf_tables", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert result.data[0]["name"] == "alice"
+	meta = (result.metadata.data_schema or {}).get("pdf_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("requested_mode") == "tables"
+	assert meta.get("table_rows") == 1
+
+
+@pytest.mark.asyncio
+async def test_source_file_pdf_ocr_mode_falls_back_to_text(tmp_path, monkeypatch):
+	file_path = tmp_path / "ocr.pdf"
+	file_path.write_bytes(b"%PDF-FAKE")
+
+	class _Page:
+		def extract_text(self):
+			return "scanned text"
+
+		def extract_tables(self):
+			return []
+
+	class _Pdf:
+		def __init__(self):
+			self.pages = [_Page()]
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+	monkeypatch.setattr(source_mod, "HAS_PDF", True)
+	monkeypatch.setattr(source_mod, "pdfplumber", SimpleNamespace(open=lambda *_args, **_kwargs: _Pdf()), raising=False)
+	node = {
+		"id": "n_source_pdf_ocr",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "pdf",
+				"pdf_extraction_mode": "ocr",
+			}
+		},
+	}
+	result = await exec_source("run_pdf_ocr", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, str)
+	assert "scanned text" in result.data
+	meta = (result.metadata.data_schema or {}).get("pdf_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("resolved_mode") == "ocr_fallback_text"
 
 
 @pytest.mark.asyncio

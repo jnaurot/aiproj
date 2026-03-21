@@ -363,6 +363,7 @@ class TestSourceFileParams:
             "excel_date_format": "%Y-%m-%d",
             "txt_record_mode": "fixed_chunk",
             "txt_chunk_size": 256,
+            "pdf_extraction_mode": "hybrid",
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -388,6 +389,7 @@ class TestSourceFileParams:
         assert source_params.excel_date_format == "%Y-%m-%d"
         assert source_params.txt_record_mode == "fixed_chunk"
         assert source_params.txt_chunk_size == 256
+        assert source_params.pdf_extraction_mode == "hybrid"
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -770,6 +772,7 @@ class TestNormalizeSourceParamsFrontend:
                 "excelDateFormat": "%d/%m/%Y",
                 "txtRecordMode": "paragraphs",
                 "txtChunkSize": 512,
+                "pdfExtractionMode": "tables",
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -795,6 +798,7 @@ class TestNormalizeSourceParamsFrontend:
         assert out["excel_date_format"] == "%d/%m/%Y"
         assert out["txt_record_mode"] == "paragraphs"
         assert out["txt_chunk_size"] == 512
+        assert out["pdf_extraction_mode"] == "tables"
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25
