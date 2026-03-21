@@ -47,6 +47,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_mapping"] = p.pop("inputMapping")
     if "inputEncoding" in p and "input_encoding" not in p:
         p["input_encoding"] = p.pop("inputEncoding")
+    if "inputEnvelope" in p and "input_envelope" not in p:
+        p["input_envelope"] = p.pop("inputEnvelope")
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -775,6 +777,7 @@ class LLMParams(NodeParamSchema):
     timeout_seconds: int = Field(60, ge=1)
     
     input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/handles
+    input_envelope: Optional[List[Dict[str, Any]]] = None
 
     @model_validator(mode="after")
     def _validate_contract(self):
@@ -799,6 +802,22 @@ class LLMParams(NodeParamSchema):
                 contract["layout"] = "1d"
             elif layout not in {"1d", "2d"}:
                 raise ValueError("embedding_contract.layout must be one of: 1d, 2d")
+        if self.input_envelope is not None:
+            if not isinstance(self.input_envelope, list):
+                raise ValueError("input_envelope must be an array")
+            for i, part in enumerate(self.input_envelope):
+                if not isinstance(part, dict):
+                    raise ValueError(f"input_envelope[{i}] must be an object")
+                part_type = str(part.get("type") or "").strip().lower()
+                if part_type not in {"text", "image", "audio"}:
+                    raise ValueError(f"input_envelope[{i}].type must be one of: text, image, audio")
+                if part_type == "text":
+                    if not isinstance(part.get("text"), str):
+                        raise ValueError(f"input_envelope[{i}].text is required for type=text")
+                else:
+                    data_url = part.get("dataUrl")
+                    if not isinstance(data_url, str) or not data_url.strip():
+                        raise ValueError(f"input_envelope[{i}].dataUrl is required for type={part_type}")
         return self
 
 # ============================================================================

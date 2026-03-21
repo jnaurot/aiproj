@@ -45,6 +45,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["stop_sequences"] = p.pop("stop")
     if "inputEncoding" in p and "input_encoding" not in p:
         p["input_encoding"] = p.pop("inputEncoding")
+    if "inputEnvelope" in p and "input_envelope" not in p:
+        p["input_envelope"] = p.pop("inputEnvelope")
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -189,6 +191,36 @@ async def _serialize_audio_media(context: GraphContext, artifact_id: str) -> Opt
         "dataUrl": f"data:{mime};base64,{b64}",
     }
 
+
+def _canonicalize_input_envelope(raw: Any) -> tuple[list[str], list[Dict[str, Any]]]:
+    if raw is None:
+        return [], []
+    if not isinstance(raw, list):
+        raise ValueError("input_envelope must be an array")
+    text_parts: list[str] = []
+    media_parts: list[Dict[str, Any]] = []
+    for i, part in enumerate(raw):
+        if not isinstance(part, dict):
+            raise ValueError(f"input_envelope[{i}] must be an object")
+        part_type = str(part.get("type") or "").strip().lower()
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise ValueError(f"input_envelope[{i}].text is required for type=text")
+            text_parts.append(text)
+            continue
+        if part_type not in {"image", "audio"}:
+            raise ValueError(f"input_envelope[{i}].type must be one of: text, image, audio")
+        data_url = part.get("dataUrl")
+        if not isinstance(data_url, str) or not data_url.strip():
+            raise ValueError(f"input_envelope[{i}].dataUrl is required for type={part_type}")
+        media: Dict[str, Any] = {"type": part_type, "dataUrl": data_url.strip()}
+        mime = str(part.get("mimeType") or "").strip().lower()
+        if mime:
+            media["mimeType"] = mime
+        media_parts.append(media)
+    return text_parts, media_parts
+
 async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
@@ -254,6 +286,13 @@ async def exec_llm(
             serialized_inputs.append(payload)
             text_parts.append(f"### INPUT {idx} artifact={aid}\n{payload}")
         text = "\n\n---\n\n".join(text_parts)
+    envelope_text_parts, envelope_media_parts = _canonicalize_input_envelope(getattr(llm_params, "input_envelope", None))
+    if envelope_text_parts:
+        envelope_text = "\n".join(envelope_text_parts)
+        text = f"{text}\n\n--- ENVELOPE ---\n{envelope_text}" if text else envelope_text
+        serialized_inputs = [*serialized_inputs, envelope_text]
+    if envelope_media_parts:
+        serialized_media = [*serialized_media, *envelope_media_parts]
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text), "input_encoding:", input_encoding)
 
 

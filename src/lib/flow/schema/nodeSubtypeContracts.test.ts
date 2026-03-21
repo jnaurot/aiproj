@@ -54,6 +54,30 @@ describe('node subtype contract schemas', () => {
 		).toBe(true);
 
 		expect(
+			LlmParamsSchemaByKind.openai_compat.safeParse({
+				connectionRef: 'openai_prod',
+				model: 'gpt-4.1-mini',
+				user_prompt: 'Analyze input',
+				inputEnvelope: [
+					{ type: 'text', text: 'extra context' },
+					{ type: 'image', dataUrl: 'data:image/png;base64,QUJD' },
+					{ type: 'audio', dataUrl: 'data:audio/wav;base64,QUJD' }
+				],
+				output: { mode: 'text' }
+			}).success
+		).toBe(true);
+
+		expect(
+			LlmParamsSchemaByKind.openai_compat.safeParse({
+				connectionRef: 'openai_prod',
+				model: 'gpt-4.1-mini',
+				user_prompt: 'Analyze input',
+				inputEnvelope: [{ type: 'video', dataUrl: 'data:video/mp4;base64,QUJD' }],
+				output: { mode: 'text' }
+			}).success
+		).toBe(false);
+
+		expect(
 			ModelNodeDataSchema.safeParse({
 				kind: 'model',
 				modelKind: 'vision',

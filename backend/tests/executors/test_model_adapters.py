@@ -45,6 +45,14 @@ def test_openai_adapter_conforms_contract():
 	last_content = audio_messages[-1].get("content")
 	assert isinstance(last_content, list)
 	assert any(isinstance(part, dict) and part.get("type") == "input_audio" for part in last_content)
+	first_payload = json.dumps(audio_prepared.payload, sort_keys=True)
+	audio_prepared_2 = adapter.prepare_request(
+		_params("text"),
+		upstream_text="abc",
+		input_media=[{"mimeType": "audio/wav", "dataUrl": "data:audio/wav;base64,QUJD", "type": "audio", "extra": "drop-me"}],
+	)
+	second_payload = json.dumps(audio_prepared_2.payload, sort_keys=True)
+	assert first_payload == second_payload
 
 
 def test_ollama_adapter_conforms_contract():
@@ -75,4 +83,14 @@ def test_ollama_adapter_rejects_audio_input():
 			_params("text"),
 			upstream_text="abc",
 			input_media=[{"type": "audio", "dataUrl": "data:audio/wav;base64,QUJD"}],
+		)
+
+
+def test_openai_adapter_rejects_invalid_media_type():
+	adapter = OpenAICompatAdapter()
+	with pytest.raises(ValueError, match="input_media\\[0\\]\\.type must be one of: image, audio"):
+		adapter.prepare_request(
+			_params("text"),
+			upstream_text="abc",
+			input_media=[{"type": "video", "dataUrl": "data:video/mp4;base64,QUJD"}],
 		)

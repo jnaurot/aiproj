@@ -60,6 +60,30 @@ def build_messages(params: LLMParams, upstream_text: str) -> List[Dict[str, str]
 	return messages
 
 
+def _canonicalize_input_media(input_media: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+	if not input_media:
+		return []
+	out: List[Dict[str, Any]] = []
+	for i, media in enumerate(input_media):
+		if not isinstance(media, dict):
+			raise ValueError(f"input_media[{i}] must be an object")
+		media_type = str(media.get("type") or "").strip().lower()
+		if media_type not in {"image", "audio"}:
+			raise ValueError(f"input_media[{i}].type must be one of: image, audio")
+		data_url = str(media.get("dataUrl") or "").strip()
+		if not data_url:
+			raise ValueError(f"input_media[{i}].dataUrl is required")
+		item: Dict[str, Any] = {
+			"type": media_type,
+			"dataUrl": data_url,
+		}
+		mime = str(media.get("mimeType") or "").strip().lower()
+		if mime:
+			item["mimeType"] = mime
+		out.append(item)
+	return out
+
+
 class OpenAICompatAdapter:
 	provider = "openai_compat"
 
@@ -85,10 +109,11 @@ class OpenAICompatAdapter:
 			}
 		else:
 			messages: List[Dict[str, Any]] = build_messages(params, upstream_text)
-			if input_media:
+			media_inputs = _canonicalize_input_media(input_media)
+			if media_inputs:
 				user_content = str(messages[-1].get("content") or "")
 				media_parts: List[Dict[str, Any]] = []
-				for media in input_media:
+				for media in media_inputs:
 					media_type = str(media.get("type") or "").strip().lower()
 					data_url = str(media.get("dataUrl") or "").strip()
 					if not data_url:
@@ -187,7 +212,8 @@ class OllamaAdapter:
 		output_mode = resolve_output_mode(params)
 		if output_mode == "embeddings":
 			raise ValueError("provider 'ollama' does not support output_mode='embeddings'")
-		if input_media and any(str(m.get("type") or "").strip().lower() == "audio" for m in input_media):
+		media_inputs = _canonicalize_input_media(input_media)
+		if media_inputs and any(str(m.get("type") or "").strip().lower() == "audio" for m in media_inputs):
 			raise ValueError("provider 'ollama' does not support audio input")
 		thinking_mode = "none"
 		if params.thinking and params.thinking.enabled:

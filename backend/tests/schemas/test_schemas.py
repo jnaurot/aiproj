@@ -73,6 +73,7 @@ class TestLLMParams:
         input_params = {
             "stop": ["A", "B"],
             "inputEncoding": "json_canonical",
+            "inputEnvelope": [{"type": "text", "text": "hello"}],
             "presencePenalty": 0.2,
             "frequencyPenalty": -0.1,
             "repeatPenalty": 1.1,
@@ -82,6 +83,7 @@ class TestLLMParams:
         result = normalize_llm_params_frontend(input_params)
         assert result["stop_sequences"] == ["A", "B"]
         assert result["input_encoding"] == "json_canonical"
+        assert result["input_envelope"] == [{"type": "text", "text": "hello"}]
         assert result["presence_penalty"] == 0.2
         assert result["frequency_penalty"] == -0.1
         assert result["repeat_penalty"] == 1.1
@@ -229,6 +231,33 @@ class TestLLMParams:
         assert llm_params.input_mapping == {
             "input_value": "{{node_input.port_name}}"
         }
+
+    def test_accepts_input_envelope(self):
+        llm_params = LLMParams.model_validate(
+            {
+                "model": "test",
+                "user_prompt": "Describe {input}",
+                "base_url": "http://test.com",
+                "input_envelope": [
+                    {"type": "text", "text": "extra context"},
+                    {"type": "image", "dataUrl": "data:image/png;base64,QUJD"},
+                    {"type": "audio", "dataUrl": "data:audio/wav;base64,QUJD"},
+                ],
+            }
+        )
+        assert isinstance(llm_params.input_envelope, list)
+        assert len(llm_params.input_envelope) == 3
+
+    def test_rejects_invalid_input_envelope_part(self):
+        with pytest.raises(ValueError, match="input_envelope\\[0\\]\\.type must be one of: text, image, audio"):
+            LLMParams.model_validate(
+                {
+                    "model": "test",
+                    "user_prompt": "Describe {input}",
+                    "base_url": "http://test.com",
+                    "input_envelope": [{"type": "video", "dataUrl": "data:video/mp4;base64,QUJD"}],
+                }
+            )
 
 
 class TestSourceFileParams:

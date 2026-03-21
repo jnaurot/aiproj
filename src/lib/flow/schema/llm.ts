@@ -15,6 +15,25 @@ export const ModelTaskKindSchema = z.enum([
 	'caption'
 ]);
 
+const LlmInputEnvelopePartSchema = z
+	.discriminatedUnion('type', [
+		z.object({ type: z.literal('text'), text: z.string() }).strip(),
+		z
+			.object({
+				type: z.literal('image'),
+				dataUrl: z.string().min(1),
+				mimeType: z.string().min(1).optional()
+			})
+			.strip(),
+		z
+			.object({
+				type: z.literal('audio'),
+				dataUrl: z.string().min(1),
+				mimeType: z.string().min(1).optional()
+			})
+			.strip()
+	]);
+
 const ModelTaskKindsByModelKind: Record<z.infer<typeof ModelKindSchema>, ReadonlySet<string>> = {
 	llm: new Set(['generate', 'classify', 'extract']),
 	vision: new Set(['caption', 'classify', 'extract', 'generate']),
@@ -53,6 +72,7 @@ export const LlmParamsSchema = z
 			.strip()
 			.optional(),
 		inputEncoding: z.enum(['text', 'json_canonical', 'table_canonical']).optional(),
+		inputEnvelope: z.array(LlmInputEnvelopePartSchema).optional(),
 
 		output: z
 			.object({
