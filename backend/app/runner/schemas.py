@@ -127,6 +127,10 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["excel_date_policy"] = p.pop("excelDatePolicy")
     if "excelDateFormat" in p and "excel_date_format" not in p:
         p["excel_date_format"] = p.pop("excelDateFormat")
+    if "txtRecordMode" in p and "txt_record_mode" not in p:
+        p["txt_record_mode"] = p.pop("txtRecordMode")
+    if "txtChunkSize" in p and "txt_chunk_size" not in p:
+        p["txt_chunk_size"] = p.pop("txtChunkSize")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -389,6 +393,8 @@ class SourceFileParams(NodeParamSchema):
     excel_merged_cells_policy: Literal["none", "ffill"] = "none"
     excel_date_policy: Literal["auto", "coerce", "string"] = "auto"
     excel_date_format: Optional[str] = None
+    txt_record_mode: Literal["raw", "lines", "paragraphs", "fixed_chunk"] = "raw"
+    txt_chunk_size: int = Field(default=1000, ge=1)
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

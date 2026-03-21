@@ -481,6 +481,39 @@ async def test_source_file_excel_applies_merge_and_date_policies(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+	"mode,chunk_size,expected_rows",
+	[
+		("lines", 1000, 4),
+		("paragraphs", 1000, 2),
+		("fixed_chunk", 5, 4),
+	],
+)
+async def test_source_file_txt_record_modes_emit_indexed_rows(tmp_path, mode, chunk_size, expected_rows):
+	file_path = tmp_path / f"{mode}.txt"
+	file_path.write_text("alpha\nbeta\n\ngamma", encoding="utf-8")
+	node = {
+		"id": f"n_source_txt_{mode}",
+		"data": {
+			"schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "txt",
+				"txt_record_mode": mode,
+				"txt_chunk_size": chunk_size,
+			}
+		},
+	}
+	result = await exec_source(f"run_txt_{mode}", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == expected_rows
+	assert "row_index" in result.data[0]
+	assert "text" in result.data[0]
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

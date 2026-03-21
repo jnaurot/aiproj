@@ -101,6 +101,8 @@
 	$: dateFormat = asString((params as any)?.date_format, '');
 	$: jsonMode = asString((params as any)?.json_mode, 'auto');
 	$: sheet_name = asString(params?.sheet_name, '');
+	$: txtRecordMode = asString((params as any)?.txt_record_mode, 'raw');
+	$: txtChunkSize = Number((params as any)?.txt_chunk_size ?? 1000);
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
 	$: void hydrateMissingRecentSnapshots(recentSnapshots);
@@ -639,6 +641,46 @@
 					}}
 				/>
 			</Field>
+		{/if}
+
+		{#if file_format === 'txt'}
+			<Field label="record mode">
+				<select
+					class="full"
+					value={txtRecordMode}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value as
+							| 'raw'
+							| 'lines'
+							| 'paragraphs'
+							| 'fixed_chunk';
+						draft({ txt_record_mode: value as any });
+						commit({ txt_record_mode: value as any });
+					}}
+				>
+					<option value="raw">raw</option>
+					<option value="lines">lines</option>
+					<option value="paragraphs">paragraphs</option>
+					<option value="fixed_chunk">fixed_chunk</option>
+				</select>
+			</Field>
+			{#if txtRecordMode === 'fixed_chunk'}
+				<Field label="chunk size">
+					<Input
+						type="number"
+						min="1"
+						value={Number.isFinite(txtChunkSize) ? String(txtChunkSize) : '1000'}
+						onInput={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							draft({ txt_chunk_size: Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000 });
+						}}
+						onBlur={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							commit({ txt_chunk_size: Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000 });
+						}}
+					/>
+				</Field>
+			{/if}
 		{/if}
 
 		<Field label="encoding">

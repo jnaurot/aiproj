@@ -31,6 +31,8 @@ export const defaultSourceFileParams: SourceFileParams = {
     json_flatten_separator: ".",
     excel_import_strategy: "single",
     excel_sheets: [],
+    txt_record_mode: "raw",
+    txt_chunk_size: 1000,
     parquet_columns: [],
     parquet_row_groups: [],
     parquet_max_rows: undefined,

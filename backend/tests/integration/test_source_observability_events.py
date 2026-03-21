@@ -325,3 +325,51 @@ async def test_source_node_output_event_includes_excel_provenance_metadata(tmp_p
     policy = source_obs.get("excel_policy")
     assert isinstance(policy, dict)
     assert policy.get("merged_cells_policy") == "ffill"
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_txt_recordization_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-7"
+    source_dir = tmp_path / "source-7"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.txt"
+    source_file.write_text("a\nb\nc\n", encoding="utf-8")
+    bus = RunEventBus("run-source-obs-7", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-7",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_txt_records",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.txt",
+                            "file_format": "txt",
+                            "txt_record_mode": "lines",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-7",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_txt_records"]
+    assert node_outputs, "Expected node_output for source_txt_records"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    txt_meta = source_obs.get("txt_recordization")
+    assert isinstance(txt_meta, dict)
+    assert txt_meta.get("mode") == "lines"

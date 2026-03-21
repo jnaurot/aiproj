@@ -361,6 +361,8 @@ class TestSourceFileParams:
             "excel_merged_cells_policy": "ffill",
             "excel_date_policy": "coerce",
             "excel_date_format": "%Y-%m-%d",
+            "txt_record_mode": "fixed_chunk",
+            "txt_chunk_size": 256,
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -384,6 +386,8 @@ class TestSourceFileParams:
         assert source_params.excel_merged_cells_policy == "ffill"
         assert source_params.excel_date_policy == "coerce"
         assert source_params.excel_date_format == "%Y-%m-%d"
+        assert source_params.txt_record_mode == "fixed_chunk"
+        assert source_params.txt_chunk_size == 256
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -764,6 +768,8 @@ class TestNormalizeSourceParamsFrontend:
                 "excelMergedCellsPolicy": "ffill",
                 "excelDatePolicy": "string",
                 "excelDateFormat": "%d/%m/%Y",
+                "txtRecordMode": "paragraphs",
+                "txtChunkSize": 512,
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -787,6 +793,8 @@ class TestNormalizeSourceParamsFrontend:
         assert out["excel_merged_cells_policy"] == "ffill"
         assert out["excel_date_policy"] == "string"
         assert out["excel_date_format"] == "%d/%m/%Y"
+        assert out["txt_record_mode"] == "paragraphs"
+        assert out["txt_chunk_size"] == 512
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25

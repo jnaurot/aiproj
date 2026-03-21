@@ -585,6 +585,29 @@ def _apply_excel_policies(
     return out
 
 
+def _text_to_records(text: str, mode: str, chunk_size: int) -> list[dict[str, Any]]:
+    content = str(text or "")
+    normalized_mode = str(mode or "raw").strip().lower()
+    rows: list[dict[str, Any]] = []
+    if normalized_mode == "lines":
+        for idx, line in enumerate(content.splitlines()):
+            rows.append({"row_index": idx, "text": line})
+        return rows
+    if normalized_mode == "paragraphs":
+        parts = [p for p in re.split(r"\n\s*\n", content) if str(p).strip()]
+        for idx, part in enumerate(parts):
+            rows.append({"row_index": idx, "text": part})
+        return rows
+    if normalized_mode == "fixed_chunk":
+        size = max(1, int(chunk_size or 1000))
+        for idx, start in enumerate(range(0, len(content), size)):
+            rows.append({"row_index": idx, "text": content[start : start + size]})
+        return rows
+    if content:
+        return [{"row_index": 0, "text": content}]
+    return []
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1714,6 +1737,15 @@ async def _handle_file_source(
             if file_bytes is not None
             else Path(file_path).read_text(encoding=schema.encoding)
         )
+        txt_mode = str(getattr(schema, "txt_record_mode", "raw") or "raw")
+        if txt_mode in {"lines", "paragraphs", "fixed_chunk"}:
+            rows = _text_to_records(text_data, txt_mode, int(getattr(schema, "txt_chunk_size", 1000) or 1000))
+            table_columns = [{"name": "row_index", "type": "int"}, {"name": "text", "type": "string"}]
+            format_specific_metadata["txt_recordization"] = {
+                "mode": txt_mode,
+                "chunk_size": int(getattr(schema, "txt_chunk_size", 1000) or 1000),
+                "rows": len(rows),
+            }
     elif schema.file_format == "pdf":
         if not HAS_PDF:
             raise ImportError("PDF support requires PyPDF2 and pdfplumber")

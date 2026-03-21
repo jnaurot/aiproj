@@ -93,6 +93,8 @@ describe('source kinds schema coverage', () => {
 			json_flatten_separator: '_',
 			excel_import_strategy: 'stack',
 			excel_sheets: ['Sheet1', 'Sheet2'],
+			txt_record_mode: 'fixed_chunk',
+			txt_chunk_size: 128,
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -113,5 +115,7 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.json_flatten_separator).toBe('_');
 		expect(parsed.excel_import_strategy).toBe('stack');
 		expect(parsed.excel_sheets).toEqual(['Sheet1', 'Sheet2']);
+		expect(parsed.txt_record_mode).toBe('fixed_chunk');
+		expect(parsed.txt_chunk_size).toBe(128);
 	});
 });
