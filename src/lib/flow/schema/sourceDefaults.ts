@@ -19,6 +19,7 @@ export const defaultSourceFileParams: SourceFileParams = {
     sheet_name: "Sheet1",
     encoding: "utf-8",
     cache_enabled: true,
+    priming: { enabled: false, mode: "advisory", sample_rows: 50, sample_bytes: 65536, timeout_ms: 1500 },
     output: { mode: "text" }
 };
 
@@ -40,6 +41,7 @@ export const defaultSourceDatabaseParams: SourceDatabaseParams = {
 		numeric_step: 1,
 		date_every_days: 1
 	},
+	priming: { enabled: false, mode: "advisory", sample_rows: 50, sample_bytes: 65536, timeout_ms: 1500 },
     output: { mode: "table" },
 };
 
@@ -81,6 +83,7 @@ export const defaultSourceAPIParams: SourceAPIParams = {
 		burst: 1
 	},
 	cache_policy: { mode: "default" },
+	priming: { enabled: false, mode: "advisory", sample_rows: 50, sample_bytes: 65536, timeout_ms: 1500 },
 	output: { mode: "json" }
 };
 
@@ -91,6 +94,7 @@ export const defaultSourceObjectStoreParams: SourceObjectStoreParams = {
 	key: "data.txt",
 	file_format: "txt",
 	encoding: "utf-8",
+	priming: { enabled: false, mode: "advisory", sample_rows: 50, sample_bytes: 65536, timeout_ms: 1500 },
 	output: { mode: "text" }
 };
 
@@ -99,6 +103,7 @@ export const defaultSourceWarehouseParams: SourceWarehouseParams = {
 	connection_ref: "conn:warehouse_default",
 	query: "select * from my_table",
 	limit: 1000,
+	priming: { enabled: false, mode: "advisory", sample_rows: 50, sample_bytes: 65536, timeout_ms: 1500 },
 	output: { mode: "table" }
 };
 

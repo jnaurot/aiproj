@@ -15,6 +15,7 @@ describe('source kinds schema coverage', () => {
 			file_format: 'txt'
 		});
 		expect(parsed.output.mode).toBe('text');
+		expect(parsed.priming.enabled).toBe(false);
 	});
 
 	it('parses warehouse params with defaults', () => {
@@ -24,6 +25,25 @@ describe('source kinds schema coverage', () => {
 			query: 'select 1'
 		});
 		expect(parsed.output.mode).toBe('table');
+		expect(parsed.priming.mode).toBe('advisory');
+	});
+
+	it('accepts explicit priming config', () => {
+		const parsed = SourceObjectStoreParamsSchema.parse({
+			provider: 's3',
+			bucket: 'demo',
+			key: 'file.txt',
+			file_format: 'txt',
+			priming: {
+				enabled: true,
+				mode: 'priming_only',
+				sample_rows: 12,
+				sample_bytes: 2048,
+				timeout_ms: 300
+			}
+		});
+		expect(parsed.priming.enabled).toBe(true);
+		expect(parsed.priming.mode).toBe('priming_only');
 	});
 
 	it('accepts source node data for new source kinds', () => {

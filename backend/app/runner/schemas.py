@@ -134,6 +134,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["incremental"] = p.pop("incrementalConfig")
     if "partitionConfig" in p and "partition" not in p:
         p["partition"] = p.pop("partitionConfig")
+    if "primingConfig" in p and "priming" not in p:
+        p["priming"] = p.pop("primingConfig")
     if "retryPolicy" in p and "retry" not in p:
         p["retry"] = p.pop("retryPolicy")
     if "rateLimit" in p and "rate_limit" not in p:
@@ -217,6 +219,14 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             partition["bind_key"] = partition.pop("bindKey")
         if "parallelismCap" in partition and "parallelism_cap" not in partition:
             partition["parallelism_cap"] = partition.pop("parallelismCap")
+    priming = p.get("priming")
+    if isinstance(priming, dict):
+        if "sampleRows" in priming and "sample_rows" not in priming:
+            priming["sample_rows"] = priming.pop("sampleRows")
+        if "sampleBytes" in priming and "sample_bytes" not in priming:
+            priming["sample_bytes"] = priming.pop("sampleBytes")
+        if "timeoutMs" in priming and "timeout_ms" not in priming:
+            priming["timeout_ms"] = priming.pop("timeoutMs")
     return p
 
 
@@ -268,6 +278,14 @@ class SourceKind(str, Enum):
     OBJECT_STORE = "object_store"
     WAREHOUSE = "warehouse"
 
+
+class SourcePrimingParams(NodeParamSchema):
+    enabled: bool = False
+    mode: Literal["advisory", "priming_only"] = "advisory"
+    sample_rows: int = Field(default=50, ge=1, le=10000)
+    sample_bytes: int = Field(default=65536, ge=1, le=100_000_000)
+    timeout_ms: int = Field(default=1500, ge=1, le=300000)
+
 class SourceFileParams(NodeParamSchema):
     snapshot_id: Optional[str] = None
     rel_path: Optional[str] = Field(None, description="Directory path")
@@ -305,6 +323,7 @@ class SourceFileParams(NodeParamSchema):
     sheet_name: Optional[str] = None  # for Excel
     encoding: str = "utf-8"
     cache_enabled: bool = True
+    priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Optional[Literal["table", "text", "json", "binary"]] = None
     output_schema: Optional[Dict[str, Any]] = None
 
@@ -351,6 +370,7 @@ class SourceDatabaseParams(NodeParamSchema):
     partition: Dict[str, Any] = Field(
         default_factory=lambda: {"enabled": False, "kind": "static_list", "on_error": "fail_fast", "bind_key": "partition", "parallelism_cap": 2}
     )
+    priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Literal["table", "text", "json", "binary"] = "table"
     output_schema: Optional[Dict[str, Any]] = None
     
@@ -399,6 +419,7 @@ class SourceAPIParams(NodeParamSchema):
     )
     rate_limit: Dict[str, Any] = Field(default_factory=lambda: {"burst": 1})
     cache_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "default"})
+    priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Literal["table", "text", "json", "binary"] = "json"
     output_schema: Optional[Dict[str, Any]] = None
 
@@ -472,6 +493,7 @@ class SourceObjectStoreParams(NodeParamSchema):
         "webm",
     ] = "txt"
     encoding: str = "utf-8"
+    priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Optional[Literal["table", "text", "json", "binary"]] = None
     output_schema: Optional[Dict[str, Any]] = None
 
@@ -504,6 +526,7 @@ class SourceWarehouseParams(NodeParamSchema):
     connection_ref: Optional[str] = None
     query: Optional[str] = None
     limit: Optional[int] = None
+    priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Literal["table", "text", "json", "binary"] = "table"
     output_schema: Optional[Dict[str, Any]] = None
 

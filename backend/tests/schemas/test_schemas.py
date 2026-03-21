@@ -636,6 +636,26 @@ class TestNormalizeSourceParamsFrontend:
         assert out["incremental"]["window_start"] == "1"
         assert out["incremental"]["window_end"] == "9"
 
+    def test_priming_camel_case_fields_are_normalized(self):
+        out = normalize_source_params_frontend(
+            {
+                "source_type": "file",
+                "filename": "data.txt",
+                "primingConfig": {
+                    "enabled": True,
+                    "mode": "priming_only",
+                    "sampleRows": 25,
+                    "sampleBytes": 1024,
+                    "timeoutMs": 400,
+                },
+            }
+        )
+        assert out["priming"]["enabled"] is True
+        assert out["priming"]["mode"] == "priming_only"
+        assert out["priming"]["sample_rows"] == 25
+        assert out["priming"]["sample_bytes"] == 1024
+        assert out["priming"]["timeout_ms"] == 400
+
 
 class TestFilterTransformParams:
     """Test filter transform parameter validation"""

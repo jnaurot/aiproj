@@ -381,6 +381,17 @@ def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _source_priming_spec(params: Dict[str, Any]) -> Dict[str, Any]:
+    raw = params.get("priming")
+    if not isinstance(raw, dict):
+        return {"enabled": False, "mode": "advisory"}
+    enabled = bool(raw.get("enabled"))
+    mode = str(raw.get("mode") or "advisory").strip().lower()
+    if mode not in {"advisory", "priming_only"}:
+        mode = "advisory"
+    return {"enabled": enabled, "mode": mode}
+
+
 def _resolve_file_path(rel_path: str, filename: str) -> Path:
     base = Path(str(rel_path or ".")).expanduser()
     leaf = Path(str(filename or "")).expanduser()
@@ -670,6 +681,7 @@ async def exec_source(
     raw_params["source_type"] = source_type
     params = normalize_source_params_frontend(raw_params)
     params["source_type"] = source_type
+    priming_spec = _source_priming_spec(params)
 
     try:
         if source_type == "file":
@@ -721,6 +733,18 @@ async def exec_source(
         else:
             raise ValueError(f"Unknown source_type: {source_type}")
         output.execution_time_ms = (time.time() - start_time) * 1000
+        if output.status == "succeeded" and output.metadata is not None and bool(priming_spec.get("enabled")):
+            schema_env = (
+                dict(output.metadata.data_schema)
+                if isinstance(output.metadata.data_schema, dict)
+                else {}
+            )
+            schema_env["priming"] = {
+                "enabled": True,
+                "mode": str(priming_spec.get("mode") or "advisory"),
+                "priming_only": bool(str(priming_spec.get("mode") or "") == "priming_only"),
+            }
+            output.metadata.data_schema = schema_env
         return output
     except Exception as exc:
         return NodeOutput(

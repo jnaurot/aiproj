@@ -66,6 +66,16 @@ export const SourcePartitionSchema = z
 	})
 	.strip();
 
+export const SourcePrimingSchema = z
+	.object({
+		enabled: z.boolean().default(false),
+		mode: z.enum(["advisory", "priming_only"]).default("advisory"),
+		sample_rows: z.number().int().positive().default(50),
+		sample_bytes: z.number().int().positive().default(65536),
+		timeout_ms: z.number().int().positive().default(1500)
+	})
+	.strip();
+
 export const SourceFileParamsSchema = z
 	.object({
 		snapshotId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -130,6 +140,13 @@ export const SourceFileParamsSchema = z
 		sheet_name: z.string().optional(),
 		encoding: z.string().default("utf-8"),
 		cache_enabled: z.boolean().default(true),
+		priming: SourcePrimingSchema.default({
+			enabled: false,
+			mode: "advisory",
+			sample_rows: 50,
+			sample_bytes: 65536,
+			timeout_ms: 1500
+		}),
 		output: SourceOutputSchema.optional()
 	})
 	.strip()
@@ -155,6 +172,13 @@ export const SourceDatabaseParamsSchema = z
 			on_error: "fail_fast",
 			bind_key: "partition",
 			parallelism_cap: 2
+		}),
+		priming: SourcePrimingSchema.default({
+			enabled: false,
+			mode: "advisory",
+			sample_rows: 50,
+			sample_bytes: 65536,
+			timeout_ms: 1500
 		}),
 		output: SourceOutputSchema.default({ mode: "table" })
 	})
@@ -239,6 +263,13 @@ export const SourceAPIParamsSchema = z
 		}),
 		rate_limit: SourceApiRateLimitSchema.default({ burst: 1 }),
 		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
+		priming: SourcePrimingSchema.default({
+			enabled: false,
+			mode: "advisory",
+			sample_rows: 50,
+			sample_bytes: 65536,
+			timeout_ms: 1500
+		}),
 		output: SourceOutputSchema.default({ mode: "json" })
 	})
 	.strip()
@@ -328,6 +359,13 @@ export const SourceObjectStoreParamsSchema = z
 			])
 			.default("txt"),
 		encoding: z.string().default("utf-8"),
+		priming: SourcePrimingSchema.default({
+			enabled: false,
+			mode: "advisory",
+			sample_rows: 50,
+			sample_bytes: 65536,
+			timeout_ms: 1500
+		}),
 		output: SourceOutputSchema.optional()
 	})
 	.strip()
@@ -354,6 +392,13 @@ export const SourceWarehouseParamsSchema = z
 		connection_ref: z.string().optional(),
 		query: z.string().min(1),
 		limit: z.number().int().positive().optional(),
+		priming: SourcePrimingSchema.default({
+			enabled: false,
+			mode: "advisory",
+			sample_rows: 50,
+			sample_bytes: 65536,
+			timeout_ms: 1500
+		}),
 		output: SourceOutputSchema.default({ mode: "table" })
 	})
 	.strip()

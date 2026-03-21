@@ -388,3 +388,25 @@ async def test_source_warehouse_mock_rows_succeeds():
 	assert len(result.data) == 2
 	assert isinstance(result.metadata.data_schema.get("source_observability"), dict)
 	assert result.metadata.data_schema.get("source_observability", {}).get("source_kind") == "warehouse"
+
+
+@pytest.mark.asyncio
+async def test_source_priming_only_sets_metadata_marker(tmp_path):
+	file_path = tmp_path / "data.csv"
+	pd.DataFrame({"a": [1, 2], "b": ["x", "y"]}).to_csv(file_path, index=False)
+	node = {
+		"id": "n_source_prime",
+		"data": {
+			"sourceKind": "file",
+			"params": {
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"priming": {"enabled": True, "mode": "priming_only"},
+			},
+		},
+	}
+	result = await exec_source("run_prime_only", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.metadata.data_schema, dict)
+	assert (result.metadata.data_schema.get("priming") or {}).get("enabled") is True
+	assert (result.metadata.data_schema.get("priming") or {}).get("priming_only") is True
