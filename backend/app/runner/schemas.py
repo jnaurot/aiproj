@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, model_validator, validator
 from enum import Enum
 
-from pprint import pformat
 
 def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(raw or {})
@@ -1134,13 +1133,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
 
     try:
         if kind in {"llm", "model"}:
-            print("\n[SCHEMAS] LLM params BEFORE normalize:")
-            print(pformat(params)[:8000])
-
             norm = normalize_llm_params_frontend(params)
-
-            print("[SCHEMAS] LLM params AFTER normalize:")
-            print(pformat(norm)[:8000])
 
             llm_kind = node.get("data", {}).get("llmKind") or "ollama"
             model_kind = node.get("data", {}).get("modelKind") or "llm"

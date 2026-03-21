@@ -2618,7 +2618,7 @@ async def run_graph(
         runtime_ref=runtime_ref,
     )
     
-    print("[context]", type(context.bus), type(context.artifact_store), type(context.bindings))
+    logger.debug("run_graph_context_initialized")
     context.bus.graph_id = graph_id
     component_parent_for_internal: Dict[str, str] = {}
     component_meta_by_parent: Dict[str, Dict[str, Any]] = {}
@@ -5274,9 +5274,6 @@ async def run_graph(
                             execution_time_ms=0.0
                         )
                 elif kind in {"llm", "model"}:
-                    print("[run_graph] LLM upstream_ids:", upstream_ids)
-                    print("[run_graph] bound node ids:", [b.node_id for b in context.bindings.all()])
-
                     llm_in_contract = str((_declared_in_port(kind, n) or "text"))
 
                     # Canonical upstream artifact list (preserve input-handle mapping order if present)

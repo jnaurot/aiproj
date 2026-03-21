@@ -9,7 +9,6 @@ from .schema_diagnostics import (
     PAYLOAD_SCHEMA_MISMATCH,
 )
 
-from pprint import pformat
 from typing import Set
 
 @dataclass
@@ -321,17 +320,6 @@ class GraphValidator:
         for node in nodes:
             node_id = node["id"]
             node_label = node["data"].get("label", node_id)
-            
-            
-            #DEBUGGING LOGS START
-            if node.get("data", {}).get("kind") in {"llm", "model"}:
-                print("\n[VALIDATOR] LLM NODE RAW:")
-                print(pformat({
-                    "id": node_id,
-                    "llmKind": node.get("data", {}).get("llmKind"),
-                    "params": node.get("data", {}).get("params"),
-                })[:8000])
-            #DEBUGGING LOGS END
             
             # Use schema validation
             param_errors = validate_node_params(node)

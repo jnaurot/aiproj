@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+import logging
 from typing import Any, Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class RunPlan:
@@ -56,7 +59,7 @@ def compile_plan(
     run_mode: Optional[str] = None,
     dirty_node_ids: Optional[Set[str]] = None,
 ) -> RunPlan:
-    print("IN COMPILE_PLAN")
+    logger.debug("compile_plan_start")
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     node_ids = [n["id"] for n in nodes]

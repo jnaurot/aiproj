@@ -4,6 +4,7 @@ import json
 import base64
 import os
 import threading
+import logging
 from typing import Any, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
@@ -16,7 +17,8 @@ from .llm_ollama import exec_llm_ollama           # new module (suggested)
 from .llm_openai_compat import exec_llm_openai_compat
 from .model_adapters import get_model_adapter
 from .model_policy import normalize_request_policy
-from pprint import pformat
+
+logger = logging.getLogger(__name__)
 
 # print("[exec_llm] has bus?", hasattr(context, "bus"), type(context.bus))
 
@@ -265,6 +267,31 @@ def _canonicalize_input_envelope(raw: Any) -> tuple[list[str], list[Dict[str, An
         media_parts.append(media)
     return text_parts, media_parts
 
+
+def _model_error_payload(code: str, message: str, **extra: Any) -> str:
+    payload: Dict[str, Any] = {"code": code, "errorCode": code, "message": str(message)}
+    if extra:
+        payload.update(extra)
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
+def _normalize_model_error(error: Optional[str], *, default_code: str) -> str:
+    raw = str(error or "").strip()
+    if not raw:
+        return _model_error_payload(default_code, "Model execution failed")
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return _model_error_payload(default_code, raw)
+    if isinstance(parsed, dict):
+        code = str(parsed.get("errorCode") or parsed.get("code") or default_code).strip() or default_code
+        message = str(parsed.get("message") or raw).strip() or raw
+        parsed["code"] = code
+        parsed["errorCode"] = code
+        parsed["message"] = message
+        return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
+    return _model_error_payload(default_code, raw)
+
 async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
@@ -281,7 +308,7 @@ async def exec_llm(
     assert hasattr(context, "bus"), "context missing bus"
 
     raw_params = node.get("data", {}).get("params", {}) or {}
-    print("LLM EXEC raw_params (before normalize):", pformat(raw_params)[:8000])
+    logger.debug("Model node raw params normalized", extra={"nodeId": node_id})
 
     norm_params = normalize_llm_params(raw_params)
     declared_mode = _llm_schema_declared_output_mode(node)
@@ -289,7 +316,7 @@ async def exec_llm(
     if declared_mode == "json" and not isinstance(norm_params.get("output_schema"), dict):
         # Schema-first: JSON mode is chosen by typed schema declaration, so allow empty schema by default.
         norm_params["output_schema"] = {}
-    print("LLM EXEC norm_params (after normalize):", pformat(norm_params)[:8000])
+    logger.debug("Model node params validated", extra={"nodeId": node_id, "llmKind": node.get("data", {}).get("llmKind")})
 
     # ✅ Validate normalized dict
     llm_params = LLMParams.model_validate(norm_params)
@@ -337,7 +364,10 @@ async def exec_llm(
         serialized_inputs = [*serialized_inputs, envelope_text]
     if envelope_media_parts:
         serialized_media = [*serialized_media, *envelope_media_parts]
-    print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text), "input_encoding:", input_encoding)
+    logger.debug(
+        "Model input prepared",
+        extra={"nodeId": node_id, "upstreamCount": len(upstream_artifact_ids), "inputChars": len(text), "inputEncoding": input_encoding},
+    )
 
 
     await context.bus.emit(
@@ -452,7 +482,21 @@ async def exec_llm(
             out = await _dispatch(kind, params_override)
         if out.status == "succeeded":
             return out
-        last_output = out
-    return last_output if last_output is not None else NodeOutput(status="failed", metadata=None, execution_time_ms=0.0, error="Unsupported llmKind")
+        last_output = out.model_copy(
+            update={
+                "error": _normalize_model_error(
+                    out.error,
+                    default_code="MODEL_EXECUTION_FAILED",
+                )
+            }
+        )
+    if last_output is not None:
+        return last_output
+    return NodeOutput(
+        status="failed",
+        metadata=None,
+        execution_time_ms=0.0,
+        error=_model_error_payload("MODEL_KIND_UNSUPPORTED", "Unsupported llmKind"),
+    )
 
 

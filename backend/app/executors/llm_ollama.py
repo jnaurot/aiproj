@@ -9,6 +9,7 @@ import hashlib
 import re
 
 import httpx
+import logging
 from jsonschema import ValidationError
 from jsonschema import validate as jsonschema_validate
 
@@ -29,6 +30,8 @@ from ..runner.schemas import LLMParams
 from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from ..runner.events import RunEventBus
 from app.runner.emit import emit
+
+logger = logging.getLogger(__name__)
 
 
 def _sha256_text(s: str) -> str:
@@ -212,7 +215,6 @@ async def exec_llm_ollama(
     Right now it can only safely template using '{input}' from input_metadata if present.
     """
     node_id = node.get("id", "<missing-node-id>")
-    print("[ollama] node_id:", node_id)
     upstream_artifact_ids = upstream_artifact_ids or []
 
     assert context is not None, "context is None"
@@ -239,8 +241,10 @@ async def exec_llm_ollama(
             )
     
     text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
-    print("TEXT: ",text)
-    print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
+    logger.debug(
+        "Ollama input prepared",
+        extra={"nodeId": node_id, "upstreamCount": len(upstream_artifact_ids), "inputChars": len(text)},
+    )
 
     adapter = OllamaAdapter()
     thinking_mode = "none"
