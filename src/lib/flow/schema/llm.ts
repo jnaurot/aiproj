@@ -100,6 +100,14 @@ export const LlmParamsSchema = z
 					})
 					.strip()
 					.optional(),
+				determinism: z
+					.object({
+						enabled: z.boolean().optional(),
+						seed: z.number().int().optional(),
+						stable_order: z.boolean().optional()
+					})
+					.strip()
+					.optional(),
 				fallback_chain: z
 					.array(
 						z

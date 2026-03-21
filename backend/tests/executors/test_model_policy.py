@@ -37,6 +37,7 @@ def test_normalize_request_policy_explicit_values():
 			"backoff": {"base_seconds": 1.5, "max_seconds": 4.0, "jitter_seconds": 0.2},
 			"circuit_breaker": {"enabled": True, "fail_threshold": 2, "reset_seconds": 30},
 			"batching": {"enabled": True, "max_items": 16},
+			"determinism": {"enabled": True, "seed": 42, "stable_order": True},
 			"fallback_chain": [{"llmKind": "openai_compat", "model": "gpt-4.1-mini"}],
 		}
 	)
@@ -50,6 +51,9 @@ def test_normalize_request_policy_explicit_values():
 	assert policy.circuit_fail_threshold == 2
 	assert policy.batch_enabled is True
 	assert policy.batch_max_items == 16
+	assert policy.deterministic_enabled is True
+	assert policy.deterministic_seed == 42
+	assert policy.deterministic_stable_order is True
 	assert len(policy.fallback_chain) == 1
 
 

@@ -20,6 +20,9 @@ class RequestPolicy:
 	circuit_reset_seconds: float
 	batch_enabled: bool
 	batch_max_items: int
+	deterministic_enabled: bool
+	deterministic_seed: int | None
+	deterministic_stable_order: bool
 	fallback_chain: List[Dict[str, Any]]
 
 
@@ -44,6 +47,7 @@ def normalize_request_policy(params: LLMParams) -> RequestPolicy:
 	backoff = raw.get("backoff") if isinstance(raw.get("backoff"), dict) else {}
 	circuit = raw.get("circuit_breaker") if isinstance(raw.get("circuit_breaker"), dict) else {}
 	batching = raw.get("batching") if isinstance(raw.get("batching"), dict) else {}
+	determinism = raw.get("determinism") if isinstance(raw.get("determinism"), dict) else {}
 	fallback = raw.get("fallback_chain")
 	if not isinstance(fallback, list):
 		fallback = []
@@ -58,6 +62,13 @@ def normalize_request_policy(params: LLMParams) -> RequestPolicy:
 		circuit_reset_seconds=_as_float(circuit.get("reset_seconds"), default=30.0, minimum=1.0, maximum=3600.0),
 		batch_enabled=bool(batching.get("enabled", True)),
 		batch_max_items=_as_int(batching.get("max_items"), default=64, minimum=1, maximum=4096),
+		deterministic_enabled=bool(determinism.get("enabled", False)),
+		deterministic_seed=(
+			_as_int(determinism.get("seed"), default=0, minimum=-2147483648, maximum=2147483647)
+			if determinism.get("seed") is not None
+			else None
+		),
+		deterministic_stable_order=bool(determinism.get("stable_order", True)),
 		fallback_chain=[x for x in fallback if isinstance(x, dict)],
 	)
 

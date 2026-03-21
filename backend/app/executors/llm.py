@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import json
 import base64
 import os
@@ -371,6 +373,38 @@ async def exec_llm(
         raise ValueError(f"Unsupported llmKind: {kind}")
 
     request_policy = normalize_request_policy(llm_params)
+    if request_policy.deterministic_enabled:
+        if request_policy.deterministic_seed is not None and llm_params.seed is None:
+            llm_params = llm_params.model_copy(update={"seed": int(request_policy.deterministic_seed)})
+        if request_policy.deterministic_stable_order:
+            serialized_media = sorted(
+                list(serialized_media),
+                key=lambda m: (
+                    str(m.get("type") or ""),
+                    str(m.get("mimeType") or ""),
+                    str(m.get("dataUrl") or ""),
+                ),
+            )
+        fingerprint_payload = {
+            "llmKind": llm_kind,
+            "model": llm_params.model,
+            "seed": llm_params.seed,
+            "inputItems": serialized_inputs,
+            "inputMedia": serialized_media,
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        await context.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": f"MODEL_DETERMINISM: hash={fingerprint} seed={llm_params.seed}",
+                "nodeId": node["id"],
+            }
+        )
     chain = [{"llm_kind": llm_kind, "params": llm_params}]
     for fallback in request_policy.fallback_chain:
         kind = str(fallback.get("llm_kind") or fallback.get("llmKind") or llm_kind).strip().lower()
