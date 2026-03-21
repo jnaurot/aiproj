@@ -1,0 +1,194 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Protocol
+
+from app.runner.schemas import LLMParams
+
+
+@dataclass(frozen=True)
+class AdapterPreparedRequest:
+	provider: str
+	base_url: str
+	url: str
+	output_mode: str
+	headers: Dict[str, str]
+	payload: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AdapterParsedResponse:
+	data: str
+	mime_type: str
+	file_type: str
+	file_suffix: str
+
+
+class ModelProviderAdapter(Protocol):
+	def prepare_request(
+		self,
+		params: LLMParams,
+		upstream_text: str,
+		input_items: Optional[List[str]] = None,
+	) -> AdapterPreparedRequest: ...
+
+	def parse_response(self, output_mode: str, raw_data: str) -> AdapterParsedResponse: ...
+
+	def normalize_error(self, error: Exception) -> str: ...
+
+
+def resolve_output_mode(params: LLMParams) -> str:
+	if isinstance(params.embedding_contract, dict) and params.embedding_contract:
+		return "embeddings"
+	if isinstance(params.output_schema, dict):
+		return "json"
+	return "text"
+
+
+def build_messages(params: LLMParams, upstream_text: str) -> List[Dict[str, str]]:
+	user_prompt = params.user_prompt or "Summarize the input data."
+	if "{input}" in user_prompt:
+		user_content = user_prompt.replace("{input}", upstream_text)
+	else:
+		user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
+	messages: List[Dict[str, str]] = []
+	if params.system_prompt:
+		messages.append({"role": "system", "content": params.system_prompt})
+	messages.append({"role": "user", "content": user_content})
+	return messages
+
+
+class OpenAICompatAdapter:
+	provider = "openai_compat"
+
+	def prepare_request(
+		self,
+		params: LLMParams,
+		upstream_text: str,
+		input_items: Optional[List[str]] = None,
+	) -> AdapterPreparedRequest:
+		base_url = (params.base_url or "").rstrip("/")
+		if not base_url:
+			raise ValueError("OpenAI-compatible adapter requires base_url")
+		output_mode = resolve_output_mode(params)
+		headers: Dict[str, str] = {"Content-Type": "application/json"}
+		payload: Dict[str, Any]
+		url = f"{base_url}/v1/chat/completions"
+		if output_mode == "embeddings":
+			url = f"{base_url}/v1/embeddings"
+			payload = {
+				"model": params.model,
+				"input": input_items if (input_items and len(input_items) > 1) else (input_items[0] if input_items else upstream_text),
+			}
+		else:
+			payload = {
+				"model": params.model,
+				"messages": build_messages(params, upstream_text),
+				"temperature": params.temperature,
+				"max_tokens": params.max_tokens,
+				"stream": True,
+			}
+			if params.top_p is not None:
+				payload["top_p"] = params.top_p
+			if params.seed is not None:
+				payload["seed"] = params.seed
+			if params.stop_sequences:
+				payload["stop"] = params.stop_sequences
+			if params.presence_penalty is not None:
+				payload["presence_penalty"] = params.presence_penalty
+			if params.frequency_penalty is not None:
+				payload["frequency_penalty"] = params.frequency_penalty
+			if output_mode == "json":
+				payload["response_format"] = {"type": "json_object"}
+		return AdapterPreparedRequest(
+			provider=self.provider,
+			base_url=base_url,
+			url=url,
+			output_mode=output_mode,
+			headers=headers,
+			payload=payload,
+		)
+
+	def parse_response(self, output_mode: str, raw_data: str) -> AdapterParsedResponse:
+		mode = str(output_mode or "text").strip().lower()
+		if mode == "json":
+			obj = json.loads(raw_data) if raw_data else None
+			data = json.dumps(obj, separators=(",", ":"), sort_keys=True)
+			return AdapterParsedResponse(data=data, mime_type="application/json", file_type="json", file_suffix="json")
+		if mode == "embeddings":
+			return AdapterParsedResponse(
+				data=raw_data,
+				mime_type="application/json",
+				file_type="json",
+				file_suffix="embeddings.json",
+			)
+		return AdapterParsedResponse(
+			data=raw_data,
+			mime_type="text/plain; charset=utf-8",
+			file_type="txt",
+			file_suffix="txt",
+		)
+
+	def normalize_error(self, error: Exception) -> str:
+		return f"openai_compat request failed: {str(error)}"
+
+
+class OllamaAdapter:
+	provider = "ollama"
+
+	def prepare_request(
+		self,
+		params: LLMParams,
+		upstream_text: str,
+		input_items: Optional[List[str]] = None,
+	) -> AdapterPreparedRequest:
+		base_url = (params.base_url or "").rstrip("/")
+		if not base_url:
+			raise ValueError("Ollama adapter requires base_url")
+		output_mode = resolve_output_mode(params)
+		thinking_mode = "none"
+		if params.thinking and params.thinking.enabled:
+			thinking_mode = params.thinking.mode
+		payload: Dict[str, Any] = {
+			"model": params.model,
+			"messages": build_messages(params, upstream_text),
+			"stream": True,
+			"think": thinking_mode in {"hidden", "visible"},
+			"options": {"temperature": params.temperature, "num_predict": params.max_tokens},
+		}
+		if params.top_p is not None:
+			payload["options"]["top_p"] = params.top_p
+		if params.seed is not None:
+			payload["options"]["seed"] = params.seed
+		if params.stop_sequences:
+			payload["options"]["stop"] = params.stop_sequences
+		if params.repeat_penalty is not None:
+			payload["options"]["repeat_penalty"] = params.repeat_penalty
+		if output_mode == "json":
+			payload["format"] = "json"
+		return AdapterPreparedRequest(
+			provider=self.provider,
+			base_url=base_url,
+			url=f"{base_url}/api/chat",
+			output_mode=output_mode,
+			headers={},
+			payload=payload,
+		)
+
+	def parse_response(self, output_mode: str, raw_data: str) -> AdapterParsedResponse:
+		mode = str(output_mode or "text").strip().lower()
+		if mode == "json":
+			obj = json.loads(raw_data) if raw_data else None
+			data = json.dumps(obj, separators=(",", ":"), sort_keys=True)
+			return AdapterParsedResponse(data=data, mime_type="application/json", file_type="json", file_suffix="json")
+		return AdapterParsedResponse(
+			data=raw_data,
+			mime_type="text/plain; charset=utf-8",
+			file_type="txt",
+			file_suffix="txt",
+		)
+
+	def normalize_error(self, error: Exception) -> str:
+		return f"ollama request failed: {str(error)}"
+

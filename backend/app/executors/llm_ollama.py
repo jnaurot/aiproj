@@ -13,6 +13,7 @@ from jsonschema import ValidationError
 from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
+from .model_adapters import OllamaAdapter
 
 # Adjust these imports to your actual paths/types
 from ..runner.schemas import LLMParams
@@ -31,13 +32,6 @@ def _sha256_json(obj: object) -> str:
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
-def _build_messages(params: LLMParams, user_content: str) -> List[Dict[str, str]]:
-    msgs: List[Dict[str, str]] = []
-    if params.system_prompt:
-        msgs.append({"role": "system", "content": params.system_prompt})
-    msgs.append({"role": "user", "content": user_content})
-    return msgs
 
 def _content_to_text(value: Any) -> str:
     if isinstance(value, str):
@@ -183,21 +177,6 @@ def _render_user_prompt(params: LLMParams, input_metadata: Optional[FileMetadata
         return prompt.replace("{input}", input_text)
     return prompt
 
-def _compose_user_content(user_prompt: str, upstream_text: str) -> str:
-    prompt = user_prompt or "Summarize the input data."
-    if "{input}" in prompt:
-        return prompt.replace("{input}", upstream_text)
-    return f"{prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
-
-
-def _resolved_output_mode(params: LLMParams) -> str:
-    if isinstance(params.embedding_contract, dict) and params.embedding_contract:
-        return "embeddings"
-    if isinstance(params.output_schema, dict):
-        return "json"
-    return "text"
-
-
 async def exec_llm_ollama(
     run_id: str,
     node: Dict[str, Any],
@@ -249,56 +228,23 @@ async def exec_llm_ollama(
     print("TEXT: ",text)
     print("[llm] upstream_ids:", upstream_artifact_ids, "len:", len(text))
 
-    base_url = (params.base_url or "").rstrip("/")
+    adapter = OllamaAdapter()
     thinking_mode = "none"
     if params.thinking and params.thinking.enabled:
         thinking_mode = params.thinking.mode
-    if not base_url:
+    try:
+        prepared = adapter.prepare_request(params, text, input_items=input_items)
+    except Exception as e:
         return NodeOutput(
             status="failed",
             metadata=None,
-            execution_time_ms=0.0,
-            error="Ollama requires base_url (e.g., http://localhost:11434)",
+            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+            error=adapter.normalize_error(e),
         )
-
-    # Build messages from system_prompt + rendered user_prompt
-    # user_prompt = params.user_prompt or "Summarize the input data."
-    # if "{input}" in user_prompt:
-    #     user_content = user_prompt.replace("{input}", text)
-    # else:
-    #     user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{text}"
-    # messages = _build_messages(params, user_content)
-    user_prompt = params.user_prompt or "Summarize the input data."
-    user_content = _compose_user_content(user_prompt, text)
-    messages = _build_messages(params, user_content)
-
-
-
-    # Ollama API payload
-    output_mode = _resolved_output_mode(params)
-    payload: Dict[str, Any] = {
-        "model": params.model,
-        "messages": messages,
-        "stream": True,
-        "think": thinking_mode in {"hidden", "visible"},
-        "options": {
-            "temperature": params.temperature,
-            "num_predict": params.max_tokens,
-        },
-    }
-    if params.top_p is not None:
-        payload["options"]["top_p"] = params.top_p
-    if params.seed is not None:
-        payload["options"]["seed"] = params.seed
-    if params.stop_sequences:
-        payload["options"]["stop"] = params.stop_sequences
-    if params.repeat_penalty is not None:
-        payload["options"]["repeat_penalty"] = params.repeat_penalty
-
-    # Structured output (Ollama supports `format: "json"` for JSON mode)
-    if output_mode == "json":
-        payload["format"] = "json"
-    elif output_mode == "embeddings":
+    base_url = prepared.base_url
+    output_mode = prepared.output_mode
+    payload = dict(prepared.payload)
+    if output_mode == "embeddings":
         return NodeOutput(
             status="failed",
             metadata=None,
@@ -317,7 +263,7 @@ async def exec_llm_ollama(
         }
     )
 
-    url = f"{base_url}/api/chat"
+    url = prepared.url
 
     # Retry loop (simple exponential backoff)
     attempt = 0
@@ -477,7 +423,6 @@ async def exec_llm_ollama(
                     error="Ollama returned empty output content",
                 )
 
-            mime_type = "text/plain; charset=utf-8"
             if output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
@@ -509,12 +454,11 @@ async def exec_llm_ollama(
                             error=f"LLM strict JSON schema validation failed: {e.message}",
                         )
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
-                file_type = "json"
-                mime_type = "application/json"
-            else: # text
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
-                file_type = "txt"
+            parsed = adapter.parse_response(output_mode, data or "")
+            data = parsed.data
+            file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.{parsed.file_suffix}"
+            file_type = parsed.file_type
+            mime_type = parsed.mime_type
                 
             content_hash = _sha256_text(data or "")
             payload_bytes = (data or "").encode("utf-8")
@@ -571,7 +515,7 @@ async def exec_llm_ollama(
                     status="failed",
                     metadata=None,
                     execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                    error=f"Ollama request failed: {last_err}",
+                    error=adapter.normalize_error(e),
                 )
 
             # exponential backoff, capped

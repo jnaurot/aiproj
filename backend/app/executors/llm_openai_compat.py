@@ -11,6 +11,7 @@ from jsonschema import ValidationError
 from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
+from .model_adapters import OpenAICompatAdapter
 from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from ..runner.schemas import LLMParams
 
@@ -51,20 +52,6 @@ def _resolve_api_key(params: LLMParams) -> Optional[str]:
     return ref
 
 
-def _build_messages(params: LLMParams, upstream_text: str) -> List[Dict[str, str]]:
-    user_prompt = params.user_prompt or "Summarize the input data."
-    if "{input}" in user_prompt:
-        user_content = user_prompt.replace("{input}", upstream_text)
-    else:
-        user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
-
-    messages: List[Dict[str, str]] = []
-    if params.system_prompt:
-        messages.append({"role": "system", "content": params.system_prompt})
-    messages.append({"role": "user", "content": user_content})
-    return messages
-
-
 def _extract_chat_content(obj: Dict[str, Any]) -> str:
     choices = obj.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -82,14 +69,6 @@ def _extract_chat_content(obj: Dict[str, Any]) -> str:
         return txt
 
     return ""
-
-
-def _resolved_output_mode(params: LLMParams) -> str:
-    if isinstance(params.embedding_contract, dict) and params.embedding_contract:
-        return "embeddings"
-    if isinstance(params.output_schema, dict):
-        return "json"
-    return "text"
 
 
 async def exec_llm_openai_compat(
@@ -129,41 +108,23 @@ async def exec_llm_openai_compat(
 
     upstream_text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
     input_items = input_items or ([upstream_text] if upstream_text else [])
-    base_url = (params.base_url or "").rstrip("/")
-    if not base_url:
+    adapter = OpenAICompatAdapter()
+    try:
+        prepared = adapter.prepare_request(params, upstream_text, input_items=input_items)
+    except Exception as e:
         return NodeOutput(
             status="failed",
             metadata=None,
             execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-            error="OpenAI-compatible executor requires base_url",
+            error=adapter.normalize_error(e),
         )
-
+    base_url = prepared.base_url
+    output_mode = prepared.output_mode
+    payload = dict(prepared.payload)
+    headers = dict(prepared.headers)
     api_key = _resolve_api_key(params)
-    headers: Dict[str, str] = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-
-    payload: Dict[str, Any] = {
-        "model": params.model,
-        "messages": _build_messages(params, upstream_text),
-        "temperature": params.temperature,
-        "max_tokens": params.max_tokens,
-        "stream": True,
-    }
-    output_mode = _resolved_output_mode(params)
-
-    if params.top_p is not None:
-        payload["top_p"] = params.top_p
-    if params.seed is not None:
-        payload["seed"] = params.seed
-    if params.stop_sequences:
-        payload["stop"] = params.stop_sequences
-    if params.presence_penalty is not None:
-        payload["presence_penalty"] = params.presence_penalty
-    if params.frequency_penalty is not None:
-        payload["frequency_penalty"] = params.frequency_penalty
-    if output_mode == "json":
-        payload["response_format"] = {"type": "json_object"}
 
     await context.bus.emit(
         {
@@ -176,9 +137,7 @@ async def exec_llm_openai_compat(
         }
     )
 
-    url = f"{base_url}/v1/chat/completions"
-    if output_mode == "embeddings":
-        url = f"{base_url}/v1/embeddings"
+    url = prepared.url
     attempt = 0
     last_err: Optional[str] = None
 
@@ -319,10 +278,6 @@ async def exec_llm_openai_compat(
                         obj = resp.json()
                     data = _extract_chat_content(obj).strip()
 
-            mime_type = "text/plain; charset=utf-8"
-            file_type = "txt"
-            file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.txt"
-
             if output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
@@ -355,13 +310,11 @@ async def exec_llm_openai_compat(
                         )
 
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
-                mime_type = "application/json"
-                file_type = "json"
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.json"
-            elif output_mode == "embeddings":
-                mime_type = "application/json"
-                file_type = "json"
-                file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.embeddings.json"
+            parsed = adapter.parse_response(output_mode, data or "")
+            data = parsed.data
+            mime_type = parsed.mime_type
+            file_type = parsed.file_type
+            file_path = f"memory://runs/{run_id}/nodes/{node_id}/llm_output.{parsed.file_suffix}"
 
             payload_bytes = (data or "").encode("utf-8")
             content_hash = _sha256_text(data or "")
@@ -410,7 +363,7 @@ async def exec_llm_openai_compat(
                     status="failed",
                     metadata=None,
                     execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                    error=f"openai_compat request failed: {last_err}",
+                    error=adapter.normalize_error(e),
                 )
 
             backoff = min(2.0 ** (attempt - 1), 8.0)
