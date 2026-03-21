@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	SourceNodeDataSchema,
+	SourceFileParamsSchema,
 	SourceObjectStoreParamsSchema,
 	SourceWarehouseParamsSchema
 } from '$lib/flow/schema/source';
@@ -68,5 +69,27 @@ describe('source kinds schema coverage', () => {
 	it('exposes defaults for new source kinds', () => {
 		expect(defaultSourceParamsByKind.object_store.provider).toBeDefined();
 		expect(defaultSourceParamsByKind.warehouse.provider).toBeDefined();
+	});
+
+	it('parses csv dialect and locale controls', () => {
+		const parsed = SourceFileParamsSchema.parse({
+			rel_path: '.',
+			filename: 'data.csv',
+			file_format: 'csv',
+			delimiter: ';',
+			has_header: true,
+			quote_char: '"',
+			escape_char: '\\',
+			malformed_row_policy: 'warn',
+			decimal_separator: ',',
+			thousands_separator: '.',
+			date_columns: ['created_at'],
+			date_format: '%d.%m.%Y'
+		});
+		expect(parsed.quote_char).toBe('"');
+		expect(parsed.escape_char).toBe('\\');
+		expect(parsed.malformed_row_policy).toBe('warn');
+		expect(parsed.decimal_separator).toBe(',');
+		expect(parsed.date_columns).toEqual(['created_at']);
 	});
 });

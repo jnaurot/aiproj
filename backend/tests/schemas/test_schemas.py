@@ -337,6 +337,28 @@ class TestSourceFileParams:
         }
         source_params = SourceFileParams.model_validate(params)
         assert source_params.has_header is False
+
+    def test_csv_dialect_and_locale_fields(self):
+        params = {
+            "rel_path": ".",
+            "filename": "data.csv",
+            "file_format": "csv",
+            "quote_char": "\"",
+            "escape_char": "\\",
+            "malformed_row_policy": "warn",
+            "decimal_separator": ",",
+            "thousands_separator": ".",
+            "date_columns": ["d"],
+            "date_format": "%d.%m.%Y",
+        }
+        source_params = SourceFileParams.model_validate(params)
+        assert source_params.quote_char == "\""
+        assert source_params.escape_char == "\\"
+        assert source_params.malformed_row_policy == "warn"
+        assert source_params.decimal_separator == ","
+        assert source_params.thousands_separator == "."
+        assert source_params.date_columns == ["d"]
+        assert source_params.date_format == "%d.%m.%Y"
     
     def test_valid_file_formats(self):
         """Test all valid file formats"""
@@ -689,6 +711,29 @@ class TestNormalizeSourceParamsFrontend:
             }
         )
         assert out["has_header"] is True
+
+    def test_file_csv_dialect_and_locale_camel_case_are_normalized(self):
+        out = normalize_source_params_frontend(
+            {
+                "source_type": "file",
+                "filename": "data.csv",
+                "file_format": "csv",
+                "quoteChar": "\"",
+                "escapeChar": "\\",
+                "malformedRowPolicy": "skip",
+                "decimalSeparator": ",",
+                "thousandsSeparator": ".",
+                "dateColumns": ["created_at"],
+                "dateFormat": "%d.%m.%Y",
+            }
+        )
+        assert out["quote_char"] == "\""
+        assert out["escape_char"] == "\\"
+        assert out["malformed_row_policy"] == "skip"
+        assert out["decimal_separator"] == ","
+        assert out["thousands_separator"] == "."
+        assert out["date_columns"] == ["created_at"]
+        assert out["date_format"] == "%d.%m.%Y"
 
 
 class TestFilterTransformParams:

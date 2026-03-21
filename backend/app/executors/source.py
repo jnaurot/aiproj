@@ -191,6 +191,36 @@ def _detect_csv_has_header(
     return True
 
 
+def _count_malformed_csv_rows(
+    *,
+    file_bytes: Optional[bytes],
+    file_path: Optional[Path],
+    encoding: str,
+    delimiter: str,
+    has_header: bool,
+) -> Optional[int]:
+    sample_text = _csv_sample_text(file_bytes, file_path, encoding, max_bytes=5 * 1024 * 1024)
+    if not sample_text.strip():
+        return 0
+    try:
+        rows = list(csv.reader(sample_text.splitlines(), delimiter=delimiter))
+    except Exception:
+        return None
+    rows = [row for row in rows if row]
+    if not rows:
+        return 0
+    start_idx = 1 if has_header and len(rows) > 1 else 0
+    reference_idx = 0 if not has_header else 0
+    expected_cols = len(rows[reference_idx]) if rows[reference_idx] else 0
+    if expected_cols <= 0:
+        return None
+    malformed = 0
+    for row in rows[start_idx:]:
+        if len(row) != expected_cols:
+            malformed += 1
+    return malformed
+
+
 def _canonical_table_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -1241,6 +1271,7 @@ async def _handle_file_source(
 
     if schema.file_format in {"csv", "tsv"}:
         delimiter = schema.delimiter or ("\t" if schema.file_format == "tsv" else ",")
+        malformed_policy = str(getattr(schema, "malformed_row_policy", "fail")).strip().lower()
         csv_has_header = _detect_csv_has_header(
             file_bytes=file_bytes,
             file_path=file_path,
@@ -1249,16 +1280,58 @@ async def _handle_file_source(
             explicit=getattr(schema, "has_header", None),
         )
         csv_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+        on_bad_lines = "error"
+        if malformed_policy == "skip":
+            on_bad_lines = "skip"
+        elif malformed_policy == "warn":
+            on_bad_lines = "warn"
+        quote_char = str(getattr(schema, "quote_char", "") or "").strip()
+        escape_char = str(getattr(schema, "escape_char", "") or "").strip()
+        thousands_separator = str(getattr(schema, "thousands_separator", "") or "").strip()
+        date_columns = [str(c).strip() for c in (getattr(schema, "date_columns", []) or []) if str(c).strip()]
         df = pd.read_csv(
             csv_input,
             delimiter=delimiter,
             encoding=schema.encoding,
             header=0 if csv_has_header else None,
+            quotechar=(quote_char if quote_char else "\""),
+            escapechar=(escape_char if escape_char else None),
+            on_bad_lines=on_bad_lines,
+            decimal=str(getattr(schema, "decimal_separator", ".") or "."),
+            thousands=(thousands_separator if thousands_separator else None),
+            parse_dates=date_columns if len(date_columns) > 0 else False,
         )
+        if date_columns and str(getattr(schema, "date_format", "") or "").strip():
+            fmt = str(getattr(schema, "date_format") or "").strip()
+            for col in date_columns:
+                if col in df.columns:
+                    try:
+                        df[col] = pd.to_datetime(df[col], format=fmt, errors="coerce")
+                    except Exception:
+                        pass
         if not csv_has_header:
             df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
         rows = df.to_dict(orient="records")
         table_columns = _infer_table_columns_from_dataframe(df)
+        if malformed_policy == "warn":
+            malformed_rows = _count_malformed_csv_rows(
+                file_bytes=file_bytes,
+                file_path=file_path,
+                encoding=schema.encoding,
+                delimiter=delimiter,
+                has_header=bool(csv_has_header),
+            )
+            if isinstance(malformed_rows, int) and malformed_rows > 0:
+                await bus.emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": _iso_now(),
+                        "level": "warning",
+                        "message": f"CSV parser skipped {malformed_rows} malformed row(s) due to malformed_row_policy=warn",
+                        "nodeId": node_id,
+                    }
+                )
     elif schema.file_format == "parquet":
         parquet_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         df = pq.read_table(parquet_input).to_pandas()
@@ -1360,6 +1433,18 @@ async def _handle_file_source(
         schema_extra={
             "file_format": schema.file_format,
             **({"header_detected": csv_has_header} if schema.file_format in {"csv", "tsv"} else {}),
+            **(
+                {
+                    "csv_dialect": {
+                        "delimiter": delimiter,
+                        "quote_char": (quote_char if quote_char else "\""),
+                        "escape_char": (escape_char if escape_char else None),
+                        "malformed_row_policy": str(getattr(schema, "malformed_row_policy", "fail")),
+                    }
+                }
+                if schema.file_format in {"csv", "tsv"}
+                else {}
+            ),
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
         },

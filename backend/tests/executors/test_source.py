@@ -20,6 +20,18 @@ def _ctx():
 	)
 
 
+def _ctx_with_events(events: list[dict]):
+	async def _emit(event):
+		events.append(event)
+		return None
+
+	return SimpleNamespace(
+		bus=SimpleNamespace(emit=_emit),
+		artifact_store=SimpleNamespace(),
+		graph_id="graph_test",
+	)
+
+
 @pytest.mark.asyncio
 async def test_source_file_csv_success(tmp_path):
 	file_path = tmp_path / "data.csv"
@@ -90,6 +102,122 @@ async def test_source_file_csv_auto_detects_header_row(tmp_path):
 	assert len(result.data) == 2
 	assert set(result.data[0].keys()) == {"name", "age"}
 	assert (result.metadata.data_schema or {}).get("header_detected") is True
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_malformed_row_policy_fail(tmp_path):
+	file_path = tmp_path / "bad_rows.csv"
+	file_path.write_text("id,name\n1,alice\n2,bob,extra\n3,charlie\n", encoding="utf-8")
+	node = {
+		"id": "n_source_bad_rows_fail",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"malformed_row_policy": "fail",
+			}
+		},
+	}
+	result = await exec_source("run_bad_rows_fail", node, _ctx())
+	assert result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_malformed_row_policy_skip(tmp_path):
+	file_path = tmp_path / "bad_rows_skip.csv"
+	file_path.write_text("id,name\n1,alice\n2,bob,extra\n3,charlie\n", encoding="utf-8")
+	node = {
+		"id": "n_source_bad_rows_skip",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"malformed_row_policy": "skip",
+			}
+		},
+	}
+	result = await exec_source("run_bad_rows_skip", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_malformed_row_policy_warn_emits_warning_log(tmp_path):
+	file_path = tmp_path / "bad_rows_warn.csv"
+	file_path.write_text("id,name\n1,alice\n2,bob,extra\n3,charlie\n", encoding="utf-8")
+	events: list[dict] = []
+	node = {
+		"id": "n_source_bad_rows_warn",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"malformed_row_policy": "warn",
+			}
+		},
+	}
+	result = await exec_source("run_bad_rows_warn", node, _ctx_with_events(events))
+	assert result.status == "succeeded"
+	warnings = [e for e in events if str(e.get("type")) == "log" and str(e.get("level")) == "warning"]
+	assert any("malformed_row_policy=warn" in str(e.get("message")) for e in warnings)
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_quote_and_escape_chars_are_honored(tmp_path):
+	file_path = tmp_path / "quoted.csv"
+	file_path.write_text('id,text\n1,"hello, world"\n2,"he said \\"hi\\""\n', encoding="utf-8")
+	node = {
+		"id": "n_source_quote_escape",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"quote_char": '"',
+				"escape_char": "\\",
+			}
+		},
+	}
+	result = await exec_source("run_quote_escape", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert result.data[0]["text"] == "hello, world"
+	assert result.data[1]["text"] == 'he said "hi"'
+
+
+@pytest.mark.asyncio
+async def test_source_file_csv_locale_decimal_and_date_parsing(tmp_path):
+	file_path = tmp_path / "locale.csv"
+	file_path.write_text("d;amount\n31.12.2025;1,23\n", encoding="utf-8")
+	node = {
+		"id": "n_source_locale",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "csv",
+				"output_mode": "table",
+				"delimiter": ";",
+				"decimal_separator": ",",
+				"date_columns": ["d"],
+				"date_format": "%d.%m.%Y",
+			}
+		},
+	}
+	result = await exec_source("run_locale_csv", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 1
+	assert "d" in result.data[0]
+	assert "amount" in result.data[0]
 
 
 @pytest.mark.asyncio

@@ -91,6 +91,20 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["snapshot_metadata"] = p.pop("snapshotMetadata")
     if "hasHeader" in p and "has_header" not in p:
         p["has_header"] = p.pop("hasHeader")
+    if "quoteChar" in p and "quote_char" not in p:
+        p["quote_char"] = p.pop("quoteChar")
+    if "escapeChar" in p and "escape_char" not in p:
+        p["escape_char"] = p.pop("escapeChar")
+    if "malformedRowPolicy" in p and "malformed_row_policy" not in p:
+        p["malformed_row_policy"] = p.pop("malformedRowPolicy")
+    if "decimalSeparator" in p and "decimal_separator" not in p:
+        p["decimal_separator"] = p.pop("decimalSeparator")
+    if "thousandsSeparator" in p and "thousands_separator" not in p:
+        p["thousands_separator"] = p.pop("thousandsSeparator")
+    if "dateColumns" in p and "date_columns" not in p:
+        p["date_columns"] = p.pop("dateColumns")
+    if "dateFormat" in p and "date_format" not in p:
+        p["date_format"] = p.pop("dateFormat")
     if "rootId" in p and "rel_path" not in p:
         p["rel_path"] = p.pop("rootId")
     if "relPath" in p and "filename" not in p:
@@ -329,6 +343,13 @@ class SourceFileParams(NodeParamSchema):
     ] = "csv"
     delimiter: Optional[str] = None  # for CSV
     has_header: Optional[bool] = None
+    quote_char: Optional[str] = None
+    escape_char: Optional[str] = None
+    malformed_row_policy: Literal["fail", "skip", "warn"] = "fail"
+    decimal_separator: Literal[".", ","] = "."
+    thousands_separator: Optional[str] = None
+    date_columns: List[str] = Field(default_factory=list)
+    date_format: Optional[str] = None
     sheet_name: Optional[str] = None  # for Excel
     encoding: str = "utf-8"
     cache_enabled: bool = True
@@ -366,6 +387,12 @@ class SourceFileParams(NodeParamSchema):
         if self.file_format == "csv" and self.delimiter is None:
             # Auto-detect or use default
             pass
+        if self.quote_char is not None and len(str(self.quote_char)) != 1:
+            errors.append("quote_char must be a single character")
+        if self.escape_char is not None and len(str(self.escape_char)) != 1:
+            errors.append("escape_char must be a single character")
+        if self.thousands_separator is not None and len(str(self.thousands_separator)) > 1:
+            errors.append("thousands_separator must be a single character")
         return errors
 
 class SourceDatabaseParams(NodeParamSchema):

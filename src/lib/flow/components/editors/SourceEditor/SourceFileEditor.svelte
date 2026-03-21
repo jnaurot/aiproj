@@ -87,6 +87,18 @@
 	$: delimiter = asString(params?.delimiter, file_format === 'tsv' ? '\t' : ',');
 	$: delimiterDisplay = delimiter === '\t' ? '\\t' : delimiter;
 	$: hasHeaderMode = params?.has_header === true ? 'yes' : params?.has_header === false ? 'no' : 'auto';
+	$: quoteChar = asString((params as any)?.quote_char, '"');
+	$: escapeChar = asString((params as any)?.escape_char, '\\');
+	$: malformedRowPolicy = asString((params as any)?.malformed_row_policy, 'fail');
+	$: decimalSeparator = asString((params as any)?.decimal_separator, '.');
+	$: thousandsSeparator = asString((params as any)?.thousands_separator, '');
+	$: dateColumnsText = Array.isArray((params as any)?.date_columns)
+		? ((params as any).date_columns as unknown[])
+				.map((value) => asString(value, '').trim())
+				.filter((value) => value.length > 0)
+				.join(', ')
+		: '';
+	$: dateFormat = asString((params as any)?.date_format, '');
 	$: sheet_name = asString(params?.sheet_name, '');
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
@@ -180,6 +192,13 @@
 		if (next === 'csv' || next === 'tsv') {
 			patch.delimiter = next === 'tsv' ? '\t' : ',';
 			patch.has_header = params?.has_header;
+			patch.quote_char = asString((params as any)?.quote_char, '"');
+			patch.escape_char = asString((params as any)?.escape_char, '\\');
+			patch.malformed_row_policy = asString((params as any)?.malformed_row_policy, 'fail') as any;
+			patch.decimal_separator = (asString((params as any)?.decimal_separator, '.') as '.' | ',') ?? '.';
+			patch.thousands_separator = asString((params as any)?.thousands_separator, '') || undefined;
+			patch.date_columns = Array.isArray((params as any)?.date_columns) ? ((params as any)?.date_columns as string[]) : [];
+			patch.date_format = asString((params as any)?.date_format, '') || undefined;
 			patch.sheet_name = undefined;
 			const currentMode = asString((params as any)?.output?.mode, '').trim().toLowerCase();
 			// Auto-switch to table for csv/tsv unless user already selected a non-text mode.
@@ -477,6 +496,87 @@
 					<option value="yes">yes</option>
 					<option value="no">no</option>
 				</select>
+			</Field>
+			<Field label="quote character">
+				<Input
+					value={quoteChar}
+					placeholder={'"'}
+					onInput={(event) => draft({ quote_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+					onBlur={(event) => commit({ quote_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+				/>
+			</Field>
+			<Field label="escape character">
+				<Input
+					value={escapeChar}
+					placeholder={'\\'}
+					onInput={(event) => draft({ escape_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+					onBlur={(event) => commit({ escape_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+				/>
+			</Field>
+			<Field label="malformed row policy">
+				<select
+					class="full"
+					value={malformedRowPolicy}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value as 'fail' | 'skip' | 'warn';
+						draft({ malformed_row_policy: value as any });
+						commit({ malformed_row_policy: value as any });
+					}}
+				>
+					<option value="fail">fail</option>
+					<option value="skip">skip</option>
+					<option value="warn">warn</option>
+				</select>
+			</Field>
+			<Field label="decimal separator">
+				<select
+					class="full"
+					value={decimalSeparator}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value as '.' | ',';
+						draft({ decimal_separator: value as any });
+						commit({ decimal_separator: value as any });
+					}}
+				>
+					<option value=".">.</option>
+					<option value=",">,</option>
+				</select>
+			</Field>
+			<Field label="thousands separator">
+				<Input
+					value={thousandsSeparator}
+					placeholder=","
+					onInput={(event) => draft({ thousands_separator: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+					onBlur={(event) => commit({ thousands_separator: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+				/>
+			</Field>
+			<Field label="date columns (comma-separated)">
+				<Input
+					value={dateColumnsText}
+					placeholder="date,created_at"
+					onInput={(event) => {
+						const values = (event.currentTarget as HTMLInputElement).value
+							.split(',')
+							.map((v) => v.trim())
+							.filter((v) => v.length > 0);
+						draft({ date_columns: values as any });
+					}}
+					onBlur={(event) => {
+						const values = (event.currentTarget as HTMLInputElement).value
+							.split(',')
+							.map((v) => v.trim())
+							.filter((v) => v.length > 0);
+						commit({ date_columns: values as any });
+					}}
+				/>
+			</Field>
+			<Field label="date format">
+				<Input
+					value={dateFormat}
+					placeholder="%Y-%m-%d"
+					onInput={(event) => draft({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
+					onBlur={(event) => commit({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
+				/>
 			</Field>
 		{/if}
 
