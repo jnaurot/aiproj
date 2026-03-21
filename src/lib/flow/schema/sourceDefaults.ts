@@ -20,6 +20,10 @@ export const defaultSourceDatabaseParams: SourceDatabaseParams = {
     connection_ref: "conn:default",
     table_name: "my_table",
     limit: 1000,
+    incremental: {
+		enabled: false,
+		cursor_type: "auto"
+	},
     output: { mode: "table" },
 };
 
@@ -37,6 +41,19 @@ export const defaultSourceAPIParams: SourceAPIParams = {
 	auth_type: "none",
 	auth_token_ref: undefined,
 	timeout_seconds: 30,
+	incremental: {
+		enabled: false,
+		cursor_type: "auto"
+	},
+	retry: {
+		max_attempts: 1,
+		backoff_seconds: 0.25,
+		jitter_seconds: 0.05,
+		retry_on_status: [429, 500, 502, 503, 504]
+	},
+	rate_limit: {
+		burst: 1
+	},
 	cache_policy: { mode: "default" },
 	output: { mode: "json" }
 };

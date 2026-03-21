@@ -67,6 +67,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(raw or {})
+    if "connectionRef" in p and "connection_ref" not in p:
+        p["connection_ref"] = p.pop("connectionRef")
     p.pop("sample_size", None)
     p.pop("sampleSize", None)
     if "snapshotId" in p and "snapshot_id" not in p:
@@ -119,6 +121,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["body_form"] = p.pop("bodyForm")
     if "bodyRaw" in p and "body_raw" not in p:
         p["body_raw"] = p.pop("bodyRaw")
+    if "incrementalConfig" in p and "incremental" not in p:
+        p["incremental"] = p.pop("incrementalConfig")
+    if "retryPolicy" in p and "retry" not in p:
+        p["retry"] = p.pop("retryPolicy")
+    if "rateLimit" in p and "rate_limit" not in p:
+        p["rate_limit"] = p.pop("rateLimit")
     if "__managedHeaders" in p and "managed_headers" not in p:
         p["managed_headers"] = p.pop("__managedHeaders")
     if isinstance(p.get("body"), dict):
@@ -148,6 +156,32 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     cache_policy = p.get("cache_policy")
     if isinstance(cache_policy, dict) and "ttlSeconds" in cache_policy and "ttl_seconds" not in cache_policy:
         cache_policy["ttl_seconds"] = cache_policy.pop("ttlSeconds")
+    retry = p.get("retry")
+    if isinstance(retry, dict):
+        if "maxAttempts" in retry and "max_attempts" not in retry:
+            retry["max_attempts"] = retry.pop("maxAttempts")
+        if "backoffSeconds" in retry and "backoff_seconds" not in retry:
+            retry["backoff_seconds"] = retry.pop("backoffSeconds")
+        if "jitterSeconds" in retry and "jitter_seconds" not in retry:
+            retry["jitter_seconds"] = retry.pop("jitterSeconds")
+        if "retryOnStatus" in retry and "retry_on_status" not in retry:
+            retry["retry_on_status"] = retry.pop("retryOnStatus")
+    rate_limit = p.get("rate_limit")
+    if isinstance(rate_limit, dict):
+        if "rpsLimit" in rate_limit and "rps" not in rate_limit:
+            rate_limit["rps"] = rate_limit.pop("rpsLimit")
+    incremental = p.get("incremental")
+    if isinstance(incremental, dict):
+        if "stateKey" in incremental and "state_key" not in incremental:
+            incremental["state_key"] = incremental.pop("stateKey")
+        if "cursorColumn" in incremental and "cursor_column" not in incremental:
+            incremental["cursor_column"] = incremental.pop("cursorColumn")
+        if "cursorType" in incremental and "cursor_type" not in incremental:
+            incremental["cursor_type"] = incremental.pop("cursorType")
+        if "windowStart" in incremental and "window_start" not in incremental:
+            incremental["window_start"] = incremental.pop("windowStart")
+        if "windowEnd" in incremental and "window_end" not in incremental:
+            incremental["window_end"] = incremental.pop("windowEnd")
     return p
 
 
@@ -276,6 +310,7 @@ class SourceDatabaseParams(NodeParamSchema):
     query: Optional[str] = None
     table_name: Optional[str] = None
     limit: Optional[int] = None
+    incremental: Dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "cursor_type": "auto"})
     output_mode: Literal["table", "text", "json", "binary"] = "table"
     output_schema: Optional[Dict[str, Any]] = None
     
@@ -310,6 +345,16 @@ class SourceAPIParams(NodeParamSchema):
     auth_type: Literal["none", "bearer", "basic", "api_key"] = "none"
     auth_token_ref: Optional[str] = None
     timeout_seconds: int = 30
+    incremental: Dict[str, Any] = Field(default_factory=lambda: {"enabled": False, "cursor_type": "auto"})
+    retry: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "max_attempts": 1,
+            "backoff_seconds": 0.25,
+            "jitter_seconds": 0.05,
+            "retry_on_status": [429, 500, 502, 503, 504],
+        }
+    )
+    rate_limit: Dict[str, Any] = Field(default_factory=lambda: {"burst": 1})
     cache_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "default"})
     output_mode: Literal["table", "text", "json", "binary"] = "json"
     output_schema: Optional[Dict[str, Any]] = None

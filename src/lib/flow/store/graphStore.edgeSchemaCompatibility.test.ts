@@ -33,6 +33,36 @@ describe('graphStore edge schema compatibility', () => {
 		expect(added.ok).toBe(true);
 	});
 
+	it('honors explicit source output mode over file_format fallback', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
+		const transformId = graphStore.addNode('transform', { x: 200, y: 0 });
+
+		const sourcePatch = graphStore.updateNodeConfig(sourceId, {
+			params: {
+				file_format: 'csv',
+				output: { mode: 'json' }
+			}
+		});
+		expect(sourcePatch.ok).toBe(true);
+
+		const transformPatch = graphStore.updateNodeConfig(transformId, {
+			params: {
+				op: 'json_to_table',
+				json_to_table: {}
+			}
+		});
+		expect(transformPatch.ok).toBe(true);
+
+		const added = graphStore.addEdge({
+			id: 'e_source_output_mode_override',
+			source: sourceId,
+			target: transformId,
+			data: { exec: 'idle' }
+		} as any);
+		expect(added.ok).toBe(true);
+	});
+
 	it('blocks adding edges when required columns are missing despite same port type', () => {
 		graphStore.hardResetGraph();
 		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });

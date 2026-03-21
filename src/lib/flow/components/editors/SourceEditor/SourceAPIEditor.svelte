@@ -73,6 +73,19 @@
 	$: outputMode = (asString(params?.output?.mode, 'json') as SourceOutputMode) ?? 'json';
 	$: cacheMode = asString(params?.cache_policy?.mode, 'default');
 	$: cacheTtl = asNumberOrEmpty(params?.cache_policy?.ttl_seconds);
+	$: retryMaxAttempts = asNumberOrEmpty(params?.retry?.max_attempts ?? 1);
+	$: retryBackoffSeconds = asNumberOrEmpty(params?.retry?.backoff_seconds ?? 0.25);
+	$: retryJitterSeconds = asNumberOrEmpty(params?.retry?.jitter_seconds ?? 0.05);
+	$: retryStatusesText = Array.isArray(params?.retry?.retry_on_status)
+		? (params?.retry?.retry_on_status ?? []).join(',')
+		: '429,500,502,503,504';
+	$: rateLimitRps = asNumberOrEmpty(params?.rate_limit?.rps);
+	$: rateLimitBurst = asNumberOrEmpty(params?.rate_limit?.burst ?? 1);
+	$: incrementalEnabled = Boolean(params?.incremental?.enabled ?? false);
+	$: incrementalCursorColumn = asString(params?.incremental?.cursor_column, '');
+	$: incrementalCursorType = asString(params?.incremental?.cursor_type, 'auto');
+	$: incrementalStateKey = asString(params?.incremental?.state_key, '');
+	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 
 	let headersDraft: Record<string, string> = headers;
 	let queryDraft: Record<string, string> = query;
@@ -174,6 +187,27 @@
 
 	function normalizeStringMap(next: Record<string, unknown>): Record<string, string> {
 		return Object.fromEntries(Object.entries(next ?? {}).map(([k, v]) => [k, String(v ?? '')]));
+	}
+
+	function parseOptionalFloat(value: string, min?: number): number | undefined {
+		const text = String(value ?? '').trim();
+		if (!text) return undefined;
+		const parsed = Number(text);
+		if (!Number.isFinite(parsed)) return undefined;
+		if (typeof min === 'number' && parsed < min) return undefined;
+		return parsed;
+	}
+
+	function parseRetryStatuses(value: string): number[] {
+		const out: number[] = [];
+		for (const part of String(value ?? '').split(',')) {
+			const t = part.trim();
+			if (!t) continue;
+			const parsed = Number(t);
+			if (!Number.isInteger(parsed) || parsed < 100 || parsed > 599) continue;
+			out.push(parsed);
+		}
+		return out.length > 0 ? Array.from(new Set(out)) : [429, 500, 502, 503, 504];
 	}
 
 	function makeEffectiveUrl(rawUrl: string, q: Record<string, string>): string {
@@ -417,6 +451,233 @@
 						commit({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
 				/>
 			</Field>
+
+			<Field label="retry.max_attempts">
+				<Input
+					type="number"
+					min="1"
+					step="1"
+					value={retryMaxAttempts}
+					onInput={(event) =>
+						draft({
+							retry: {
+								...(params?.retry ?? {}),
+								max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							retry: {
+								...(params?.retry ?? {}),
+								max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="retry.backoff_seconds">
+				<Input
+					type="number"
+					min="0"
+					step="0.01"
+					value={retryBackoffSeconds}
+					onInput={(event) =>
+						draft({
+							retry: {
+								...(params?.retry ?? {}),
+								backoff_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							retry: {
+								...(params?.retry ?? {}),
+								backoff_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="retry.jitter_seconds">
+				<Input
+					type="number"
+					min="0"
+					step="0.01"
+					value={retryJitterSeconds}
+					onInput={(event) =>
+						draft({
+							retry: {
+								...(params?.retry ?? {}),
+								jitter_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							retry: {
+								...(params?.retry ?? {}),
+								jitter_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="retry.retry_on_status">
+				<Input
+					value={retryStatusesText}
+					placeholder="429,500,502,503,504"
+					onInput={(event) =>
+						draft({
+							retry: {
+								...(params?.retry ?? {}),
+								retry_on_status: parseRetryStatuses((event.currentTarget as HTMLInputElement).value)
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							retry: {
+								...(params?.retry ?? {}),
+								retry_on_status: parseRetryStatuses((event.currentTarget as HTMLInputElement).value)
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="rate_limit.rps">
+				<Input
+					type="number"
+					min="0"
+					step="0.1"
+					value={rateLimitRps}
+					placeholder="optional requests/sec"
+					onInput={(event) =>
+						draft({
+							rate_limit: {
+								...(params?.rate_limit ?? {}),
+								rps: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							rate_limit: {
+								...(params?.rate_limit ?? {}),
+								rps: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="rate_limit.burst">
+				<Input
+					type="number"
+					min="1"
+					step="1"
+					value={rateLimitBurst}
+					onInput={(event) =>
+						draft({
+							rate_limit: {
+								...(params?.rate_limit ?? {}),
+								burst: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							rate_limit: {
+								...(params?.rate_limit ?? {}),
+								burst: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="incremental.enabled">
+				<select
+					value={String(incrementalEnabled)}
+					on:change={(event) => {
+						const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+						const patch = {
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled
+							}
+						};
+						draft(patch);
+						commit(patch);
+					}}
+				>
+					<option value="false">false</option>
+					<option value="true">true</option>
+				</select>
+			</Field>
+
+			{#if incrementalEnabled}
+				<Field label="incremental.cursor_column">
+					<Input
+						value={incrementalCursorColumn}
+						placeholder="updated_at or id"
+						onInput={(event) =>
+							draft({
+								incremental: {
+									...(params?.incremental ?? {}),
+									enabled: true,
+									cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
+								}
+							})}
+						onBlur={(event) =>
+							commit({
+								incremental: {
+									...(params?.incremental ?? {}),
+									enabled: true,
+									cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
+								}
+							})}
+					/>
+				</Field>
+
+				<Field label="incremental.cursor_type">
+					<select
+						value={incrementalCursorType}
+						on:change={(event) => {
+							const cursorType = (event.currentTarget as HTMLSelectElement).value;
+							const patch = {
+								incremental: {
+									...(params?.incremental ?? {}),
+									enabled: true,
+									cursor_type: cursorType
+								}
+							};
+							draft(patch);
+							commit(patch);
+						}}
+					>
+						{#each cursorTypes as ct}
+							<option value={ct}>{ct}</option>
+						{/each}
+					</select>
+				</Field>
+
+				<Field label="incremental.state_key">
+					<Input
+						value={incrementalStateKey}
+						placeholder="optional state key override"
+						onInput={(event) =>
+							draft({
+								incremental: {
+									...(params?.incremental ?? {}),
+									enabled: true,
+									state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
+								}
+							})}
+						onBlur={(event) =>
+							commit({
+								incremental: {
+									...(params?.incremental ?? {}),
+									enabled: true,
+									state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
+								}
+							})}
+					/>
+				</Field>
+			{/if}
 		</Disclosure>
 
 		<Disclosure

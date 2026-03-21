@@ -247,11 +247,22 @@ function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 	const schema = (data as any)?.schema ?? {};
 	const expectedType = normalizeTypedSchemaPrimitive(schema?.expectedSchema?.typedSchema?.type);
 	if (isPayloadType(expectedType)) return expectedType;
+	const params = (((data as any)?.params ?? {}) as Record<string, any>);
+	const outputMode = String(
+		(params?.output && typeof params.output === 'object' ? (params.output as any)?.mode : undefined) ??
+			params?.output_mode ??
+			''
+	)
+		.trim()
+		.toLowerCase();
+	if (outputMode === 'json') return 'json';
+	if (outputMode === 'text') return 'text';
+	if (outputMode === 'table') return 'table';
+	if (outputMode === 'binary') return 'binary';
 	const inferredType = normalizeTypedSchemaPrimitive(schema?.inferredSchema?.typedSchema?.type);
 	if (isPayloadType(inferredType)) return inferredType;
 	const observedType = normalizeTypedSchemaPrimitive(schema?.observedSchema?.typedSchema?.type);
 	if (isPayloadType(observedType)) return observedType;
-	const params = (((data as any)?.params ?? {}) as Record<string, any>);
 	const sourceKind = String((data as any)?.sourceKind ?? '').trim().toLowerCase();
 	if (sourceKind === 'api') return 'json';
 	if (sourceKind === 'database') return 'table';

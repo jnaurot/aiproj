@@ -1,8 +1,11 @@
+import asyncio
 import hashlib
 import io
 import json
 import logging
 import os
+import random
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -25,6 +28,8 @@ from ..runner.metadata import GraphContext, NodeOutput, FileMetadata
 from ..runner.schemas import SourceAPIParams, SourceDatabaseParams, SourceFileParams, normalize_source_params_frontend
 
 logger = logging.getLogger(__name__)
+
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 try:
     import PyPDF2
@@ -302,6 +307,10 @@ def _source_out_mode_from_node(node: Dict[str, Any]) -> Optional[str]:
     if expected_type in {"table", "text", "json", "binary"}:
         return expected_type
     params = data.get("params") if isinstance(data.get("params"), dict) else {}
+    out = params.get("output") if isinstance(params.get("output"), dict) else {}
+    out_mode = str(out.get("mode") or "").strip().lower()
+    if out_mode in {"table", "text", "json", "binary"}:
+        return out_mode
     legacy_source_type = str(params.get("source_type") or "").strip().lower()
     if legacy_source_type in {"text", "json", "table", "binary"}:
         return legacy_source_type
@@ -343,6 +352,171 @@ def _merge_query_into_url(url: str, query: Optional[Dict[str, Any]]) -> str:
     merged = {**url_query, **editor_query}
     ordered = [(k, merged[k]) for k in sorted(merged.keys())]
     return urlunsplit((split.scheme, split.netloc, split.path, urlencode(ordered, doseq=False), split.fragment))
+
+
+def _resolve_connection_ref(connection_ref: str) -> str:
+    ref = str(connection_ref or "").strip()
+    if not ref:
+        raise ValueError("MISSING_SECRET: connection_ref is empty")
+    env_name = ref[4:].strip() if ref.lower().startswith("env:") else ref
+    value = str(os.getenv(env_name, "")).strip()
+    if not value:
+        raise ValueError(f"MISSING_SECRET: connection_ref '{ref}' is not set in environment")
+    return value
+
+
+def _resolve_required_env(ref: str, *, param_path: str) -> str:
+    name = str(ref or "").strip()
+    if not name:
+        raise ValueError(f"MISSING_SECRET: {param_path} is required")
+    value = str(os.getenv(name, "")).strip()
+    if not value:
+        raise ValueError(f"MISSING_SECRET: {param_path} '{name}' is not set in environment")
+    return value
+
+
+def _validate_table_identifier(table_name: str) -> tuple[Optional[str], str]:
+    raw = str(table_name or "").strip()
+    if not raw:
+        raise ValueError("INVALID_IDENTIFIER: table_name is required")
+    parts = raw.split(".")
+    if len(parts) > 2:
+        raise ValueError(f"INVALID_IDENTIFIER: unsupported table_name '{raw}'")
+    for part in parts:
+        if not _SQL_IDENTIFIER_RE.fullmatch(part):
+            raise ValueError(f"INVALID_IDENTIFIER: unsafe table_name '{raw}'")
+    if len(parts) == 1:
+        return None, parts[0]
+    return parts[0], parts[1]
+
+
+def _incremental_state_path() -> Path:
+    raw = str(os.getenv("SOURCE_INCREMENTAL_STATE_FILE") or "./data/source_incremental_state.json").strip()
+    return Path(raw).expanduser().resolve()
+
+
+def _load_incremental_state_map() -> Dict[str, Any]:
+    path = _incremental_state_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_incremental_state_map(state_map: Dict[str, Any]) -> None:
+    path = _incremental_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state_map, sort_keys=True, ensure_ascii=False), encoding="utf-8")
+
+
+def _cursor_sort_value(value: Any, cursor_type: str) -> Any:
+    if value is None:
+        return None
+    t = str(cursor_type or "auto").strip().lower() or "auto"
+
+    def _as_datetime(v: Any) -> Optional[float]:
+        try:
+            ts = pd.to_datetime(v, utc=True, errors="coerce")
+            if pd.isna(ts):
+                return None
+            return float(ts.value)
+        except Exception:
+            return None
+
+    if t == "int":
+        try:
+            return int(value)
+        except Exception:
+            return None
+    if t == "float":
+        try:
+            return float(value)
+        except Exception:
+            return None
+    if t == "datetime":
+        return _as_datetime(value)
+    if t == "string":
+        return str(value)
+    # auto
+    for caster in (int, float):
+        try:
+            return caster(value)
+        except Exception:
+            continue
+    dt = _as_datetime(value)
+    if dt is not None:
+        return dt
+    return str(value)
+
+
+def _compare_gt(left: Any, right: Any) -> bool:
+    try:
+        return left > right
+    except Exception:
+        return str(left) > str(right)
+
+
+def _apply_incremental_rows(
+    *,
+    rows: list[dict[str, Any]],
+    graph_id: str,
+    node_id: str,
+    incremental_spec: Optional[Dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Optional[Dict[str, Any]]]:
+    spec = incremental_spec if isinstance(incremental_spec, dict) else {}
+    if not bool(spec.get("enabled")):
+        return rows, None
+    cursor_column = str(spec.get("cursor_column") or "").strip()
+    if not cursor_column:
+        raise ValueError("INVALID_INCREMENTAL_CONFIG: incremental.cursor_column is required when enabled=true")
+    cursor_type = str(spec.get("cursor_type") or "auto").strip().lower() or "auto"
+    state_key = str(spec.get("state_key") or f"{graph_id}:{node_id}").strip()
+    window_start_raw = spec.get("window_start")
+    window_end_raw = spec.get("window_end")
+
+    state_map = _load_incremental_state_map()
+    prev_raw = state_map.get(state_key)
+    prev_val = _cursor_sort_value(prev_raw, cursor_type)
+    window_start = _cursor_sort_value(window_start_raw, cursor_type) if window_start_raw is not None else None
+    window_end = _cursor_sort_value(window_end_raw, cursor_type) if window_end_raw is not None else None
+
+    filtered: list[dict[str, Any]] = []
+    max_raw: Any = prev_raw
+    max_val = prev_val
+    for row in rows:
+        cur_raw = row.get(cursor_column) if isinstance(row, dict) else None
+        cur_val = _cursor_sort_value(cur_raw, cursor_type)
+        if cur_val is None:
+            continue
+        if prev_val is not None and not _compare_gt(cur_val, prev_val):
+            continue
+        if window_start is not None and _compare_gt(window_start, cur_val):
+            continue
+        if window_end is not None and _compare_gt(cur_val, window_end):
+            continue
+        filtered.append(row)
+        if max_val is None or _compare_gt(cur_val, max_val):
+            max_val = cur_val
+            max_raw = cur_raw
+
+    if max_raw is not None:
+        state_map[state_key] = max_raw
+        _save_incremental_state_map(state_map)
+
+    meta = {
+        "enabled": True,
+        "state_key": state_key,
+        "cursor_column": cursor_column,
+        "cursor_type": cursor_type,
+        "previous_cursor": prev_raw,
+        "next_cursor": max_raw,
+        "rows_before": len(rows),
+        "rows_after": len(filtered),
+    }
+    return filtered, meta
 
 
 async def exec_source(
@@ -606,9 +780,14 @@ async def _handle_database_source(
 
     conn_string = schema.connection_string
     if not conn_string and schema.connection_ref:
-        raise NotImplementedError("Connection references not implemented")
+        conn_string = _resolve_connection_ref(str(schema.connection_ref))
     if not conn_string:
         raise ValueError("connection_string or connection_ref required")
+
+    table_schema_name: Optional[str] = None
+    table_name_value: Optional[str] = None
+    if schema.table_name:
+        table_schema_name, table_name_value = _validate_table_identifier(str(schema.table_name))
 
     engine = sqlalchemy.create_engine(conn_string)
     try:
@@ -617,15 +796,26 @@ async def _handle_database_source(
             if schema.limit:
                 query = f"{query.rstrip(';')} LIMIT {schema.limit}"
             df = pd.read_sql(query, engine)
-        elif schema.table_name:
-            query = f"SELECT * FROM {schema.table_name}"
+        elif table_name_value:
+            md = sqlalchemy.MetaData()
+            table = sqlalchemy.Table(table_name_value, md, schema=table_schema_name, autoload_with=engine)
+            stmt = sqlalchemy.select(table)
             if schema.limit:
-                query += f" LIMIT {schema.limit}"
-            df = pd.read_sql(query, engine)
+                stmt = stmt.limit(int(schema.limit))
+            df = pd.read_sql(stmt, engine)
         else:
             raise ValueError("Either query or table_name required")
 
         rows = df.to_dict(orient="records")
+        incremental_meta: Optional[Dict[str, Any]] = None
+        if isinstance(schema.incremental, dict) and bool(schema.incremental.get("enabled")):
+            rows, incremental_meta = _apply_incremental_rows(
+                rows=rows,
+                graph_id=graph_id,
+                node_id=node_id,
+                incremental_spec=schema.incremental,
+            )
+            df = pd.DataFrame(rows)
         table_columns = _infer_table_columns_from_dataframe(df)
         if output_mode == "table":
             data: Any = _canonical_table_rows(rows)
@@ -644,7 +834,14 @@ async def _handle_database_source(
             output_mode=output_mode,
             data=data,
             params=params,
-            schema_extra={"table_columns": table_columns} if output_mode == "table" else None,
+            schema_extra=(
+                {
+                    **({"table_columns": table_columns} if output_mode == "table" else {}),
+                    **({"incremental": incremental_meta} if incremental_meta else {}),
+                }
+                if (output_mode == "table" or incremental_meta)
+                else None
+            ),
         )
         return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
     finally:
@@ -666,15 +863,20 @@ async def _handle_api_source(
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     if schema.content_type:
         headers["Content-Type"] = str(schema.content_type)
-    if schema.auth_type == "bearer" and schema.auth_token_ref:
-        headers["Authorization"] = f"Bearer {os.getenv(schema.auth_token_ref, '')}"
-    elif schema.auth_type == "basic" and schema.auth_token_ref:
-        raw = os.getenv(schema.auth_token_ref, "")
+    if schema.auth_type != "none" and not schema.auth_token_ref:
+        raise ValueError("MISSING_SECRET: params.auth_token_ref is required when authentication is enabled")
+    if schema.auth_type == "bearer":
+        token = _resolve_required_env(str(schema.auth_token_ref or ""), param_path="params.auth_token_ref")
+        headers["Authorization"] = f"Bearer {token}"
+    elif schema.auth_type == "basic":
+        raw = _resolve_required_env(str(schema.auth_token_ref or ""), param_path="params.auth_token_ref")
         import base64
 
         headers["Authorization"] = f"Basic {base64.b64encode(raw.encode('utf-8')).decode('ascii')}"
-    elif schema.auth_type == "api_key" and schema.auth_token_ref:
-        headers["X-API-Key"] = os.getenv(schema.auth_token_ref, "")
+    elif schema.auth_type == "api_key":
+        headers["X-API-Key"] = _resolve_required_env(
+            str(schema.auth_token_ref or ""), param_path="params.auth_token_ref"
+        )
 
     final_url = _merge_query_into_url(schema.url, schema.query)
     request_kwargs: Dict[str, Any] = {
@@ -694,9 +896,58 @@ async def _handle_api_source(
     elif schema.body_mode == "raw":
         request_kwargs["content"] = (schema.body_raw or "").encode("utf-8")
 
+    retry_cfg = schema.retry if isinstance(schema.retry, dict) else {}
+    max_attempts = int(retry_cfg.get("max_attempts") or 1)
+    max_attempts = max(1, max_attempts)
+    backoff_seconds = float(retry_cfg.get("backoff_seconds") or 0.0)
+    jitter_seconds = float(retry_cfg.get("jitter_seconds") or 0.0)
+    retry_on_status_raw = retry_cfg.get("retry_on_status") if isinstance(retry_cfg.get("retry_on_status"), list) else []
+    retry_on_status = {int(s) for s in retry_on_status_raw if isinstance(s, int)}
+    if not retry_on_status:
+        retry_on_status = {429, 500, 502, 503, 504}
+    rate_cfg = schema.rate_limit if isinstance(schema.rate_limit, dict) else {}
+    rps = float(rate_cfg.get("rps") or 0.0)
+    min_interval = (1.0 / rps) if rps > 0 else 0.0
+    last_request_monotonic = 0.0
+
+    response = None
     async with httpx.AsyncClient() as client:
-        response = await client.request(**request_kwargs)
-        response.raise_for_status()
+        for attempt in range(1, max_attempts + 1):
+            now_mono = time.monotonic()
+            if min_interval > 0:
+                wait_for = (last_request_monotonic + min_interval) - now_mono
+                if wait_for > 0:
+                    await asyncio.sleep(wait_for)
+            last_request_monotonic = time.monotonic()
+            try:
+                response = await client.request(**request_kwargs)
+                response.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                status = int(exc.response.status_code) if exc.response is not None else 0
+                retryable = status in retry_on_status
+                if (not retryable) or attempt >= max_attempts:
+                    raise
+            except httpx.RequestError:
+                if attempt >= max_attempts:
+                    raise
+            delay = max(0.0, backoff_seconds * (2 ** (attempt - 1)))
+            if jitter_seconds > 0:
+                delay += random.uniform(0.0, jitter_seconds)
+            await bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": _iso_now(),
+                    "level": "warning",
+                    "message": f"API retry attempt={attempt} delay_s={round(delay, 3)}",
+                    "nodeId": node_id,
+                }
+            )
+            if delay > 0:
+                await asyncio.sleep(delay)
+    if response is None:
+        raise RuntimeError("API request produced no response")
 
     content_type = response.headers.get("content-type", "")
     is_json = "application/json" in content_type
@@ -704,14 +955,31 @@ async def _handle_api_source(
     text_payload = response.text if not is_json else json.dumps(json_payload, sort_keys=True, separators=(",", ":"))
     table_coercion: Dict[str, Any] | None = None
     table_columns: list[dict[str, str]] | None = None
+    incremental_meta: Dict[str, Any] | None = None
+    incremental_spec = schema.incremental if isinstance(schema.incremental, dict) else {}
 
     if output_mode == "table":
         if isinstance(json_payload, list):
             rows, json_mode = _table_rows_from_json_array(json_payload)
+            if bool(incremental_spec.get("enabled")) and all(isinstance(r, dict) for r in rows):
+                rows, incremental_meta = _apply_incremental_rows(
+                    rows=[dict(r) for r in rows if isinstance(r, dict)],
+                    graph_id=graph_id,
+                    node_id=node_id,
+                    incremental_spec=incremental_spec,
+                )
             data = _canonical_table_rows(rows)
             table_coercion = {"mode": json_mode, "lossy": False}
         elif isinstance(json_payload, dict):
-            data = [json_payload]
+            rows = [json_payload]
+            if bool(incremental_spec.get("enabled")):
+                rows, incremental_meta = _apply_incremental_rows(
+                    rows=rows,
+                    graph_id=graph_id,
+                    node_id=node_id,
+                    incremental_spec=incremental_spec,
+                )
+            data = rows
             table_coercion = {"mode": "json_object_1row", "lossy": False}
         else:
             data = [{"text": line} for line in text_payload.splitlines() if line.strip()]
@@ -720,6 +988,14 @@ async def _handle_api_source(
         _log_source_inference(node_id, "api", table_columns)
     elif output_mode == "json":
         data = json_payload if json_payload is not None else {"text": text_payload}
+        if bool(incremental_spec.get("enabled")) and isinstance(data, list) and all(isinstance(r, dict) for r in data):
+            filtered_rows, incremental_meta = _apply_incremental_rows(
+                rows=[dict(r) for r in data if isinstance(r, dict)],
+                graph_id=graph_id,
+                node_id=node_id,
+                incremental_spec=incremental_spec,
+            )
+            data = filtered_rows
     elif output_mode == "binary":
         data = response.content
     else:
@@ -735,8 +1011,9 @@ async def _handle_api_source(
         schema_extra={
             **({"table_coercion": table_coercion} if output_mode == "table" and table_coercion else {}),
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
+            **({"incremental": incremental_meta} if incremental_meta else {}),
         }
-        if output_mode == "table"
+        if output_mode in {"table", "json"} and (table_coercion or table_columns or incremental_meta)
         else None,
     )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)

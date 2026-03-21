@@ -151,6 +151,11 @@ def default_contract_for_node(node: Dict[str, Any]) -> str:
     typed_contract = _contract_from_typed_type(_typed_schema_type_from_node(node))
     if typed_contract:
         return typed_contract
+    output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}
+    output_mode = str(output_obj.get("mode") or "").strip().lower()
+    mode_contract = _contract_from_output_mode(output_mode, "")
+    if mode_contract:
+        return mode_contract
 
     if kind == "source":
         source_kind = str(data.get("sourceKind") or params.get("source_type") or "").strip().lower()

@@ -120,6 +120,7 @@ export const SourceDatabaseParamsSchema = z
 		query: z.string().optional(),
 		table_name: z.string().optional(),
 		limit: z.number().int().positive().optional(),
+		incremental: SourceIncrementalSchema.default({ enabled: false, cursor_type: "auto" }),
 		output: SourceOutputSchema.default({ mode: "table" })
 	})
 	.superRefine((v, ctx) => {
@@ -139,6 +140,17 @@ export const SourceCachePolicySchema = z
 	})
 	.strip();
 
+export const SourceIncrementalSchema = z
+	.object({
+		enabled: z.boolean().default(false),
+		state_key: z.string().min(1).optional(),
+		cursor_column: z.string().min(1).optional(),
+		cursor_type: z.enum(["auto", "int", "float", "datetime", "string"]).default("auto"),
+		window_start: z.string().optional(),
+		window_end: z.string().optional()
+	})
+	.strip();
+
 export const SourceApiContentTypeSchema = z.enum([
 	"application/json",
 	"application/x-www-form-urlencoded",
@@ -148,6 +160,22 @@ export const SourceApiContentTypeSchema = z.enum([
 ]);
 
 export const SourceApiBodyModeSchema = z.enum(["none", "json", "form", "raw", "multipart"]);
+
+export const SourceApiRetryPolicySchema = z
+	.object({
+		max_attempts: z.number().int().positive().default(1),
+		backoff_seconds: z.number().nonnegative().default(0.25),
+		jitter_seconds: z.number().nonnegative().default(0.05),
+		retry_on_status: z.array(z.number().int().min(100).max(599)).default([429, 500, 502, 503, 504])
+	})
+	.strip();
+
+export const SourceApiRateLimitSchema = z
+	.object({
+		rps: z.number().positive().optional(),
+		burst: z.number().int().positive().default(1)
+	})
+	.strip();
 
 export const SourceAPIParamsSchema = z
 	.object({
@@ -171,6 +199,14 @@ export const SourceAPIParamsSchema = z
 		auth_type: z.enum(["none", "bearer", "basic", "api_key"]).default("none"),
 		auth_token_ref: z.string().optional(),
 		timeout_seconds: z.number().int().positive().default(30),
+		incremental: SourceIncrementalSchema.default({ enabled: false, cursor_type: "auto" }),
+		retry: SourceApiRetryPolicySchema.default({
+			max_attempts: 1,
+			backoff_seconds: 0.25,
+			jitter_seconds: 0.05,
+			retry_on_status: [429, 500, 502, 503, 504]
+		}),
+		rate_limit: SourceApiRateLimitSchema.default({ burst: 1 }),
 		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
 		output: SourceOutputSchema.default({ mode: "json" })
 	})

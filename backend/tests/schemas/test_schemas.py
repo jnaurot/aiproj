@@ -512,6 +512,17 @@ class TestSourceAPIParams:
 
 
 class TestNormalizeSourceParamsFrontend:
+    def test_database_connection_ref_camel_case_is_normalized(self):
+        out = normalize_source_params_frontend(
+            {
+                "source_type": "database",
+                "connectionRef": "DB_CONN",
+                "table_name": "items",
+            }
+        )
+        assert out["connection_ref"] == "DB_CONN"
+        assert "connectionRef" not in out
+
     def test_legacy_output_mode_is_dropped_in_schema_first_mode(self):
         out = normalize_source_params_frontend({"output_mode": "rows"})
         assert "output_mode" not in out
@@ -530,6 +541,8 @@ class TestNormalizeSourceParamsFrontend:
             "bodyForm": {"a": "1"},
             "bodyRaw": "hello",
             "__managedHeaders": {"contentType": True},
+            "retryPolicy": {"maxAttempts": 3, "backoffSeconds": 0.2, "jitterSeconds": 0.1, "retryOnStatus": [429]},
+            "rateLimit": {"rpsLimit": 4},
         }
         out = normalize_source_params_frontend(raw)
         assert out["content_type"] == "application/json"
@@ -538,6 +551,11 @@ class TestNormalizeSourceParamsFrontend:
         assert out["body_form"] == {"a": "1"}
         assert out["body_raw"] == "hello"
         assert out["managed_headers"] == {"contentType": True}
+        assert out["retry"]["max_attempts"] == 3
+        assert out["retry"]["backoff_seconds"] == 0.2
+        assert out["retry"]["jitter_seconds"] == 0.1
+        assert out["retry"]["retry_on_status"] == [429]
+        assert out["rate_limit"]["rps"] == 4
 
     def test_api_legacy_body_is_migrated(self):
         out_obj = normalize_source_params_frontend({"url": "https://api.example.com", "body": {"k": "v"}})
@@ -549,6 +567,28 @@ class TestNormalizeSourceParamsFrontend:
         assert out_str["body_mode"] == "raw"
         assert out_str["body_raw"] == "raw text"
         assert "body" not in out_str
+
+    def test_incremental_camel_case_fields_are_normalized(self):
+        out = normalize_source_params_frontend(
+            {
+                "source_type": "database",
+                "connection_string": "sqlite:///memory",
+                "query": "select 1",
+                "incrementalConfig": {
+                    "enabled": True,
+                    "stateKey": "state-a",
+                    "cursorColumn": "id",
+                    "cursorType": "int",
+                    "windowStart": "1",
+                    "windowEnd": "9",
+                },
+            }
+        )
+        assert out["incremental"]["state_key"] == "state-a"
+        assert out["incremental"]["cursor_column"] == "id"
+        assert out["incremental"]["cursor_type"] == "int"
+        assert out["incremental"]["window_start"] == "1"
+        assert out["incremental"]["window_end"] == "9"
 
 
 class TestFilterTransformParams:

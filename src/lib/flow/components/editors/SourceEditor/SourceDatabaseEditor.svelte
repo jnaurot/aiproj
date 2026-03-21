@@ -20,8 +20,13 @@
 	$: query = asString(params?.query, '');
 	$: table_name = asString(params?.table_name, '');
 	$: limit = asNumberOrEmpty(params?.limit);
+	$: incrementalEnabled = Boolean(params?.incremental?.enabled ?? false);
+	$: incrementalStateKey = asString(params?.incremental?.state_key, '');
+	$: incrementalCursorColumn = asString(params?.incremental?.cursor_column, '');
+	$: incrementalCursorType = asString(params?.incremental?.cursor_type, 'auto');
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
+	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 
 	function draft(patch: SourceDatabasePatch): void {
 		onDraft?.(patch);
@@ -125,6 +130,96 @@
 					commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
 			/>
 		</Field>
+
+		<Field label="incremental.enabled">
+			<select
+				value={String(incrementalEnabled)}
+				on:change={(event) => {
+					const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+					const patch = {
+						incremental: {
+							...(params?.incremental ?? {}),
+							enabled
+						}
+					};
+					draft(patch);
+					commit(patch);
+				}}
+			>
+				<option value="false">false</option>
+				<option value="true">true</option>
+			</select>
+		</Field>
+
+		{#if incrementalEnabled}
+			<Field label="incremental.cursor_column">
+				<Input
+					value={incrementalCursorColumn}
+					placeholder="updated_at or id"
+					onInput={(event) =>
+						draft({
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled: true,
+								cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled: true,
+								cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
+							}
+						})}
+				/>
+			</Field>
+
+			<Field label="incremental.cursor_type">
+				<select
+					value={incrementalCursorType}
+					on:change={(event) => {
+						const cursorType = (event.currentTarget as HTMLSelectElement).value;
+						const patch = {
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled: true,
+								cursor_type: cursorType
+							}
+						};
+						draft(patch);
+						commit(patch);
+					}}
+				>
+					{#each cursorTypes as ct}
+						<option value={ct}>{ct}</option>
+					{/each}
+				</select>
+			</Field>
+
+			<Field label="incremental.state_key">
+				<Input
+					value={incrementalStateKey}
+					placeholder="optional state key override"
+					onInput={(event) =>
+						draft({
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled: true,
+								state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
+							}
+						})}
+					onBlur={(event) =>
+						commit({
+							incremental: {
+								...(params?.incremental ?? {}),
+								enabled: true,
+								state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
+							}
+						})}
+				/>
+			</Field>
+		{/if}
 
 		<Field label="output mode">
 			<select
