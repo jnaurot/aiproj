@@ -126,6 +126,8 @@ async def exec_llm_openai_compat(
         )
     base_url = prepared.base_url
     output_mode = prepared.output_mode
+    validation_mode = str(getattr(params, "output_validation_mode", "strict") or "strict").strip().lower()
+    soft_mode = validation_mode == "soft" or (not bool(params.output_strict))
     payload = dict(prepared.payload)
     headers = dict(prepared.headers)
     api_key = resolved_conn.api_key
@@ -213,21 +215,30 @@ async def exec_llm_openai_compat(
                 contract = params.embedding_contract or {}
                 dims = int(contract.get("dims") or 0)
                 layout = str(contract.get("layout") or "1d")
+                embedding_warnings: List[str] = []
                 for vec in vectors:
                     if len(vec) != dims:
+                        msg = f"Embedding dims mismatch: expected {dims}, got {len(vec)}"
+                        if soft_mode:
+                            embedding_warnings.append(msg)
+                        else:
+                            return NodeOutput(
+                                status="failed",
+                                metadata=None,
+                                execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                                error=msg,
+                            )
+                if layout == "1d" and len(vectors) != 1:
+                    msg = f"Embedding layout 1d requires exactly one vector, got {len(vectors)}"
+                    if soft_mode:
+                        embedding_warnings.append(msg)
+                    else:
                         return NodeOutput(
                             status="failed",
                             metadata=None,
                             execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                            error=f"Embedding dims mismatch: expected {dims}, got {len(vec)}",
+                            error=msg,
                         )
-                if layout == "1d" and len(vectors) != 1:
-                    return NodeOutput(
-                        status="failed",
-                        metadata=None,
-                        execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                        error=f"Embedding layout 1d requires exactly one vector, got {len(vectors)}",
-                    )
                 output_obj = {
                     "mode": "embeddings",
                     "dims": dims,
@@ -235,6 +246,8 @@ async def exec_llm_openai_compat(
                     "layout": layout,
                     "data": vectors[0] if layout == "1d" else vectors,
                 }
+                if embedding_warnings:
+                    output_obj["_warnings"] = embedding_warnings
                 data = json.dumps(output_obj, separators=(",", ":"), sort_keys=True)
             else:
                 chunks: List[str] = []
@@ -314,23 +327,36 @@ async def exec_llm_openai_compat(
                 try:
                     json_data = json.loads(data) if data else None
                 except json.JSONDecodeError as e:
-                    await context.bus.emit(
-                        {
-                            "type": "log",
-                            "runId": run_id,
-                            "nodeId": node_id,
-                            "at": iso_now(),
-                            "level": "error",
-                            "message": f"JSON parse failed in output_mode={output_mode}: {str(e)}",
-                        }
-                    )
-                    return NodeOutput(
-                        status="failed",
-                        metadata=None,
-                        execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-                        error=f"LLM output_mode={output_mode} but response was not valid JSON",
-                    )
-                if params.output_strict:
+                    if soft_mode:
+                        await context.bus.emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": f"JSON parse failed in soft mode: {str(e)}",
+                            }
+                        )
+                        json_data = {"_warnings": ["json_parse_failed"], "_raw_text": data}
+                    else:
+                        await context.bus.emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "level": "error",
+                                "message": f"JSON parse failed in output_mode={output_mode}: {str(e)}",
+                            }
+                        )
+                        return NodeOutput(
+                            status="failed",
+                            metadata=None,
+                            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+                            error=f"LLM output_mode={output_mode} but response was not valid JSON",
+                        )
+                if params.output_strict and not soft_mode:
                     try:
                         jsonschema_validate(instance=json_data, schema=params.output_schema or {})
                     except ValidationError as e:
@@ -340,6 +366,15 @@ async def exec_llm_openai_compat(
                             execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
                             error=f"LLM strict JSON schema validation failed: {e.message}",
                         )
+                elif soft_mode:
+                    try:
+                        jsonschema_validate(instance=json_data, schema=params.output_schema or {})
+                    except ValidationError as e:
+                        if not isinstance(json_data, dict):
+                            json_data = {"value": json_data}
+                        warnings = list(json_data.get("_warnings") or []) if isinstance(json_data, dict) else []
+                        warnings.append(f"json_schema_validation_failed:{e.message}")
+                        json_data["_warnings"] = warnings
 
                 data = json.dumps(json_data, separators=(",", ":"), sort_keys=True)
             parsed = adapter.parse_response(output_mode, data or "")

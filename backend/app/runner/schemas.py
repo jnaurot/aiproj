@@ -36,6 +36,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
             p["output_strict"] = out.get("strict")
+        if "validationMode" in out and "output_validation_mode" not in p:
+            p["output_validation_mode"] = out.get("validationMode")
         if "embedding" in out and "embedding_contract" not in p:
             p["embedding_contract"] = out.get("embedding")
 
@@ -774,6 +776,7 @@ class LLMParams(NodeParamSchema):
     output_mode: Literal["text", "json", "embeddings"] = "text"
     output_schema: Optional[Dict[str, Any]] = None
     output_strict: bool = True
+    output_validation_mode: Literal["strict", "soft"] = "strict"
     embedding_contract: Optional[Dict[str, Any]] = None
     
     # Error handling

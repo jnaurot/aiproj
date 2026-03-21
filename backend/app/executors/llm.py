@@ -76,6 +76,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
             p["output_strict"] = out.get("strict")
+        if "validationMode" in out and "output_validation_mode" not in p:
+            p["output_validation_mode"] = out.get("validationMode")
         if "embedding" in out and "embedding_contract" not in p:
             p["embedding_contract"] = out.get("embedding")
 

@@ -225,6 +225,80 @@ async def test_llm_embeddings_dims_mismatch_fails_without_binding(monkeypatch, t
 
 
 @pytest.mark.asyncio
+async def test_llm_json_soft_mode_succeeds_with_warning(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+	state = {
+		"stream_lines": [
+			'data: {"choices":[{"delta":{"content":"not-json"}}]}',
+			"data: [DONE]",
+		],
+		"post_payload": {"choices": [{"message": {"content": "not-json"}}]},
+		"embedding_payload": {},
+		"chat_calls": 0,
+		"post_calls": 0,
+		"urls": [],
+	}
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _FakeAsyncClient(state))
+
+	events = []
+	artifact_root = tmp_path / "artifacts-json-soft"
+	await run_mod.run_graph(
+		run_id="run-json-soft",
+		graph=_graph("json", {"output_validation_mode": "soft"}),
+		run_from=None,
+		bus=RunEventBus("run-json-soft", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-json-soft",
+	)
+
+	assert any(e.get("type") == "node_output" and e.get("nodeId") == "llm_1" for e in events)
+	assert not any(e.get("type") == "node_finished" and e.get("nodeId") == "llm_1" and e.get("status") == "failed" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_llm_embeddings_soft_mode_succeeds_with_warning(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+	state = {
+		"stream_lines": [],
+		"post_payload": {},
+		"embedding_payload": {"data": [{"embedding": [0.1, 0.2]}]},
+		"chat_calls": 0,
+		"post_calls": 0,
+		"urls": [],
+	}
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _FakeAsyncClient(state))
+
+	events = []
+	artifact_root = tmp_path / "artifacts-embeddings-soft"
+	store = DiskArtifactStore(artifact_root)
+	await run_mod.run_graph(
+		run_id="run-embeddings-soft",
+		graph=_graph(
+			"embeddings",
+			{
+				"embedding_contract": {"dims": 3, "dtype": "float32", "layout": "1d"},
+				"output_validation_mode": "soft",
+			},
+		),
+		run_from=None,
+		bus=RunEventBus("run-embeddings-soft", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=store,
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-embeddings-soft",
+	)
+
+	out_events = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "llm_1"]
+	assert out_events
+	payload = await store.read(out_events[-1]["artifactId"])
+	assert b"_warnings" in payload
+
+
+@pytest.mark.asyncio
 async def test_llm_embeddings_success_cache_reuse_and_endpoint(monkeypatch, tmp_path):
 	run_mod = importlib.import_module("app.runner.run")
 	openai_mod = importlib.import_module("app.executors.llm_openai_compat")

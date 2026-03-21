@@ -94,6 +94,17 @@ class TestLLMParams:
         assert result["thinking"] == {"enabled": True, "mode": "visible"}
         assert "output_mode" not in result
         assert result["embedding_contract"] == {"dims": 1536}
+
+    def test_normalize_output_validation_mode(self):
+        result = normalize_llm_params_frontend(
+            {
+                "model": "gpt-4",
+                "user_prompt": "hi",
+                "baseUrl": "https://api.example.com",
+                "output": {"mode": "json", "jsonSchema": {"type": "object"}, "validationMode": "soft"},
+            }
+        )
+        assert result["output_validation_mode"] == "soft"
     
     def test_success_with_base_url(self):
         """Test successful validation with base_url"""

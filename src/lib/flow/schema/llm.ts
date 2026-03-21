@@ -130,6 +130,7 @@ export const LlmParamsSchema = z
 			.object({
 				mode: LlmOutputModeSchema,
 				strict: z.boolean().optional().default(true),
+				validationMode: z.enum(['strict', 'soft']).optional().default('strict'),
 				jsonSchema: z.unknown().optional(),
 				embedding: z
 					.object({
