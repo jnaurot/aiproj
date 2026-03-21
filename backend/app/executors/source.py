@@ -192,6 +192,36 @@ def _detect_csv_has_header(
     return True
 
 
+def _excel_heuristic_has_header(df: pd.DataFrame) -> Optional[bool]:
+    try:
+        if df.shape[0] < 2:
+            return None
+        first = list(df.iloc[0].values)
+        second = list(df.iloc[1].values)
+    except Exception:
+        return None
+
+    def _looks_number(value: Any) -> bool:
+        if value is None:
+            return False
+        text = str(value).strip()
+        if text == "":
+            return False
+        try:
+            float(text)
+            return True
+        except Exception:
+            return False
+
+    first_numeric = sum(1 for item in first if _looks_number(item))
+    second_numeric = sum(1 for item in second if _looks_number(item))
+    if first_numeric == 0 and second_numeric > 0:
+        return True
+    if first_numeric == len(first) and second_numeric == len(second):
+        return False
+    return None
+
+
 def _count_malformed_csv_rows(
     *,
     file_bytes: Optional[bytes],
@@ -1432,6 +1462,7 @@ async def _handle_file_source(
     table_coercion: Dict[str, Any] | None = None
     table_columns: list[dict[str, str]] | None = None
     csv_has_header: Optional[bool] = None
+    excel_has_header: Optional[bool] = None
     format_specific_metadata: Dict[str, Any] = {}
 
     if schema.file_format in {"csv", "tsv"}:
@@ -1573,7 +1604,19 @@ async def _handle_file_source(
             rows = json_data
     elif schema.file_format == "excel":
         excel_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
-        df = pd.read_excel(excel_input, sheet_name=schema.sheet_name or 0)
+        sheet = schema.sheet_name or 0
+        explicit_header = getattr(schema, "has_header", None)
+        if explicit_header is None:
+            probe_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+            probe = pd.read_excel(probe_input, sheet_name=sheet, header=None)
+            guess = _excel_heuristic_has_header(probe)
+            excel_has_header = True if guess is None else bool(guess)
+        else:
+            excel_has_header = bool(explicit_header)
+        read_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+        df = pd.read_excel(read_input, sheet_name=sheet, header=0 if excel_has_header else None)
+        if not excel_has_header:
+            df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
         rows = df.to_dict(orient="records")
         table_columns = _infer_table_columns_from_dataframe(df)
     elif schema.file_format == "txt":
@@ -1683,6 +1726,7 @@ async def _handle_file_source(
         schema_extra={
             "file_format": schema.file_format,
             **({"header_detected": csv_has_header} if schema.file_format in {"csv", "tsv"} else {}),
+            **({"header_detected": excel_has_header} if schema.file_format == "excel" else {}),
             **(
                 {
                     "csv_dialect": {

@@ -325,6 +325,65 @@ async def test_source_file_not_found_returns_failed():
 
 
 @pytest.mark.asyncio
+async def test_source_file_excel_header_mode_no_generates_column_names(tmp_path, monkeypatch):
+	file_path = tmp_path / "no_header.xlsx"
+	file_path.write_bytes(b"fake-xlsx")
+
+	def _fake_read_excel(*_args, **kwargs):
+		header = kwargs.get("header", 0)
+		if header is None:
+			return pd.DataFrame([[1, "alice"], [2, "bob"]])
+		return pd.DataFrame({"name": ["alice", "bob"], "age": [31, 28]})
+
+	monkeypatch.setattr("app.executors.source.pd.read_excel", _fake_read_excel)
+	node = {
+		"id": "n_source_excel_no_header",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "excel",
+				"has_header": False,
+			}
+		},
+	}
+	result = await exec_source("run_excel_no_header", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert set(result.data[0].keys()) == {"column_1", "column_2"}
+	assert (result.metadata.data_schema or {}).get("header_detected") is False
+
+
+@pytest.mark.asyncio
+async def test_source_file_excel_header_mode_auto_detects_header(tmp_path, monkeypatch):
+	file_path = tmp_path / "with_header.xlsx"
+	file_path.write_bytes(b"fake-xlsx")
+
+	def _fake_read_excel(*_args, **kwargs):
+		header = kwargs.get("header", 0)
+		if header is None:
+			return pd.DataFrame([["name", "age"], ["alice", 31], ["bob", 28]])
+		return pd.DataFrame({"name": ["alice", "bob"], "age": [31, 28]})
+
+	monkeypatch.setattr("app.executors.source.pd.read_excel", _fake_read_excel)
+	node = {
+		"id": "n_source_excel_auto_header",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "excel",
+			}
+		},
+	}
+	result = await exec_source("run_excel_auto_header", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert set(result.data[0].keys()) == {"name", "age"}
+	assert (result.metadata.data_schema or {}).get("header_detected") is True
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

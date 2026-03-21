@@ -212,7 +212,7 @@
 		} else if (next === 'excel') {
 			patch.sheet_name = asString(params?.sheet_name, '') || 'Sheet1';
 			patch.delimiter = undefined;
-			patch.has_header = undefined;
+			patch.has_header = params?.has_header;
 		} else if (next === 'json') {
 			patch.json_mode = asString((params as any)?.json_mode, 'auto') as any;
 			const currentMode = asString((params as any)?.output?.mode, '').trim().toLowerCase();
@@ -609,6 +609,22 @@
 		{/if}
 
 		{#if file_format === 'excel'}
+			<Field label="first row is header">
+				<select
+					class="full"
+					value={hasHeaderMode}
+					on:change={(event) => {
+						const value = (event.currentTarget as HTMLSelectElement).value;
+						const has_header = value === 'yes' ? true : value === 'no' ? false : undefined;
+						draft({ has_header });
+						commit({ has_header });
+					}}
+				>
+					<option value="auto">auto</option>
+					<option value="yes">yes</option>
+					<option value="no">no</option>
+				</select>
+			</Field>
 			<Field label="sheet_name">
 				<Input
 					value={sheet_name}
