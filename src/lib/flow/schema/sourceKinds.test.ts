@@ -86,6 +86,9 @@ describe('source kinds schema coverage', () => {
 			date_columns: ['created_at'],
 			date_format: '%d.%m.%Y',
 			json_mode: 'auto',
+			json_streaming_enabled: true,
+			json_stream_chunk_lines: 500,
+			json_stream_max_records: 1000,
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -99,5 +102,8 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.parquet_row_groups).toEqual([0]);
 		expect(parsed.parquet_max_rows).toBe(100);
 		expect(parsed.json_mode).toBe('auto');
+		expect(parsed.json_streaming_enabled).toBe(true);
+		expect(parsed.json_stream_chunk_lines).toBe(500);
+		expect(parsed.json_stream_max_records).toBe(1000);
 	});
 });

@@ -370,6 +370,38 @@ async def test_source_file_json_auto_mode_detects_ndjson(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_source_file_json_streaming_ndjson_progress_and_cap(tmp_path):
+	file_path = tmp_path / "stream.ndjson"
+	lines = [f'{{"id":{idx},"v":"x{idx}"}}' for idx in range(2500)]
+	file_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+	events: list[dict] = []
+	node = {
+		"id": "n_source_json_stream",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "json",
+				"json_mode": "ndjson",
+				"json_streaming_enabled": True,
+				"json_stream_chunk_lines": 1000,
+				"json_stream_max_records": 1200,
+				"output_mode": "table",
+			}
+		},
+	}
+	result = await exec_source("run_json_stream", node, _ctx_with_events(events))
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 1200
+	stream_meta = (result.metadata.data_schema or {}).get("json_streaming") if result.metadata else None
+	assert isinstance(stream_meta, dict)
+	assert stream_meta.get("records_emitted") == 1200
+	logs = [e for e in events if str(e.get("type")) == "log"]
+	assert any("json-stream progress" in str(e.get("message")) for e in logs)
+
+
+@pytest.mark.asyncio
 async def test_source_api_success(monkeypatch):
 	class _Resp:
 		headers = {"content-type": "application/json"}

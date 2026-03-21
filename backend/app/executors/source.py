@@ -434,6 +434,65 @@ def _parse_json_payload(raw_json: str, mode: str) -> tuple[Any, str]:
     return json.loads(text), "document"
 
 
+async def _parse_ndjson_stream(
+    *,
+    node_id: str,
+    run_id: str,
+    bus: RunEventBus,
+    file_path: Optional[Path],
+    file_bytes: Optional[bytes],
+    encoding: str,
+    chunk_lines: int,
+    max_records: Optional[int],
+) -> tuple[list[Any], Dict[str, Any]]:
+    rows: list[Any] = []
+    processed_lines = 0
+    parse_errors = 0
+    chunk = max(1, int(chunk_lines or 1000))
+    limit = max_records if isinstance(max_records, int) and max_records > 0 else None
+
+    def _iter_lines():
+        if isinstance(file_path, Path):
+            with file_path.open("r", encoding=encoding, errors="replace") as fh:
+                for raw in fh:
+                    yield raw
+            return
+        text = (file_bytes or b"").decode(encoding, errors="replace")
+        for raw in text.splitlines():
+            yield raw
+
+    for raw in _iter_lines():
+        line = str(raw).strip()
+        if not line:
+            continue
+        processed_lines += 1
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            parse_errors += 1
+        if processed_lines % chunk == 0:
+            await bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": _iso_now(),
+                    "level": "info",
+                    "message": f"json-stream progress lines={processed_lines} rows={len(rows)}",
+                    "nodeId": node_id,
+                }
+            )
+        if limit is not None and len(rows) >= limit:
+            break
+    return rows, {
+        "enabled": True,
+        "lines_processed": processed_lines,
+        "records_emitted": len(rows),
+        "chunk_lines": chunk,
+        "max_records": limit,
+        "parse_errors": parse_errors,
+    }
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1444,12 +1503,42 @@ async def _handle_file_source(
         except Exception:
             pass
     elif schema.file_format == "json":
-        raw_json = (
-            (file_bytes or b"").decode(schema.encoding, errors="replace")
-            if file_bytes is not None
-            else Path(file_path).read_text(encoding=schema.encoding)
-        )
-        json_data, resolved_json_mode = _parse_json_payload(raw_json, str(getattr(schema, "json_mode", "auto") or "auto"))
+        json_mode = str(getattr(schema, "json_mode", "auto") or "auto").strip().lower() or "auto"
+        stream_enabled = bool(getattr(schema, "json_streaming_enabled", False))
+        resolved_json_mode = json_mode
+        if stream_enabled and json_mode in {"ndjson", "auto"}:
+            if json_mode == "auto":
+                probe_text = _csv_sample_text(file_bytes, file_path, schema.encoding, max_bytes=4096).lstrip()
+                if probe_text.startswith("{") or probe_text.startswith("["):
+                    resolved_json_mode = "document"
+                else:
+                    resolved_json_mode = "ndjson"
+            if resolved_json_mode == "ndjson":
+                json_data, stream_meta = await _parse_ndjson_stream(
+                    node_id=node_id,
+                    run_id=run_id,
+                    bus=bus,
+                    file_path=file_path,
+                    file_bytes=file_bytes,
+                    encoding=schema.encoding,
+                    chunk_lines=int(getattr(schema, "json_stream_chunk_lines", 1000) or 1000),
+                    max_records=getattr(schema, "json_stream_max_records", None),
+                )
+                format_specific_metadata["json_streaming"] = stream_meta
+            else:
+                raw_json = (
+                    (file_bytes or b"").decode(schema.encoding, errors="replace")
+                    if file_bytes is not None
+                    else Path(file_path).read_text(encoding=schema.encoding)
+                )
+                json_data, resolved_json_mode = _parse_json_payload(raw_json, "document")
+        else:
+            raw_json = (
+                (file_bytes or b"").decode(schema.encoding, errors="replace")
+                if file_bytes is not None
+                else Path(file_path).read_text(encoding=schema.encoding)
+            )
+            json_data, resolved_json_mode = _parse_json_payload(raw_json, json_mode)
         format_specific_metadata["json_mode_resolved"] = resolved_json_mode
         if isinstance(json_data, list):
             rows = json_data

@@ -161,3 +161,54 @@ async def test_source_node_output_event_includes_parquet_logical_metadata(tmp_pa
     logical = source_obs.get("parquet_logical_types")
     assert isinstance(logical, dict)
     assert logical.get("amount") == "decimal(10,2)"
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_json_streaming_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-4"
+    source_dir = tmp_path / "source-4"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.ndjson"
+    source_file.write_text('{"id":1}\n{"id":2}\n{"id":3}\n', encoding="utf-8")
+    bus = RunEventBus("run-source-obs-4", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-4",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_json_stream",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.ndjson",
+                            "file_format": "json",
+                            "json_mode": "ndjson",
+                            "json_streaming_enabled": True,
+                            "json_stream_chunk_lines": 1,
+                            "json_stream_max_records": 2,
+                            "output": {"mode": "table"},
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-4",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_json_stream"]
+    assert node_outputs, "Expected node_output for source_json_stream"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    stream_meta = source_obs.get("json_streaming")
+    assert isinstance(stream_meta, dict)
+    assert stream_meta.get("records_emitted") == 2

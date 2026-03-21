@@ -1097,21 +1097,23 @@ def _source_payload_schema(
         if isinstance(getattr(source_metadata, "priming_artifact", None), dict)
         else {}
     )
-    if out_contract == "table" and isinstance(data_value, list):
-        def _copy_format_specific(target: Dict[str, Any]) -> None:
-            for key in (
-                "parquet_logical_types",
-                "parquet_stats",
-                "csv_dialect",
-                "image_metadata",
-                "audio_metadata",
-                "video_metadata",
-                "pdf_metadata",
-            ):
-                value = source_data_schema.get(key)
-                if value is not None:
-                    target[key] = value
+    def _copy_format_specific(target: Dict[str, Any]) -> None:
+        for key in (
+            "parquet_logical_types",
+            "parquet_stats",
+            "csv_dialect",
+            "image_metadata",
+            "audio_metadata",
+            "video_metadata",
+            "pdf_metadata",
+            "json_streaming",
+            "json_mode_resolved",
+        ):
+            value = source_data_schema.get(key)
+            if value is not None:
+                target[key] = value
 
+    if out_contract == "table" and isinstance(data_value, list):
         payload = _table_payload_schema_from_rows(data_value)
         table_columns = source_data_schema.get("table_columns")
         if isinstance(table_columns, list):
@@ -1151,6 +1153,7 @@ def _source_payload_schema(
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability
+        _copy_format_specific(out)
         if isinstance(source_priming_artifact, dict) and source_priming_artifact:
             out["priming_artifact"] = source_priming_artifact
         return out
@@ -1694,6 +1697,7 @@ def _source_observability_from_artifact(artifact: Artifact) -> Optional[Dict[str
             "audio_metadata",
             "video_metadata",
             "pdf_metadata",
+            "json_streaming",
         }
         for key in passthrough_keys:
             if key in source:

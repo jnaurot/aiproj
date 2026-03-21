@@ -107,6 +107,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["date_format"] = p.pop("dateFormat")
     if "jsonMode" in p and "json_mode" not in p:
         p["json_mode"] = p.pop("jsonMode")
+    if "jsonStreamingEnabled" in p and "json_streaming_enabled" not in p:
+        p["json_streaming_enabled"] = p.pop("jsonStreamingEnabled")
+    if "jsonStreamChunkLines" in p and "json_stream_chunk_lines" not in p:
+        p["json_stream_chunk_lines"] = p.pop("jsonStreamChunkLines")
+    if "jsonStreamMaxRecords" in p and "json_stream_max_records" not in p:
+        p["json_stream_max_records"] = p.pop("jsonStreamMaxRecords")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -359,6 +365,9 @@ class SourceFileParams(NodeParamSchema):
     date_columns: List[str] = Field(default_factory=list)
     date_format: Optional[str] = None
     json_mode: Literal["document", "ndjson", "auto"] = "auto"
+    json_streaming_enabled: bool = False
+    json_stream_chunk_lines: int = Field(default=1000, ge=1)
+    json_stream_max_records: Optional[int] = Field(default=None, ge=1)
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

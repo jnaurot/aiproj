@@ -351,6 +351,9 @@ class TestSourceFileParams:
             "date_columns": ["d"],
             "date_format": "%d.%m.%Y",
             "json_mode": "ndjson",
+            "json_streaming_enabled": True,
+            "json_stream_chunk_lines": 500,
+            "json_stream_max_records": 2000,
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -364,6 +367,9 @@ class TestSourceFileParams:
         assert source_params.date_columns == ["d"]
         assert source_params.date_format == "%d.%m.%Y"
         assert source_params.json_mode == "ndjson"
+        assert source_params.json_streaming_enabled is True
+        assert source_params.json_stream_chunk_lines == 500
+        assert source_params.json_stream_max_records == 2000
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -734,6 +740,9 @@ class TestNormalizeSourceParamsFrontend:
                 "dateColumns": ["created_at"],
                 "dateFormat": "%d.%m.%Y",
                 "jsonMode": "document",
+                "jsonStreamingEnabled": True,
+                "jsonStreamChunkLines": 200,
+                "jsonStreamMaxRecords": 1000,
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -747,6 +756,9 @@ class TestNormalizeSourceParamsFrontend:
         assert out["date_columns"] == ["created_at"]
         assert out["date_format"] == "%d.%m.%Y"
         assert out["json_mode"] == "document"
+        assert out["json_streaming_enabled"] is True
+        assert out["json_stream_chunk_lines"] == 200
+        assert out["json_stream_max_records"] == 1000
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25
