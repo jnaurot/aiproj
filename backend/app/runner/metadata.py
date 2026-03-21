@@ -39,6 +39,7 @@ class FileMetadata(BaseModel):
     estimated_memory_mb: float = 0.0
     is_partitioned: bool = False
     partition_key: Optional[str] = None
+    observability: Optional[Dict[str, Any]] = None
 
 class NodeOutput(BaseModel):
     """What each node produces"""

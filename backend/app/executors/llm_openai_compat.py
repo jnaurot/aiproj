@@ -37,6 +37,10 @@ def _sha256_json(obj: object) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def _token_estimate(text: str) -> int:
+    return max(1, int(len(text or "") / 4))
+
+
 def _extract_chat_content(obj: Dict[str, Any]) -> str:
     choices = obj.get("choices")
     if not isinstance(choices, list) or not choices:
@@ -361,8 +365,38 @@ async def exec_llm_openai_compat(
                 content_hash=content_hash,
                 node_id=node_id,
                 params_hash=params_hash,
+                observability={
+                    "provider": "openai_compat",
+                    "model": params.model,
+                    "output_mode": output_mode,
+                    "retries": int(attempt),
+                    "latency_ms": max(0.0, (asyncio.get_event_loop().time() - t0) * 1000.0),
+                    "input_chars": int(len(upstream_text or "")),
+                    "output_chars": int(len(data or "")),
+                    "input_tokens_est": _token_estimate(upstream_text or ""),
+                    "output_tokens_est": _token_estimate(data or ""),
+                    "total_tokens_est": _token_estimate(upstream_text or "") + _token_estimate(data or ""),
+                    "cost_estimate_usd": round((_token_estimate(upstream_text or "") + _token_estimate(data or "")) * 0.000002, 8),
+                    "cache_decision": "executed",
+                },
             )
 
+            await context.bus.emit(
+                {
+                    "type": "model_observability",
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "at": iso_now(),
+                    "provider": "openai_compat",
+                    "model": params.model,
+                    "output_mode": output_mode,
+                    "retries": int(attempt),
+                    "latency_ms": meta.observability.get("latency_ms") if isinstance(meta.observability, dict) else None,
+                    "total_tokens_est": meta.observability.get("total_tokens_est") if isinstance(meta.observability, dict) else None,
+                    "cost_estimate_usd": meta.observability.get("cost_estimate_usd") if isinstance(meta.observability, dict) else None,
+                    "cache_decision": "executed",
+                }
+            )
             circuit_record_success(circuit_key, request_policy)
             return NodeOutput(
                 status="succeeded",
