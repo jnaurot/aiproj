@@ -7,6 +7,7 @@
 		guidedControlsForModelKind,
 		taskKindsForModelKind
 	} from '$lib/flow/components/editors/LlmEditor/modelAssist';
+	import { buildModelAutoFixes } from '$lib/flow/components/editors/LlmEditor/modelErrorAssist';
 	import { TransformEditorByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
@@ -111,6 +112,13 @@
 				kind: transformKind as TransformKind,
 				nodeError,
 				schemaEdges: (schemaContract.edges ?? []).filter((e) => e.direction === 'incoming')
+			})
+		: [];
+	$: modelAutoFixes = isLlm
+		? buildModelAutoFixes({
+				nodeError,
+				params: (params ?? {}) as Record<string, unknown>,
+				schemaEdges: schemaContract.edges ?? []
 			})
 		: [];
 
@@ -660,6 +668,18 @@
 		onCommit({ output: nextOutput });
 	}
 
+	function applyModelAutoFix(fix: { patch?: Record<string, unknown>; edgeId?: string }): void {
+		if (!isLlm) return;
+		if (fix.patch) {
+			graphStore.commitInspectorImmediate(fix.patch as Record<string, any>);
+			return;
+		}
+		if (fix.edgeId) {
+			const edge = (schemaContract.edges ?? []).find((entry) => entry.edgeId === fix.edgeId);
+			if (edge) applySchemaSuggestion(edge);
+		}
+	}
+
 	function schemaTypeLabel(schema: Record<string, any> | undefined): string {
 		return String(schema?.type ?? 'unknown');
 	}
@@ -835,6 +855,21 @@
 					{modelAdvancedOpen ? 'Hide Advanced Editor' : 'Show Advanced Editor'}
 				</button>
 			</div>
+			{#if nodeError}
+				<div class="guidedAssistCard guidedAssistError">
+					<div class="guidedAssistHead">Why This Failed</div>
+					<div class="guidedAssistDesc">{nodeError.message || 'Model execution failed. Review diagnostics.'}</div>
+					{#if modelAutoFixes.length > 0}
+						<div class="assistActionRow">
+							{#each modelAutoFixes as fix (fix.id)}
+								<button type="button" class="small" on:click={() => applyModelAutoFix(fix)}>
+									{fix.label}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			{/if}
 		{/if}
 		{#if !modelGuidedMode || modelAdvancedOpen}
 			<div class="advancedEditor">
