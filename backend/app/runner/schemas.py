@@ -221,6 +221,8 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             partition["parallelism_cap"] = partition.pop("parallelismCap")
     priming = p.get("priming")
     if isinstance(priming, dict):
+        if "driftPolicy" in priming and "drift_policy" not in priming:
+            priming["drift_policy"] = priming.pop("driftPolicy")
         if "sampleRows" in priming and "sample_rows" not in priming:
             priming["sample_rows"] = priming.pop("sampleRows")
         if "sampleBytes" in priming and "sample_bytes" not in priming:
@@ -282,6 +284,7 @@ class SourceKind(str, Enum):
 class SourcePrimingParams(NodeParamSchema):
     enabled: bool = False
     mode: Literal["advisory", "priming_only"] = "advisory"
+    drift_policy: Literal["soft", "strict"] = "soft"
     sample_rows: int = Field(default=50, ge=1, le=10000)
     sample_bytes: int = Field(default=65536, ge=1, le=100_000_000)
     timeout_ms: int = Field(default=1500, ge=1, le=300000)

@@ -644,6 +644,7 @@ class TestNormalizeSourceParamsFrontend:
                 "primingConfig": {
                     "enabled": True,
                     "mode": "priming_only",
+                    "driftPolicy": "strict",
                     "sampleRows": 25,
                     "sampleBytes": 1024,
                     "timeoutMs": 400,
@@ -652,6 +653,7 @@ class TestNormalizeSourceParamsFrontend:
         )
         assert out["priming"]["enabled"] is True
         assert out["priming"]["mode"] == "priming_only"
+        assert out["priming"]["drift_policy"] == "strict"
         assert out["priming"]["sample_rows"] == 25
         assert out["priming"]["sample_bytes"] == 1024
         assert out["priming"]["timeout_ms"] == 400

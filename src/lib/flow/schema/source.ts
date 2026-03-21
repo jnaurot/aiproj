@@ -70,6 +70,7 @@ export const SourcePrimingSchema = z
 	.object({
 		enabled: z.boolean().default(false),
 		mode: z.enum(["advisory", "priming_only"]).default("advisory"),
+		drift_policy: z.enum(["soft", "strict"]).default("soft"),
 		sample_rows: z.number().int().positive().default(50),
 		sample_bytes: z.number().int().positive().default(65536),
 		timeout_ms: z.number().int().positive().default(1500)
@@ -143,6 +144,7 @@ export const SourceFileParamsSchema = z
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
+			drift_policy: "soft",
 			sample_rows: 50,
 			sample_bytes: 65536,
 			timeout_ms: 1500
@@ -176,6 +178,7 @@ export const SourceDatabaseParamsSchema = z
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
+			drift_policy: "soft",
 			sample_rows: 50,
 			sample_bytes: 65536,
 			timeout_ms: 1500
@@ -266,6 +269,7 @@ export const SourceAPIParamsSchema = z
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
+			drift_policy: "soft",
 			sample_rows: 50,
 			sample_bytes: 65536,
 			timeout_ms: 1500
@@ -362,6 +366,7 @@ export const SourceObjectStoreParamsSchema = z
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
+			drift_policy: "soft",
 			sample_rows: 50,
 			sample_bytes: 65536,
 			timeout_ms: 1500
@@ -395,6 +400,7 @@ export const SourceWarehouseParamsSchema = z
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
+			drift_policy: "soft",
 			sample_rows: 50,
 			sample_bytes: 65536,
 			timeout_ms: 1500

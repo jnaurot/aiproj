@@ -388,8 +388,11 @@ def _source_priming_spec(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"enabled": False, "mode": "advisory"}
     enabled = bool(raw.get("enabled"))
     mode = str(raw.get("mode") or "advisory").strip().lower()
+    drift_policy = str(raw.get("drift_policy") or "soft").strip().lower()
     if mode not in {"advisory", "priming_only"}:
         mode = "advisory"
+    if drift_policy not in {"soft", "strict"}:
+        drift_policy = "soft"
     sample_rows_raw = raw.get("sample_rows")
     sample_bytes_raw = raw.get("sample_bytes")
     timeout_raw = raw.get("timeout_ms")
@@ -405,7 +408,14 @@ def _source_priming_spec(params: Dict[str, Any]) -> Dict[str, Any]:
         timeout_ms = max(1, int(timeout_raw)) if timeout_raw is not None else 1500
     except Exception:
         timeout_ms = 1500
-    return {"enabled": enabled, "mode": mode, "sample_rows": sample_rows, "sample_bytes": sample_bytes, "timeout_ms": timeout_ms}
+    return {
+        "enabled": enabled,
+        "mode": mode,
+        "drift_policy": drift_policy,
+        "sample_rows": sample_rows,
+        "sample_bytes": sample_bytes,
+        "timeout_ms": timeout_ms,
+    }
 
 
 def _trim_rows_by_bytes(rows: list[dict[str, Any]], sample_bytes: int) -> tuple[list[dict[str, Any]], bool]:
@@ -585,6 +595,39 @@ def _schema_fingerprint_from_data(data: Any, payload_type: str) -> str:
         fields = _infer_table_columns_from_rows([row for row in data if isinstance(row, dict)])
     env = {"type": str(payload_type or "unknown"), "fields": fields}
     return hashlib.sha256(_canon_json_bytes(env)).hexdigest()
+
+
+def _compute_priming_drift(
+    *,
+    expected_schema: Optional[Dict[str, Any]],
+    inferred_schema: Optional[Dict[str, Any]],
+    detected_mime: str,
+    current_mime: str,
+) -> Dict[str, Any]:
+    expected = expected_schema if isinstance(expected_schema, dict) else {}
+    inferred = inferred_schema if isinstance(inferred_schema, dict) else {}
+    expected_type = str(expected.get("type") or "unknown").strip().lower()
+    inferred_type = str(inferred.get("type") or "unknown").strip().lower()
+    type_mismatch = expected_type not in {"", "unknown"} and inferred_type not in {"", "unknown"} and expected_type != inferred_type
+    expected_fields = expected.get("fields") if isinstance(expected.get("fields"), list) else []
+    inferred_fields = inferred.get("fields") if isinstance(inferred.get("fields"), list) else []
+    expected_cols = {str(f.get("name") or "").strip().lower() for f in expected_fields if isinstance(f, dict)}
+    inferred_cols = {str(f.get("name") or "").strip().lower() for f in inferred_fields if isinstance(f, dict)}
+    expected_cols = {c for c in expected_cols if c}
+    inferred_cols = {c for c in inferred_cols if c}
+    missing_columns = sorted([c for c in expected_cols if c not in inferred_cols])
+    new_columns = sorted([c for c in inferred_cols if c not in expected_cols])
+    mime_mismatch = bool(expected.get("mime_type")) and str(expected.get("mime_type") or "").strip().lower() != str(detected_mime or current_mime).strip().lower()
+    has_drift = bool(type_mismatch or missing_columns or new_columns or mime_mismatch)
+    return {
+        "has_drift": has_drift,
+        "type_mismatch": type_mismatch,
+        "missing_columns": missing_columns,
+        "new_columns": new_columns,
+        "mime_mismatch": mime_mismatch,
+        "expected_type": expected_type,
+        "observed_type": inferred_type,
+    }
 
 
 def _sample_preview(data: Any, payload_type: str) -> Any:
@@ -957,6 +1000,7 @@ async def exec_source(
                 schema_env["priming"] = {
                     "enabled": True,
                     "mode": str(priming_spec.get("mode") or "advisory"),
+                    "drift_policy": str(priming_spec.get("drift_policy") or "soft"),
                     "priming_only": bool(str(priming_spec.get("mode") or "") == "priming_only"),
                     "sample_rows": int(priming_spec.get("sample_rows") or 50),
                     "sample_bytes": int(priming_spec.get("sample_bytes") or 65536),
@@ -969,12 +1013,23 @@ async def exec_source(
                 output.metadata.data_schema = schema_env
                 output.metadata.mime_type = str(detection.get("mime_type") or output.metadata.mime_type)
                 payload_type = str(detection.get("payload_type") or output_mode or "unknown")
+                expected_schema = params.get("output_schema")
+                if not isinstance(expected_schema, dict):
+                    out_obj = params.get("output")
+                    expected_schema = out_obj.get("schema") if isinstance(out_obj, dict) and isinstance(out_obj.get("schema"), dict) else None
+                inferred_schema = infer_typed_schema_from_sample_profile(output.data, payload_type)
+                drift = _compute_priming_drift(
+                    expected_schema=expected_schema,
+                    inferred_schema=inferred_schema,
+                    detected_mime=str(detection.get("mime_type") or ""),
+                    current_mime=str(output.metadata.mime_type or ""),
+                )
                 output.metadata.priming_artifact = {
                     "version": 1,
                     "payload_type": payload_type,
                     "mime_type": str(detection.get("mime_type") or output.metadata.mime_type),
                     "schema_fingerprint": _schema_fingerprint_from_data(output.data, payload_type),
-                    "inferred_schema": infer_typed_schema_from_sample_profile(output.data, payload_type),
+                    "inferred_schema": inferred_schema,
                     "sample_preview": _sample_preview(output.data, payload_type),
                     "stats": {
                         "sample_rows": int(priming_spec.get("sample_rows") or 50),
@@ -983,7 +1038,33 @@ async def exec_source(
                         "truncated_bytes": bool(priming_meta.get("truncated_bytes")),
                     },
                     "detection": detection,
+                    "drift": drift,
                 }
+                schema_env["priming"]["drift"] = drift
+                output.metadata.data_schema = schema_env
+                if drift.get("has_drift"):
+                    drift_msg = (
+                        f"PRIMING_SCHEMA_DRIFT: type_mismatch={drift.get('type_mismatch')} "
+                        f"missing={drift.get('missing_columns')} new={drift.get('new_columns')} "
+                        f"mime_mismatch={drift.get('mime_mismatch')}"
+                    )
+                    if str(priming_spec.get("drift_policy") or "soft") == "strict":
+                        return NodeOutput(
+                            status="failed",
+                            metadata=output.metadata,
+                            execution_time_ms=(time.time() - start_time) * 1000,
+                            error=drift_msg,
+                        )
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": _iso_now(),
+                            "level": "warning",
+                            "message": drift_msg,
+                            "nodeId": node_id,
+                        }
+                    )
                 if bool(detection.get("ambiguous")):
                     await context.bus.emit(
                         {

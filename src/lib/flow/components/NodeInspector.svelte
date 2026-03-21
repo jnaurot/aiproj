@@ -53,6 +53,13 @@
 	$: sourceObservability = selectedNode
 		? (($graphStore.nodeOutputs?.[selectedNode.id]?.sourceObservability ?? null) as Record<string, unknown> | null)
 		: null;
+	$: sourcePrimingArtifact = selectedNode
+		? (($graphStore.nodeOutputs?.[selectedNode.id]?.primingArtifact ?? null) as Record<string, unknown> | null)
+		: null;
+	$: sourcePrimingDrift = (() => {
+		const drift = sourcePrimingArtifact?.drift;
+		return drift && typeof drift === 'object' ? (drift as Record<string, unknown>) : null;
+	})();
 	$: sourceObsWarnings = (() => {
 		if (!sourceObservability) return [] as string[];
 		const warnings: string[] = [];
@@ -743,6 +750,15 @@
 			{#if sourceObsWarnings.length > 0}
 				<div class="guidedAssistDesc">{sourceObsWarnings.join(' | ')}</div>
 			{/if}
+		</div>
+	{/if}
+	{#if sourcePrimingDrift && Boolean(sourcePrimingDrift.has_drift)}
+		<div class="guidedAssistCard guidedAssistError">
+			<div class="guidedAssistHead">Priming Drift</div>
+			<div class="guidedAssistDesc">
+				type mismatch: {String(sourcePrimingDrift.type_mismatch ?? false)} | missing: {String(sourcePrimingDrift.missing_columns ?? [])}
+				| new: {String(sourcePrimingDrift.new_columns ?? [])} | mime mismatch: {String(sourcePrimingDrift.mime_mismatch ?? false)}
+			</div>
 		</div>
 	{/if}
 	{#if isSource}

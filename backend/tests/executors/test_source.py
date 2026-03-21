@@ -550,3 +550,36 @@ async def test_ambiguous_detection_emits_warning_log(monkeypatch):
 	result = await exec_source("run_prime_ambiguous", node, _ctx_with_events(events))
 	assert result.status == "succeeded"
 	assert any("PRIMING_TYPE_DETECTION_AMBIGUOUS" in str(e.get("message") or "") for e in events if e.get("type") == "log")
+
+
+@pytest.mark.asyncio
+async def test_priming_drift_soft_emits_warning(monkeypatch):
+	async def _fake_file(*_args, **_kwargs):
+		return _output([{"id": 1, "name": "a"}], "table")
+
+	events: list[dict] = []
+	monkeypatch.setattr("app.executors.source._handle_file_source", _fake_file)
+	node = _priming_node(
+		"file",
+		{"enabled": True, "mode": "advisory", "drift_policy": "soft", "sample_rows": 5, "sample_bytes": 1024, "timeout_ms": 100},
+	)
+	node["data"]["params"]["output_schema"] = {"type": "table", "fields": [{"name": "missing_col", "type": "string"}]}
+	result = await exec_source("run_prime_drift_soft", node, _ctx_with_events(events))
+	assert result.status == "succeeded"
+	assert any("PRIMING_SCHEMA_DRIFT" in str(e.get("message") or "") for e in events if e.get("type") == "log")
+
+
+@pytest.mark.asyncio
+async def test_priming_drift_strict_fails_node(monkeypatch):
+	async def _fake_file(*_args, **_kwargs):
+		return _output([{"id": 1, "name": "a"}], "table")
+
+	monkeypatch.setattr("app.executors.source._handle_file_source", _fake_file)
+	node = _priming_node(
+		"file",
+		{"enabled": True, "mode": "advisory", "drift_policy": "strict", "sample_rows": 5, "sample_bytes": 1024, "timeout_ms": 100},
+	)
+	node["data"]["params"]["output_schema"] = {"type": "table", "fields": [{"name": "missing_col", "type": "string"}]}
+	result = await exec_source("run_prime_drift_strict", node, _ctx())
+	assert result.status == "failed"
+	assert "PRIMING_SCHEMA_DRIFT" in str(result.error or "")
