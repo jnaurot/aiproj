@@ -551,3 +551,50 @@ async def test_source_node_output_event_includes_audio_metadata(tmp_path):
     audio_meta = source_obs.get("audio_metadata")
     assert isinstance(audio_meta, dict)
     assert audio_meta.get("sample_rate") == 8000
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_video_metadata(tmp_path):
+    events = []
+    artifact_root = tmp_path / "artifact-root-11"
+    source_dir = tmp_path / "source-11"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.mp4"
+    source_file.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    bus = RunEventBus("run-source-obs-11", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-11",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_video_meta",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.mp4",
+                            "file_format": "mp4",
+                            "video_frame_mode": "keyframes",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-11",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_video_meta"]
+    assert node_outputs, "Expected node_output for source_video_meta"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    video_meta = source_obs.get("video_metadata")
+    assert isinstance(video_meta, dict)
+    assert video_meta.get("format") == "mp4"

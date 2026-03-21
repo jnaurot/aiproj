@@ -103,6 +103,10 @@ describe('source kinds schema coverage', () => {
 			audio_normalize: true,
 			audio_target_peak: 0.8,
 			audio_transcode_format: 'wav',
+			video_extract_metadata: true,
+			video_frame_mode: 'interval',
+			video_frame_interval_sec: 2,
+			video_max_frames: 7,
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -133,5 +137,9 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.audio_normalize).toBe(true);
 		expect(parsed.audio_target_peak).toBe(0.8);
 		expect(parsed.audio_transcode_format).toBe('wav');
+		expect(parsed.video_extract_metadata).toBe(true);
+		expect(parsed.video_frame_mode).toBe('interval');
+		expect(parsed.video_frame_interval_sec).toBe(2);
+		expect(parsed.video_max_frames).toBe(7);
 	});
 });

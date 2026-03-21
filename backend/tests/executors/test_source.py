@@ -801,6 +801,34 @@ async def test_source_file_audio_non_wav_normalize_fallback(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_source_file_video_metadata_and_frame_fallback(tmp_path):
+	file_path = tmp_path / "sample.mp4"
+	file_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+	node = {
+		"id": "n_source_video_mp4",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "mp4",
+				"video_frame_mode": "interval",
+				"video_frame_interval_sec": 2.0,
+				"video_max_frames": 3,
+			}
+		},
+	}
+	result = await exec_source("run_video_mp4", node, _ctx())
+	assert result.status == "succeeded"
+	meta = (result.metadata.data_schema or {}).get("video_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("format") == "mp4"
+	frame_meta = meta.get("frame_extraction")
+	assert isinstance(frame_meta, dict)
+	assert frame_meta.get("requested_mode") == "interval"
+	assert frame_meta.get("applied") is False
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

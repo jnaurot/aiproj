@@ -2007,6 +2007,27 @@ async def _handle_file_source(
             if schema.file_format == "wav":
                 audio_meta.update(_extract_wav_metadata(binary_data))
             format_specific_metadata["audio_metadata"] = audio_meta
+    elif schema.file_format in {"mp4", "mov", "webm"}:
+        raw = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
+        binary_data = raw
+        if bool(getattr(schema, "video_extract_metadata", True)):
+            frame_mode = str(getattr(schema, "video_frame_mode", "none") or "none")
+            frame_interval = float(getattr(schema, "video_frame_interval_sec", 1.0) or 1.0)
+            max_frames = int(getattr(schema, "video_max_frames", 5) or 5)
+            format_specific_metadata["video_metadata"] = {
+                "format": schema.file_format,
+                "codec": "unknown",
+                "duration_sec": None,
+                "resolution": None,
+                "frame_extraction": {
+                    "requested_mode": frame_mode,
+                    "interval_sec": frame_interval,
+                    "max_frames": max_frames,
+                    "applied": False,
+                    "reason": "video_decoder_not_available",
+                    "artifacts": [],
+                },
+            }
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 

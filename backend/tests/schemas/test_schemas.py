@@ -374,6 +374,10 @@ class TestSourceFileParams:
             "audio_normalize": True,
             "audio_target_peak": 0.8,
             "audio_transcode_format": "wav",
+            "video_extract_metadata": True,
+            "video_frame_mode": "interval",
+            "video_frame_interval_sec": 2.0,
+            "video_max_frames": 6,
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -410,6 +414,10 @@ class TestSourceFileParams:
         assert source_params.audio_normalize is True
         assert source_params.audio_target_peak == 0.8
         assert source_params.audio_transcode_format == "wav"
+        assert source_params.video_extract_metadata is True
+        assert source_params.video_frame_mode == "interval"
+        assert source_params.video_frame_interval_sec == 2.0
+        assert source_params.video_max_frames == 6
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -803,6 +811,10 @@ class TestNormalizeSourceParamsFrontend:
                 "audioNormalize": True,
                 "audioTargetPeak": 0.75,
                 "audioTranscodeFormat": "mp3",
+                "videoExtractMetadata": False,
+                "videoFrameMode": "keyframes",
+                "videoFrameIntervalSec": 1.5,
+                "videoMaxFrames": 4,
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -839,6 +851,10 @@ class TestNormalizeSourceParamsFrontend:
         assert out["audio_normalize"] is True
         assert out["audio_target_peak"] == 0.75
         assert out["audio_transcode_format"] == "mp3"
+        assert out["video_extract_metadata"] is False
+        assert out["video_frame_mode"] == "keyframes"
+        assert out["video_frame_interval_sec"] == 1.5
+        assert out["video_max_frames"] == 4
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25

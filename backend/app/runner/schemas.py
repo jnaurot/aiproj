@@ -153,6 +153,14 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["audio_target_peak"] = p.pop("audioTargetPeak")
     if "audioTranscodeFormat" in p and "audio_transcode_format" not in p:
         p["audio_transcode_format"] = p.pop("audioTranscodeFormat")
+    if "videoExtractMetadata" in p and "video_extract_metadata" not in p:
+        p["video_extract_metadata"] = p.pop("videoExtractMetadata")
+    if "videoFrameMode" in p and "video_frame_mode" not in p:
+        p["video_frame_mode"] = p.pop("videoFrameMode")
+    if "videoFrameIntervalSec" in p and "video_frame_interval_sec" not in p:
+        p["video_frame_interval_sec"] = p.pop("videoFrameIntervalSec")
+    if "videoMaxFrames" in p and "video_max_frames" not in p:
+        p["video_max_frames"] = p.pop("videoMaxFrames")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -428,6 +436,10 @@ class SourceFileParams(NodeParamSchema):
     audio_normalize: bool = False
     audio_target_peak: float = Field(default=0.9, ge=0.01, le=1.0)
     audio_transcode_format: Optional[Literal["mp3", "wav", "flac", "ogg", "m4a", "aac"]] = None
+    video_extract_metadata: bool = True
+    video_frame_mode: Literal["none", "keyframes", "interval"] = "none"
+    video_frame_interval_sec: float = Field(default=1.0, ge=0.01)
+    video_max_frames: int = Field(default=5, ge=1)
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)
