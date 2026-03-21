@@ -58,6 +58,17 @@ class TestLLMParams:
         assert "output_mode" not in result
         assert result["output_schema"] == {"type": "object"}
         assert result["output_strict"] is True
+
+    def test_normalize_frontend_output_mode_prefers_nested_mode_over_legacy(self):
+        input_params = {
+            "model": "gpt-4",
+            "user_prompt": "Hello",
+            "output_mode": "json",
+            "output": {"mode": "text"}
+        }
+
+        result = normalize_llm_params_frontend(input_params)
+        assert result["output_mode"] == "text"
     
     def test_normalize_stop_sequences(self):
         """Test stop_sequences normalization"""

@@ -76,6 +76,9 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     # nested output -> flattened output schema controls
     out = p.get("output")
     if isinstance(out, dict):
+        if "mode" in out:
+            # Nested output.mode is the canonical control and must override stale legacy output_mode.
+            p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
@@ -130,6 +133,13 @@ def _llm_schema_declared_output_mode(node: Dict[str, Any]) -> str:
     return "text"
 
 #
+
+def _resolve_llm_output_mode(node: Dict[str, Any], norm_params: Dict[str, Any]) -> str:
+    explicit = str(norm_params.get("output_mode") or "").strip().lower()
+    if explicit in {"text", "json", "embeddings"}:
+        return explicit
+    return _llm_schema_declared_output_mode(node)
+
 
 def iso_now():
     return datetime.now(timezone.utc).isoformat()
@@ -311,9 +321,9 @@ async def exec_llm(
     logger.debug("Model node raw params normalized", extra={"nodeId": node_id})
 
     norm_params = normalize_llm_params(raw_params)
-    declared_mode = _llm_schema_declared_output_mode(node)
-    norm_params["output_mode"] = declared_mode
-    if declared_mode == "json" and not isinstance(norm_params.get("output_schema"), dict):
+    resolved_mode = _resolve_llm_output_mode(node, norm_params)
+    norm_params["output_mode"] = resolved_mode
+    if resolved_mode == "json" and not isinstance(norm_params.get("output_schema"), dict):
         # Schema-first: JSON mode is chosen by typed schema declaration, so allow empty schema by default.
         norm_params["output_schema"] = {}
     logger.debug("Model node params validated", extra={"nodeId": node_id, "llmKind": node.get("data", {}).get("llmKind")})

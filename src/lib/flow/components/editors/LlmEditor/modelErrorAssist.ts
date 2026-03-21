@@ -46,7 +46,6 @@ export function buildModelAutoFixes(input: {
 			label: 'Set output mode to text',
 			patch: {
 				output: {
-					...((input.params?.output as Record<string, unknown> | undefined) ?? {}),
 					mode: 'text',
 					strict: true
 				}

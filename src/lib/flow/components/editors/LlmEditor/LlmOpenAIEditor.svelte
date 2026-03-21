@@ -398,12 +398,15 @@
 			value={String(outputStrict)}
 			on:change={(event) => {
 				const value = (event.currentTarget as HTMLSelectElement).value === 'true';
-				draft({
-					output: { ...(params?.output ?? { mode: outputMode }), mode: outputMode, strict: value }
-				});
-				commit({
-					output: { ...(params?.output ?? { mode: outputMode }), mode: outputMode, strict: value }
-				});
+				const nextOutput: Record<string, unknown> = { mode: outputMode, strict: value };
+				if (outputMode === 'json') {
+					nextOutput.jsonSchema = params?.output?.jsonSchema ?? { type: 'object', properties: {} };
+				}
+				if (outputMode === 'embeddings') {
+					nextOutput.embedding = params?.output?.embedding ?? { dims: 1536, dtype: 'float32', layout: '1d' };
+				}
+				draft({ output: nextOutput });
+				commit({ output: nextOutput });
 			}}
 		>
 			<option value="true">true</option>

@@ -224,6 +224,20 @@ function patchIncludesBuiltinArgs(patch: unknown): boolean {
   return isObject(builtin.args);
 }
 
+function normalizeExistingForModelOutputPatch(existing: unknown, patch: unknown): unknown {
+  if (!isObject(existing) || !isObject(patch)) return existing;
+  const outputPatch = patch.output;
+  if (!isObject(outputPatch)) return existing;
+  if (!Object.prototype.hasOwnProperty.call(outputPatch, "mode")) return existing;
+
+  const next: Record<string, unknown> = { ...existing };
+  const existingOutput = isObject(next.output) ? { ...(next.output as Record<string, unknown>) } : {};
+  delete existingOutput.jsonSchema;
+  delete existingOutput.embedding;
+  next.output = existingOutput;
+  return next;
+}
+
 function normalizeExistingForToolBuiltinPatch(existing: unknown, patch: unknown): unknown {
   if (!isObject(existing) || !isObject(patch)) return existing;
   if (!patchIncludesBuiltinArgs(patch)) return existing;
@@ -255,7 +269,9 @@ export function updateNodeParamsValidated(
       ? normalizeExistingForTransformPatch(existing, normalizedPatch)
       : node.data.kind === "tool"
         ? normalizeExistingForToolBuiltinPatch(existing, normalizedPatch)
-      : existing;
+        : node.data.kind === "llm" || node.data.kind === "model"
+          ? normalizeExistingForModelOutputPatch(existing, normalizedPatch)
+        : existing;
   const pick = pickValidation(node.data, normalizedPatch, existingForMerge);
   const defaultsForMerge =
     node.data.kind === "transform" && patchIncludesRenameMap(normalizedPatch) && isObject(pick.defaults)

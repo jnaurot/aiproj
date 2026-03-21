@@ -176,6 +176,19 @@ def _schema_declared_type_from_cache_view(schema_view: Dict[str, Any]) -> Option
     return None
 
 
+def _priming_fingerprint(priming: Any) -> Dict[str, Any]:
+    if not isinstance(priming, dict):
+        return {"enabled": False}
+    return {
+        "enabled": bool(priming.get("enabled")),
+        "mode": str(priming.get("mode") or "advisory"),
+        "drift_policy": str(priming.get("drift_policy") or "soft"),
+        "sample_rows": int(priming.get("sample_rows") or 50),
+        "sample_bytes": int(priming.get("sample_bytes") or 65536),
+        "timeout_ms": int(priming.get("timeout_ms") or 1500),
+    }
+
+
 def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Dict[str, Any]:
     data = (node.get("data", {}) if isinstance(node, dict) else {}) or {}
     source_kind = str(data.get("sourceKind") or params.get("source_type") or "file")
@@ -186,6 +199,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
     )
     source_output_type = _schema_declared_type_from_cache_view(schema_view)
     fp: Dict[str, Any] = {"source_kind": source_kind}
+    priming_fp = _priming_fingerprint(p.get("priming"))
     if source_kind == "file":
         snapshot_id = p.get("snapshot_id") or p.get("snapshotId")
         if isinstance(snapshot_id, str) and snapshot_id.strip():
@@ -251,6 +265,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
                 "file_stat": file_stat,
+                "priming": priming_fp,
             }
         )
     elif source_kind == "database":
@@ -280,6 +295,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "limit": p.get("limit"),
                 "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+                "priming": priming_fp,
             }
         )
     elif source_kind == "api":
@@ -312,6 +328,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "cache_policy": p.get("cache_policy") or {"mode": "default"},
                 "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+                "priming": priming_fp,
             }
         )
     elif source_kind == "object_store":
@@ -325,6 +342,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "encoding": p.get("encoding"),
                 "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+                "priming": priming_fp,
             }
         )
     elif source_kind == "warehouse":
@@ -337,6 +355,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
                 "limit": p.get("limit"),
                 "output_type": source_output_type,
                 "output_schema": p.get("output_schema") or ((p.get("output") or {}).get("schema")),
+                "priming": priming_fp,
             }
         )
     return _sanitize(fp)

@@ -25,6 +25,31 @@ function toolNodeWithArgs(args: Record<string, unknown>): Node<PipelineNodeData>
 	};
 }
 
+function modelNodeWithJsonOutput(): Node<PipelineNodeData> {
+	return {
+		id: 'n_model',
+		type: 'model',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'model',
+			label: 'Model',
+			llmKind: 'ollama',
+			modelKind: 'llm',
+			taskKind: 'generate',
+			params: {
+				baseUrl: 'http://localhost:11434',
+				model: 'demo-model',
+				user_prompt: 'hello',
+				output: {
+					mode: 'json',
+					strict: true,
+					jsonSchema: { type: 'object', properties: { ok: { type: 'boolean' } } }
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
 describe('updateNodeParamsValidated builtin args replacement', () => {
 	it('replaces builtin args object on operation switch instead of deep-merging keys', () => {
 		const nodes = [
@@ -56,5 +81,18 @@ describe('updateNodeParamsValidated builtin args replacement', () => {
 		expect(Object.prototype.hasOwnProperty.call(nextArgs, 'value')).toBe(false);
 		expect(Object.prototype.hasOwnProperty.call(nextArgs, 'target_tz')).toBe(false);
 		expect(Object.prototype.hasOwnProperty.call(nextArgs, 'values')).toBe(false);
+	});
+});
+
+describe('updateNodeParamsValidated model output mode switching', () => {
+	it('drops jsonSchema when switching output mode from json to text', () => {
+		const nodes = [modelNodeWithJsonOutput()];
+		const result = updateNodeParamsValidated(nodes, 'n_model', {
+			output: { mode: 'text', strict: true }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_model')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.output.mode).toBe('text');
+		expect(Object.prototype.hasOwnProperty.call(params.output, 'jsonSchema')).toBe(false);
 	});
 });
