@@ -170,6 +170,25 @@ async def _serialize_image_media(context: GraphContext, artifact_id: str) -> Opt
         "dataUrl": f"data:{mime};base64,{b64}",
     }
 
+
+async def _serialize_audio_media(context: GraphContext, artifact_id: str) -> Optional[Dict[str, Any]]:
+    art = await context.artifact_store.get(artifact_id)
+    mime = str(getattr(art, "mime_type", "") or "").strip().lower()
+    payload_type = str(getattr(art, "payload_type", "") or "").strip().lower()
+    if payload_type != "audio" and not mime.startswith("audio/"):
+        return None
+    payload = await context.artifact_store.read(artifact_id)
+    if not isinstance(payload, (bytes, bytearray)):
+        return None
+    if not mime:
+        mime = "audio/wav"
+    b64 = base64.b64encode(bytes(payload)).decode("ascii")
+    return {
+        "type": "audio",
+        "mimeType": mime,
+        "dataUrl": f"data:{mime};base64,{b64}",
+    }
+
 async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
@@ -214,6 +233,10 @@ async def exec_llm(
             media = await _serialize_image_media(context, aid)
             if media is not None:
                 serialized_media.append(media)
+        if model_kind in {"audio", "multimodal"}:
+            media = await _serialize_audio_media(context, aid)
+            if media is not None:
+                serialized_media.append(media)
         text = await _serialize_artifact_input(context, aid, input_encoding)
         serialized_inputs = [text] if text else []
     else:
@@ -221,6 +244,10 @@ async def exec_llm(
         for idx, aid in enumerate(upstream_artifact_ids, start=1):
             if model_kind in {"vision", "multimodal"}:
                 media = await _serialize_image_media(context, aid)
+                if media is not None:
+                    serialized_media.append(media)
+            if model_kind in {"audio", "multimodal"}:
+                media = await _serialize_audio_media(context, aid)
                 if media is not None:
                     serialized_media.append(media)
             payload = await _serialize_artifact_input(context, aid, input_encoding)

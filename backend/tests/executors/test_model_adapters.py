@@ -35,6 +35,16 @@ def test_openai_adapter_conforms_contract():
 	embed_prepared = adapter.prepare_request(_params("embeddings"), upstream_text="abc", input_items=["abc"])
 	assert embed_prepared.url.endswith("/v1/embeddings")
 	assert embed_prepared.output_mode == "embeddings"
+	audio_prepared = adapter.prepare_request(
+		_params("text"),
+		upstream_text="abc",
+		input_media=[{"type": "audio", "dataUrl": "data:audio/wav;base64,QUJD"}],
+	)
+	audio_messages = audio_prepared.payload.get("messages") or []
+	assert isinstance(audio_messages, list) and len(audio_messages) > 0
+	last_content = audio_messages[-1].get("content")
+	assert isinstance(last_content, list)
+	assert any(isinstance(part, dict) and part.get("type") == "input_audio" for part in last_content)
 
 
 def test_ollama_adapter_conforms_contract():
@@ -56,3 +66,13 @@ def test_ollama_adapter_rejects_embeddings_mode():
 	adapter = OllamaAdapter()
 	with pytest.raises(ValueError, match="does not support output_mode='embeddings'"):
 		adapter.prepare_request(_params("embeddings"), upstream_text="abc", input_items=["abc"])
+
+
+def test_ollama_adapter_rejects_audio_input():
+	adapter = OllamaAdapter()
+	with pytest.raises(ValueError, match="does not support audio input"):
+		adapter.prepare_request(
+			_params("text"),
+			upstream_text="abc",
+			input_media=[{"type": "audio", "dataUrl": "data:audio/wav;base64,QUJD"}],
+		)

@@ -87,12 +87,33 @@ class OpenAICompatAdapter:
 			messages: List[Dict[str, Any]] = build_messages(params, upstream_text)
 			if input_media:
 				user_content = str(messages[-1].get("content") or "")
-				media_parts = []
+				media_parts: List[Dict[str, Any]] = []
 				for media in input_media:
+					media_type = str(media.get("type") or "").strip().lower()
 					data_url = str(media.get("dataUrl") or "").strip()
 					if not data_url:
 						continue
-					media_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+					if media_type == "audio":
+						# OpenAI-compatible multimodal payload for audio transcript/extract paths.
+						audio_data = data_url
+						audio_format = "wav"
+						if data_url.startswith("data:"):
+							header, _, b64 = data_url.partition(",")
+							audio_data = b64.strip()
+							mime = header[5:].split(";")[0].strip().lower() if ";" in header else ""
+							if mime:
+								audio_format = mime.split("/")[-1]
+						media_parts.append(
+							{
+								"type": "input_audio",
+								"input_audio": {
+									"data": audio_data,
+									"format": audio_format,
+								},
+							}
+						)
+					else:
+						media_parts.append({"type": "image_url", "image_url": {"url": data_url}})
 				if media_parts:
 					messages[-1] = {
 						"role": "user",
@@ -166,6 +187,8 @@ class OllamaAdapter:
 		output_mode = resolve_output_mode(params)
 		if output_mode == "embeddings":
 			raise ValueError("provider 'ollama' does not support output_mode='embeddings'")
+		if input_media and any(str(m.get("type") or "").strip().lower() == "audio" for m in input_media):
+			raise ValueError("provider 'ollama' does not support audio input")
 		thinking_mode = "none"
 		if params.thinking and params.thinking.enabled:
 			thinking_mode = params.thinking.mode
