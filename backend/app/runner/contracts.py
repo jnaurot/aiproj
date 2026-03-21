@@ -108,23 +108,22 @@ def _contract_from_output_mode(output_mode: Optional[str], fallback: str) -> str
     return fallback
 
 
-def _typed_schema_type_from_node(node: Dict[str, Any]) -> Optional[str]:
+def _declared_typed_schema_type_from_node(node: Dict[str, Any]) -> Optional[str]:
     data = (node.get("data") or {}) if isinstance(node, dict) else {}
     schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
     if not isinstance(schema_env, dict):
         return None
-    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
-        obs = schema_env.get(key)
-        if not isinstance(obs, dict):
-            continue
-        typed = obs.get("typedSchema")
-        if not isinstance(typed, dict):
-            continue
-        t = str(typed.get("type") or "").strip().lower()
-        if t == "string":
-            t = "text"
-        if t in {"table", "json", "text", "binary", "embeddings"}:
-            return t
+    obs = schema_env.get("expectedSchema")
+    if not isinstance(obs, dict):
+        return None
+    typed = obs.get("typedSchema")
+    if not isinstance(typed, dict):
+        return None
+    t = str(typed.get("type") or "").strip().lower()
+    if t == "string":
+        t = "text"
+    if t in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
+        return t
     return None
 
 
@@ -140,6 +139,12 @@ def _contract_from_typed_type(typed: Optional[str]) -> Optional[str]:
         return BINARY_V1
     if t == "embeddings":
         return EMBEDDINGS_ANY_V1
+    if t == "image":
+        return IMAGE_V1
+    if t == "audio":
+        return AUDIO_V1
+    if t == "video":
+        return VIDEO_V1
     return None
 
 
@@ -148,7 +153,7 @@ def default_contract_for_node(node: Dict[str, Any]) -> str:
     kind = str(data.get("kind") or "").strip().lower()
     params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
 
-    typed_contract = _contract_from_typed_type(_typed_schema_type_from_node(node))
+    typed_contract = _contract_from_typed_type(_declared_typed_schema_type_from_node(node))
     if typed_contract:
         return typed_contract
     output_obj = params.get("output") if isinstance(params.get("output"), dict) else {}

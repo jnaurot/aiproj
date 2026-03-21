@@ -284,7 +284,15 @@ function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 	return 'text';
 }
 
-function deriveLlmOutPort(params: Record<string, any>): PayloadType {
+function deriveDeclaredOutPort(data: PipelineNodeData): PayloadType | null {
+	const schema = (data as any)?.schema ?? {};
+	const expectedType = normalizeTypedSchemaPrimitive(schema?.expectedSchema?.typedSchema?.type);
+	return isPayloadType(expectedType) ? expectedType : null;
+}
+
+function deriveLlmOutPort(data: PipelineNodeData, params: Record<string, any>): PayloadType {
+	const declaredOut = deriveDeclaredOutPort(data);
+	if (declaredOut) return declaredOut;
 	const output = params?.output && typeof params.output === 'object' ? params.output : {};
 	const mode = String((output as any)?.mode ?? '').trim().toLowerCase();
 	if (mode === 'json') return 'json';
@@ -311,7 +319,7 @@ export function deriveNodeIoForData(data: PipelineNodeData): { in: PayloadType |
 	}
 	const params = ((data as any)?.params ?? {}) as Record<string, any>;
 	if (data.kind === 'llm' || data.kind === 'model') {
-		return { in: 'text', out: deriveLlmOutPort(params) };
+		return { in: 'text', out: deriveLlmOutPort(data, params) };
 	}
 	if (data.kind === 'transform') {
 		return deriveTransformIo(params, (data as any)?.transformKind);
@@ -2714,7 +2722,16 @@ function makeSchemaFieldsFromColumns(columns: unknown, fallbackType = 'unknown')
 	);
 }
 
-type TypedSchemaPrimitive = 'table' | 'json' | 'text' | 'binary' | 'embeddings' | 'unknown';
+type TypedSchemaPrimitive =
+	| 'table'
+	| 'json'
+	| 'text'
+	| 'binary'
+	| 'embeddings'
+	| 'image'
+	| 'audio'
+	| 'video'
+	| 'unknown';
 
 function normalizeTypedSchemaPrimitive(raw: unknown): TypedSchemaPrimitive {
 	const value = String(raw ?? '').trim().toLowerCase();
@@ -2723,6 +2740,9 @@ function normalizeTypedSchemaPrimitive(raw: unknown): TypedSchemaPrimitive {
 	if (value === 'text' || value === 'string') return 'text';
 	if (value === 'binary' || value === 'bytes') return 'binary';
 	if (value === 'embeddings' || value === 'embedding') return 'embeddings';
+	if (value === 'image') return 'image';
+	if (value === 'audio') return 'audio';
+	if (value === 'video') return 'video';
 	return 'unknown';
 }
 
