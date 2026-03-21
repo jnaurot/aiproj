@@ -121,6 +121,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["excel_import_strategy"] = p.pop("excelImportStrategy")
     if "excelSheets" in p and "excel_sheets" not in p:
         p["excel_sheets"] = p.pop("excelSheets")
+    if "excelMergedCellsPolicy" in p and "excel_merged_cells_policy" not in p:
+        p["excel_merged_cells_policy"] = p.pop("excelMergedCellsPolicy")
+    if "excelDatePolicy" in p and "excel_date_policy" not in p:
+        p["excel_date_policy"] = p.pop("excelDatePolicy")
+    if "excelDateFormat" in p and "excel_date_format" not in p:
+        p["excel_date_format"] = p.pop("excelDateFormat")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -380,6 +386,9 @@ class SourceFileParams(NodeParamSchema):
     json_flatten_separator: str = "."
     excel_import_strategy: Literal["single", "union", "stack"] = "single"
     excel_sheets: List[str] = Field(default_factory=list)
+    excel_merged_cells_policy: Literal["none", "ffill"] = "none"
+    excel_date_policy: Literal["auto", "coerce", "string"] = "auto"
+    excel_date_format: Optional[str] = None
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

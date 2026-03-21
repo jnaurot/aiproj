@@ -300,6 +300,8 @@ async def test_source_node_output_event_includes_excel_provenance_metadata(tmp_p
                             "filename": "input.xlsx",
                             "file_format": "excel",
                             "excel_import_strategy": "stack",
+                            "excel_merged_cells_policy": "ffill",
+                            "excel_date_policy": "coerce",
                         },
                     },
                 }
@@ -320,3 +322,6 @@ async def test_source_node_output_event_includes_excel_provenance_metadata(tmp_p
     provenance = source_obs.get("excel_provenance")
     assert isinstance(provenance, dict)
     assert provenance.get("strategy") == "stack"
+    policy = source_obs.get("excel_policy")
+    assert isinstance(policy, dict)
+    assert policy.get("merged_cells_policy") == "ffill"

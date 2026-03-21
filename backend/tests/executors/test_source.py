@@ -445,6 +445,42 @@ async def test_source_file_excel_multi_sheet_union_and_stack(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_source_file_excel_applies_merge_and_date_policies(tmp_path, monkeypatch):
+	file_path = tmp_path / "policy.xlsx"
+	file_path.write_bytes(b"fake-xlsx")
+
+	def _fake_read_excel(*_args, **kwargs):
+		header = kwargs.get("header", 0)
+		if header is None:
+			return pd.DataFrame([["group", "date"], ["A", "2025-01-01"], [None, "2025-01-02"]])
+		return pd.DataFrame({"group": ["A", None], "date": ["2025-01-01", "2025-01-02"]})
+
+	monkeypatch.setattr("app.executors.source.pd.read_excel", _fake_read_excel)
+	node = {
+		"id": "n_source_excel_policy",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "excel",
+				"excel_merged_cells_policy": "ffill",
+				"excel_date_policy": "coerce",
+				"excel_date_format": "%Y-%m-%d",
+			}
+		},
+	}
+	result = await exec_source("run_excel_policy", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert result.data[1]["group"] == "A"
+	data_schema = (result.metadata.data_schema or {}) if result.metadata else {}
+	policy = data_schema.get("excel_policy")
+	assert isinstance(policy, dict)
+	assert policy.get("merged_cells_policy") == "ffill"
+	assert policy.get("date_policy") == "coerce"
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

@@ -552,6 +552,39 @@ def _flatten_json_record(
     return out
 
 
+def _apply_excel_policies(
+    df: pd.DataFrame,
+    *,
+    merged_cells_policy: str,
+    date_policy: str,
+    date_format: Optional[str],
+) -> pd.DataFrame:
+    out = df.copy()
+    if str(merged_cells_policy or "none").strip().lower() == "ffill":
+        out = out.ffill(axis=0)
+    policy = str(date_policy or "auto").strip().lower()
+    if policy == "coerce":
+        fmt = str(date_format or "").strip() or None
+        for col in list(out.columns):
+            series = out[col]
+            if is_object_dtype(series.dtype) or is_string_dtype(series.dtype):
+                try:
+                    converted = pd.to_datetime(series, errors="coerce", format=fmt)
+                    non_null = int(series.notna().sum())
+                    parsed_non_null = int(converted.notna().sum())
+                    # Only coerce if most non-null values parse as dates.
+                    if non_null > 0 and (parsed_non_null / non_null) >= 0.8:
+                        out[col] = converted
+                except Exception:
+                    continue
+    elif policy == "string":
+        for col in list(out.columns):
+            series = out[col]
+            if is_datetime64_any_dtype(series.dtype):
+                out[col] = series.astype("string").fillna("")
+    return out
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1622,6 +1655,12 @@ async def _handle_file_source(
             df = _read_excel(sheet_name=sheet, header=0 if excel_has_header else None)
             if not excel_has_header:
                 df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
+            df = _apply_excel_policies(
+                df,
+                merged_cells_policy=str(getattr(schema, "excel_merged_cells_policy", "none") or "none"),
+                date_policy=str(getattr(schema, "excel_date_policy", "auto") or "auto"),
+                date_format=getattr(schema, "excel_date_format", None),
+            )
             rows = df.to_dict(orient="records")
             table_columns = _infer_table_columns_from_dataframe(df)
             format_specific_metadata["excel_provenance"] = {
@@ -1651,6 +1690,12 @@ async def _handle_file_source(
                 row_counts[name] = int(len(local))
                 frames.append(local)
             df = pd.concat(frames, axis=0, ignore_index=True, sort=True) if frames else pd.DataFrame()
+            df = _apply_excel_policies(
+                df,
+                merged_cells_policy=str(getattr(schema, "excel_merged_cells_policy", "none") or "none"),
+                date_policy=str(getattr(schema, "excel_date_policy", "auto") or "auto"),
+                date_format=getattr(schema, "excel_date_format", None),
+            )
             rows = df.to_dict(orient="records")
             table_columns = _infer_table_columns_from_dataframe(df)
             format_specific_metadata["excel_provenance"] = {
@@ -1658,6 +1703,11 @@ async def _handle_file_source(
                 "sheets": target_sheets,
                 "row_counts": row_counts,
             }
+        format_specific_metadata["excel_policy"] = {
+            "merged_cells_policy": str(getattr(schema, "excel_merged_cells_policy", "none") or "none"),
+            "date_policy": str(getattr(schema, "excel_date_policy", "auto") or "auto"),
+            "date_format": (str(getattr(schema, "excel_date_format", "") or "").strip() or None),
+        }
     elif schema.file_format == "txt":
         text_data = (
             (file_bytes or b"").decode(schema.encoding, errors="replace")
