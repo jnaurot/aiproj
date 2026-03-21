@@ -1170,8 +1170,8 @@ def _source_payload_schema(
         if isinstance(source_priming_artifact, dict) and source_priming_artifact:
             out["priming_artifact"] = source_priming_artifact
         return out
-    if out_contract == "binary":
-        out = {"schema_version": 1, "type": "binary"}
+    if out_contract in {"binary", "image", "audio", "video"}:
+        out = {"schema_version": 1, "type": str(out_contract)}
         source_observability = source_data_schema.get("source_observability")
         if isinstance(source_observability, dict):
             out["source_observability"] = source_observability

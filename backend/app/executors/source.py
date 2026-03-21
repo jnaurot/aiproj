@@ -56,6 +56,13 @@ try:
 except ImportError:
     HAS_DATABASE = False
 
+try:
+    from PIL import Image, ExifTags
+
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
 
 def _iso_now() -> str:
     from datetime import datetime, timezone
@@ -642,6 +649,50 @@ def _select_pdf_page_indexes(total_pages: int, mode: str, page_range: Optional[s
         if selected:
             return sorted(selected)
     return list(range(total_pages))
+
+
+def _sanitize_svg_bytes(raw: bytes) -> bytes:
+    text = raw.decode("utf-8", errors="replace")
+    # Remove script blocks and inline event handlers.
+    text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\son[a-zA-Z]+\s*=\s*\"[^\"]*\"", "", text)
+    text = re.sub(r"\son[a-zA-Z]+\s*=\s*'[^']*'", "", text)
+    return text.encode("utf-8")
+
+
+def _extract_image_metadata(file_bytes: bytes, file_format: str, tiff_pages_mode: str) -> Dict[str, Any]:
+    meta: Dict[str, Any] = {"format": file_format}
+    if not HAS_PIL:
+        return meta
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            meta["width"] = int(getattr(img, "width", 0) or 0)
+            meta["height"] = int(getattr(img, "height", 0) or 0)
+            meta["color_mode"] = str(getattr(img, "mode", "") or "")
+            meta["mime"] = str(Image.MIME.get(img.format, "") if getattr(img, "format", None) else "")
+            n_frames = int(getattr(img, "n_frames", 1) or 1)
+            if str(file_format).lower() in {"tif", "tiff"}:
+                meta["tiff_pages"] = n_frames
+                if str(tiff_pages_mode or "first").strip().lower() == "all":
+                    meta["tiff_pages_mode"] = "all"
+                else:
+                    meta["tiff_pages_mode"] = "first"
+            exif = None
+            try:
+                exif = img.getexif()
+            except Exception:
+                exif = None
+            orientation = None
+            if exif:
+                for k, v in exif.items():
+                    if str(ExifTags.TAGS.get(k, "")).lower() == "orientation":
+                        orientation = int(v)
+                        break
+            if orientation is not None:
+                meta["orientation"] = orientation
+    except Exception:
+        return meta
+    return meta
 
 
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
@@ -1858,6 +1909,24 @@ async def _handle_file_source(
                 "confidence": 0.75 if resolved_mode.startswith("ocr") else 0.9,
                 "pages": per_page_meta,
             }
+    elif schema.file_format in {"jpg", "jpeg", "png", "webp", "gif", "svg", "tif", "tiff"}:
+        raw = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
+        svg_policy = str(getattr(schema, "image_svg_policy", "sanitize") or "sanitize").strip().lower()
+        if schema.file_format == "svg":
+            lowered = raw.decode("utf-8", errors="ignore").lower()
+            has_script = "<script" in lowered or "onload=" in lowered or "onerror=" in lowered
+            if has_script and svg_policy == "reject":
+                raise ValueError("SVG rejected by image_svg_policy=reject due to active content")
+            if has_script and svg_policy == "sanitize":
+                raw = _sanitize_svg_bytes(raw)
+        binary_data = raw
+        if bool(getattr(schema, "image_extract_metadata", True)):
+            format_specific_metadata["image_metadata"] = _extract_image_metadata(
+                binary_data,
+                schema.file_format,
+                str(getattr(schema, "image_tiff_pages_mode", "first") or "first"),
+            )
+            format_specific_metadata["image_metadata"]["svg_policy"] = svg_policy if schema.file_format == "svg" else "n/a"
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 

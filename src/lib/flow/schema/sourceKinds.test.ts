@@ -96,6 +96,9 @@ describe('source kinds schema coverage', () => {
 			txt_record_mode: 'fixed_chunk',
 			txt_chunk_size: 128,
 			pdf_extraction_mode: 'hybrid',
+			image_extract_metadata: true,
+			image_svg_policy: 'sanitize',
+			image_tiff_pages_mode: 'all',
 			parquet_columns: ['id'],
 			parquet_row_groups: [0],
 			parquet_max_rows: 100
@@ -119,5 +122,8 @@ describe('source kinds schema coverage', () => {
 		expect(parsed.txt_record_mode).toBe('fixed_chunk');
 		expect(parsed.txt_chunk_size).toBe(128);
 		expect(parsed.pdf_extraction_mode).toBe('hybrid');
+		expect(parsed.image_extract_metadata).toBe(true);
+		expect(parsed.image_svg_policy).toBe('sanitize');
+		expect(parsed.image_tiff_pages_mode).toBe('all');
 	});
 });

@@ -658,6 +658,93 @@ async def test_source_file_pdf_page_range_metadata(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_source_file_image_metadata_png(tmp_path):
+	pytest.importorskip("PIL")
+	from PIL import Image
+
+	file_path = tmp_path / "img.png"
+	Image.new("RGB", (12, 8), color=(255, 0, 0)).save(file_path)
+	node = {
+		"id": "n_source_img_png",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "png",
+			}
+		},
+	}
+	result = await exec_source("run_img_png", node, _ctx())
+	assert result.status == "succeeded"
+	meta = (result.metadata.data_schema or {}).get("image_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("width") == 12
+	assert meta.get("height") == 8
+
+
+@pytest.mark.asyncio
+async def test_source_file_svg_policy_sanitize_and_reject(tmp_path):
+	file_path = tmp_path / "bad.svg"
+	file_path.write_text('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect width="10" height="10"/></svg>', encoding="utf-8")
+	sanitize_node = {
+		"id": "n_source_svg_sanitize",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "svg",
+				"image_svg_policy": "sanitize",
+			}
+		},
+	}
+	sanitize_result = await exec_source("run_svg_sanitize", sanitize_node, _ctx())
+	assert sanitize_result.status == "succeeded"
+	assert isinstance(sanitize_result.data, (bytes, bytearray))
+	assert b"<script" not in bytes(sanitize_result.data).lower()
+
+	reject_node = {
+		"id": "n_source_svg_reject",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "svg",
+				"image_svg_policy": "reject",
+			}
+		},
+	}
+	reject_result = await exec_source("run_svg_reject", reject_node, _ctx())
+	assert reject_result.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_source_file_tiff_multipage_metadata(tmp_path):
+	pytest.importorskip("PIL")
+	from PIL import Image
+
+	file_path = tmp_path / "multi.tiff"
+	frame1 = Image.new("RGB", (4, 4), color=(255, 255, 255))
+	frame2 = Image.new("RGB", (4, 4), color=(0, 0, 0))
+	frame1.save(file_path, save_all=True, append_images=[frame2])
+	node = {
+		"id": "n_source_tiff",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "tiff",
+				"image_tiff_pages_mode": "all",
+			}
+		},
+	}
+	result = await exec_source("run_tiff", node, _ctx())
+	assert result.status == "succeeded"
+	meta = (result.metadata.data_schema or {}).get("image_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert int(meta.get("tiff_pages", 0)) >= 2
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

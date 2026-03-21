@@ -139,6 +139,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["pdf_page_range"] = p.pop("pdfPageRange")
     if "pdfPageSample" in p and "pdf_page_sample" not in p:
         p["pdf_page_sample"] = p.pop("pdfPageSample")
+    if "imageExtractMetadata" in p and "image_extract_metadata" not in p:
+        p["image_extract_metadata"] = p.pop("imageExtractMetadata")
+    if "imageSvgPolicy" in p and "image_svg_policy" not in p:
+        p["image_svg_policy"] = p.pop("imageSvgPolicy")
+    if "imageTiffPagesMode" in p and "image_tiff_pages_mode" not in p:
+        p["image_tiff_pages_mode"] = p.pop("imageTiffPagesMode")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -407,6 +413,9 @@ class SourceFileParams(NodeParamSchema):
     pdf_page_mode: Literal["all", "range", "sample"] = "all"
     pdf_page_range: Optional[str] = None
     pdf_page_sample: int = Field(default=1, ge=1)
+    image_extract_metadata: bool = True
+    image_svg_policy: Literal["pass", "sanitize", "reject"] = "sanitize"
+    image_tiff_pages_mode: Literal["first", "all"] = "first"
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

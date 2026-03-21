@@ -448,3 +448,53 @@ async def test_source_node_output_event_includes_pdf_metadata(tmp_path, monkeypa
     pages = pdf_meta.get("pages")
     assert isinstance(pages, list)
     assert len(pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_image_metadata(tmp_path):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    events = []
+    artifact_root = tmp_path / "artifact-root-9"
+    source_dir = tmp_path / "source-9"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.png"
+    Image.new("RGB", (6, 5), color=(10, 20, 30)).save(source_file)
+    bus = RunEventBus("run-source-obs-9", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-9",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_image_meta",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.png",
+                            "file_format": "png",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-9",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_image_meta"]
+    assert node_outputs, "Expected node_output for source_image_meta"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    img_meta = source_obs.get("image_metadata")
+    assert isinstance(img_meta, dict)
+    assert img_meta.get("width") == 6
+    assert img_meta.get("height") == 5
