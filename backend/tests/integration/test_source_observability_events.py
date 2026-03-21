@@ -422,6 +422,8 @@ async def test_source_node_output_event_includes_pdf_metadata(tmp_path, monkeypa
                             "filename": "input.pdf",
                             "file_format": "pdf",
                             "pdf_extraction_mode": "hybrid",
+                            "pdf_page_mode": "sample",
+                            "pdf_page_sample": 1,
                         },
                     },
                 }
@@ -442,3 +444,7 @@ async def test_source_node_output_event_includes_pdf_metadata(tmp_path, monkeypa
     pdf_meta = source_obs.get("pdf_metadata")
     assert isinstance(pdf_meta, dict)
     assert pdf_meta.get("requested_mode") == "hybrid"
+    assert pdf_meta.get("selected_pages") == [0]
+    pages = pdf_meta.get("pages")
+    assert isinstance(pages, list)
+    assert len(pages) == 1

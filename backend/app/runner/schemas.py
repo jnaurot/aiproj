@@ -133,6 +133,12 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["txt_chunk_size"] = p.pop("txtChunkSize")
     if "pdfExtractionMode" in p and "pdf_extraction_mode" not in p:
         p["pdf_extraction_mode"] = p.pop("pdfExtractionMode")
+    if "pdfPageMode" in p and "pdf_page_mode" not in p:
+        p["pdf_page_mode"] = p.pop("pdfPageMode")
+    if "pdfPageRange" in p and "pdf_page_range" not in p:
+        p["pdf_page_range"] = p.pop("pdfPageRange")
+    if "pdfPageSample" in p and "pdf_page_sample" not in p:
+        p["pdf_page_sample"] = p.pop("pdfPageSample")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -398,6 +404,9 @@ class SourceFileParams(NodeParamSchema):
     txt_record_mode: Literal["raw", "lines", "paragraphs", "fixed_chunk"] = "raw"
     txt_chunk_size: int = Field(default=1000, ge=1)
     pdf_extraction_mode: Literal["text", "ocr", "tables", "hybrid"] = "text"
+    pdf_page_mode: Literal["all", "range", "sample"] = "all"
+    pdf_page_range: Optional[str] = None
+    pdf_page_sample: int = Field(default=1, ge=1)
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

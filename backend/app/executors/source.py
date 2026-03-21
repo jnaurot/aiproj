@@ -608,6 +608,42 @@ def _text_to_records(text: str, mode: str, chunk_size: int) -> list[dict[str, An
     return []
 
 
+def _select_pdf_page_indexes(total_pages: int, mode: str, page_range: Optional[str], sample_count: int) -> list[int]:
+    if total_pages <= 0:
+        return []
+    normalized = str(mode or "all").strip().lower()
+    if normalized == "sample":
+        n = max(1, int(sample_count or 1))
+        return list(range(min(total_pages, n)))
+    if normalized == "range":
+        selected: set[int] = set()
+        for token in str(page_range or "").split(","):
+            part = token.strip()
+            if not part:
+                continue
+            if "-" in part:
+                left, right = part.split("-", 1)
+                try:
+                    start = max(1, int(left))
+                    end = min(total_pages, int(right))
+                except Exception:
+                    continue
+                if end < start:
+                    start, end = end, start
+                for idx in range(start, end + 1):
+                    selected.add(idx - 1)
+            else:
+                try:
+                    idx = int(part)
+                except Exception:
+                    continue
+                if 1 <= idx <= total_pages:
+                    selected.add(idx - 1)
+        if selected:
+            return sorted(selected)
+    return list(range(total_pages))
+
+
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
     if mode == "binary":
         if isinstance(data, bytes):
@@ -1755,20 +1791,43 @@ async def _handle_file_source(
         with pdfplumber.open(pdf_input) as pdf:
             pages = list(pdf.pages)
             page_count = len(pages)
+            page_mode = str(getattr(schema, "pdf_page_mode", "all") or "all")
+            page_range = getattr(schema, "pdf_page_range", None)
+            page_sample = int(getattr(schema, "pdf_page_sample", 1) or 1)
+            selected_indexes = _select_pdf_page_indexes(page_count, page_mode, page_range, page_sample)
+            selected_pages = [pages[i] for i in selected_indexes if 0 <= i < page_count]
             text_parts: list[str] = []
             table_rows: list[dict[str, Any]] = []
+            per_page_meta: list[dict[str, Any]] = []
             if requested_mode in {"text", "hybrid", "ocr"}:
                 # OCR currently degrades gracefully to native text when OCR deps are unavailable.
                 if requested_mode == "ocr":
                     resolved_mode = "ocr_fallback_text"
-                for page in pages:
-                    text_parts.append(page.extract_text() or "")
+                for page_idx, page in zip(selected_indexes, selected_pages):
+                    page_text = page.extract_text() or ""
+                    text_parts.append(page_text)
+                    per_page_meta.append(
+                        {
+                            "page_index": int(page_idx),
+                            "text_bytes": int(len(page_text.encode("utf-8"))),
+                            "extracted_chars": int(len(page_text)),
+                        }
+                    )
             if requested_mode in {"tables", "hybrid"}:
-                for page_idx, page in enumerate(pages):
+                for page_idx, page in zip(selected_indexes, selected_pages):
                     try:
                         tables = page.extract_tables() or []
                     except Exception:
                         tables = []
+                    if requested_mode == "tables":
+                        per_page_meta.append(
+                            {
+                                "page_index": int(page_idx),
+                                "text_bytes": 0,
+                                "extracted_chars": 0,
+                                "table_count": int(len(tables)),
+                            }
+                        )
                     for table_idx, table in enumerate(tables):
                         if not isinstance(table, list) or not table:
                             continue
@@ -1793,8 +1852,11 @@ async def _handle_file_source(
                 "requested_mode": requested_mode,
                 "resolved_mode": resolved_mode,
                 "page_count": page_count,
+                "selected_pages": [int(i) for i in selected_indexes],
+                "page_mode": page_mode,
                 "table_rows": len(table_rows),
                 "confidence": 0.75 if resolved_mode.startswith("ocr") else 0.9,
+                "pages": per_page_meta,
             }
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()

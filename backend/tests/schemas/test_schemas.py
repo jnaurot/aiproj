@@ -364,6 +364,9 @@ class TestSourceFileParams:
             "txt_record_mode": "fixed_chunk",
             "txt_chunk_size": 256,
             "pdf_extraction_mode": "hybrid",
+            "pdf_page_mode": "range",
+            "pdf_page_range": "1-2",
+            "pdf_page_sample": 2,
             "parquet_columns": ["id"],
             "parquet_row_groups": [0, 1],
             "parquet_max_rows": 50,
@@ -390,6 +393,9 @@ class TestSourceFileParams:
         assert source_params.txt_record_mode == "fixed_chunk"
         assert source_params.txt_chunk_size == 256
         assert source_params.pdf_extraction_mode == "hybrid"
+        assert source_params.pdf_page_mode == "range"
+        assert source_params.pdf_page_range == "1-2"
+        assert source_params.pdf_page_sample == 2
         assert source_params.parquet_columns == ["id"]
         assert source_params.parquet_row_groups == [0, 1]
         assert source_params.parquet_max_rows == 50
@@ -773,6 +779,9 @@ class TestNormalizeSourceParamsFrontend:
                 "txtRecordMode": "paragraphs",
                 "txtChunkSize": 512,
                 "pdfExtractionMode": "tables",
+                "pdfPageMode": "sample",
+                "pdfPageRange": "2-4",
+                "pdfPageSample": 3,
                 "parquetColumns": ["id"],
                 "parquetRowGroups": [1],
                 "parquetMaxRows": 25,
@@ -799,6 +808,9 @@ class TestNormalizeSourceParamsFrontend:
         assert out["txt_record_mode"] == "paragraphs"
         assert out["txt_chunk_size"] == 512
         assert out["pdf_extraction_mode"] == "tables"
+        assert out["pdf_page_mode"] == "sample"
+        assert out["pdf_page_range"] == "2-4"
+        assert out["pdf_page_sample"] == 3
         assert out["parquet_columns"] == ["id"]
         assert out["parquet_row_groups"] == [1]
         assert out["parquet_max_rows"] == 25

@@ -605,6 +605,59 @@ async def test_source_file_pdf_ocr_mode_falls_back_to_text(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_source_file_pdf_page_range_metadata(tmp_path, monkeypatch):
+	file_path = tmp_path / "range.pdf"
+	file_path.write_bytes(b"%PDF-FAKE")
+
+	class _Page:
+		def __init__(self, idx: int):
+			self.idx = idx
+
+		def extract_text(self):
+			return f"page-{self.idx}"
+
+		def extract_tables(self):
+			return []
+
+	class _Pdf:
+		def __init__(self):
+			self.pages = [_Page(0), _Page(1), _Page(2)]
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb):
+			return False
+
+	monkeypatch.setattr(source_mod, "HAS_PDF", True)
+	monkeypatch.setattr(source_mod, "pdfplumber", SimpleNamespace(open=lambda *_args, **_kwargs: _Pdf()), raising=False)
+	node = {
+		"id": "n_source_pdf_range",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "pdf",
+				"pdf_extraction_mode": "text",
+				"pdf_page_mode": "range",
+				"pdf_page_range": "2-3",
+			}
+		},
+	}
+	result = await exec_source("run_pdf_range", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, str)
+	assert "page-0" not in result.data
+	assert "page-1" in result.data and "page-2" in result.data
+	meta = (result.metadata.data_schema or {}).get("pdf_metadata") if result.metadata else None
+	assert isinstance(meta, dict)
+	assert meta.get("selected_pages") == [1, 2]
+	pages = meta.get("pages")
+	assert isinstance(pages, list)
+	assert len(pages) == 2
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")
