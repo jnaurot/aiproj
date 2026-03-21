@@ -389,7 +389,108 @@ def _source_priming_spec(params: Dict[str, Any]) -> Dict[str, Any]:
     mode = str(raw.get("mode") or "advisory").strip().lower()
     if mode not in {"advisory", "priming_only"}:
         mode = "advisory"
-    return {"enabled": enabled, "mode": mode}
+    sample_rows_raw = raw.get("sample_rows")
+    sample_bytes_raw = raw.get("sample_bytes")
+    timeout_raw = raw.get("timeout_ms")
+    try:
+        sample_rows = max(1, int(sample_rows_raw)) if sample_rows_raw is not None else 50
+    except Exception:
+        sample_rows = 50
+    try:
+        sample_bytes = max(1, int(sample_bytes_raw)) if sample_bytes_raw is not None else 65536
+    except Exception:
+        sample_bytes = 65536
+    try:
+        timeout_ms = max(1, int(timeout_raw)) if timeout_raw is not None else 1500
+    except Exception:
+        timeout_ms = 1500
+    return {"enabled": enabled, "mode": mode, "sample_rows": sample_rows, "sample_bytes": sample_bytes, "timeout_ms": timeout_ms}
+
+
+def _trim_rows_by_bytes(rows: list[dict[str, Any]], sample_bytes: int) -> tuple[list[dict[str, Any]], bool]:
+    if not rows:
+        return rows, False
+    out: list[dict[str, Any]] = []
+    trimmed = False
+    used = 0
+    for row in rows:
+        row_bytes = len(_canon_json_bytes(row))
+        if out and (used + row_bytes) > sample_bytes:
+            trimmed = True
+            break
+        out.append(row)
+        used += row_bytes
+        if used >= sample_bytes:
+            trimmed = True
+            break
+    if not out and rows:
+        out = [rows[0]]
+        trimmed = len(rows) > 1
+    return out, trimmed
+
+
+def _apply_priming_bounds(output_mode: str, data: Any, priming_spec: Dict[str, Any]) -> tuple[Any, Dict[str, Any]]:
+    if not bool(priming_spec.get("enabled")):
+        return data, {"applied": False}
+    sample_rows = int(priming_spec.get("sample_rows") or 50)
+    sample_bytes = int(priming_spec.get("sample_bytes") or 65536)
+    mode = str(output_mode or "").strip().lower()
+    truncated_rows = False
+    truncated_bytes = False
+    bounded = data
+    if mode == "table" and isinstance(data, list):
+        rows = [row for row in data if isinstance(row, dict)]
+        if len(rows) > sample_rows:
+            rows = rows[:sample_rows]
+            truncated_rows = True
+        rows, row_byte_trimmed = _trim_rows_by_bytes(rows, sample_bytes)
+        truncated_bytes = truncated_bytes or row_byte_trimmed
+        bounded = rows
+    elif mode == "json":
+        if isinstance(data, list):
+            arr = list(data)
+            if len(arr) > sample_rows:
+                arr = arr[:sample_rows]
+                truncated_rows = True
+            payload = _canon_json_bytes(arr)
+            if len(payload) > sample_bytes:
+                arr, row_byte_trimmed = _trim_rows_by_bytes(
+                    [{"value": item} if not isinstance(item, dict) else item for item in arr], sample_bytes
+                )
+                truncated_bytes = truncated_bytes or row_byte_trimmed
+                if arr and all(isinstance(item, dict) and "value" in item and len(item) == 1 for item in arr):
+                    bounded = [item.get("value") for item in arr]
+                else:
+                    bounded = arr
+            else:
+                bounded = arr
+        elif isinstance(data, dict):
+            payload = _canon_json_bytes(data)
+            if len(payload) > sample_bytes:
+                truncated_bytes = True
+                bounded = {"_priming_note": "json object truncated for priming", "_bytes": sample_bytes}
+    elif mode == "binary":
+        raw = bytes(data) if isinstance(data, (bytes, bytearray)) else _payload_bytes_for_mode(data, "binary")
+        if len(raw) > sample_bytes:
+            bounded = raw[:sample_bytes]
+            truncated_bytes = True
+        else:
+            bounded = raw
+    else:
+        text = str(data if data is not None else "")
+        raw = text.encode("utf-8")
+        if len(raw) > sample_bytes:
+            bounded = raw[:sample_bytes].decode("utf-8", errors="replace")
+            truncated_bytes = True
+        else:
+            bounded = text
+    return bounded, {
+        "applied": True,
+        "sample_rows": sample_rows,
+        "sample_bytes": sample_bytes,
+        "truncated_rows": truncated_rows,
+        "truncated_bytes": truncated_bytes,
+    }
 
 
 def _resolve_file_path(rel_path: str, filename: str) -> Path:
@@ -675,6 +776,7 @@ async def exec_source(
 ) -> NodeOutput:
     upstream_artifact_ids = upstream_artifact_ids or []
     start_time = time.time()
+    start_mono = time.monotonic()
     node_id = node["id"]
     raw_params = dict(node.get("data", {}).get("params", {}) or {})
     source_type = (node.get("data", {}).get("sourceKind") or raw_params.get("source_type") or "file")
@@ -732,19 +834,30 @@ async def exec_source(
             )
         else:
             raise ValueError(f"Unknown source_type: {source_type}")
+        if output.status == "succeeded":
+            output_mode = str(((output.metadata.data_schema or {}).get("output_mode") if output.metadata else "") or "").strip().lower()
+            bounded_data, priming_meta = _apply_priming_bounds(output_mode, output.data, priming_spec)
+            output.data = bounded_data
+            if output.metadata is not None and isinstance(output.metadata.data_schema, dict) and priming_meta.get("applied"):
+                schema_env = dict(output.metadata.data_schema)
+                schema_env["priming"] = {
+                    "enabled": True,
+                    "mode": str(priming_spec.get("mode") or "advisory"),
+                    "priming_only": bool(str(priming_spec.get("mode") or "") == "priming_only"),
+                    "sample_rows": int(priming_spec.get("sample_rows") or 50),
+                    "sample_bytes": int(priming_spec.get("sample_bytes") or 65536),
+                    "timeout_ms": int(priming_spec.get("timeout_ms") or 1500),
+                    "timed_out": ((time.monotonic() - start_mono) * 1000.0) >= float(priming_spec.get("timeout_ms") or 1500),
+                    "truncated_rows": bool(priming_meta.get("truncated_rows")),
+                    "truncated_bytes": bool(priming_meta.get("truncated_bytes")),
+                }
+                output.metadata.data_schema = schema_env
+                if output.metadata.row_count is not None and isinstance(output.data, list):
+                    output.metadata.row_count = len(output.data)
+                payload_bytes = _payload_bytes_for_mode(output.data, output_mode or "text")
+                output.metadata.size_bytes = len(payload_bytes)
+                output.metadata.content_hash = _sha256_bytes(payload_bytes)
         output.execution_time_ms = (time.time() - start_time) * 1000
-        if output.status == "succeeded" and output.metadata is not None and bool(priming_spec.get("enabled")):
-            schema_env = (
-                dict(output.metadata.data_schema)
-                if isinstance(output.metadata.data_schema, dict)
-                else {}
-            )
-            schema_env["priming"] = {
-                "enabled": True,
-                "mode": str(priming_spec.get("mode") or "advisory"),
-                "priming_only": bool(str(priming_spec.get("mode") or "") == "priming_only"),
-            }
-            output.metadata.data_schema = schema_env
         return output
     except Exception as exc:
         return NodeOutput(

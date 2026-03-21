@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import httpx
@@ -5,7 +6,7 @@ import pandas as pd
 import pytest
 
 from app.executors.source import exec_source
-from app.runner.metadata import NodeOutput
+from app.runner.metadata import FileMetadata, NodeOutput
 
 
 def _ctx():
@@ -410,3 +411,87 @@ async def test_source_priming_only_sets_metadata_marker(tmp_path):
 	assert isinstance(result.metadata.data_schema, dict)
 	assert (result.metadata.data_schema.get("priming") or {}).get("enabled") is True
 	assert (result.metadata.data_schema.get("priming") or {}).get("priming_only") is True
+
+
+def _priming_node(source_kind: str, priming: dict) -> dict:
+	return {
+		"id": f"n_{source_kind}_prime",
+		"data": {
+			"sourceKind": source_kind,
+			"params": {
+				"source_type": source_kind,
+				"url": "https://example.com",
+				"query": "select 1",
+				"connection_string": "sqlite:///memory",
+				"bucket": "demo",
+				"key": "data.txt",
+				"filename": "data.txt",
+				"rel_path": ".",
+				"file_format": "txt",
+				"priming": priming,
+			},
+		},
+	}
+
+
+def _output(data, output_mode: str) -> NodeOutput:
+	return NodeOutput(
+		status="succeeded",
+		data=data,
+		metadata=FileMetadata(
+			file_path="memory://source.out",
+			file_type="csv" if output_mode == "table" else ("json" if output_mode == "json" else ("binary" if output_mode == "binary" else "txt")),
+			mime_type="application/json" if output_mode == "json" else "text/plain",
+			size_bytes=1,
+			data_schema={"source_kind": "mock", "output_mode": output_mode},
+			content_hash="h",
+			node_id="n",
+			params_hash="p",
+		),
+		execution_time_ms=0.0,
+	)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+	"source_kind,handler_name,output_mode,data,assertion",
+	[
+		("file", "_handle_file_source", "table", [{"id": 1}, {"id": 2}, {"id": 3}], lambda out: isinstance(out, list) and 1 <= len(out) <= 2),
+		("database", "_handle_database_source", "table", [{"id": 1}, {"id": 2}, {"id": 3}], lambda out: isinstance(out, list) and 1 <= len(out) <= 2),
+		("api", "_handle_api_source", "json", [{"id": 1}, {"id": 2}, {"id": 3}], lambda out: isinstance(out, list) and 1 <= len(out) <= 2),
+		("object_store", "_handle_object_store_source", "text", "abcdefghij", lambda out: isinstance(out, str) and len(out) < 10),
+		("warehouse", "_handle_warehouse_source", "table", [{"id": 1}, {"id": 2}, {"id": 3}], lambda out: isinstance(out, list) and 1 <= len(out) <= 2),
+	],
+)
+async def test_source_priming_bounds_apply_per_source_kind(monkeypatch, source_kind, handler_name, output_mode, data, assertion):
+	async def _fake(*_args, **_kwargs):
+		return _output(data, output_mode)
+
+	monkeypatch.setattr(f"app.executors.source.{handler_name}", _fake)
+	node = _priming_node(
+		source_kind,
+		{"enabled": True, "mode": "priming_only", "sample_rows": 2, "sample_bytes": 8, "timeout_ms": 1},
+	)
+	result = await exec_source("run_prime_bounds", node, _ctx())
+	assert result.status == "succeeded"
+	assert assertion(result.data)
+	priming_meta = (result.metadata.data_schema or {}).get("priming") or {}
+	assert priming_meta.get("enabled") is True
+	assert priming_meta.get("sample_rows") == 2
+	assert priming_meta.get("sample_bytes") == 8
+
+
+@pytest.mark.asyncio
+async def test_source_priming_timeout_sets_timed_out_marker(monkeypatch):
+	async def _slow_file(*_args, **_kwargs):
+		await asyncio.sleep(0.01)
+		return _output([{"id": 1}, {"id": 2}], "table")
+
+	monkeypatch.setattr("app.executors.source._handle_file_source", _slow_file)
+	node = _priming_node(
+		"file",
+		{"enabled": True, "mode": "priming_only", "sample_rows": 1, "sample_bytes": 1024, "timeout_ms": 1},
+	)
+	result = await exec_source("run_prime_timeout", node, _ctx())
+	assert result.status == "succeeded"
+	assert ((result.metadata.data_schema or {}).get("priming") or {}).get("timed_out") is True
