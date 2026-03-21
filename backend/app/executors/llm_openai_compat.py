@@ -12,6 +12,7 @@ from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 from .model_adapters import OpenAICompatAdapter
+from .model_registry import resolve_model_connection
 from ..runner.metadata import GraphContext, FileMetadata, NodeOutput
 from ..runner.schemas import LLMParams
 
@@ -27,29 +28,6 @@ def _sha256_text(s: str) -> str:
 def _sha256_json(obj: object) -> str:
     b = json.dumps(obj, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(b).hexdigest()
-
-
-def _resolve_api_key(params: LLMParams) -> Optional[str]:
-    """
-    Resolve API key from api_key_ref.
-    For now:
-    - if api_key_ref is set and matches an env var name, use that env var value
-    - otherwise treat api_key_ref as direct key
-    """
-    ref = (params.api_key_ref or "").strip()
-    if not ref:
-        return None
-
-    try:
-        import os
-
-        env_val = os.getenv(ref)
-        if env_val:
-            return env_val
-    except Exception:
-        pass
-
-    return ref
 
 
 def _extract_chat_content(obj: Dict[str, Any]) -> str:
@@ -111,8 +89,18 @@ async def exec_llm_openai_compat(
     input_items = input_items or ([upstream_text] if upstream_text else [])
     adapter = OpenAICompatAdapter()
     try:
+        resolved_conn = resolve_model_connection(params, provider="openai_compat")
+    except Exception as e:
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+            error=adapter.normalize_error(e),
+        )
+    effective_params = params.model_copy(update={"base_url": resolved_conn.base_url})
+    try:
         prepared = adapter.prepare_request(
-            params,
+            effective_params,
             upstream_text,
             input_items=input_items,
             input_media=input_media,
@@ -128,7 +116,7 @@ async def exec_llm_openai_compat(
     output_mode = prepared.output_mode
     payload = dict(prepared.payload)
     headers = dict(prepared.headers)
-    api_key = _resolve_api_key(params)
+    api_key = resolved_conn.api_key
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 

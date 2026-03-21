@@ -14,6 +14,7 @@ from jsonschema import validate as jsonschema_validate
 
 from app.runner.materialize import materialize_text
 from .model_adapters import OllamaAdapter
+from .model_registry import resolve_model_connection
 
 # Adjust these imports to your actual paths/types
 from ..runner.schemas import LLMParams
@@ -234,8 +235,18 @@ async def exec_llm_ollama(
     if params.thinking and params.thinking.enabled:
         thinking_mode = params.thinking.mode
     try:
+        resolved_conn = resolve_model_connection(params, provider="ollama")
+    except Exception as e:
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
+            error=adapter.normalize_error(e),
+        )
+    effective_params = params.model_copy(update={"base_url": resolved_conn.base_url})
+    try:
         prepared = adapter.prepare_request(
-            params,
+            effective_params,
             text,
             input_items=input_items,
             input_media=input_media,
