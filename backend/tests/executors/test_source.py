@@ -384,6 +384,67 @@ async def test_source_file_excel_header_mode_auto_detects_header(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_source_file_excel_multi_sheet_union_and_stack(tmp_path, monkeypatch):
+	file_path = tmp_path / "multi.xlsx"
+	file_path.write_bytes(b"fake-xlsx")
+
+	def _fake_read_excel(*_args, **kwargs):
+		sheet_name = kwargs.get("sheet_name", 0)
+		header = kwargs.get("header", 0)
+		if sheet_name is None:
+			return {
+				"Sheet1": pd.DataFrame({"id": [1], "a": ["x"]}),
+				"Sheet2": pd.DataFrame({"id": [2], "b": ["y"]}),
+			}
+		if sheet_name == "Sheet1" or sheet_name == 0:
+			return pd.DataFrame({"id": [1], "a": ["x"]}) if header == 0 else pd.DataFrame([[1, "x"]])
+		return pd.DataFrame({"id": [2], "b": ["y"]}) if header == 0 else pd.DataFrame([[2, "y"]])
+
+	monkeypatch.setattr("app.executors.source.pd.read_excel", _fake_read_excel)
+
+	union_node = {
+		"id": "n_source_excel_union",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "excel",
+				"excel_import_strategy": "union",
+			}
+		},
+	}
+	union_result = await exec_source("run_excel_union", union_node, _ctx())
+	assert union_result.status == "succeeded"
+	assert isinstance(union_result.data, list)
+	assert len(union_result.data) == 2
+	union_schema = union_result.metadata.data_schema or {}
+	union_prov = union_schema.get("excel_provenance")
+	assert isinstance(union_prov, dict)
+	assert union_prov.get("strategy") == "union"
+
+	stack_node = {
+		"id": "n_source_excel_stack",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "excel",
+				"excel_import_strategy": "stack",
+			}
+		},
+	}
+	stack_result = await exec_source("run_excel_stack", stack_node, _ctx())
+	assert stack_result.status == "succeeded"
+	assert isinstance(stack_result.data, list)
+	assert len(stack_result.data) == 2
+	assert "__sheet" in stack_result.data[0]
+	stack_schema = stack_result.metadata.data_schema or {}
+	stack_prov = stack_schema.get("excel_provenance")
+	assert isinstance(stack_prov, dict)
+	assert stack_prov.get("strategy") == "stack"
+
+
+@pytest.mark.asyncio
 async def test_source_file_json_document_mode(tmp_path):
 	file_path = tmp_path / "doc.json"
 	file_path.write_text('{"id":1,"name":"alice"}', encoding="utf-8")

@@ -117,6 +117,10 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["json_flatten_strategy"] = p.pop("jsonFlattenStrategy")
     if "jsonFlattenSeparator" in p and "json_flatten_separator" not in p:
         p["json_flatten_separator"] = p.pop("jsonFlattenSeparator")
+    if "excelImportStrategy" in p and "excel_import_strategy" not in p:
+        p["excel_import_strategy"] = p.pop("excelImportStrategy")
+    if "excelSheets" in p and "excel_sheets" not in p:
+        p["excel_sheets"] = p.pop("excelSheets")
     if "parquetColumns" in p and "parquet_columns" not in p:
         p["parquet_columns"] = p.pop("parquetColumns")
     if "parquetRowGroups" in p and "parquet_row_groups" not in p:
@@ -374,6 +378,8 @@ class SourceFileParams(NodeParamSchema):
     json_stream_max_records: Optional[int] = Field(default=None, ge=1)
     json_flatten_strategy: Literal["none", "shallow", "deep"] = "none"
     json_flatten_separator: str = "."
+    excel_import_strategy: Literal["single", "union", "stack"] = "single"
+    excel_sheets: List[str] = Field(default_factory=list)
     parquet_columns: List[str] = Field(default_factory=list)
     parquet_row_groups: List[int] = Field(default_factory=list)
     parquet_max_rows: Optional[int] = Field(default=None, ge=1)

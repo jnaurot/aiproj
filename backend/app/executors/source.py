@@ -1603,22 +1603,61 @@ async def _handle_file_source(
         if isinstance(json_data, list):
             rows = json_data
     elif schema.file_format == "excel":
-        excel_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
         sheet = schema.sheet_name or 0
+        strategy = str(getattr(schema, "excel_import_strategy", "single") or "single").strip().lower()
+        selected_sheets = [str(s).strip() for s in (getattr(schema, "excel_sheets", []) or []) if str(s).strip()]
         explicit_header = getattr(schema, "has_header", None)
-        if explicit_header is None:
-            probe_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
-            probe = pd.read_excel(probe_input, sheet_name=sheet, header=None)
-            guess = _excel_heuristic_has_header(probe)
-            excel_has_header = True if guess is None else bool(guess)
+
+        def _read_excel(*, sheet_name: Any, header: Any) -> Any:
+            read_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
+            return pd.read_excel(read_input, sheet_name=sheet_name, header=header)
+
+        if strategy == "single":
+            if explicit_header is None:
+                probe = _read_excel(sheet_name=sheet, header=None)
+                guess = _excel_heuristic_has_header(probe)
+                excel_has_header = True if guess is None else bool(guess)
+            else:
+                excel_has_header = bool(explicit_header)
+            df = _read_excel(sheet_name=sheet, header=0 if excel_has_header else None)
+            if not excel_has_header:
+                df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
+            rows = df.to_dict(orient="records")
+            table_columns = _infer_table_columns_from_dataframe(df)
+            format_specific_metadata["excel_provenance"] = {
+                "strategy": "single",
+                "sheets": [str(sheet)],
+                "row_counts": {str(sheet): int(len(rows))},
+            }
         else:
-            excel_has_header = bool(explicit_header)
-        read_input: Any = io.BytesIO(file_bytes) if file_bytes is not None else file_path
-        df = pd.read_excel(read_input, sheet_name=sheet, header=0 if excel_has_header else None)
-        if not excel_has_header:
-            df.columns = [f"column_{i+1}" for i in range(len(df.columns))]
-        rows = df.to_dict(orient="records")
-        table_columns = _infer_table_columns_from_dataframe(df)
+            # For multi-sheet runs, default to header row unless user explicitly disables it.
+            excel_has_header = True if explicit_header is None else bool(explicit_header)
+            workbook = _read_excel(sheet_name=None, header=0 if excel_has_header else None)
+            if not isinstance(workbook, dict):
+                workbook = {str(sheet): workbook}
+            available = [str(name) for name in workbook.keys()]
+            target_sheets = [name for name in available if not selected_sheets or name in set(selected_sheets)]
+            frames: list[pd.DataFrame] = []
+            row_counts: Dict[str, int] = {}
+            for name in target_sheets:
+                frame = workbook.get(name)
+                if not isinstance(frame, pd.DataFrame):
+                    continue
+                local = frame.copy()
+                if not excel_has_header:
+                    local.columns = [f"column_{i+1}" for i in range(len(local.columns))]
+                if strategy == "stack":
+                    local["__sheet"] = name
+                row_counts[name] = int(len(local))
+                frames.append(local)
+            df = pd.concat(frames, axis=0, ignore_index=True, sort=True) if frames else pd.DataFrame()
+            rows = df.to_dict(orient="records")
+            table_columns = _infer_table_columns_from_dataframe(df)
+            format_specific_metadata["excel_provenance"] = {
+                "strategy": strategy,
+                "sheets": target_sheets,
+                "row_counts": row_counts,
+            }
     elif schema.file_format == "txt":
         text_data = (
             (file_bytes or b"").decode(schema.encoding, errors="replace")

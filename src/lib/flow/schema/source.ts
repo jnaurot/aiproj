@@ -152,6 +152,8 @@ export const SourceFileParamsSchema = z
 		json_stream_max_records: z.number().int().positive().optional(),
 		json_flatten_strategy: z.enum(["none", "shallow", "deep"]).optional(),
 		json_flatten_separator: z.string().min(1).max(1).optional(),
+		excel_import_strategy: z.enum(["single", "union", "stack"]).optional(),
+		excel_sheets: z.array(z.string().min(1)).optional(),
 		parquet_columns: z.array(z.string().min(1)).optional(),
 		parquet_row_groups: z.array(z.number().int().nonnegative()).optional(),
 		parquet_max_rows: z.number().int().positive().optional(),

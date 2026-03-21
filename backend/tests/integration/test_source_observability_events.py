@@ -262,3 +262,61 @@ async def test_source_node_output_event_includes_json_flatten_metadata(tmp_path)
     flatten = source_obs.get("json_flatten")
     assert isinstance(flatten, dict)
     assert flatten.get("strategy") == "deep"
+
+
+@pytest.mark.asyncio
+async def test_source_node_output_event_includes_excel_provenance_metadata(tmp_path, monkeypatch):
+    import pandas as pd
+
+    events = []
+    artifact_root = tmp_path / "artifact-root-6"
+    source_dir = tmp_path / "source-6"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    source_file = source_dir / "input.xlsx"
+    source_file.write_bytes(b"fake-xlsx")
+
+    def _fake_read_excel(*_args, **kwargs):
+        sheet_name = kwargs.get("sheet_name", 0)
+        if sheet_name is None:
+            return {"S1": pd.DataFrame({"id": [1]}), "S2": pd.DataFrame({"id": [2]})}
+        return pd.DataFrame({"id": [1]})
+
+    monkeypatch.setattr("app.executors.source.pd.read_excel", _fake_read_excel)
+    bus = RunEventBus("run-source-obs-6", on_emit=lambda e: events.append(dict(e)))
+
+    await run_graph(
+        run_id="run-source-obs-6",
+        graph={
+            "nodes": [
+                {
+                    "id": "source_excel_multi",
+                    "data": {
+                        "kind": "source",
+                        "label": "Source",
+                        "sourceKind": "file",
+                        "schema": {"expectedSchema": {"typedSchema": {"type": "table"}}},
+                        "params": {
+                            "rel_path": str(source_dir),
+                            "filename": "input.xlsx",
+                            "file_format": "excel",
+                            "excel_import_strategy": "stack",
+                        },
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=bus,
+        artifact_store=DiskArtifactStore(artifact_root),
+        cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+        graph_id="graph-source-obs-6",
+    )
+
+    node_outputs = [e for e in events if e.get("type") == "node_output" and e.get("nodeId") == "source_excel_multi"]
+    assert node_outputs, "Expected node_output for source_excel_multi"
+    source_obs = node_outputs[-1].get("sourceObservability")
+    assert isinstance(source_obs, dict)
+    provenance = source_obs.get("excel_provenance")
+    assert isinstance(provenance, dict)
+    assert provenance.get("strategy") == "stack"

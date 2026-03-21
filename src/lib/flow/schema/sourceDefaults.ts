@@ -29,6 +29,8 @@ export const defaultSourceFileParams: SourceFileParams = {
     json_stream_max_records: undefined,
     json_flatten_strategy: "none",
     json_flatten_separator: ".",
+    excel_import_strategy: "single",
+    excel_sheets: [],
     parquet_columns: [],
     parquet_row_groups: [],
     parquet_max_rows: undefined,
