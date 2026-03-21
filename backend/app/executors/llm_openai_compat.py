@@ -368,6 +368,7 @@ async def exec_llm_openai_compat(
                 observability={
                     "provider": "openai_compat",
                     "model": params.model,
+                    "prompt_revision_id": params.prompt_revision_id,
                     "output_mode": output_mode,
                     "retries": int(attempt),
                     "latency_ms": max(0.0, (asyncio.get_event_loop().time() - t0) * 1000.0),
@@ -389,6 +390,7 @@ async def exec_llm_openai_compat(
                     "at": iso_now(),
                     "provider": "openai_compat",
                     "model": params.model,
+                    "prompt_revision_id": params.prompt_revision_id,
                     "output_mode": output_mode,
                     "retries": int(attempt),
                     "latency_ms": meta.observability.get("latency_ms") if isinstance(meta.observability, dict) else None,

@@ -19,6 +19,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     if "apiKeyRef" in p and "api_key_ref" not in p:
         p["api_key_ref"] = p.pop("apiKeyRef")
+    if "promptRevisionId" in p and "prompt_revision_id" not in p:
+        p["prompt_revision_id"] = p.pop("promptRevisionId")
 
     if "system_prompt" in p and "system_prompt" not in p:
         # no-op; included just to show: FE already uses system_prompt
@@ -754,6 +756,7 @@ class LLMParams(NodeParamSchema):
     # Prompting
     system_prompt: Optional[str] = None
     user_prompt: str = Field(..., description="User prompt template")
+    prompt_revision_id: Optional[str] = None
     
     # Generation params
     temperature: float = Field(1.0, ge=0.0, le=2.0)

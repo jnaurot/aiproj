@@ -516,6 +516,7 @@ async def exec_llm_ollama(
                 observability={
                     "provider": "ollama",
                     "model": params.model,
+                    "prompt_revision_id": params.prompt_revision_id,
                     "output_mode": output_mode,
                     "retries": int(attempt),
                     "latency_ms": max(0.0, (asyncio.get_event_loop().time() - t0) * 1000.0),
@@ -537,6 +538,7 @@ async def exec_llm_ollama(
                     "at": iso_now(),
                     "provider": "ollama",
                     "model": params.model,
+                    "prompt_revision_id": params.prompt_revision_id,
                     "output_mode": output_mode,
                     "retries": int(attempt),
                     "latency_ms": meta.observability.get("latency_ms") if isinstance(meta.observability, dict) else None,

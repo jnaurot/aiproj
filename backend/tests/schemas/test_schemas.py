@@ -75,6 +75,7 @@ class TestLLMParams:
             "inputEncoding": "json_canonical",
             "inputEnvelope": [{"type": "text", "text": "hello"}],
             "requestPolicy": {"retries": 2, "timeout_seconds": 15},
+            "promptRevisionId": "pr_001",
             "presencePenalty": 0.2,
             "frequencyPenalty": -0.1,
             "repeatPenalty": 1.1,
@@ -86,6 +87,7 @@ class TestLLMParams:
         assert result["input_encoding"] == "json_canonical"
         assert result["input_envelope"] == [{"type": "text", "text": "hello"}]
         assert result["request_policy"] == {"retries": 2, "timeout_seconds": 15}
+        assert result["prompt_revision_id"] == "pr_001"
         assert result["presence_penalty"] == 0.2
         assert result["frequency_penalty"] == -0.1
         assert result["repeat_penalty"] == 1.1

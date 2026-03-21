@@ -49,6 +49,7 @@ describe('node subtype contract schemas', () => {
 				connectionRef: 'openai_prod',
 				model: 'gpt-4.1-mini',
 				user_prompt: 'Return json',
+				promptRevisionId: 'pr_001',
 				output: { mode: 'json', jsonSchema: { type: 'object' } },
 			}).success
 		).toBe(true);
