@@ -147,6 +147,8 @@ class OllamaAdapter:
 		if not base_url:
 			raise ValueError("Ollama adapter requires base_url")
 		output_mode = resolve_output_mode(params)
+		if output_mode == "embeddings":
+			raise ValueError("provider 'ollama' does not support output_mode='embeddings'")
 		thinking_mode = "none"
 		if params.thinking and params.thinking.enabled:
 			thinking_mode = params.thinking.mode
@@ -190,7 +192,10 @@ class OllamaAdapter:
 		)
 
 	def normalize_error(self, error: Exception) -> str:
-		return f"ollama request failed: {str(error)}"
+		msg = str(error)
+		if "output_mode" in msg:
+			return msg
+		return f"ollama request failed: {msg}"
 
 
 def get_model_adapter(llm_kind: str) -> ModelProviderAdapter:

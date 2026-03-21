@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.executors.model_adapters import OpenAICompatAdapter, OllamaAdapter
 from app.runner.schemas import LLMParams
 
@@ -30,6 +32,9 @@ def test_openai_adapter_conforms_contract():
 	assert parsed.file_suffix == "json"
 	assert json.loads(parsed.data) == {"ok": True}
 	assert "openai_compat" in adapter.normalize_error(ValueError("boom"))
+	embed_prepared = adapter.prepare_request(_params("embeddings"), upstream_text="abc", input_items=["abc"])
+	assert embed_prepared.url.endswith("/v1/embeddings")
+	assert embed_prepared.output_mode == "embeddings"
 
 
 def test_ollama_adapter_conforms_contract():
@@ -45,3 +50,9 @@ def test_ollama_adapter_conforms_contract():
 	assert parsed.file_suffix == "txt"
 	assert parsed.data == "hello"
 	assert "ollama" in adapter.normalize_error(ValueError("boom"))
+
+
+def test_ollama_adapter_rejects_embeddings_mode():
+	adapter = OllamaAdapter()
+	with pytest.raises(ValueError, match="does not support output_mode='embeddings'"):
+		adapter.prepare_request(_params("embeddings"), upstream_text="abc", input_items=["abc"])

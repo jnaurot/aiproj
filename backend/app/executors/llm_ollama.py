@@ -244,13 +244,6 @@ async def exec_llm_ollama(
     base_url = prepared.base_url
     output_mode = prepared.output_mode
     payload = dict(prepared.payload)
-    if output_mode == "embeddings":
-        return NodeOutput(
-            status="failed",
-            metadata=None,
-            execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
-            error="embeddings mode not supported for ollama executor yet",
-        )
 
     await context.bus.emit(
         {
