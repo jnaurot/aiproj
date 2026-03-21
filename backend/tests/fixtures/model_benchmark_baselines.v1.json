@@ -1,0 +1,9 @@
+{
+	"version": 1,
+	"metrics": {
+		"single_run_latency_ms_max": 2500.0,
+		"throughput_runs_per_sec_min": 3.0,
+		"peak_memory_mb_max": 128.0,
+		"cancellation_recovery_ms_max": 3000.0
+	}
+}
