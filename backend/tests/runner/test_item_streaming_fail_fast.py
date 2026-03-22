@@ -148,3 +148,100 @@ async def test_item_streaming_fatal_stop_with_param_edges(monkeypatch) -> None:
 	)
 	assert param_calls == 1
 	assert any(evt.get("type") == "run_finished" and evt.get("status") == "failed" for evt in events)
+
+
+@pytest.mark.asyncio
+async def test_item_streaming_fatal_stop_with_param_and_control_edges(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+	param_calls = 0
+	control_calls = 0
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		nonlocal param_calls, control_calls
+		node_id = str(node["id"])
+		if node_id == "work_src":
+			return NodeOutput(
+				status="succeeded",
+				metadata=None,
+				execution_time_ms=1.0,
+				data={"kind": "json", "payload": [1, 2, 3], "meta": {"ok": True}},
+			)
+		if node_id == "param_src":
+			param_calls += 1
+			return NodeOutput(
+				status="succeeded",
+				metadata=None,
+				execution_time_ms=1.0,
+				data={"kind": "json", "payload": {"region": "us"}, "meta": {"ok": True}},
+			)
+		if node_id == "control_src":
+			control_calls += 1
+			return NodeOutput(
+				status="succeeded",
+				metadata=None,
+				execution_time_ms=1.0,
+				data={"kind": "json", "payload": {"signal": "ready"}, "meta": {"ok": True}},
+			)
+		if node_id == "b":
+			return NodeOutput(
+				status="failed",
+				metadata=None,
+				execution_time_ms=1.0,
+				error="boom",
+				data={"kind": "json", "payload": {"ok": False}, "meta": {"ok": False}},
+			)
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": node_id}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "work_src", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "param_src", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "control_src", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "fatal": True}}},
+		],
+		"edges": [
+			{
+				"id": "e_work",
+				"source": "work_src",
+				"target": "b",
+				"targetHandle": "in",
+				"data": {"mode": "work", "work": {"item_mode": "json_items", "max_items": 3}},
+			},
+			{
+				"id": "e_param",
+				"source": "param_src",
+				"target": "b",
+				"targetHandle": "param_config",
+				"data": {"mode": "param"},
+			},
+			{
+				"id": "e_control",
+				"source": "control_src",
+				"sourceHandle": "control_out",
+				"target": "b",
+				"targetHandle": "control_gate",
+				"data": {"mode": "control"},
+			},
+		],
+	}
+	events: list[dict] = []
+	bus = RunEventBus("run-qflow-023-fatal-mixed-control", on_emit=lambda evt: events.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-qflow-023-fatal-mixed-control",
+		graph=graph,
+		run_from=None,
+		bus=bus,
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="graph-qflow-023-fatal-mixed-control",
+	)
+	assert param_calls == 1
+	assert control_calls == 1
+	assert any(evt.get("type") == "run_finished" and evt.get("status") == "failed" for evt in events)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import types
 
@@ -30,6 +31,35 @@ async def test_jobflow_mixed_mode_contracts_stream_work_and_snapshot_params(monk
 		"select_jobs": 0,
 		"generate_docs": 0,
 	}
+
+	async def _extract_job_id(context, node: dict) -> int:
+		work_item = ((node.get("data", {}).get("params", {}) or {}).get("_work_item") or {})
+		if not isinstance(work_item, dict):
+			return -1
+		item_preview = work_item.get("itemPreview")
+		if isinstance(item_preview, dict):
+			if isinstance(item_preview.get("job_id"), int):
+				return int(item_preview["job_id"])
+			selected_job = item_preview.get("selected_job")
+			if isinstance(selected_job, dict) and isinstance(selected_job.get("job_id"), int):
+				return int(selected_job["job_id"])
+		artifact_id = str(work_item.get("artifactId") or "").strip()
+		if not artifact_id:
+			return -1
+		try:
+			payload = await context.artifact_store.read(artifact_id)
+			parsed = json.loads(payload.decode("utf-8"))
+		except Exception:
+			return -1
+		if isinstance(parsed, dict):
+			obj = parsed.get("payload")
+			if isinstance(obj, dict):
+				if isinstance(obj.get("job_id"), int):
+					return int(obj["job_id"])
+				selected = obj.get("selected_job")
+				if isinstance(selected, dict) and isinstance(selected.get("job_id"), int):
+					return int(selected["job_id"])
+		return -1
 
 	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
 		node_id = str(node["id"])
@@ -87,7 +117,7 @@ async def test_jobflow_mixed_mode_contracts_stream_work_and_snapshot_params(monk
 				},
 			)
 		if node_id == "generate_docs":
-			job_id = int((item_preview or {}).get("job_id") or -1) if isinstance(item_preview, dict) else -1
+			job_id = await _extract_job_id(context, node)
 			generate_seen.append(job_id)
 			return NodeOutput(
 				status="succeeded",
@@ -109,22 +139,34 @@ async def test_jobflow_mixed_mode_contracts_stream_work_and_snapshot_params(monk
 	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
 	graph = {
 		"nodes": [
-			{"id": "jobs_api", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
-			{"id": "resume_file", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{
+				"id": "jobs_api",
+				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False}},
+			},
+			{
+				"id": "resume_file",
+				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False}},
+			},
 			{
 				"id": "projects_file",
-				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False},
+				},
 			},
 			{
 				"id": "preferences_file",
-				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False},
+				},
 			},
 			{
 				"id": "select_jobs",
 				"data": {
 					"kind": "tool",
 					"processingPolicy": {"consume_mode": "single_item", "batch_size": 1, "max_inflight": 1},
-					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False},
 				},
 			},
 			{
@@ -132,7 +174,7 @@ async def test_jobflow_mixed_mode_contracts_stream_work_and_snapshot_params(monk
 				"data": {
 					"kind": "tool",
 					"processingPolicy": {"consume_mode": "single_item", "batch_size": 1, "max_inflight": 1},
-					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "cache_enabled": False},
 				},
 			},
 		],

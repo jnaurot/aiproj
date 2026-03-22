@@ -166,4 +166,59 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			'work'
 		]);
 	});
+
+	it('supports mixed work/param/control wiring without false type mismatch', () => {
+		__setStrictSchemaFeatureFlagsForTest({ STRICT_SCHEMA_EDGE_CHECKS_V2: true });
+		graphStore.hardResetGraph();
+		const srcWork = graphStore.addNode('source', { x: 0, y: 0 });
+		const srcParam = graphStore.addNode('source', { x: 0, y: 180 });
+		const srcControl = graphStore.addNode('source', { x: 0, y: 360 });
+		const dst = graphStore.addNode('model', { x: 280, y: 0 });
+
+		graphStore.updateNodeConfig(srcWork, {
+			params: { file_format: 'json', output: { mode: 'json' } }
+		});
+		graphStore.updateNodeConfig(srcParam, {
+			params: { file_format: 'txt', output: { mode: 'json' } }
+		});
+		graphStore.updateNodeConfig(srcControl, {
+			params: { file_format: 'txt', output: { mode: 'json' } }
+		});
+		graphStore.setNodeExpectedInputSchemaForHandle(dst, 'in', { type: 'json', fields: [] });
+		graphStore.setNodeExpectedInputSchemaForHandle(dst, 'param_profile', { type: 'json', fields: [] });
+
+		const edgeWork = graphStore.addEdge({
+			id: 'e_mixed_work',
+			source: srcWork,
+			target: dst,
+			targetHandle: 'in',
+			data: { exec: 'idle', mode: 'work' }
+		} as any);
+		const edgeParam = graphStore.addEdge({
+			id: 'e_mixed_param',
+			source: srcParam,
+			target: dst,
+			targetHandle: 'param_profile',
+			data: { exec: 'idle', mode: 'param' }
+		} as any);
+		const edgeControl = graphStore.addEdge({
+			id: 'e_mixed_control',
+			source: srcControl,
+			sourceHandle: 'control_out',
+			target: dst,
+			targetHandle: 'control_gate',
+			data: { exec: 'idle', mode: 'control' }
+		} as any);
+
+		expect(edgeWork.ok).toBe(true);
+		expect(edgeParam.ok).toBe(true);
+		expect(edgeControl.ok).toBe(true);
+		const state = get(graphStore);
+		expect(state.edges).toHaveLength(3);
+		expect(state.edges.map((e) => String((e.data as any)?.mode ?? 'work')).sort()).toEqual([
+			'control',
+			'param',
+			'work'
+		]);
+	});
 });
