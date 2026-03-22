@@ -30,8 +30,10 @@
 		type NodeSchemaContractEdge
 	} from '$lib/flow/store/graphStore';
 	import {
+		collectExpectedInputHandles,
 		groupSchemaEdgesByMode,
-		schemaEdgeCounterpartyName
+		schemaEdgeCounterpartyName,
+		type ExpectedInputHandleSummary
 	} from '$lib/flow/components/nodeInspectorSchema';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
@@ -192,6 +194,7 @@
 	let modelEditorNodeId = '';
 	let inputPreviewRows: Array<Record<string, unknown>> = [];
 	let inputPreviewColumns: string[] = [];
+	let expectedInputHandles: ExpectedInputHandleSummary[] = [];
 	type SchemaAssistState = 'fresh' | 'partial' | 'stale' | 'unknown';
 	type SchemaAssistSummary = {
 		state: SchemaAssistState;
@@ -303,31 +306,12 @@
 		}
 		return issues.length > 0 ? issues.join(' | ') : null;
 	})();
-	$: expectedInputSchemaSuggestedDraft = (() => {
-		if (!selectedNode || !schemaContract?.edges?.length) return '';
-		const incoming = (schemaContract.edges as NodeSchemaContractEdge[])
-			.filter((edge) => edge.direction === 'incoming' && edge.requiredSchema)
-			.map((edge) => ({
-				edgeId: edge.edgeId,
-				sourceNodeId: edge.sourceNodeId,
-				sourceHandle: edge.sourceHandle,
-				requiredSchema: edge.requiredSchema
-			}));
-		if (incoming.length === 0) return '';
-		if (incoming.length === 1) {
-			return JSON.stringify(incoming[0].requiredSchema ?? { type: 'unknown', fields: [] }, null, 2);
-		}
-		return JSON.stringify(
-			{
-				type: 'multi_input',
-				inputs: incoming
-			},
-			null,
-			2
-		);
-	})();
-	let expectedInputSchemaDraft = '';
-	let expectedInputSchemaError = '';
+	$: expectedInputHandles = collectExpectedInputHandles(
+		selectedNode as any,
+		(schemaContract.edges ?? []) as NodeSchemaContractEdge[]
+	);
+	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
+	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
 	let edgeConfigErrors: Record<string, string> = {};
 	let expectedSchemaDraft = '';
@@ -410,11 +394,43 @@
 
 	$: if (selectedNode?.id && selectedNode.id !== expectedInputSchemaNodeId) {
 		expectedInputSchemaNodeId = selectedNode.id;
-		const typed = (selectedNode.data as any)?.schema?.expectedInputSchema?.typedSchema ?? null;
-		expectedInputSchemaDraft = typed
-			? JSON.stringify(typed, null, 2)
-			: expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
-		expectedInputSchemaError = '';
+		const schema = (selectedNode.data as any)?.schema ?? {};
+		const expectedInputSchemas =
+			schema?.expectedInputSchemas && typeof schema.expectedInputSchemas === 'object'
+				? (schema.expectedInputSchemas as Record<string, any>)
+				: {};
+		const legacyInTyped = schema?.expectedInputSchema?.typedSchema ?? null;
+		const incomingByHandle = new Map<string, Record<string, unknown>>();
+		for (const edge of (schemaContract?.edges ?? []) as NodeSchemaContractEdge[]) {
+			if (String(edge?.direction ?? '').trim().toLowerCase() !== 'incoming') continue;
+			const handle = String(edge?.targetHandle ?? 'in').trim() || 'in';
+			if (!incomingByHandle.has(handle) && edge?.requiredSchema && typeof edge.requiredSchema === 'object') {
+				incomingByHandle.set(handle, edge.requiredSchema as Record<string, unknown>);
+			}
+		}
+		const nextDrafts: Record<string, string> = {};
+		for (const handleSummary of expectedInputHandles) {
+			const handle = handleSummary.handle;
+			const explicit = expectedInputSchemas?.[handle]?.typedSchema ?? null;
+			const fallback = handle === 'in' ? legacyInTyped : null;
+			const suggested = incomingByHandle.get(handle) ?? { type: handleSummary.classDefaultType };
+			const typed = explicit ?? fallback ?? suggested;
+			nextDrafts[handle] = JSON.stringify(typed, null, 2);
+		}
+		expectedInputSchemaDraftByHandle = nextDrafts;
+		expectedInputSchemaErrorByHandle = {};
+	}
+
+	$: if (selectedNode?.id && selectedNode.id === expectedInputSchemaNodeId) {
+		let changed = false;
+		const nextDrafts = { ...expectedInputSchemaDraftByHandle };
+		for (const handleSummary of expectedInputHandles) {
+			if (nextDrafts[handleSummary.handle] == null) {
+				nextDrafts[handleSummary.handle] = JSON.stringify({ type: handleSummary.classDefaultType }, null, 2);
+				changed = true;
+			}
+		}
+		if (changed) expectedInputSchemaDraftByHandle = nextDrafts;
 	}
 
 	$: if (isLlm && selectedNode?.id && selectedNode.id !== modelEditorNodeId) {
@@ -500,47 +516,85 @@
 		}
 	}
 
-	function useSuggestedInputSchema(): void {
-		expectedInputSchemaDraft = expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
-		expectedInputSchemaError = '';
+	function suggestedInputSchemaForHandle(handle: string): Record<string, unknown> {
+		const incoming = (schemaContract.edges ?? []) as NodeSchemaContractEdge[];
+		const match = incoming.find(
+			(edge) =>
+				String(edge?.direction ?? '').trim().toLowerCase() === 'incoming' &&
+				(String(edge?.targetHandle ?? 'in').trim() || 'in') === handle &&
+				edge.requiredSchema &&
+				typeof edge.requiredSchema === 'object'
+		);
+		if (match?.requiredSchema && typeof match.requiredSchema === 'object') {
+			return match.requiredSchema as Record<string, unknown>;
+		}
+		const summary = expectedInputHandles.find((item) => item.handle === handle);
+		return { type: summary?.classDefaultType ?? 'none' };
 	}
 
-	function useInferredInputSchema(): void {
+	function setExpectedInputDraft(handle: string, draft: string): void {
+		expectedInputSchemaDraftByHandle = {
+			...expectedInputSchemaDraftByHandle,
+			[handle]: draft
+		};
+	}
+
+	function clearExpectedInputError(handle: string): void {
+		if (expectedInputSchemaErrorByHandle[handle] == null) return;
+		const { [handle]: _drop, ...rest } = expectedInputSchemaErrorByHandle;
+		expectedInputSchemaErrorByHandle = rest;
+	}
+
+	function setExpectedInputError(handle: string, message: string): void {
+		expectedInputSchemaErrorByHandle = {
+			...expectedInputSchemaErrorByHandle,
+			[handle]: message
+		};
+	}
+
+	function useSuggestedInputSchema(handle: string): void {
+		setExpectedInputDraft(handle, JSON.stringify(suggestedInputSchemaForHandle(handle), null, 2));
+		clearExpectedInputError(handle);
+	}
+
+	function useInferredInputSchema(handle: string): void {
 		if (!selectedNode) return;
 		const typed = (selectedNode.data as any)?.schema?.inferredSchema?.typedSchema ?? { type: 'unknown', fields: [] };
-		expectedInputSchemaDraft = JSON.stringify(typed, null, 2);
-		expectedInputSchemaError = '';
+		setExpectedInputDraft(handle, JSON.stringify(typed, null, 2));
+		clearExpectedInputError(handle);
 	}
 
-	function clearExpectedInputSchema(): void {
+	function clearExpectedInputSchema(handle: string): void {
 		if (!selectedNode?.id) return;
-		const result = graphStore.setNodeExpectedInputSchema(selectedNode.id, null);
+		const result = graphStore.setNodeExpectedInputSchemaForHandle(selectedNode.id, handle, null);
 		if (!(result as any)?.ok) {
-			expectedInputSchemaError = String((result as any)?.error ?? 'Failed to clear expected input schema');
+			setExpectedInputError(handle, String((result as any)?.error ?? 'Failed to clear expected input schema'));
 			return;
 		}
-		expectedInputSchemaDraft = expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
-		expectedInputSchemaError = '';
+		setExpectedInputDraft(handle, JSON.stringify(suggestedInputSchemaForHandle(handle), null, 2));
+		clearExpectedInputError(handle);
 	}
 
-	function saveExpectedInputSchema(): void {
+	function saveExpectedInputSchema(handle: string): void {
 		if (!selectedNode?.id) return;
 		try {
-			const parsed = JSON.parse(expectedInputSchemaDraft || '{}');
+			const parsed = JSON.parse(expectedInputSchemaDraftByHandle[handle] || '{}');
 			const parsedType = String((parsed as any)?.type ?? '').trim().toLowerCase();
 			if (parsedType === 'multi_input') {
-				expectedInputSchemaError =
-					'Use a typed schema object (type + optional fields). multi_input envelopes are display-only.';
+				setExpectedInputError(
+					handle,
+					'Use a typed schema object (type + optional fields). multi_input envelopes are display-only.'
+				);
 				return;
 			}
-			const result = graphStore.setNodeExpectedInputSchema(selectedNode.id, parsed);
+			const result = graphStore.setNodeExpectedInputSchemaForHandle(selectedNode.id, handle, parsed);
 			if (!(result as any)?.ok) {
-				expectedInputSchemaError = String((result as any)?.error ?? 'Failed to save expected input schema');
+				setExpectedInputError(handle, String((result as any)?.error ?? 'Failed to save expected input schema'));
 				return;
 			}
-			expectedInputSchemaError = '';
+			clearExpectedInputError(handle);
 		} catch (error) {
-			expectedInputSchemaError = String((error as Error)?.message ?? 'Expected input schema must be valid JSON.');
+			setExpectedInputError(handle, String((error as Error)?.message ?? 'Expected input schema must be valid JSON.'));
 		}
 	}
 
@@ -1309,22 +1363,44 @@
 		</div>
 		{#if !isComponent}
 			<div class="expectedSchemaEditor">
-				<div class="expectedSchemaHead">Expected Input Schema</div>
-				<textarea
-					class="expectedSchemaTextarea"
-					rows="7"
-					bind:value={expectedInputSchemaDraft}
-					spellcheck="false"
-				></textarea>
-				<div class="expectedSchemaActions">
-					<button type="button" on:click={saveExpectedInputSchema}>Save expected input</button>
-					<button type="button" on:click={useSuggestedInputSchema}>Use contract</button>
-					<button type="button" on:click={useInferredInputSchema}>Use inferred</button>
-					<button type="button" on:click={clearExpectedInputSchema}>Clear</button>
-				</div>
-				{#if expectedInputSchemaError}
-					<div class="expectedSchemaError">{expectedInputSchemaError}</div>
-				{/if}
+				<div class="expectedSchemaHead">Expected Input Schemas</div>
+				{#each expectedInputHandles as handleSummary (handleSummary.handle)}
+					<div class="expectedInputHandleEditor">
+						<div class="expectedInputHandleHead">
+							<span>{handleSummary.handle}</span>
+							<span class="schemaEdgeCounterparty"
+								>{handleSummary.affinity} default:{handleSummary.classDefaultType}</span
+							>
+						</div>
+						<textarea
+							class="expectedSchemaTextarea"
+							rows="6"
+							value={expectedInputSchemaDraftByHandle[handleSummary.handle] ?? ''}
+							spellcheck="false"
+							on:input={(event) =>
+								setExpectedInputDraft(handleSummary.handle, (event.currentTarget as HTMLTextAreaElement).value)}
+						></textarea>
+						<div class="expectedSchemaActions">
+							<button type="button" on:click={() => saveExpectedInputSchema(handleSummary.handle)}
+								>Save {handleSummary.handle}</button
+							>
+							<button type="button" on:click={() => useSuggestedInputSchema(handleSummary.handle)}
+								>Use contract</button
+							>
+							<button type="button" on:click={() => useInferredInputSchema(handleSummary.handle)}
+								>Use inferred</button
+							>
+							<button type="button" on:click={() => clearExpectedInputSchema(handleSummary.handle)}
+								>Clear</button
+							>
+						</div>
+						{#if expectedInputSchemaErrorByHandle[handleSummary.handle]}
+							<div class="expectedSchemaError">
+								{expectedInputSchemaErrorByHandle[handleSummary.handle]}
+							</div>
+						{/if}
+					</div>
+				{/each}
 			</div>
 			<div class="expectedSchemaEditor">
 				<div class="expectedSchemaHead">Expected Output Schema</div>
@@ -1739,6 +1815,22 @@
 	.expectedSchemaActions button {
 		font-size: 11px;
 		padding: 4px 8px;
+	}
+
+	.expectedInputHandleEditor {
+		border: 1px solid var(--ni-border);
+		border-radius: 8px;
+		padding: 6px;
+		display: grid;
+		gap: 6px;
+	}
+
+	.expectedInputHandleHead {
+		display: flex;
+		justify-content: space-between;
+		align-items: baseline;
+		font-size: 11px;
+		font-weight: 600;
 	}
 
 	.expectedSchemaError {

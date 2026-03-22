@@ -215,4 +215,36 @@ describe('graphStore schema contract snapshot', () => {
 		expect(snapshot.edges).toHaveLength(1);
 		expect(snapshot.edges[0]?.mode).toBe('param');
 	});
+
+	it('uses handle-specific expected input schema in required diagnostics', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
+		const modelId = graphStore.addNode('model', { x: 240, y: 0 });
+		const updated = graphStore.updateNodeConfig(modelId, {
+			schema: {
+				expectedInputSchemas: {
+					param_profile: {
+						source: 'declared',
+						state: 'fresh',
+						typedSchema: { type: 'json', fields: [] }
+					}
+				}
+			}
+		} as any);
+		expect(updated.ok).toBe(true);
+		const added = graphStore.addEdge({
+			id: 'e_param_profile',
+			source: sourceId,
+			target: modelId,
+			targetHandle: 'param_profile',
+			data: { exec: 'idle', mode: 'param' }
+		} as any);
+		expect(added.ok).toBe(true);
+
+		const snapshot = __buildNodeSchemaContractSnapshotForTest(get(graphStore), modelId);
+		const edge = snapshot.edges.find((item) => item.edgeId === 'e_param_profile');
+		expect(edge?.targetHandle).toBe('param_profile');
+		expect(typeof edge?.requiredSchema?.type).toBe('string');
+		expect(String(edge?.requiredSchema?.type ?? '')).not.toBe('');
+	});
 });
