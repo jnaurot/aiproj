@@ -577,6 +577,8 @@ class GraphValidator:
             # Get payload types
             source_handle = edge.get("sourceHandle", "out")
             target_handle = edge.get("targetHandle", "in")
+            source_label = str(((source_node.get("data") or {}).get("label") or source_id or "")).strip()
+            target_label = str(((target_node.get("data") or {}).get("label") or target_id or "")).strip()
             edge_mode = self._edge_mode(edge)
             valid_modes = allowed_edge_modes()
             if edge_mode not in valid_modes:
@@ -612,11 +614,16 @@ class GraphValidator:
                         message=mode_message,
                         edge_id=edge_id,
                         details={
+                            "edgeId": edge_id,
+                            "sourceHandle": source_handle,
+                            "targetHandle": target_handle,
                             "edgeMode": edge_mode,
                             "sourceAffinity": src_affinity,
                             "targetAffinity": dst_affinity,
-                            "sourceHandle": source_handle,
-                            "targetHandle": target_handle,
+                            "sourceNodeId": source_id,
+                            "targetNodeId": target_id,
+                            "sourceLabel": source_label,
+                            "targetLabel": target_label,
                         },
                     )
                 )
@@ -640,10 +647,17 @@ class GraphValidator:
                                 ),
                                 edge_id=edge_id,
                                 details={
+                                    "edgeId": edge_id,
+                                    "sourceHandle": source_handle,
+                                    "targetHandle": target_handle,
                                     "mode": edge_mode,
                                     "requiredKeys": required_keys,
                                     "availableKeys": available_keys,
                                     "missingKeys": missing,
+                                    "sourceNodeId": source_id,
+                                    "targetNodeId": target_id,
+                                    "sourceLabel": source_label,
+                                    "targetLabel": target_label,
                                 },
                                 suggestions=[
                                     "Ensure source payload exposes all requiredKeys for this param edge.",
@@ -722,6 +736,9 @@ class GraphValidator:
                         ),
                         edge_id=edge_id,
                         details={
+                            "edgeId": edge_id,
+                            "sourceHandle": source_handle,
+                            "targetHandle": target_handle,
                             "expected": {
                                 "type": self._normalize_payload_type(target_type),
                                 "typedSchema": {"fields": "non-empty"},
@@ -732,6 +749,13 @@ class GraphValidator:
                             },
                             "provided_schema": provided_schema,
                             "required_schema": required_schema,
+                            "sourceNodeId": source_id,
+                            "targetNodeId": target_id,
+                            "sourceLabel": source_label,
+                            "targetLabel": target_label,
+                            "mode": edge_mode,
+                            "sourceAffinity": src_affinity,
+                            "targetAffinity": dst_affinity,
                         },
                     )
                 )
@@ -758,6 +782,16 @@ class GraphValidator:
                             "provided_schema": provided_schema,
                             "required_schema": required_schema,
                             "missing_columns": missing,
+                            "edgeId": edge_id,
+                            "sourceHandle": source_handle,
+                            "targetHandle": target_handle,
+                            "sourceNodeId": source_id,
+                            "targetNodeId": target_id,
+                            "sourceLabel": source_label,
+                            "targetLabel": target_label,
+                            "mode": edge_mode,
+                            "sourceAffinity": src_affinity,
+                            "targetAffinity": dst_affinity,
                         },
                         suggestions=suggestions or None,
                     ))
@@ -784,6 +818,16 @@ class GraphValidator:
                         details={
                             "provided_schema": provided_schema,
                             "required_schema": required_schema,
+                            "edgeId": edge_id,
+                            "sourceHandle": source_handle,
+                            "targetHandle": target_handle,
+                            "sourceNodeId": source_id,
+                            "targetNodeId": target_id,
+                            "sourceLabel": source_label,
+                            "targetLabel": target_label,
+                            "mode": edge_mode,
+                            "sourceAffinity": src_affinity,
+                            "targetAffinity": dst_affinity,
                         },
                         suggestions=suggestions or None,
                     )

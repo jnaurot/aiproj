@@ -49,6 +49,8 @@ describe('graphStore edge schema diagnostics', () => {
 		expect(diagnostics.e1?.severity).toBe('error');
 		expect(diagnostics.e1?.details?.providedSchema?.type).toBe('string');
 		expect(diagnostics.e1?.details?.requiredSchema?.type).toBe('binary');
+		expect(diagnostics.e1?.details?.targetHandle).toBe('in');
+		expect(diagnostics.e1?.details?.mode).toBe('work');
 	});
 
 	it('emits warning diagnostics for lossy coercions', () => {
@@ -123,6 +125,8 @@ describe('graphStore edge schema diagnostics', () => {
 		expect(String(diagnostics.e3?.message ?? '').toLowerCase()).toContain(
 			'required typed schema coverage is missing'
 		);
+		expect(diagnostics.e3?.details?.sourceNodeId).toBe('n_source');
+		expect(diagnostics.e3?.details?.targetNodeId).toBe('n_transform');
 	});
 
 	it('respects manual expected schema precedence over inferred/observed hints', () => {

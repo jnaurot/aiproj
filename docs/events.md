@@ -104,6 +104,7 @@ Schema/contract diagnostics are mode-aware:
 - `work` edges emit `Work payload mismatch ...` diagnostics for payload type/schema issues.
 - `param` edges emit `Param shape mismatch ...` diagnostics when required param keys/shapes are missing.
 - `control` affinity errors emit `Control contract mismatch ...` diagnostics when control handles/mode contracts are incompatible.
+- mismatch diagnostics include per-handle context: `edgeId`, `sourceHandle`, `targetHandle`, `sourceNodeId`, `targetNodeId`, `sourceLabel`, `targetLabel`, `mode`, `sourceAffinity`, `targetAffinity`.
 
 Suggested auto-fixes are also mode-specific:
 

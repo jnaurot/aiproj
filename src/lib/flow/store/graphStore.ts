@@ -3194,6 +3194,10 @@ export type EdgeSchemaConstraint = {
 	mode: 'work' | 'param' | 'control';
 	sourceNodeId: string;
 	targetNodeId: string;
+	sourceHandle: string;
+	targetHandle: string;
+	sourceAffinity: 'work' | 'param' | 'control';
+	targetAffinity: 'work' | 'param' | 'control';
 	providedSchema: Record<string, any>;
 	requiredSchema: Record<string, any>;
 	compatible: boolean;
@@ -3213,6 +3217,13 @@ export type EdgeSchemaDiagnostic = {
 		providedSchema: Record<string, any>;
 		requiredSchema: Record<string, any>;
 		missingColumns?: string[];
+		targetHandle?: string;
+		sourceHandle?: string;
+		sourceNodeId?: string;
+		targetNodeId?: string;
+		mode?: 'work' | 'param' | 'control';
+		sourceAffinity?: 'work' | 'param' | 'control';
+		targetAffinity?: 'work' | 'param' | 'control';
 	};
 	suggestions: string[];
 };
@@ -3325,6 +3336,8 @@ function computeEdgeSchemaConstraintsInternal(
 		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
 		const mode = normalizeEdgeMode(edge as Edge<PipelineEdgeData>);
 		if (!sourceNode || !targetNode) continue;
+		const sourceAffinity = nodePortAffinity(sourceNode as any, 'out', sourceHandle);
+		const targetAffinity = nodePortAffinity(targetNode as any, 'in', targetHandle);
 		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
 		const requiredSchema = buildRequiredSchema(targetNode as any, targetHandle);
 		const check = isSchemaCompatible(providedSchema, requiredSchema, mode);
@@ -3333,6 +3346,10 @@ function computeEdgeSchemaConstraintsInternal(
 			mode,
 			sourceNodeId,
 			targetNodeId,
+			sourceHandle,
+			targetHandle,
+			sourceAffinity,
+			targetAffinity,
 			providedSchema,
 			requiredSchema,
 			compatible: check.ok,
@@ -3382,7 +3399,14 @@ function computeEdgeSchemaDiagnosticsInternal(
 					message: `${modeLabel}: lossy coercion ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 					details: {
 						providedSchema: constraint.providedSchema,
-						requiredSchema: constraint.requiredSchema
+						requiredSchema: constraint.requiredSchema,
+						targetHandle: constraint.targetHandle,
+						sourceHandle: constraint.sourceHandle,
+						sourceNodeId: constraint.sourceNodeId,
+						targetNodeId: constraint.targetNodeId,
+						mode: constraint.mode,
+						sourceAffinity: constraint.sourceAffinity,
+						targetAffinity: constraint.targetAffinity
 					},
 					suggestions: constraint.suggestions ?? []
 				};
@@ -3400,7 +3424,14 @@ function computeEdgeSchemaDiagnosticsInternal(
 				details: {
 					providedSchema: constraint.providedSchema,
 					requiredSchema: constraint.requiredSchema,
-					missingColumns: constraint.missingColumns
+					missingColumns: constraint.missingColumns,
+					targetHandle: constraint.targetHandle,
+					sourceHandle: constraint.sourceHandle,
+					sourceNodeId: constraint.sourceNodeId,
+					targetNodeId: constraint.targetNodeId,
+					mode: constraint.mode,
+					sourceAffinity: constraint.sourceAffinity,
+					targetAffinity: constraint.targetAffinity
 				},
 				suggestions: constraint.suggestions ?? []
 			};
@@ -3415,7 +3446,14 @@ function computeEdgeSchemaDiagnosticsInternal(
 				details: {
 					providedSchema: constraint.providedSchema,
 					requiredSchema: constraint.requiredSchema,
-					missingColumns: constraint.missingColumns
+					missingColumns: constraint.missingColumns,
+					targetHandle: constraint.targetHandle,
+					sourceHandle: constraint.sourceHandle,
+					sourceNodeId: constraint.sourceNodeId,
+					targetNodeId: constraint.targetNodeId,
+					mode: constraint.mode,
+					sourceAffinity: constraint.sourceAffinity,
+					targetAffinity: constraint.targetAffinity
 				},
 				suggestions: constraint.suggestions ?? []
 			};
@@ -3428,7 +3466,14 @@ function computeEdgeSchemaDiagnosticsInternal(
 			message: `${modeLabel}: incompatible schema types ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 			details: {
 				providedSchema: constraint.providedSchema,
-				requiredSchema: constraint.requiredSchema
+				requiredSchema: constraint.requiredSchema,
+				targetHandle: constraint.targetHandle,
+				sourceHandle: constraint.sourceHandle,
+				sourceNodeId: constraint.sourceNodeId,
+				targetNodeId: constraint.targetNodeId,
+				mode: constraint.mode,
+				sourceAffinity: constraint.sourceAffinity,
+				targetAffinity: constraint.targetAffinity
 			},
 			suggestions: constraint.suggestions ?? []
 		};
