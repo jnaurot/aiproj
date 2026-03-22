@@ -53,3 +53,53 @@ async def test_control_signals_and_queue_metrics_are_emitted(monkeypatch) -> Non
 	assert "busy" in signals
 	assert "drain" in signals
 	assert any(e.get("type") == "queue_metrics" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_control_edge_runtime_ignores_payload_type_mismatch(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [
+			{
+				"id": "e_control",
+				"source": "a",
+				"sourceHandle": "control_out",
+				"target": "b",
+				"targetHandle": "control_in",
+				"data": {
+					"mode": "control",
+					"contract": {"payload": {"source": {"type": "text"}, "target": {"type": "json"}}},
+				},
+			}
+		],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-control-mismatch",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-control-mismatch", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-control-mismatch",
+	)
+	assert any(evt.get("type") == "run_finished" and evt.get("status") == "succeeded" for evt in events)
+	assert not any(
+		evt.get("type") == "log" and "CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH" in str(evt.get("message") or "")
+		for evt in events
+	)
