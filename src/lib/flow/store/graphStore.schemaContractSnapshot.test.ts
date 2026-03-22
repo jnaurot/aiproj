@@ -197,4 +197,22 @@ describe('graphStore schema contract snapshot', () => {
 			}
 		`);
 	});
+
+	it('includes edge mode in schema contract snapshots', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
+		const modelId = graphStore.addNode('model', { x: 220, y: 0 });
+		const added = graphStore.addEdge({
+			id: 'e_param_snapshot',
+			source: sourceId,
+			target: modelId,
+			targetHandle: 'param_filters',
+			data: { exec: 'idle', mode: 'param' }
+		} as any);
+		expect(added.ok).toBe(true);
+
+		const snapshot = __buildNodeSchemaContractSnapshotForTest(get(graphStore), modelId);
+		expect(snapshot.edges).toHaveLength(1);
+		expect(snapshot.edges[0]?.mode).toBe('param');
+	});
 });

@@ -6119,6 +6119,7 @@ export const edgeSchemaDiagnostics = derived(edgeSchemaConstraints, ($constraint
 
 export type NodeSchemaContractEdge = {
 	edgeId: string;
+	mode: 'work' | 'param' | 'control';
 	direction: 'incoming' | 'outgoing';
 	sourceNodeId: string;
 	targetNodeId: string;
@@ -6157,6 +6158,7 @@ function buildNodeSchemaContractSnapshotInternal(
 			diag?.severity === 'error' ? 'error' : diag?.severity === 'warning' ? 'warning' : 'clean';
 		edges.push({
 			edgeId,
+			mode: constraint.mode,
 			direction: String(edge.target ?? '') === nodeId ? 'incoming' : 'outgoing',
 			sourceNodeId: String(edge.source ?? ''),
 			targetNodeId: String(edge.target ?? ''),

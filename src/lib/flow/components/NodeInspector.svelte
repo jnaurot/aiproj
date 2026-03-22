@@ -29,6 +29,10 @@
 		__buildNodeSchemaContractSnapshotForTest,
 		type NodeSchemaContractEdge
 	} from '$lib/flow/store/graphStore';
+	import {
+		groupSchemaEdgesByMode,
+		schemaEdgeCounterpartyName
+	} from '$lib/flow/components/nodeInspectorSchema';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
@@ -112,6 +116,7 @@
 	$: schemaContract = selectedNode
 		? __buildNodeSchemaContractSnapshotForTest($graphStore as any, selectedNode.id)
 		: { nodeId: '', status: 'clean', edges: [] as NodeSchemaContractEdge[] };
+	$: schemaContractGroups = groupSchemaEdgesByMode(schemaContract.edges ?? []);
 	$: guidedControls = isTransform ? guidedControlsForTransform(transformKind as TransformKind) : [];
 	$: transformPreviewDiff = isTransform
 		? buildTransformPreviewDiff({
@@ -164,6 +169,18 @@
 				sampleOutput: null,
 				notes: []
 			};
+	$: nodeProcessingPolicy = (() => {
+		const policyRaw =
+			((selectedNode?.data as any)?.processingPolicy ?? {}) as Record<string, unknown>;
+		const consumeMode = String(policyRaw?.consume_mode ?? 'once').trim().toLowerCase();
+		return {
+			consume_mode: (
+				consumeMode === 'single_item' || consumeMode === 'batch' ? consumeMode : 'once'
+			) as 'once' | 'single_item' | 'batch',
+			batch_size: Math.max(1, Number(policyRaw?.batch_size ?? 1)),
+			max_inflight: Math.max(1, Number(policyRaw?.max_inflight ?? 1))
+		};
+	})();
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
@@ -325,12 +342,19 @@
 			max: number;
 			overflow: 'block' | 'spill' | 'error';
 		};
+		work: {
+			item_mode: 'artifact' | 'json_items' | 'table_rows';
+			max_items: number;
+		};
 	};
 
 	function readEdgeRuntimeConfig(edgeId: string): EdgeRuntimeConfig {
 		const edge = ($graphStore?.edges ?? []).find((candidate) => String(candidate.id ?? '') === edgeId);
 		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
 		const overflow = String((edge?.data as any)?.queue?.overflow ?? 'block').trim().toLowerCase();
+		const itemMode = String((edge?.data as any)?.work?.item_mode ?? (edge?.data as any)?.work?.itemMode ?? 'artifact')
+			.trim()
+			.toLowerCase();
 		return {
 			mode: (mode === 'param' || mode === 'control' ? mode : 'work') as 'work' | 'param' | 'control',
 			fatal: Boolean((edge?.data as any)?.fatal ?? false),
@@ -339,7 +363,13 @@
 				overflow: (
 					overflow === 'spill' || overflow === 'error' ? overflow : 'block'
 				) as 'block' | 'spill' | 'error'
-			}
+			},
+			work: {
+				item_mode: (
+					itemMode === 'json_items' || itemMode === 'table_rows' ? itemMode : 'artifact'
+				) as 'artifact' | 'json_items' | 'table_rows',
+				max_items: Math.max(1, Number((edge?.data as any)?.work?.max_items ?? (edge?.data as any)?.work?.maxItems ?? 256))
+			},
 		};
 	}
 
@@ -349,6 +379,7 @@
 			mode?: 'work' | 'param' | 'control';
 			fatal?: boolean;
 			queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+			work?: { item_mode?: 'artifact' | 'json_items' | 'table_rows'; max_items?: number };
 		}
 	): void {
 		const result = graphStore.updateEdgeConfig(edgeId, patch);
@@ -853,6 +884,13 @@
 			adapterKind: edge.adapterKind
 		});
 	}
+
+	function updateNodeProcessingPolicy(
+		patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+	): void {
+		if (!selectedNode?.id) return;
+		graphStore.updateNodeProcessingPolicy(selectedNode.id, patch);
+	}
 </script>
 
 {#if selectedNode}
@@ -1221,6 +1259,54 @@
 				/>
 			{/if}
 		{/if}
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Processing Policy</div>
+			<div class="assistActionRow">
+				<label class="guidedToggle">
+					<span>consume</span>
+					<select
+						value={nodeProcessingPolicy.consume_mode}
+						on:change={(event) =>
+							updateNodeProcessingPolicy({
+								consume_mode: (event.currentTarget as HTMLSelectElement).value as
+									| 'once'
+									| 'single_item'
+									| 'batch'
+							})}
+					>
+						<option value="once">once</option>
+						<option value="single_item">single_item</option>
+						<option value="batch">batch</option>
+					</select>
+				</label>
+				<label class="guidedToggle">
+					<span>batch size</span>
+					<input
+						type="number"
+						min="1"
+						step="1"
+						value={String(nodeProcessingPolicy.batch_size)}
+						on:change={(event) =>
+							updateNodeProcessingPolicy({
+								batch_size: Math.max(1, Number((event.currentTarget as HTMLInputElement).value || '1'))
+							})}
+					/>
+				</label>
+				<label class="guidedToggle">
+					<span>max inflight</span>
+					<input
+						type="number"
+						min="1"
+						step="1"
+						value={String(nodeProcessingPolicy.max_inflight)}
+						on:change={(event) =>
+							updateNodeProcessingPolicy({
+								max_inflight: Math.max(1, Number((event.currentTarget as HTMLInputElement).value || '1'))
+							})}
+					/>
+				</label>
+			</div>
+		</div>
 		{#if !isComponent}
 			<div class="expectedSchemaEditor">
 				<div class="expectedSchemaHead">Expected Input Schema</div>
@@ -1272,99 +1358,145 @@
 			{#if schemaContract.edges.length === 0}
 				<div class="schemaEmpty">No connected edges.</div>
 			{:else}
-				{#each schemaContract.edges as edge (edge.edgeId)}
-					{@const edgeRuntimeConfig = readEdgeRuntimeConfig(edge.edgeId)}
-					<div class={`schemaEdge schemaEdge-${edge.severity}`}>
-						<div class="schemaEdgeHead">
-							<span>{edge.direction === 'incoming' ? 'in' : 'out'}: {edge.edgeId}</span>
-							<span>{edge.severity}</span>
-						</div>
-						<div class="schemaEdgeConfig">
-							<label>
-								<span>mode</span>
-								<select
-									value={edgeRuntimeConfig.mode}
-									on:change={(event) =>
-										patchEdgeRuntimeConfig(edge.edgeId, {
-											mode: (event.currentTarget as HTMLSelectElement).value as
-												| 'work'
-												| 'param'
-												| 'control'
-										})}
-								>
-									<option value="work">work</option>
-									<option value="param">param</option>
-									<option value="control">control</option>
-								</select>
-							</label>
-							<label>
-								<span>queue.max</span>
-								<input
-									type="number"
-									min="1"
-									step="1"
-									value={String(edgeRuntimeConfig.queue.max)}
-									on:change={(event) =>
-										patchEdgeRuntimeConfig(edge.edgeId, {
-											queue: {
-												max: Math.max(
-													1,
-													Math.trunc(Number((event.currentTarget as HTMLInputElement).value || '1'))
-												)
-											}
-										})}
-								/>
-							</label>
-							<label>
-								<span>overflow</span>
-								<select
-									value={edgeRuntimeConfig.queue.overflow}
-									on:change={(event) =>
-										patchEdgeRuntimeConfig(edge.edgeId, {
-											queue: {
-												overflow: (event.currentTarget as HTMLSelectElement).value as
-													| 'block'
-													| 'spill'
-													| 'error'
-											}
-										})}
-								>
-									<option value="block">block</option>
-									<option value="spill">spill</option>
-									<option value="error">error</option>
-								</select>
-							</label>
-							<label class="schemaEdgeFatal">
-								<input
-									type="checkbox"
-									checked={edgeRuntimeConfig.fatal}
-									on:change={(event) =>
-										patchEdgeRuntimeConfig(edge.edgeId, {
-											fatal: (event.currentTarget as HTMLInputElement).checked
-										})}
-								/>
-								<span>fatal</span>
-							</label>
-						</div>
-						{#if edgeConfigErrors[edge.edgeId]}
-							<div class="expectedSchemaError">{edgeConfigErrors[edge.edgeId]}</div>
-						{/if}
-						<div class="schemaRow">
-							<span class="schemaLabel">provided</span>
-							<span>{schemaTypeLabel(edge.providedSchema)} [{schemaFieldSummary(edge.providedSchema, 'fields')}]</span>
-						</div>
-						<div class="schemaRow">
-							<span class="schemaLabel">required</span>
-							<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
-						</div>
-						{#if edge.suggestions.length > 0}
-							<div class="schemaSuggestions">{edge.suggestions.join(' ')}</div>
-						{/if}
-						{#if edge.adapterKind}
-							<button type="button" class="schemaApplyBtn" on:click={() => applySchemaSuggestion(edge)}>
-								Apply {edge.adapterKind} adapter
-							</button>
-						{/if}
+				{#each schemaContractGroups as group (group.mode)}
+					<div class="schemaModeGroup">
+						<div class="schemaModeHead">{group.label} edges ({group.edges.length})</div>
+						{#each group.edges as edge (edge.edgeId)}
+							{@const edgeRuntimeConfig = readEdgeRuntimeConfig(edge.edgeId)}
+							{@const counterpartyName = schemaEdgeCounterpartyName(edge, selectedNode?.id ?? '', $graphStore.nodes ?? [])}
+							<div class={`schemaEdge schemaEdge-${edge.severity}`}>
+								<div class="schemaEdgeHead">
+									<div class="schemaEdgeHeadMain">
+										<span>{edge.direction === 'incoming' ? 'in' : 'out'}: {edge.edgeId}</span>
+										<span class="schemaEdgeCounterparty">{counterpartyName}</span>
+									</div>
+									<span>{edge.severity}</span>
+								</div>
+								<div class="schemaEdgeConfig">
+									<label>
+										<span>mode</span>
+										<select
+											value={edgeRuntimeConfig.mode}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													mode: (event.currentTarget as HTMLSelectElement).value as
+														| 'work'
+														| 'param'
+														| 'control'
+												})}
+										>
+											<option value="work">work</option>
+											<option value="param">param</option>
+											<option value="control">control</option>
+										</select>
+									</label>
+									<label>
+										<span>queue.max</span>
+										<input
+											type="number"
+											min="1"
+											step="1"
+											value={String(edgeRuntimeConfig.queue.max)}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													queue: {
+														max: Math.max(
+															1,
+															Math.trunc(Number((event.currentTarget as HTMLInputElement).value || '1'))
+														)
+													}
+												})}
+										/>
+									</label>
+									<label>
+										<span>overflow</span>
+										<select
+											value={edgeRuntimeConfig.queue.overflow}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													queue: {
+														overflow: (event.currentTarget as HTMLSelectElement).value as
+															| 'block'
+															| 'spill'
+															| 'error'
+													}
+												})}
+										>
+											<option value="block">block</option>
+											<option value="spill">spill</option>
+											<option value="error">error</option>
+										</select>
+									</label>
+									<label>
+										<span>item mode</span>
+										<select
+											value={edgeRuntimeConfig.work.item_mode}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													work: {
+														item_mode: (event.currentTarget as HTMLSelectElement).value as
+															| 'artifact'
+															| 'json_items'
+															| 'table_rows'
+													}
+												})}
+										>
+											<option value="artifact">artifact</option>
+											<option value="json_items">json_items</option>
+											<option value="table_rows">table_rows</option>
+										</select>
+									</label>
+									<label>
+										<span>max items</span>
+										<input
+											type="number"
+											min="1"
+											step="1"
+											value={String(edgeRuntimeConfig.work.max_items)}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													work: {
+														max_items: Math.max(
+															1,
+															Math.trunc(Number((event.currentTarget as HTMLInputElement).value || '1'))
+														)
+													}
+												})}
+										/>
+									</label>
+									<label class="schemaEdgeFatal">
+										<input
+											type="checkbox"
+											checked={edgeRuntimeConfig.fatal}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													fatal: (event.currentTarget as HTMLInputElement).checked
+												})}
+										/>
+										<span>fatal</span>
+									</label>
+								</div>
+								{#if edgeConfigErrors[edge.edgeId]}
+									<div class="expectedSchemaError">{edgeConfigErrors[edge.edgeId]}</div>
+								{/if}
+								<div class="schemaRow">
+									<span class="schemaLabel">provided</span>
+									<span>{schemaTypeLabel(edge.providedSchema)} [{schemaFieldSummary(edge.providedSchema, 'fields')}]</span>
+								</div>
+								<div class="schemaRow">
+									<span class="schemaLabel">required</span>
+									<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
+								</div>
+								{#if edge.suggestions.length > 0}
+									<div class="schemaSuggestions">{edge.suggestions.join(' ')}</div>
+								{/if}
+								{#if edge.adapterKind}
+									<button type="button" class="schemaApplyBtn" on:click={() => applySchemaSuggestion(edge)}>
+										Apply {edge.adapterKind} adapter
+									</button>
+								{/if}
+							</div>
+						{/each}
 					</div>
 				{/each}
 			{/if}
@@ -1649,6 +1781,20 @@
 		opacity: 0.86;
 	}
 
+	.schemaModeGroup {
+		display: grid;
+		gap: 6px;
+		padding-top: 4px;
+	}
+
+	.schemaModeHead {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: var(--ni-muted);
+	}
+
 	.schemaEdge {
 		border: 1px solid var(--ni-border);
 		border-radius: 8px;
@@ -1668,8 +1814,20 @@
 	.schemaEdgeHead {
 		display: flex;
 		justify-content: space-between;
+		align-items: flex-start;
 		font-size: 11px;
 		font-weight: 600;
+	}
+
+	.schemaEdgeHeadMain {
+		display: grid;
+		gap: 2px;
+	}
+
+	.schemaEdgeCounterparty {
+		padding-left: 4ch;
+		font-weight: 500;
+		opacity: 0.9;
 	}
 
 	.schemaEdgeConfig {
