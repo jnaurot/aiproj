@@ -10,6 +10,7 @@ COMPONENT_SCHEMA_VERSION = 1
 ALLOWED_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
 ALLOWED_TYPED_TYPES = {"table", "json", "text", "binary", "embeddings", "unknown"}
 ALLOWED_EDGE_MODES = {"work", "param", "control"}
+INPUT_CONTRACT_CLASSES = ("workInputs", "paramInputs", "controlInputs")
 
 
 @dataclass
@@ -231,3 +232,27 @@ def normalize_edge_mode(raw: Any) -> str:
 
 def edge_mode_requires_payload_compatibility(raw: Any) -> bool:
     return normalize_edge_mode(raw) == "work"
+
+
+def _canonical_input_contract_class(raw: Any) -> Dict[str, Any]:
+    value = raw if isinstance(raw, dict) else {}
+    default_schema = value.get("defaultSchema") if isinstance(value.get("defaultSchema"), dict) else None
+    handles_raw = value.get("handles") if isinstance(value.get("handles"), dict) else {}
+    handles: Dict[str, Dict[str, Any]] = {}
+    for key, entry in handles_raw.items():
+        handle = str(key or "").strip()
+        if not handle or not isinstance(entry, dict):
+            continue
+        handles[handle] = entry
+    out: Dict[str, Any] = {"handles": handles}
+    if default_schema is not None:
+        out["defaultSchema"] = default_schema
+    return out
+
+
+def canonicalize_input_contracts(raw: Any) -> Dict[str, Dict[str, Any]]:
+    value = raw if isinstance(raw, dict) else {}
+    return {
+        key: _canonical_input_contract_class(value.get(key))
+        for key in INPUT_CONTRACT_CLASSES
+    }
