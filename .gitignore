@@ -1,5 +1,6 @@
 node_modules
-
+example.*
+example*.*
 # Output
 .output
 .vercel

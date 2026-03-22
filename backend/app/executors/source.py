@@ -5,11 +5,16 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import random
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 import wave
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -748,6 +753,261 @@ def _normalize_wav_bytes(file_bytes: bytes, target_peak: float) -> tuple[bytes, 
         out_wf.setparams(params)
         out_wf.writeframes(normalized.tobytes())
     return out_buf.getvalue(), {"applied": True, "gain": round(gain, 6), "target_peak": target}
+
+
+def _has_cmd(cmd: str) -> bool:
+    return bool(shutil.which(cmd))
+
+
+def _parse_ffprobe_json(stdout: bytes) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(stdout.decode("utf-8", errors="replace"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _parse_fraction_to_float(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(Fraction(text))
+    except Exception:
+        try:
+            return float(text)
+        except Exception:
+            return None
+
+
+def _with_media_probe_path(file_bytes: Optional[bytes], file_path: Optional[Path], file_format: str) -> tuple[Optional[Path], Optional[Path]]:
+    if isinstance(file_path, Path) and file_path.exists():
+        return file_path, None
+    if isinstance(file_bytes, (bytes, bytearray)):
+        suffix = f".{str(file_format or 'bin').strip().lower() or 'bin'}"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            tmp.write(bytes(file_bytes))
+            tmp.flush()
+        finally:
+            tmp.close()
+        tmp_path = Path(tmp.name)
+        return tmp_path, tmp_path
+    return None, None
+
+
+def _ffprobe_media(path: Path) -> Dict[str, Any]:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+    except Exception:
+        return {}
+    if proc.returncode != 0:
+        return {}
+    return _parse_ffprobe_json(proc.stdout)
+
+
+def _extract_audio_metadata_ffprobe(path: Path, file_format: str) -> Dict[str, Any]:
+    parsed = _ffprobe_media(path)
+    streams = parsed.get("streams") if isinstance(parsed.get("streams"), list) else []
+    audio_stream = next((s for s in streams if isinstance(s, dict) and str(s.get("codec_type")) == "audio"), {})
+    fmt = parsed.get("format") if isinstance(parsed.get("format"), dict) else {}
+    duration = _parse_fraction_to_float(audio_stream.get("duration")) or _parse_fraction_to_float(fmt.get("duration"))
+    bitrate = _parse_fraction_to_float(audio_stream.get("bit_rate")) or _parse_fraction_to_float(fmt.get("bit_rate"))
+    meta: Dict[str, Any] = {
+        "format": file_format,
+        "codec": str(audio_stream.get("codec_name") or "unknown"),
+        "sample_rate": int(_parse_fraction_to_float(audio_stream.get("sample_rate")) or 0) or None,
+        "channels": int(_parse_fraction_to_float(audio_stream.get("channels")) or 0) or None,
+        "duration_sec": round(duration, 6) if isinstance(duration, float) else None,
+        "bitrate_bps": int(bitrate) if isinstance(bitrate, float) and bitrate > 0 else None,
+        "container": str(fmt.get("format_name") or ""),
+    }
+    return meta
+
+
+def _extract_video_metadata_ffprobe(path: Path, file_format: str) -> Dict[str, Any]:
+    parsed = _ffprobe_media(path)
+    streams = parsed.get("streams") if isinstance(parsed.get("streams"), list) else []
+    video_stream = next((s for s in streams if isinstance(s, dict) and str(s.get("codec_type")) == "video"), {})
+    fmt = parsed.get("format") if isinstance(parsed.get("format"), dict) else {}
+    duration = _parse_fraction_to_float(video_stream.get("duration")) or _parse_fraction_to_float(fmt.get("duration"))
+    fps = _parse_fraction_to_float(video_stream.get("avg_frame_rate")) or _parse_fraction_to_float(video_stream.get("r_frame_rate"))
+    bitrate = _parse_fraction_to_float(video_stream.get("bit_rate")) or _parse_fraction_to_float(fmt.get("bit_rate"))
+    width = int(_parse_fraction_to_float(video_stream.get("width")) or 0) or None
+    height = int(_parse_fraction_to_float(video_stream.get("height")) or 0) or None
+    resolution = f"{width}x{height}" if width and height else None
+    meta: Dict[str, Any] = {
+        "format": file_format,
+        "codec": str(video_stream.get("codec_name") or "unknown"),
+        "duration_sec": round(duration, 6) if isinstance(duration, float) else None,
+        "resolution": resolution,
+        "fps": round(fps, 6) if isinstance(fps, float) else None,
+        "bitrate_bps": int(bitrate) if isinstance(bitrate, float) and bitrate > 0 else None,
+        "container": str(fmt.get("format_name") or ""),
+    }
+    return meta
+
+
+def _ffmpeg_audio_transcode(input_path: Path, output_format: str) -> tuple[Optional[bytes], Dict[str, Any]]:
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{output_format}")
+    out_file_path = Path(out_file.name)
+    out_file.close()
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(input_path),
+        str(out_file_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+        if proc.returncode != 0 or not out_file_path.exists():
+            return None, {"applied": False, "reason": "transcode_failed"}
+        return out_file_path.read_bytes(), {"applied": True, "output_format": output_format}
+    except Exception:
+        return None, {"applied": False, "reason": "transcode_failed"}
+    finally:
+        try:
+            if out_file_path.exists():
+                out_file_path.unlink()
+        except Exception:
+            pass
+
+
+def _ffmpeg_normalize_audio(input_path: Path, input_format: str, target_peak: float) -> tuple[Optional[bytes], Dict[str, Any]]:
+    out_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{input_format}")
+    out_file_path = Path(out_file.name)
+    out_file.close()
+    clipped_target = max(0.01, min(1.0, float(target_peak)))
+    try:
+        target_db = 20.0 * (math.log10(clipped_target))
+    except Exception:
+        target_db = -1.0
+    volume_filter = f"volume={target_db:.2f}dB"
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(input_path),
+        "-af",
+        volume_filter,
+        str(out_file_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+        if proc.returncode != 0 or not out_file_path.exists():
+            return None, {"applied": False, "reason": "normalize_failed"}
+        return out_file_path.read_bytes(), {"applied": True, "target_peak": clipped_target, "filter": volume_filter}
+    except Exception:
+        return None, {"applied": False, "reason": "normalize_failed"}
+    finally:
+        try:
+            if out_file_path.exists():
+                out_file_path.unlink()
+        except Exception:
+            pass
+
+
+def _ffmpeg_extract_video_frames(
+    input_path: Path,
+    mode: str,
+    interval_sec: float,
+    max_frames: int,
+) -> Dict[str, Any]:
+    frame_mode = str(mode or "none").strip().lower()
+    if frame_mode == "none":
+        return {
+            "requested_mode": "none",
+            "interval_sec": float(interval_sec),
+            "max_frames": int(max_frames),
+            "applied": False,
+            "reason": "frame_mode_none",
+            "artifacts": [],
+        }
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aiproj_frames_"))
+    output_pattern = str(tmp_dir / "frame_%03d.jpg")
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(input_path),
+    ]
+    if frame_mode == "keyframes":
+        cmd.extend(["-skip_frame", "nokey", "-vsync", "vfr"])
+    else:
+        safe_interval = max(0.01, float(interval_sec))
+        cmd.extend(["-vf", f"fps=1/{safe_interval}"])
+    cmd.extend(["-frames:v", str(max(1, int(max_frames))), output_pattern])
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False)
+        if proc.returncode != 0:
+            return {
+                "requested_mode": frame_mode,
+                "interval_sec": float(interval_sec),
+                "max_frames": int(max_frames),
+                "applied": False,
+                "reason": "frame_extract_failed",
+                "artifacts": [],
+            }
+        frame_files = sorted(tmp_dir.glob("frame_*.jpg"))
+        artifacts = []
+        for idx, frame_file in enumerate(frame_files):
+            try:
+                payload = frame_file.read_bytes()
+            except Exception:
+                continue
+            artifacts.append(
+                {
+                    "index": idx,
+                    "filename": frame_file.name,
+                    "mime": "image/jpeg",
+                    "bytes": len(payload),
+                    "sha256": _sha256_bytes(payload),
+                }
+            )
+        return {
+            "requested_mode": frame_mode,
+            "interval_sec": float(interval_sec),
+            "max_frames": int(max_frames),
+            "applied": bool(artifacts),
+            "reason": (None if artifacts else "no_frames_extracted"),
+            "artifacts": artifacts,
+        }
+    except Exception:
+        return {
+            "requested_mode": frame_mode,
+            "interval_sec": float(interval_sec),
+            "max_frames": int(max_frames),
+            "applied": False,
+            "reason": "frame_extract_failed",
+            "artifacts": [],
+        }
+    finally:
+        try:
+            for frame in tmp_dir.glob("frame_*.jpg"):
+                frame.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except Exception:
+            pass
 
 
 def _payload_bytes_for_mode(data: Any, mode: str) -> bytes:
@@ -1663,6 +1923,7 @@ async def _handle_file_source(
     excel_has_header: Optional[bool] = None
     format_specific_metadata: Dict[str, Any] = {}
 
+    output_file_format = str(schema.file_format)
     if schema.file_format in {"csv", "tsv"}:
         delimiter = schema.delimiter or ("\t" if schema.file_format == "tsv" else ",")
         malformed_policy = str(getattr(schema, "malformed_row_policy", "fail")).strip().lower()
@@ -1989,24 +2250,61 @@ async def _handle_file_source(
         transcode_target = str(getattr(schema, "audio_transcode_format", "") or "").strip().lower() or None
         normalize_meta: Dict[str, Any] = {"applied": False}
         transcode_meta: Dict[str, Any] = {"applied": False}
+        probe_path, cleanup_path = _with_media_probe_path(file_bytes, file_path, schema.file_format)
         if normalize_audio:
             if schema.file_format == "wav":
                 raw, normalize_meta = _normalize_wav_bytes(raw, target_peak)
             else:
-                normalize_meta = {"applied": False, "reason": "normalize_supported_for_wav_only"}
+                if probe_path is not None and _has_cmd("ffmpeg"):
+                    normalized_bytes, normalize_meta = _ffmpeg_normalize_audio(
+                        probe_path,
+                        str(schema.file_format),
+                        target_peak,
+                    )
+                    if isinstance(normalized_bytes, (bytes, bytearray)):
+                        raw = bytes(normalized_bytes)
+                else:
+                    normalize_meta = {"applied": False, "reason": "ffmpeg_not_available"}
         if transcode_target and transcode_target != schema.file_format:
-            transcode_meta = {"applied": False, "reason": "transcode_not_available"}
+            transcode_input_path, transcode_cleanup = _with_media_probe_path(raw, None, schema.file_format)
+            if transcode_input_path is not None and _has_cmd("ffmpeg"):
+                transcoded_bytes, transcode_meta = _ffmpeg_audio_transcode(transcode_input_path, transcode_target)
+                if isinstance(transcoded_bytes, (bytes, bytearray)):
+                    raw = bytes(transcoded_bytes)
+                    output_file_format = str(transcode_target)
+            else:
+                transcode_meta = {"applied": False, "reason": "ffmpeg_not_available"}
+            if transcode_cleanup is not None:
+                try:
+                    transcode_cleanup.unlink(missing_ok=True)
+                except Exception:
+                    pass
         binary_data = raw
         if bool(getattr(schema, "audio_extract_metadata", True)):
             audio_meta: Dict[str, Any] = {
-                "format": schema.file_format,
+                "format": output_file_format,
                 "codec": "unknown",
                 "normalize": normalize_meta,
                 "transcode": transcode_meta,
             }
-            if schema.file_format == "wav":
+            if output_file_format == "wav":
                 audio_meta.update(_extract_wav_metadata(binary_data))
+            else:
+                final_probe_path, final_probe_cleanup = _with_media_probe_path(binary_data, None, output_file_format)
+                if final_probe_path is not None and _has_cmd("ffprobe"):
+                    probe_meta = _extract_audio_metadata_ffprobe(final_probe_path, output_file_format)
+                    audio_meta.update({k: v for k, v in probe_meta.items() if v is not None})
+                if final_probe_cleanup is not None:
+                    try:
+                        final_probe_cleanup.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             format_specific_metadata["audio_metadata"] = audio_meta
+        if cleanup_path is not None:
+            try:
+                cleanup_path.unlink(missing_ok=True)
+            except Exception:
+                pass
     elif schema.file_format in {"mp4", "mov", "webm"}:
         raw = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
         binary_data = raw
@@ -2014,20 +2312,39 @@ async def _handle_file_source(
             frame_mode = str(getattr(schema, "video_frame_mode", "none") or "none")
             frame_interval = float(getattr(schema, "video_frame_interval_sec", 1.0) or 1.0)
             max_frames = int(getattr(schema, "video_max_frames", 5) or 5)
-            format_specific_metadata["video_metadata"] = {
+            frame_meta: Dict[str, Any] = {
+                "requested_mode": frame_mode,
+                "interval_sec": frame_interval,
+                "max_frames": max_frames,
+                "applied": False,
+                "reason": "video_decoder_not_available",
+                "artifacts": [],
+            }
+            probe_meta: Dict[str, Any] = {
                 "format": schema.file_format,
                 "codec": "unknown",
                 "duration_sec": None,
                 "resolution": None,
-                "frame_extraction": {
-                    "requested_mode": frame_mode,
-                    "interval_sec": frame_interval,
-                    "max_frames": max_frames,
-                    "applied": False,
-                    "reason": "video_decoder_not_available",
-                    "artifacts": [],
-                },
             }
+            probe_path, cleanup_path = _with_media_probe_path(file_bytes, file_path, schema.file_format)
+            if probe_path is not None and _has_cmd("ffprobe"):
+                probe_meta.update(_extract_video_metadata_ffprobe(probe_path, schema.file_format))
+            if probe_path is not None and _has_cmd("ffmpeg"):
+                frame_meta = _ffmpeg_extract_video_frames(
+                    probe_path,
+                    mode=frame_mode,
+                    interval_sec=frame_interval,
+                    max_frames=max_frames,
+                )
+            format_specific_metadata["video_metadata"] = {
+                **probe_meta,
+                "frame_extraction": frame_meta,
+            }
+            if cleanup_path is not None:
+                try:
+                    cleanup_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
     else:
         binary_data = file_bytes if file_bytes is not None else Path(file_path).read_bytes()
 
@@ -2119,9 +2436,10 @@ async def _handle_file_source(
         output_mode=output_mode,
         data=data,
         params=params,
-        mime_override=_file_format_mime(schema.file_format),
+        mime_override=_file_format_mime(output_file_format),
         schema_extra={
-            "file_format": schema.file_format,
+            "file_format": output_file_format,
+            **({"source_file_format": schema.file_format} if output_file_format != schema.file_format else {}),
             **({"header_detected": csv_has_header} if schema.file_format in {"csv", "tsv"} else {}),
             **({"header_detected": excel_has_header} if schema.file_format == "excel" else {}),
             **(

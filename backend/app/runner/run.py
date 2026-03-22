@@ -1807,12 +1807,15 @@ def _declared_expected_typed_schema_from_node(node: Dict[str, Any]) -> Optional[
     return {"type": typed_type, "fields": fields}
 
 
-def _node_typed_schema_type_from_node(node: Dict[str, Any]) -> Optional[str]:
+def _node_typed_schema_type_from_node(
+    node: Dict[str, Any],
+    channels: tuple[str, ...] = ("expectedSchema", "inferredSchema", "observedSchema"),
+) -> Optional[str]:
     data = node.get("data", {}) if isinstance(node, dict) else {}
     schema_env = data.get("schema") if isinstance(data, dict) and isinstance(data.get("schema"), dict) else {}
     if not isinstance(schema_env, dict):
         return None
-    for key in ("expectedSchema", "inferredSchema", "observedSchema"):
+    for key in channels:
         obs = schema_env.get(key)
         if not isinstance(obs, dict):
             continue
@@ -2098,6 +2101,12 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
 
 def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     params = (node.get("data", {}).get("params", {}) or {})
+    declared_input_typed = _node_typed_schema_type_from_node(
+        node,
+        channels=("expectedInputSchema",),
+    )
+    if declared_input_typed in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
+        return declared_input_typed
     if kind == "source":
         return None
     if kind == "transform":

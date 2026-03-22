@@ -1,7 +1,9 @@
 import asyncio
 import array
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 import wave
 
@@ -826,6 +828,169 @@ async def test_source_file_video_metadata_and_frame_fallback(tmp_path):
 	assert isinstance(frame_meta, dict)
 	assert frame_meta.get("requested_mode") == "interval"
 	assert frame_meta.get("applied") is False
+
+
+@pytest.mark.asyncio
+async def test_source_file_audio_mp3_metadata_with_ffprobe(tmp_path, monkeypatch):
+	file_path = tmp_path / "song.mp3"
+	file_path.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00")
+
+	def _fake_has_cmd(cmd: str) -> bool:
+		return cmd == "ffprobe"
+
+	def _fake_run(cmd, capture_output=True, check=False):
+		if cmd[0] == "ffprobe":
+			payload = {
+				"streams": [
+					{
+						"codec_type": "audio",
+						"codec_name": "mp3",
+						"sample_rate": "44100",
+						"channels": 2,
+						"duration": "3.25",
+					}
+				],
+				"format": {"format_name": "mp3", "duration": "3.25", "bit_rate": "128000"},
+			}
+			return SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode("utf-8"), stderr=b"")
+		return SimpleNamespace(returncode=1, stdout=b"", stderr=b"unsupported")
+
+	monkeypatch.setattr(source_mod, "_has_cmd", _fake_has_cmd)
+	monkeypatch.setattr(source_mod.subprocess, "run", _fake_run)
+	node = {
+		"id": "n_source_audio_mp3_probe",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "mp3",
+				"audio_extract_metadata": True,
+			}
+		},
+	}
+	result = await exec_source("run_audio_mp3_probe", node, _ctx())
+	assert result.status == "succeeded"
+	audio_meta = (result.metadata.data_schema or {}).get("audio_metadata") if result.metadata else None
+	assert isinstance(audio_meta, dict)
+	assert audio_meta.get("codec") == "mp3"
+	assert audio_meta.get("sample_rate") == 44100
+	assert audio_meta.get("channels") == 2
+	assert audio_meta.get("duration_sec") == 3.25
+
+
+@pytest.mark.asyncio
+async def test_source_file_audio_transcode_applies_when_ffmpeg_available(tmp_path, monkeypatch):
+	file_path = tmp_path / "clip.mp3"
+	file_path.write_bytes(b"ID3\x03\x00\x00\x00\x00\x00\x00")
+
+	def _fake_has_cmd(cmd: str) -> bool:
+		return cmd in {"ffmpeg", "ffprobe"}
+
+	def _fake_run(cmd, capture_output=True, check=False):
+		if cmd[0] == "ffmpeg":
+			out_path = cmd[-1]
+			with open(out_path, "wb") as fh:
+				fh.write(b"RIFF\x00\x00\x00\x00WAVEfmt ")
+			return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+		if cmd[0] == "ffprobe":
+			payload = {
+				"streams": [
+					{
+						"codec_type": "audio",
+						"codec_name": "pcm_s16le",
+						"sample_rate": "16000",
+						"channels": 1,
+						"duration": "1.0",
+					}
+				],
+				"format": {"format_name": "wav", "duration": "1.0"},
+			}
+			return SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode("utf-8"), stderr=b"")
+		return SimpleNamespace(returncode=1, stdout=b"", stderr=b"unsupported")
+
+	monkeypatch.setattr(source_mod, "_has_cmd", _fake_has_cmd)
+	monkeypatch.setattr(source_mod.subprocess, "run", _fake_run)
+	node = {
+		"id": "n_source_audio_transcode",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "mp3",
+				"audio_transcode_format": "wav",
+			}
+		},
+	}
+	result = await exec_source("run_audio_transcode", node, _ctx())
+	assert result.status == "succeeded"
+	assert result.metadata is not None
+	assert result.metadata.mime_type == "audio/wav"
+	schema = result.metadata.data_schema or {}
+	assert schema.get("file_format") == "wav"
+	assert schema.get("source_file_format") == "mp3"
+	audio_meta = schema.get("audio_metadata")
+	assert isinstance(audio_meta, dict)
+	assert audio_meta.get("transcode", {}).get("applied") is True
+
+
+@pytest.mark.asyncio
+async def test_source_file_video_frame_extract_with_ffmpeg(tmp_path, monkeypatch):
+	file_path = tmp_path / "sample.mp4"
+	file_path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+
+	def _fake_has_cmd(cmd: str) -> bool:
+		return cmd in {"ffmpeg", "ffprobe"}
+
+	def _fake_run(cmd, capture_output=True, check=False):
+		if cmd[0] == "ffprobe":
+			payload = {
+				"streams": [
+					{
+						"codec_type": "video",
+						"codec_name": "h264",
+						"width": 1920,
+						"height": 1080,
+						"avg_frame_rate": "30/1",
+						"duration": "5.0",
+					}
+				],
+				"format": {"format_name": "mp4", "duration": "5.0"},
+			}
+			return SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode("utf-8"), stderr=b"")
+		if cmd[0] == "ffmpeg":
+			output_pattern = str(cmd[-1])
+			frame_1 = output_pattern.replace("%03d", "001")
+			frame_2 = output_pattern.replace("%03d", "002")
+			Path(frame_1).write_bytes(b"\xff\xd8\xff\xe0frame1")
+			Path(frame_2).write_bytes(b"\xff\xd8\xff\xe0frame2")
+			return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+		return SimpleNamespace(returncode=1, stdout=b"", stderr=b"unsupported")
+
+	monkeypatch.setattr(source_mod, "_has_cmd", _fake_has_cmd)
+	monkeypatch.setattr(source_mod.subprocess, "run", _fake_run)
+	node = {
+		"id": "n_source_video_frames",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "mp4",
+				"video_frame_mode": "interval",
+				"video_frame_interval_sec": 1.0,
+				"video_max_frames": 2,
+			}
+		},
+	}
+	result = await exec_source("run_video_frames", node, _ctx())
+	assert result.status == "succeeded"
+	video_meta = (result.metadata.data_schema or {}).get("video_metadata") if result.metadata else None
+	assert isinstance(video_meta, dict)
+	assert video_meta.get("codec") == "h264"
+	assert video_meta.get("resolution") == "1920x1080"
+	frame_meta = video_meta.get("frame_extraction")
+	assert isinstance(frame_meta, dict)
+	assert frame_meta.get("applied") is True
+	assert len(frame_meta.get("artifacts", [])) == 2
 
 
 @pytest.mark.asyncio

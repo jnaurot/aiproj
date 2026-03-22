@@ -50,6 +50,27 @@ function modelNodeWithJsonOutput(): Node<PipelineNodeData> {
 	};
 }
 
+function sourceApiNodeWithQuery(query: Record<string, string>): Node<PipelineNodeData> {
+	return {
+		id: 'n_source_api',
+		type: 'source',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'source',
+			sourceKind: 'api',
+			label: 'API Source',
+			params: {
+				method: 'GET',
+				url: 'https://remotive.com/api/remote-jobs',
+				query,
+				headers: { accept: 'application/json', 'Content-Type': 'application/json' },
+				bodyMode: 'none',
+				output: { mode: 'json' }
+			}
+		} as PipelineNodeData
+	};
+}
+
 describe('updateNodeParamsValidated builtin args replacement', () => {
 	it('replaces builtin args object on operation switch instead of deep-merging keys', () => {
 		const nodes = [
@@ -94,5 +115,46 @@ describe('updateNodeParamsValidated model output mode switching', () => {
 		const params = ((result.nodes.find((n) => n.id === 'n_model')?.data as any)?.params ?? {}) as Record<string, any>;
 		expect(params.output.mode).toBe('text');
 		expect(Object.prototype.hasOwnProperty.call(params.output, 'jsonSchema')).toBe(false);
+	});
+});
+
+describe('updateNodeParamsValidated source api map replacement', () => {
+	it('replaces query object so deleted keys do not reappear on subsequent commits', () => {
+		const nodes = [
+			sourceApiNodeWithQuery({
+				limit: '500',
+				search: 'software OR data'
+			})
+		];
+		const result = updateNodeParamsValidated(nodes, 'n_source_api', {
+			query: {
+				limit: '500'
+			}
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_source_api')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.query).toEqual({ limit: '500' });
+		expect(Object.prototype.hasOwnProperty.call(params.query ?? {}, 'search')).toBe(false);
+	});
+
+	it('persists empty query object when user deletes all query params', () => {
+		const nodes = [
+			sourceApiNodeWithQuery({
+				limit: '500',
+				search: 'software OR data'
+			})
+		];
+		const result = updateNodeParamsValidated(nodes, 'n_source_api', {
+			query: {}
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_source_api')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.query).toEqual({});
 	});
 });

@@ -230,6 +230,19 @@
 		}
 	}
 
+	function stripUrlQuery(rawUrl: string): string {
+		const base = String(rawUrl ?? '');
+		if (!base.trim()) return '';
+		try {
+			const u = new URL(base);
+			u.search = '';
+			return u.toString();
+		} catch {
+			// Best-effort fallback for invalid/relative URLs.
+			return base.split('?')[0] ?? base;
+		}
+	}
+
 	$: effectiveUrl = makeEffectiveUrl(url, queryDraft);
 	$: effectiveHeadersPreview = (() => {
 		const next = { ...headersDraft };
@@ -305,7 +318,17 @@
 						draft({ query: value });
 					}}
 				/>
-				<button type="button" on:click={() => commit({ query: { ...queryDraft } })}>Apply query params</button>
+				<button
+					type="button"
+					on:click={() => {
+						const normalizedUrl = stripUrlQuery(url);
+						const patch: SourceAPIPatch = { url: normalizedUrl, query: { ...queryDraft } };
+						draft(patch);
+						commit(patch);
+					}}
+				>
+					Apply query params
+				</button>
 			</Disclosure>
 
 			<Disclosure

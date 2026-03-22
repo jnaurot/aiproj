@@ -22,8 +22,13 @@ describe("NodeSchemaEnvelopeSchema", () => {
 		});
 	});
 
-	it("supports expected and observed schema channels", () => {
+	it("supports expected input/output and observed schema channels", () => {
 		const parsed = NodeSchemaEnvelopeSchema.parse({
+			expectedInputSchema: {
+				source: "declared",
+				state: "fresh",
+				typedSchema: { type: "text", fields: [] }
+			},
 			expectedSchema: {
 				source: "declared",
 				state: "fresh",
@@ -38,6 +43,8 @@ describe("NodeSchemaEnvelopeSchema", () => {
 			}
 		});
 
+		expect(parsed.expectedInputSchema?.source).toBe("declared");
+		expect(parsed.expectedInputSchema?.typedSchema?.type).toBe("text");
 		expect(parsed.expectedSchema?.source).toBe("declared");
 		expect(parsed.expectedSchema?.schemaFingerprint).toBe("fp_expected");
 		expect(parsed.observedSchema?.source).toBe("runtime");

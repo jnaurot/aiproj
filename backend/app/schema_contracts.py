@@ -38,6 +38,7 @@ class SchemaObservation(BaseModel):
 
 class SchemaEnvelope(BaseModel):
 	inferredSchema: Optional[SchemaObservation] = None
+	expectedInputSchema: Optional[SchemaObservation] = None
 	expectedSchema: Optional[SchemaObservation] = None
 	observedSchema: Optional[SchemaObservation] = None
 

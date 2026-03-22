@@ -25,6 +25,7 @@ export const NodeSchemaObservationSchema = z
 export const NodeSchemaEnvelopeSchema = z
 	.object({
 		inferredSchema: NodeSchemaObservationSchema.optional(),
+		expectedInputSchema: NodeSchemaObservationSchema.optional(),
 		expectedSchema: NodeSchemaObservationSchema.optional(),
 		observedSchema: NodeSchemaObservationSchema.optional()
 	})

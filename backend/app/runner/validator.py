@@ -125,6 +125,23 @@ class GraphValidator:
         return None
 
     @staticmethod
+    def _node_schema_declared_input_type(node: Dict[str, Any]) -> Optional[str]:
+        data = (node.get("data") or {}) if isinstance(node, dict) else {}
+        schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+        if not isinstance(schema_env, dict):
+            return None
+        # Input contract is modeled by expectedInputSchema.
+        # expectedSchema is output-side and must not be reused for incoming edge checks.
+        obs = schema_env.get("expectedInputSchema")
+        if isinstance(obs, dict):
+            typed = obs.get("typedSchema")
+            if isinstance(typed, dict):
+                resolved = GraphValidator._normalize_payload_type(typed.get("type"))
+                if resolved:
+                    return resolved
+        return None
+
+    @staticmethod
     def _source_default_type(node: Dict[str, Any]) -> Optional[str]:
         data = (node.get("data") or {})
         kind = str(data.get("kind") or "").strip().lower()
@@ -498,9 +515,11 @@ class GraphValidator:
                 or self._source_default_type(source_node)
                 or source_type
             )
-            # expectedSchema currently models node output schema. It should not override
-            # incoming edge requirements for target-side validation.
-            target_type = self._target_default_type(target_node) or target_type
+            target_type = (
+                self._node_schema_declared_input_type(target_node)
+                or self._target_default_type(target_node)
+                or target_type
+            )
             source_type = self._normalize_payload_type(source_type)
             target_type = self._normalize_payload_type(target_type)
 

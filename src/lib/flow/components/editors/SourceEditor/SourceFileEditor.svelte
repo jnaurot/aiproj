@@ -103,6 +103,14 @@
 	$: sheet_name = asString(params?.sheet_name, '');
 	$: txtRecordMode = asString((params as any)?.txt_record_mode, 'raw');
 	$: txtChunkSize = Number((params as any)?.txt_chunk_size ?? 1000);
+	$: audioExtractMetadata = asBoolean((params as any)?.audio_extract_metadata, true);
+	$: audioNormalize = asBoolean((params as any)?.audio_normalize, false);
+	$: audioTargetPeak = Number((params as any)?.audio_target_peak ?? 0.9);
+	$: audioTranscodeFormat = asString((params as any)?.audio_transcode_format, '');
+	$: videoExtractMetadata = asBoolean((params as any)?.video_extract_metadata, true);
+	$: videoFrameMode = asString((params as any)?.video_frame_mode, 'none');
+	$: videoFrameIntervalSec = Number((params as any)?.video_frame_interval_sec ?? 1.0);
+	$: videoMaxFrames = Number((params as any)?.video_max_frames ?? 5);
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
 	$: void hydrateMissingRecentSnapshots(recentSnapshots);
@@ -178,6 +186,30 @@
 			file_format: format,
 			delimiter: format === 'csv' || format === 'tsv' ? asString(overrides.delimiter, delimiter) : undefined,
 			sheet_name: format === 'excel' ? asString(overrides.sheet_name, sheet_name) : undefined,
+			audio_extract_metadata:
+				audioFileFormatOptions.includes(format) ? asBoolean((overrides as any).audio_extract_metadata, audioExtractMetadata) : undefined,
+			audio_normalize:
+				audioFileFormatOptions.includes(format) ? asBoolean((overrides as any).audio_normalize, audioNormalize) : undefined,
+			audio_target_peak:
+				audioFileFormatOptions.includes(format)
+					? Number((overrides as any).audio_target_peak ?? audioTargetPeak)
+					: undefined,
+			audio_transcode_format:
+				audioFileFormatOptions.includes(format)
+					? asString((overrides as any).audio_transcode_format, audioTranscodeFormat) || undefined
+					: undefined,
+			video_extract_metadata:
+				videoFileFormatOptions.includes(format) ? asBoolean((overrides as any).video_extract_metadata, videoExtractMetadata) : undefined,
+			video_frame_mode:
+				videoFileFormatOptions.includes(format) ? asString((overrides as any).video_frame_mode, videoFrameMode) : undefined,
+			video_frame_interval_sec:
+				videoFileFormatOptions.includes(format)
+					? Number((overrides as any).video_frame_interval_sec ?? videoFrameIntervalSec)
+					: undefined,
+			video_max_frames:
+				videoFileFormatOptions.includes(format)
+					? Number((overrides as any).video_max_frames ?? videoMaxFrames)
+					: undefined,
 			encoding: asString(overrides.encoding, encoding || 'utf-8'),
 			cache_enabled: asBoolean(overrides.cache_enabled, cache_enabled),
 			output: (overrides.output ?? (params as any)?.output) as any
@@ -231,6 +263,19 @@
 			patch.delimiter = undefined;
 			patch.has_header = undefined;
 			patch.sheet_name = undefined;
+		}
+		if (audioFileFormatOptions.includes(next)) {
+			patch.audio_extract_metadata = asBoolean((params as any)?.audio_extract_metadata, true);
+			patch.audio_normalize = asBoolean((params as any)?.audio_normalize, false);
+			patch.audio_target_peak = Number((params as any)?.audio_target_peak ?? 0.9);
+			patch.audio_transcode_format =
+				asString((params as any)?.audio_transcode_format, '').trim().toLowerCase() || undefined;
+		}
+		if (videoFileFormatOptions.includes(next)) {
+			patch.video_extract_metadata = asBoolean((params as any)?.video_extract_metadata, true);
+			patch.video_frame_mode = asString((params as any)?.video_frame_mode, 'none') as any;
+			patch.video_frame_interval_sec = Number((params as any)?.video_frame_interval_sec ?? 1.0);
+			patch.video_max_frames = Number((params as any)?.video_max_frames ?? 5);
 		}
 		return patch;
 	}
@@ -683,6 +728,137 @@
 						onBlur={(event) => {
 							const raw = Number((event.currentTarget as HTMLInputElement).value);
 							commit({ txt_chunk_size: Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000 });
+						}}
+					/>
+				</Field>
+			{/if}
+		{/if}
+
+		{#if audioFileFormatOptions.includes(file_format)}
+			<Field label="extract metadata">
+				<Input
+					type="checkbox"
+					checked={audioExtractMetadata}
+					onChange={(event) => {
+						const checked = (event.currentTarget as HTMLInputElement).checked;
+						draft({ audio_extract_metadata: checked as any });
+						commit({ audio_extract_metadata: checked as any });
+					}}
+				/>
+			</Field>
+			<Field label="normalize audio">
+				<Input
+					type="checkbox"
+					checked={audioNormalize}
+					onChange={(event) => {
+						const checked = (event.currentTarget as HTMLInputElement).checked;
+						draft({ audio_normalize: checked as any });
+						commit({ audio_normalize: checked as any });
+					}}
+				/>
+			</Field>
+			{#if audioNormalize}
+				<Field label="target peak (0.01-1.0)">
+					<Input
+						type="number"
+						min="0.01"
+						max="1"
+						step="0.01"
+						value={Number.isFinite(audioTargetPeak) ? String(audioTargetPeak) : '0.9'}
+						onInput={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) ? Math.max(0.01, Math.min(1, raw)) : 0.9;
+							draft({ audio_target_peak: value as any });
+						}}
+						onBlur={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) ? Math.max(0.01, Math.min(1, raw)) : 0.9;
+							commit({ audio_target_peak: value as any });
+						}}
+					/>
+				</Field>
+			{/if}
+			<Field label="transcode format">
+				<select
+					class="full"
+					value={audioTranscodeFormat || ''}
+					on:change={(event) => {
+						const value = asString((event.currentTarget as HTMLSelectElement).value, '');
+						draft({ audio_transcode_format: value || undefined });
+						commit({ audio_transcode_format: value || undefined });
+					}}
+				>
+					<option value="">none</option>
+					{#each audioFileFormatOptions as option}
+						<option value={option}>{option}</option>
+					{/each}
+				</select>
+			</Field>
+		{/if}
+
+		{#if videoFileFormatOptions.includes(file_format)}
+			<Field label="extract metadata">
+				<Input
+					type="checkbox"
+					checked={videoExtractMetadata}
+					onChange={(event) => {
+						const checked = (event.currentTarget as HTMLInputElement).checked;
+						draft({ video_extract_metadata: checked as any });
+						commit({ video_extract_metadata: checked as any });
+					}}
+				/>
+			</Field>
+			<Field label="frame extraction mode">
+				<select
+					class="full"
+					value={videoFrameMode}
+					on:change={(event) => {
+						const value = asString((event.currentTarget as HTMLSelectElement).value, 'none');
+						draft({ video_frame_mode: value as any });
+						commit({ video_frame_mode: value as any });
+					}}
+				>
+					<option value="none">none</option>
+					<option value="keyframes">keyframes</option>
+					<option value="interval">interval</option>
+				</select>
+			</Field>
+			{#if videoFrameMode === 'interval'}
+				<Field label="frame interval sec">
+					<Input
+						type="number"
+						min="0.01"
+						step="0.01"
+						value={Number.isFinite(videoFrameIntervalSec) ? String(videoFrameIntervalSec) : '1'}
+						onInput={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) && raw > 0 ? raw : 1;
+							draft({ video_frame_interval_sec: value as any });
+						}}
+						onBlur={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) && raw > 0 ? raw : 1;
+							commit({ video_frame_interval_sec: value as any });
+						}}
+					/>
+				</Field>
+			{/if}
+			{#if videoFrameMode !== 'none'}
+				<Field label="max frames">
+					<Input
+						type="number"
+						min="1"
+						step="1"
+						value={Number.isFinite(videoMaxFrames) ? String(Math.max(1, Math.floor(videoMaxFrames))) : '5'}
+						onInput={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5;
+							draft({ video_max_frames: value as any });
+						}}
+						onBlur={(event) => {
+							const raw = Number((event.currentTarget as HTMLInputElement).value);
+							const value = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5;
+							commit({ video_max_frames: value as any });
 						}}
 					/>
 				</Field>

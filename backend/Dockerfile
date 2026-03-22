@@ -9,6 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN python -m pip install --no-cache-dir --upgrade pip \
 	&& python -m pip install --no-cache-dir "uv>=0.8.0,<0.9.0"
 
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends ffmpeg \
+	&& rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace/backend
 
 # Dependency layer for faster local rebuilds.
@@ -23,4 +27,4 @@ COPY shared /workspace/shared
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

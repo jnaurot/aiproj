@@ -2232,6 +2232,22 @@ function buildSavePreflightDiagnostics(
 				});
 			}
 		}
+		const expectedInputSchema = (node.data as any)?.schema?.expectedInputSchema;
+		if (expectedInputSchema != null) {
+			const expectedInputTypedRaw =
+				typeof (expectedInputSchema as any)?.typedSchema === 'object'
+					? ((expectedInputSchema as any).typedSchema as Record<string, unknown>)
+					: null;
+			const expectedInputTyped = payloadHintToTypedSchema(expectedInputTypedRaw);
+			if (!expectedInputTyped) {
+				diagnostics.push({
+					code: 'EXPECTED_INPUT_SCHEMA_INVALID',
+					path: `nodes.${String(node.id)}.data.schema.expectedInputSchema.typedSchema`,
+					message: 'Expected input schema must define a valid typedSchema.type.',
+					severity: 'error'
+				});
+			}
+		}
 		if (node.data.kind !== 'component') continue;
 		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
@@ -2833,7 +2849,7 @@ function fingerprintTypedSchema(typedSchemaRaw: unknown): string | undefined {
 function hasSchemaEnvelopeContent(raw: unknown): boolean {
 	if (!raw || typeof raw !== 'object') return false;
 	const env = raw as Record<string, unknown>;
-	return Boolean(env.inferredSchema || env.expectedSchema || env.observedSchema);
+	return Boolean(env.inferredSchema || env.expectedInputSchema || env.expectedSchema || env.observedSchema);
 }
 
 function deriveInferredSchemaObservationForNode(node: Node<PipelineNodeData>): NodeSchemaObservation | null {
@@ -3153,7 +3169,12 @@ function buildProvidedSchema(
 }
 
 function buildRequiredSchema(node: Node<PipelineNodeData>): Record<string, any> {
-	const payload = (targetPayloadHint(node as any) as Record<string, any> | undefined) ?? { type: 'unknown' };
+	const explicitInputHint = typedSchemaToPayloadHint(
+		(node.data as any)?.schema?.expectedInputSchema?.typedSchema
+	);
+	const payload =
+		(explicitInputHint as Record<string, any> | undefined) ??
+		((targetPayloadHint(node as any) as Record<string, any> | undefined) ?? { type: 'unknown' });
 	const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
 	const policyRaw =
 		params?.coercion_policy ??
@@ -3715,8 +3736,11 @@ export const graphStore = (() => {
 		return out;
 	}
 
-	function setNodeExpectedSchemaImpl(
+	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchema';
+
+	function setNodeSchemaObservationImpl(
 		nodeId: string,
+		channel: SchemaEnvelopeChannel,
 		typedSchema: Record<string, unknown> | null
 	): { ok: boolean; error?: string } {
 		let result: { ok: boolean; error?: string } = { ok: true };
@@ -3731,14 +3755,14 @@ export const graphStore = (() => {
 					? ({ ...(node.data.schema as Record<string, unknown>) } as Record<string, unknown>)
 					: {};
 			if (typedSchema == null) {
-				delete (existingSchema as any).expectedSchema;
+				delete (existingSchema as any)[channel];
 			} else {
 				const normalizedTyped = payloadHintToTypedSchema(typedSchema);
 				if (!normalizedTyped) {
 					result = { ok: false, error: 'Expected schema must include a valid typed schema type.' };
 					return logPush(s, 'warn', result.error, nodeId);
 				}
-				(existingSchema as any).expectedSchema = {
+				(existingSchema as any)[channel] = {
 					typedSchema: normalizedTyped,
 					source: 'declared',
 					state: 'fresh',
@@ -3776,7 +3800,7 @@ export const graphStore = (() => {
 			const next = logPush(
 				{ ...s, nodes, edges: rechecked.edges },
 				'info',
-				'Expected schema updated',
+				channel === 'expectedInputSchema' ? 'Expected input schema updated' : 'Expected schema updated',
 				nodeId
 			);
 			persist(next);
@@ -3786,6 +3810,20 @@ export const graphStore = (() => {
 			applyLocalStaleInvalidation(nodeId, 'PARAMS_CHANGED');
 		}
 		return result;
+	}
+
+	function setNodeExpectedSchemaImpl(
+		nodeId: string,
+		typedSchema: Record<string, unknown> | null
+	): { ok: boolean; error?: string } {
+		return setNodeSchemaObservationImpl(nodeId, 'expectedSchema', typedSchema);
+	}
+
+	function setNodeExpectedInputSchemaImpl(
+		nodeId: string,
+		typedSchema: Record<string, unknown> | null
+	): { ok: boolean; error?: string } {
+		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchema', typedSchema);
 	}
 
 	type UpdateNodeConfig = {
@@ -4297,6 +4335,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		updateNodeConfig: updateNodeConfigImpl,
 		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
 			return setNodeExpectedSchemaImpl(nodeId, typedSchema);
+		},
+		setNodeExpectedInputSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
+			return setNodeExpectedInputSchemaImpl(nodeId, typedSchema);
 		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {

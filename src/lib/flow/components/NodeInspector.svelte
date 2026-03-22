@@ -286,7 +286,7 @@
 		}
 		return issues.length > 0 ? issues.join(' | ') : null;
 	})();
-	$: expectedInputSchemaDraft = (() => {
+	$: expectedInputSchemaSuggestedDraft = (() => {
 		if (!selectedNode || !schemaContract?.edges?.length) return '';
 		const incoming = (schemaContract.edges as NodeSchemaContractEdge[])
 			.filter((edge) => edge.direction === 'incoming' && edge.requiredSchema)
@@ -309,6 +309,9 @@
 			2
 		);
 	})();
+	let expectedInputSchemaDraft = '';
+	let expectedInputSchemaError = '';
+	let expectedInputSchemaNodeId = '';
 	let expectedSchemaDraft = '';
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
@@ -326,6 +329,15 @@
 		expectedSchemaNodeId = selectedNode.id;
 		expectedSchemaDraft = normalizeExpectedSchemaDraft(selectedNode);
 		expectedSchemaError = '';
+	}
+
+	$: if (selectedNode?.id && selectedNode.id !== expectedInputSchemaNodeId) {
+		expectedInputSchemaNodeId = selectedNode.id;
+		const typed = (selectedNode.data as any)?.schema?.expectedInputSchema?.typedSchema ?? null;
+		expectedInputSchemaDraft = typed
+			? JSON.stringify(typed, null, 2)
+			: expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
+		expectedInputSchemaError = '';
 	}
 
 	$: if (isLlm && selectedNode?.id && selectedNode.id !== modelEditorNodeId) {
@@ -408,6 +420,50 @@
 			expectedSchemaError = '';
 		} catch (error) {
 			expectedSchemaError = String((error as Error)?.message ?? 'Expected schema must be valid JSON.');
+		}
+	}
+
+	function useSuggestedInputSchema(): void {
+		expectedInputSchemaDraft = expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
+		expectedInputSchemaError = '';
+	}
+
+	function useInferredInputSchema(): void {
+		if (!selectedNode) return;
+		const typed = (selectedNode.data as any)?.schema?.inferredSchema?.typedSchema ?? { type: 'unknown', fields: [] };
+		expectedInputSchemaDraft = JSON.stringify(typed, null, 2);
+		expectedInputSchemaError = '';
+	}
+
+	function clearExpectedInputSchema(): void {
+		if (!selectedNode?.id) return;
+		const result = graphStore.setNodeExpectedInputSchema(selectedNode.id, null);
+		if (!(result as any)?.ok) {
+			expectedInputSchemaError = String((result as any)?.error ?? 'Failed to clear expected input schema');
+			return;
+		}
+		expectedInputSchemaDraft = expectedInputSchemaSuggestedDraft || JSON.stringify({ type: 'none' }, null, 2);
+		expectedInputSchemaError = '';
+	}
+
+	function saveExpectedInputSchema(): void {
+		if (!selectedNode?.id) return;
+		try {
+			const parsed = JSON.parse(expectedInputSchemaDraft || '{}');
+			const parsedType = String((parsed as any)?.type ?? '').trim().toLowerCase();
+			if (parsedType === 'multi_input') {
+				expectedInputSchemaError =
+					'Use a typed schema object (type + optional fields). multi_input envelopes are display-only.';
+				return;
+			}
+			const result = graphStore.setNodeExpectedInputSchema(selectedNode.id, parsed);
+			if (!(result as any)?.ok) {
+				expectedInputSchemaError = String((result as any)?.error ?? 'Failed to save expected input schema');
+				return;
+			}
+			expectedInputSchemaError = '';
+		} catch (error) {
+			expectedInputSchemaError = String((error as Error)?.message ?? 'Expected input schema must be valid JSON.');
 		}
 	}
 
@@ -1125,10 +1181,18 @@
 				<textarea
 					class="expectedSchemaTextarea"
 					rows="7"
-					value={expectedInputSchemaDraft || JSON.stringify({ type: 'none' }, null, 2)}
-					readonly
+					bind:value={expectedInputSchemaDraft}
 					spellcheck="false"
-				/>
+				></textarea>
+				<div class="expectedSchemaActions">
+					<button type="button" on:click={saveExpectedInputSchema}>Save expected input</button>
+					<button type="button" on:click={useSuggestedInputSchema}>Use contract</button>
+					<button type="button" on:click={useInferredInputSchema}>Use inferred</button>
+					<button type="button" on:click={clearExpectedInputSchema}>Clear</button>
+				</div>
+				{#if expectedInputSchemaError}
+					<div class="expectedSchemaError">{expectedInputSchemaError}</div>
+				{/if}
 			</div>
 			<div class="expectedSchemaEditor">
 				<div class="expectedSchemaHead">Expected Output Schema</div>
@@ -1137,7 +1201,7 @@
 					rows="7"
 					bind:value={expectedSchemaDraft}
 					spellcheck="false"
-				/>
+				></textarea>
 				<div class="expectedSchemaActions">
 					<button type="button" on:click={saveExpectedSchema}>Save expected</button>
 					<button type="button" on:click={useInferredExpectedSchema}>Use inferred</button>

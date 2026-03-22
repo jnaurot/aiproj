@@ -75,12 +75,12 @@ def canonical_cache_schema_view(*, node_kind: str, raw_schema: Any) -> Dict[str,
     stripped = _strip_volatile_schema_metadata(raw_schema)
     if not isinstance(stripped, dict):
         return {}
-    has_channels = any(k in stripped for k in ("expectedSchema", "inferredSchema", "observedSchema"))
+    has_channels = any(k in stripped for k in ("expectedInputSchema", "expectedSchema", "inferredSchema", "observedSchema"))
     if not has_channels:
         return _sanitize(stripped)
     # Cache keys should use authoring/inferred contracts only. Runtime-observed
     # channels are excluded to avoid drift across equivalent reruns.
-    allowed_channels = ("expectedSchema", "inferredSchema")
+    allowed_channels = ("expectedInputSchema", "expectedSchema", "inferredSchema")
     view: Dict[str, Any] = {}
     for channel in allowed_channels:
         payload = stripped.get(channel)
@@ -154,7 +154,7 @@ def _redact_body_map(body: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def _schema_declared_type_from_cache_view(schema_view: Dict[str, Any]) -> Optional[str]:
     if not isinstance(schema_view, dict):
         return None
-    for key in ("expectedSchema", "inferredSchema"):
+    for key in ("expectedSchema", "inferredSchema", "expectedInputSchema"):
         obs = schema_view.get(key)
         if not isinstance(obs, dict):
             continue

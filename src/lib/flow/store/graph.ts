@@ -239,8 +239,8 @@ function normalizeExistingForModelOutputPatch(existing: unknown, patch: unknown)
 }
 
 function normalizeExistingForToolBuiltinPatch(existing: unknown, patch: unknown): unknown {
-  if (!isObject(existing) || !isObject(patch)) return existing;
-  if (!patchIncludesBuiltinArgs(patch)) return existing;
+	if (!isObject(existing) || !isObject(patch)) return existing;
+	if (!patchIncludesBuiltinArgs(patch)) return existing;
 
   const next: Record<string, unknown> = { ...existing };
   const existingBuiltin = isObject(next.builtin) ? (next.builtin as Record<string, unknown>) : {};
@@ -248,7 +248,26 @@ function normalizeExistingForToolBuiltinPatch(existing: unknown, patch: unknown)
     ...existingBuiltin,
     args: {}
   };
-  return next;
+	return next;
+}
+
+function patchIncludesSourceApiMap(patch: unknown): boolean {
+	if (!isObject(patch)) return false;
+	const mapKeys = ['query', 'headers', 'bodyJson', 'bodyForm'];
+	return mapKeys.some((key) => Object.prototype.hasOwnProperty.call(patch, key) && isObject(patch[key]));
+}
+
+function normalizeExistingForSourceApiPatch(existing: unknown, patch: unknown): unknown {
+	if (!isObject(existing) || !isObject(patch)) return existing;
+	if (!patchIncludesSourceApiMap(patch)) return existing;
+
+	const next: Record<string, unknown> = { ...existing };
+	for (const key of ['query', 'headers', 'bodyJson', 'bodyForm']) {
+		if (Object.prototype.hasOwnProperty.call(patch, key) && isObject(patch[key])) {
+			next[key] = {};
+		}
+	}
+	return next;
 }
 
 export function updateNodeParamsValidated(
@@ -267,6 +286,8 @@ export function updateNodeParamsValidated(
   const existingForMerge =
     node.data.kind === "transform"
       ? normalizeExistingForTransformPatch(existing, normalizedPatch)
+      : node.data.kind === "source" && node.data.sourceKind === "api"
+        ? normalizeExistingForSourceApiPatch(existing, normalizedPatch)
       : node.data.kind === "tool"
         ? normalizeExistingForToolBuiltinPatch(existing, normalizedPatch)
         : node.data.kind === "llm" || node.data.kind === "model"
