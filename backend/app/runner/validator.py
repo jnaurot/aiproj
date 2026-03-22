@@ -110,6 +110,38 @@ class GraphValidator:
         return GraphValidator._normalize_payload_type(payload.get("type"))
 
     @staticmethod
+    def _contract_param_keys(payload: Any) -> List[str]:
+        if not isinstance(payload, dict):
+            return []
+        required = payload.get("requiredKeys")
+        if isinstance(required, list):
+            out = [str(item).strip() for item in required if str(item).strip()]
+            if out:
+                return out
+        shape = payload.get("shape")
+        if isinstance(shape, dict):
+            out = [str(key).strip() for key in shape.keys() if str(key).strip()]
+            if out:
+                return out
+        props = payload.get("properties")
+        if isinstance(props, dict):
+            out = [str(key).strip() for key in props.keys() if str(key).strip()]
+            if out:
+                return out
+        return []
+
+    @staticmethod
+    def _contract_source_param_keys(payload: Any) -> List[str]:
+        if not isinstance(payload, dict):
+            return []
+        keys = payload.get("keys")
+        if isinstance(keys, list):
+            out = [str(item).strip() for item in keys if str(item).strip()]
+            if out:
+                return out
+        return GraphValidator._contract_param_keys(payload)
+
+    @staticmethod
     def _node_schema_declared_type(node: Dict[str, Any]) -> Optional[str]:
         data = (node.get("data") or {}) if isinstance(node, dict) else {}
         schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
@@ -567,6 +599,33 @@ class GraphValidator:
                         },
                     )
                 )
+                continue
+            if edge_mode == "param":
+                contract = (edge.get("data", {}) or {}).get("contract", {}) or {}
+                payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
+                src_payload = payload.get("source", {}) if isinstance(payload, dict) else {}
+                tgt_payload = payload.get("target", {}) if isinstance(payload, dict) else {}
+                required_keys = self._contract_param_keys(tgt_payload)
+                if required_keys:
+                    available_keys = self._contract_source_param_keys(src_payload)
+                    missing = [key for key in required_keys if key not in available_keys]
+                    if missing:
+                        errors.append(
+                            ValidationError(
+                                code="PARAM_CONTRACT_MISMATCH",
+                                message=(
+                                    f"Param edge '{edge_id}' missing required keys {missing}. "
+                                    f"available={available_keys}"
+                                ),
+                                edge_id=edge_id,
+                                details={
+                                    "mode": edge_mode,
+                                    "requiredKeys": required_keys,
+                                    "availableKeys": available_keys,
+                                    "missingKeys": missing,
+                                },
+                            )
+                        )
                 continue
             if not edge_mode_requires_payload_compatibility(edge_mode):
                 # Param/control edges use affinity and mode-specific semantics instead of payload typing.

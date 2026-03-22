@@ -117,3 +117,58 @@ async def test_dynamic_param_mode_reads_live_values(monkeypatch) -> None:
 		graph_id="g-dynamic",
 	)
 	assert seen["b_tag"] == "mutated"
+
+
+@pytest.mark.asyncio
+async def test_param_handle_skips_work_payload_type_preflight(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+	events: list[dict] = []
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "label": "a", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "label": "b", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [
+			{
+				"id": "e_param",
+				"source": "a",
+				"sourceHandle": "out",
+				"target": "b",
+				"targetHandle": "param_config",
+				"data": {
+					"mode": "param",
+					"contract": {
+						"payload": {
+							"source": {"type": "text", "keys": ["foo"]},
+							"target": {"type": "json", "requiredKeys": ["foo"]},
+						}
+					},
+				},
+			}
+		],
+	}
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	await run_mod.run_graph(
+		run_id="run-param-handle",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-param-handle", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-param-handle",
+	)
+	assert any(evt.get("type") == "run_finished" and evt.get("status") == "succeeded" for evt in events)
+	assert not any(
+		evt.get("type") == "log" and "CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH" in str(evt.get("message") or "")
+		for evt in events
+	)

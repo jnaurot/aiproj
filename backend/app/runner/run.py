@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import contextvars
 import hashlib
 import inspect
 import json
@@ -433,6 +434,52 @@ def _resolve_retry_policy(
     except Exception:
         merged["jitter_seconds"] = 0.0
     return merged
+
+
+def _node_processing_policy(node: Dict[str, Any]) -> Dict[str, Any]:
+    data = (node.get("data") or {}) if isinstance(node, dict) else {}
+    params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
+    policy = {}
+    if isinstance(data.get("processingPolicy"), dict):
+        policy = data.get("processingPolicy") or {}
+    elif isinstance(params.get("processing_policy"), dict):
+        policy = params.get("processing_policy") or {}
+    elif isinstance(params.get("processingPolicy"), dict):
+        policy = params.get("processingPolicy") or {}
+    consume_mode = str(policy.get("consume_mode") or policy.get("consumeMode") or "once").strip().lower()
+    if consume_mode not in {"once", "single_item", "batch"}:
+        consume_mode = "once"
+    try:
+        batch_size = max(1, int(policy.get("batch_size") or policy.get("batchSize") or 1))
+    except Exception:
+        batch_size = 1
+    try:
+        max_inflight = max(1, int(policy.get("max_inflight") or policy.get("maxInflight") or 1))
+    except Exception:
+        max_inflight = 1
+    return {
+        "consume_mode": consume_mode,
+        "batch_size": batch_size,
+        "max_inflight": max_inflight,
+    }
+
+
+def _edge_work_item_mode(edge: Dict[str, Any]) -> str:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    work = data.get("work") if isinstance(data.get("work"), dict) else {}
+    mode = str(work.get("item_mode") or work.get("itemMode") or "artifact").strip().lower()
+    if mode not in {"artifact", "json_items", "table_rows"}:
+        mode = "artifact"
+    return mode
+
+
+def _edge_work_max_items(edge: Dict[str, Any]) -> int:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    work = data.get("work") if isinstance(data.get("work"), dict) else {}
+    try:
+        return max(1, int(work.get("max_items") or work.get("maxItems") or 256))
+    except Exception:
+        return 256
 
 
 def _normalized_params_for_exec_key(
@@ -3125,7 +3172,20 @@ async def run_graph(
             nid: copy.deepcopy((node.get("data", {}) or {}).get("params", {}) or {})
             for nid, node in nodes.items()
         }
-        get_current_artifact = context.bindings.get_current_artifact
+        _work_input_overrides: contextvars.ContextVar[Dict[str, str]] = contextvars.ContextVar(
+            "work_input_overrides", default={}
+        )
+        _active_work_batch: contextvars.ContextVar[List[Dict[str, Any]]] = contextvars.ContextVar(
+            "active_work_batch", default=[]
+        )
+
+        def get_current_artifact(node_id_ref: str) -> Optional[str]:
+            overrides = _work_input_overrides.get({})
+            if isinstance(overrides, dict):
+                aid = overrides.get(str(node_id_ref))
+                if isinstance(aid, str) and aid.strip():
+                    return aid.strip()
+            return context.bindings.get_current_artifact(node_id_ref)
         component_runtime_state: Dict[str, Dict[str, Any]] = {}
         component_parent_for_internal = {}
         component_meta_by_parent = {}
@@ -3315,7 +3375,26 @@ async def run_graph(
                 f"(node_id={node_id}, phase={phase}, expected={snapshot}, actual={current})"
             )
 
-        async def _resolve_node_execution(node_id: str) -> Dict[str, Any]:
+        def _assert_binding_ready_for_commit(
+            *,
+            node_id: str,
+            snapshot: tuple[Optional[str], Optional[str]],
+            commit_artifact_id: str,
+            phase: str,
+        ) -> None:
+            current = _binding_snapshot(node_id)
+            # Normal case: unchanged since execution began.
+            if current == snapshot:
+                return
+            # Idempotent re-commit case: already bound to this computed artifact.
+            if current == (commit_artifact_id, "computed"):
+                return
+            raise RuntimeError(
+                "Binding changed during execution before commit "
+                f"(node_id={node_id}, phase={phase}, expected={snapshot}, actual={current})"
+            )
+
+        async def _resolve_node_execution(node_id: str, *, work_batch: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
             raw_node = nodes[node_id]
             kind = raw_node["data"]["kind"]
             if node_param_modes.get(node_id, "read_once") == "dynamic":
@@ -3325,6 +3404,9 @@ async def run_graph(
                 params = copy.deepcopy(node_param_snapshots.get(node_id, raw_node["data"].get("params", {}) or {}))
             n = copy.deepcopy(raw_node)
             n.setdefault("data", {})
+            if isinstance(work_batch, list) and work_batch:
+                params["_work_batch"] = copy.deepcopy(work_batch)
+                params["_work_item"] = copy.deepcopy(work_batch[0])
             n["data"]["params"] = copy.deepcopy(params)
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
@@ -3356,6 +3438,7 @@ async def run_graph(
             node_force_off = node_cache_policy == "force_off"
             node_prefer_off = node_cache_policy == "prefer_off"
             cache_bypass_reason: Optional[str] = None
+            processing_policy = _node_processing_policy(raw_node)
             if tool_uncacheable:
                 cache_bypass_reason = "UNCACHEABLE_EFFECTFUL_TOOL"
             elif global_cache_mode == "force_off":
@@ -3364,6 +3447,8 @@ async def run_graph(
                 cache_bypass_reason = "NODE_POLICY_FORCE_OFF"
             elif global_cache_mode == "default_on" and node_prefer_off:
                 cache_bypass_reason = "NODE_POLICY_PREFER_OFF"
+            elif processing_policy.get("consume_mode") in {"single_item", "batch"}:
+                cache_bypass_reason = "STREAMING_WORK_ITEM"
             use_cache_for_node = cache_bypass_reason is None
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
@@ -3476,8 +3561,15 @@ async def run_graph(
                 "resolve_input_refs_error": resolve_input_refs_error,
             }
 
-        async def _execute_node(node_id: str, *, cache_only: bool = False) -> Dict[str, Any]:
+        async def _execute_node(
+            node_id: str,
+            *,
+            cache_only: bool = False,
+            work_batch: Optional[List[Dict[str, Any]]] = None,
+        ) -> Dict[str, Any]:
             node_started_t = asyncio.get_running_loop().time()
+            decision_value = "accept"
+            decision_reason_code = ""
             binding_snapshot = _binding_snapshot(node_id)
             await _emit({
                 "type": "node_started",
@@ -3496,7 +3588,22 @@ async def run_graph(
                     "exec": "active"
                 })
 
-            resolved = await _resolve_node_execution(node_id)
+            work_batch_list = work_batch if isinstance(work_batch, list) else []
+            override_map: Dict[str, str] = {}
+            for item in work_batch_list:
+                if not isinstance(item, dict):
+                    continue
+                src_node_id = str(item.get("sourceNodeId") or "").strip()
+                artifact_id = str(item.get("artifactId") or "").strip()
+                if src_node_id and artifact_id:
+                    override_map[src_node_id] = artifact_id
+            token_overrides = _work_input_overrides.set(override_map)
+            token_batch = _active_work_batch.set(work_batch_list)
+            try:
+                resolved = await _resolve_node_execution(node_id, work_batch=work_batch_list)
+            finally:
+                _active_work_batch.reset(token_batch)
+                _work_input_overrides.reset(token_overrides)
             n = resolved["node"]
             kind = resolved["kind"]
             params = resolved["params"]
@@ -3551,6 +3658,11 @@ async def run_graph(
                     _coercion_policy_for_node(n) if strict_coercion_policy else "allow_lossy"
                 )
                 for input_port, upstream_id in input_refs:
+                    input_port_name = str(input_port or "").strip().lower()
+                    if input_port_name.startswith("param") or input_port_name.startswith("control") or input_port_name.startswith("ctl"):
+                        # Param/control links are validated through affinity + param-shape contracts.
+                        # Skip work-payload preflight checks here.
+                        continue
                     upstream_art = await context.artifact_store.get(upstream_id)
                     upstream_pt = _infer_artifact_payload_type(upstream_art)
                     expected_in = str(declared_in or "").strip()
@@ -3812,7 +3924,12 @@ async def run_graph(
                             "exec": "done"
                         })
                     await asyncio.sleep(0.05)
-                    return {"ok": True, "cached": True}
+                    return {
+                        "ok": True,
+                        "cached": True,
+                        "decision": decision_value,
+                        "reasonCode": decision_reason_code,
+                    }
             if use_cache_for_node and cache_resolution == "CACHE_MISS":
                 cache_stats["miss"] += 1
                 await _emit_cache_decision(
@@ -5385,9 +5502,10 @@ async def run_graph(
                         )
 
                         # bind artifact
-                        _assert_binding_unchanged(
+                        _assert_binding_ready_for_commit(
                             node_id=node_id,
                             snapshot=binding_snapshot,
+                            commit_artifact_id=committed_artifact_id,
                             phase="post_write_bind_transform",
                         )
                         context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
@@ -5727,6 +5845,8 @@ async def run_graph(
                         meta_payload = data_obj.get("meta") if isinstance(data_obj.get("meta"), dict) else {}
                         reject_flag = reject_flag or bool(payload_obj.get("reject")) or bool(meta_payload.get("reject"))
                     if reject_flag:
+                        decision_value = "reject"
+                        decision_reason_code = "NODE_REJECTED_NON_ERROR"
                         await _emit(
                             {
                                 "type": "log",
@@ -6084,9 +6204,10 @@ async def run_graph(
                         consumer_exec_key=exec_key,
                         output_artifact_id=committed_artifact_id,
                     )
-                    _assert_binding_unchanged(
+                    _assert_binding_ready_for_commit(
                         node_id=node_id,
                         snapshot=binding_snapshot,
+                        commit_artifact_id=committed_artifact_id,
                         phase="post_write_bind",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
@@ -6273,7 +6394,12 @@ async def run_graph(
                 })
 
             await asyncio.sleep(0.05)
-            return {"ok": True, "cached": False}
+            return {
+                "ok": True,
+                "cached": False,
+                "decision": decision_value,
+                "reasonCode": decision_reason_code,
+            }
 
         run_t0 = asyncio.get_running_loop().time()
         global_sem = asyncio.Semaphore(max_inflight)
@@ -6297,8 +6423,116 @@ async def run_graph(
                 global_max=_env_int("RUNNER_QUEUE_GLOBAL_MAX", 50000, minimum=1),
             )
         )
+        node_processing_policy: Dict[str, Dict[str, Any]] = {
+            nid: _node_processing_policy(nodes.get(nid, {})) for nid in nodes.keys()
+        }
+        node_accept_reject_counters: Dict[str, Dict[str, int]] = {
+            nid: {"accepted": 0, "rejected": 0} for nid in nodes.keys()
+        }
+        runtime_item_metrics: Dict[str, Any] = {
+            "itemsEnqueued": 0,
+            "itemsDequeued": 0,
+            "itemsRejected": 0,
+            "itemsAccepted": 0,
+            "nodeCounters": node_accept_reject_counters,
+        }
 
-        async def _run_with_limits(node_id: str) -> Dict[str, Any]:
+        async def _expand_edge_work_items(
+            *,
+            source_node_id: str,
+            edge_obj: Dict[str, Any],
+            edge_id: str,
+            target_handle: str,
+        ) -> List[Dict[str, Any]]:
+            artifact_id = str(get_current_artifact(source_node_id) or "").strip()
+            if not artifact_id:
+                return []
+            item_mode = _edge_work_item_mode(edge_obj)
+            max_items = _edge_work_max_items(edge_obj)
+            items: List[Dict[str, Any]] = []
+            if item_mode == "artifact":
+                return [
+                    {
+                        "edgeId": edge_id,
+                        "sourceNodeId": source_node_id,
+                        "targetHandle": target_handle,
+                        "artifactId": artifact_id,
+                        "itemIndex": 0,
+                        "itemMode": "artifact",
+                    }
+                ]
+            try:
+                upstream_art = await context.artifact_store.get(artifact_id)
+                payload = await context.artifact_store.read(artifact_id)
+            except Exception:
+                return [
+                    {
+                        "edgeId": edge_id,
+                        "sourceNodeId": source_node_id,
+                        "targetHandle": target_handle,
+                        "artifactId": artifact_id,
+                        "itemIndex": 0,
+                        "itemMode": "artifact",
+                    }
+                ]
+            if item_mode == "json_items":
+                try:
+                    parsed = json.loads(payload.decode("utf-8"))
+                except Exception:
+                    parsed = None
+                iterable = parsed if isinstance(parsed, list) else []
+                if not iterable and isinstance(parsed, dict):
+                    payload_obj = parsed.get("payload")
+                    if isinstance(payload_obj, list):
+                        iterable = payload_obj
+                for idx, entry in enumerate(iterable):
+                    if idx >= max_items:
+                        break
+                    items.append(
+                        {
+                            "edgeId": edge_id,
+                            "sourceNodeId": source_node_id,
+                            "targetHandle": target_handle,
+                            "artifactId": artifact_id,
+                            "itemIndex": idx,
+                            "itemMode": "json_items",
+                            "itemPreview": entry if isinstance(entry, (dict, list, str, int, float, bool, type(None))) else str(entry),
+                        }
+                    )
+            elif item_mode == "table_rows":
+                try:
+                    df = load_table_from_artifact_bytes(upstream_art, payload)
+                    rows = df.to_dicts() if hasattr(df, "to_dicts") else []
+                except Exception:
+                    rows = []
+                for idx, row in enumerate(rows):
+                    if idx >= max_items:
+                        break
+                    items.append(
+                        {
+                            "edgeId": edge_id,
+                            "sourceNodeId": source_node_id,
+                            "targetHandle": target_handle,
+                            "artifactId": artifact_id,
+                            "itemIndex": idx,
+                            "itemMode": "table_rows",
+                            "itemPreview": row if isinstance(row, dict) else {},
+                        }
+                    )
+            if not items:
+                items.append(
+                    {
+                        "edgeId": edge_id,
+                        "sourceNodeId": source_node_id,
+                        "targetHandle": target_handle,
+                        "artifactId": artifact_id,
+                        "itemIndex": 0,
+                        "itemMode": "artifact",
+                    }
+                )
+            return items
+
+        async def _run_with_limits(node_id: str, *, work_batch: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
             nonlocal inflight_current, peak_concurrency
             n = nodes[node_id]
             kind = n.get("data", {}).get("kind")
@@ -6343,7 +6577,7 @@ async def run_graph(
                 )
                 if kind_sem is None:
                     try:
-                        result = await _execute_node(node_id)
+                        result = await _execute_node(node_id, work_batch=work_batch)
                         await _component_mark_node_finish(
                             node_id,
                             ok=bool(result.get("ok")),
@@ -6404,6 +6638,7 @@ async def run_graph(
                             result = await _execute_node(
                                 node_id,
                                 cache_only=(node_id in plan.cache_only_nodes),
+                                work_batch=work_batch,
                             )
                             await _component_mark_node_finish(
                                 node_id,
@@ -6487,13 +6722,93 @@ async def run_graph(
             adj[nid].sort(key=lambda n: order_index.get(n, 10**9))
         for nid in outbound_edges_by_source:
             outbound_edges_by_source[nid].sort(key=lambda item: order_index.get(str(item.get("target") or ""), 10**9))
+        edge_dependency_released: Dict[str, bool] = {
+            str(edge_id): False
+            for edge_id, edge in edges.items()
+            if edge.get("source") in sub and edge.get("target") in sub
+        }
         ready: List[str] = sorted(
             [nid for nid, d in indeg.items() if d == 0],
             key=lambda n: order_index.get(n, 10**9),
         )
-        inflight: Dict[asyncio.Task, str] = {}
+        deps_released: Dict[str, bool] = {nid: indeg.get(nid, 0) == 0 for nid in sub}
+        node_started_once: Dict[str, bool] = {nid: False for nid in sub}
+        node_inflight_counts: Dict[str, int] = {nid: 0 for nid in sub}
+        inflight: Dict[asyncio.Task, Dict[str, Any]] = {}
         completed_count = 0
         run_failed = False
+
+        def _incoming_edge_infos(node_id: str) -> List[Dict[str, str]]:
+            infos: List[Dict[str, str]] = []
+            for incoming_edge_id in plan.incoming_edges.get(node_id, []):
+                incoming_edge = edges.get(incoming_edge_id) or {}
+                infos.append(
+                    {
+                        "edgeId": str(incoming_edge_id),
+                        "inputHandle": str(incoming_edge.get("targetHandle") or "in"),
+                    }
+                )
+            infos.sort(key=lambda item: (item.get("inputHandle") or "", item.get("edgeId") or ""))
+            return infos
+
+        def _node_has_ready_work(node_id: str) -> bool:
+            incoming = _incoming_edge_infos(node_id)
+            if not incoming:
+                return True
+            for info in incoming:
+                if queue_registry.depth(str(info.get("edgeId") or ""), str(info.get("inputHandle") or "in")) <= 0:
+                    return False
+            return True
+
+        async def _dequeue_work_batch(node_id: str) -> List[Dict[str, Any]]:
+            incoming = _incoming_edge_infos(node_id)
+            if not incoming:
+                return []
+            policy = node_processing_policy.get(node_id, {"consume_mode": "once", "batch_size": 1})
+            consume_mode = str(policy.get("consume_mode") or "once")
+            batch_size = max(1, int(policy.get("batch_size") or 1))
+            max_take = 1 if consume_mode == "single_item" else batch_size if consume_mode == "batch" else 1
+            primary = incoming[0]
+            out: List[Dict[str, Any]] = []
+            for _ in range(max_take):
+                item = await queue_registry.dequeue(
+                    str(primary.get("edgeId") or ""),
+                    str(primary.get("inputHandle") or "in"),
+                    timeout_sec=0.0,
+                )
+                if item is None:
+                    break
+                runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
+                out.append(item if isinstance(item, dict) else {"item": item})
+            # For additional incoming edges keep one item alignment token if available.
+            for info in incoming[1:]:
+                item = await queue_registry.dequeue(
+                    str(info.get("edgeId") or ""),
+                    str(info.get("inputHandle") or "in"),
+                    timeout_sec=0.0,
+                )
+                if item is not None:
+                    runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
+                    out.append(item if isinstance(item, dict) else {"item": item})
+            return out
+
+        def _enqueue_ready_if_possible(node_id: str) -> None:
+            if not deps_released.get(node_id, False):
+                return
+            policy = node_processing_policy.get(node_id, {"consume_mode": "once", "max_inflight": 1})
+            consume_mode = str(policy.get("consume_mode") or "once")
+            per_node_max = max(1, int(policy.get("max_inflight") or 1))
+            in_flight_for_node = int(node_inflight_counts.get(node_id, 0))
+            in_ready = ready.count(node_id)
+            if in_flight_for_node + in_ready >= per_node_max:
+                return
+            if consume_mode == "once":
+                if node_started_once.get(node_id, False):
+                    return
+                ready.append(node_id)
+                return
+            if _node_has_ready_work(node_id):
+                ready.append(node_id)
         await _emit(
             {
                 "type": "log",
@@ -6551,12 +6866,29 @@ async def run_graph(
 
             while ready and len(inflight) < max_inflight:
                 nid = ready.pop(0)
+                policy = node_processing_policy.get(nid, {"consume_mode": "once", "max_inflight": 1})
+                consume_mode = str(policy.get("consume_mode") or "once")
+                per_node_max = max(1, int(policy.get("max_inflight") or 1))
+                if int(node_inflight_counts.get(nid, 0)) >= per_node_max:
+                    # Per-node inflight cap reached; defer.
+                    ready.append(nid)
+                    break
+                work_batch: List[Dict[str, Any]] = []
+                if consume_mode in {"single_item", "batch"} and plan.incoming_edges.get(nid, []):
+                    if not _node_has_ready_work(nid):
+                        continue
+                    work_batch = await _dequeue_work_batch(nid)
+                    if not work_batch:
+                        continue
                 task = asyncio.create_task(
                     _run_with_limits(
                         nid,
+                        work_batch=work_batch,
                     )
                 )
-                inflight[task] = nid
+                inflight[task] = {"nodeId": nid, "workBatch": work_batch}
+                node_inflight_counts[nid] = int(node_inflight_counts.get(nid, 0)) + 1
+                node_started_once[nid] = True
 
             if not inflight:
                 await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})
@@ -6568,7 +6900,10 @@ async def run_graph(
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in done:
-                node_id = inflight.pop(task, "")
+                inflight_info = inflight.pop(task, {}) if isinstance(inflight.get(task), dict) else {}
+                node_id = str(inflight_info.get("nodeId") or "")
+                work_batch = inflight_info.get("workBatch") if isinstance(inflight_info.get("workBatch"), list) else []
+                node_inflight_counts[node_id] = max(0, int(node_inflight_counts.get(node_id, 0)) - 1)
                 completed_count += 1
                 try:
                     result = task.result()
@@ -6613,6 +6948,33 @@ async def run_graph(
                         break
                     # Localized failure: do not release downstream dependencies from this node.
                     continue
+                # decision / reject semantics
+                decision = str(result.get("decision") or "accept").strip().lower() if isinstance(result, dict) else "accept"
+                if decision not in {"accept", "reject"}:
+                    decision = "accept"
+                if decision == "reject":
+                    runtime_item_metrics["itemsRejected"] = int(runtime_item_metrics.get("itemsRejected", 0)) + max(1, len(work_batch or []))
+                    node_accept_reject_counters.setdefault(node_id, {"accepted": 0, "rejected": 0})
+                    node_accept_reject_counters[node_id]["rejected"] = int(node_accept_reject_counters[node_id].get("rejected", 0)) + max(1, len(work_batch or []))
+                else:
+                    runtime_item_metrics["itemsAccepted"] = int(runtime_item_metrics.get("itemsAccepted", 0)) + max(1, len(work_batch or []))
+                    node_accept_reject_counters.setdefault(node_id, {"accepted": 0, "rejected": 0})
+                    node_accept_reject_counters[node_id]["accepted"] = int(node_accept_reject_counters[node_id].get("accepted", 0)) + max(1, len(work_batch or []))
+                await _emit(
+                    {
+                        "type": "node_decision",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "decision": decision,
+                        "count": max(1, len(work_batch or [])),
+                        "reasonCode": str(result.get("reasonCode") or ""),
+                    }
+                )
+                if decision == "reject":
+                    # Reject is non-error; do not release downstream dependencies from this item.
+                    _enqueue_ready_if_possible(node_id)
+                    continue
                 # Node succeeded/cached, release downstream dependencies through per-edge queues.
                 for edge_info in outbound_edges_by_source.get(node_id, []):
                     edge_id = str(edge_info.get("edgeId") or "")
@@ -6620,19 +6982,32 @@ async def run_graph(
                     target_handle = str(edge_info.get("targetHandle") or "in")
                     if not edge_id or not nb:
                         continue
-                    await queue_registry.enqueue(
-                        edge_id,
-                        target_handle,
-                        {"fromNodeId": node_id, "at": iso_now()},
-                        overflow="block",
+                    edge_obj = edges.get(edge_id) or {}
+                    work_items = await _expand_edge_work_items(
+                        source_node_id=node_id,
+                        edge_obj=edge_obj,
+                        edge_id=edge_id,
+                        target_handle=target_handle,
                     )
-                    indeg[nb] = max(0, indeg.get(nb, 0) - 1)
-                    if indeg[nb] == 0:
-                        for incoming_edge_id in plan.incoming_edges.get(nb, []):
-                            incoming_edge = edges.get(incoming_edge_id) or {}
-                            incoming_handle = str(incoming_edge.get("targetHandle") or "in")
-                            await queue_registry.dequeue(str(incoming_edge_id), incoming_handle, timeout_sec=0.0)
-                        ready.append(nb)
+                    overflow_mode = str(
+                        (((edge_obj.get("data") or {}) if isinstance(edge_obj.get("data"), dict) else {}).get("queue") or {}).get("overflow")
+                        or "block"
+                    ).strip().lower()
+                    for item in work_items:
+                        await queue_registry.enqueue(
+                            edge_id,
+                            target_handle,
+                            item,
+                            overflow=overflow_mode if overflow_mode in {"block", "spill", "error"} else "block",
+                        )
+                        runtime_item_metrics["itemsEnqueued"] = int(runtime_item_metrics.get("itemsEnqueued", 0)) + 1
+                    if not bool(edge_dependency_released.get(edge_id, False)):
+                        edge_dependency_released[edge_id] = True
+                        indeg[nb] = max(0, indeg.get(nb, 0) - 1)
+                        if indeg[nb] == 0:
+                            deps_released[nb] = True
+                            _enqueue_ready_if_possible(nb)
+                _enqueue_ready_if_possible(node_id)
                 ready.sort(key=lambda n: order_index.get(n, 10**9))
                 await _emit(
                     {
@@ -6641,6 +7016,7 @@ async def run_graph(
                         "at": iso_now(),
                         "metrics": queue_registry.metrics(),
                         "nodeMetrics": node_runtime_metrics,
+                        "runtimeItemMetrics": runtime_item_metrics,
                     }
                 )
 
@@ -6668,7 +7044,7 @@ async def run_graph(
         })
         await _emit_cache_summary_once()
 
-        if run_failed:
+        if run_failed or total_failed > 0:
             await _emit({
                 "type": "run_finished",
                 "runId": run_id,
