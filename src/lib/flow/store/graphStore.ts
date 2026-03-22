@@ -2284,6 +2284,33 @@ function buildSavePreflightDiagnostics(
 				});
 			}
 		}
+		const expectedInputSchemas = (node.data as any)?.schema?.expectedInputSchemas;
+		if (expectedInputSchemas != null) {
+			if (typeof expectedInputSchemas !== 'object' || Array.isArray(expectedInputSchemas)) {
+				diagnostics.push({
+					code: 'EXPECTED_INPUT_SCHEMA_INVALID',
+					path: `nodes.${String(node.id)}.data.schema.expectedInputSchemas`,
+					message: 'Expected input schemas must be an object keyed by input handle.',
+					severity: 'error'
+				});
+			} else {
+				for (const [handle, envelope] of Object.entries(expectedInputSchemas as Record<string, any>)) {
+					const expectedInputTypedRaw =
+						typeof envelope?.typedSchema === 'object'
+							? (envelope.typedSchema as Record<string, unknown>)
+							: null;
+					const expectedInputTyped = payloadHintToTypedSchema(expectedInputTypedRaw);
+					if (!expectedInputTyped) {
+						diagnostics.push({
+							code: 'EXPECTED_INPUT_SCHEMA_INVALID',
+							path: `nodes.${String(node.id)}.data.schema.expectedInputSchemas.${String(handle)}.typedSchema`,
+							message: `Expected input schema for handle "${String(handle)}" must define a valid typedSchema.type.`,
+							severity: 'error'
+						});
+					}
+				}
+			}
+		}
 		if (node.data.kind !== 'component') continue;
 		const componentParams = ((node.data as any)?.params ?? {}) as Record<string, any>;
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
@@ -2885,7 +2912,13 @@ function fingerprintTypedSchema(typedSchemaRaw: unknown): string | undefined {
 function hasSchemaEnvelopeContent(raw: unknown): boolean {
 	if (!raw || typeof raw !== 'object') return false;
 	const env = raw as Record<string, unknown>;
-	return Boolean(env.inferredSchema || env.expectedInputSchema || env.expectedSchema || env.observedSchema);
+	return Boolean(
+		env.inferredSchema ||
+			env.expectedInputSchema ||
+			env.expectedInputSchemas ||
+			env.expectedSchema ||
+			env.observedSchema
+	);
 }
 
 function deriveInferredSchemaObservationForNode(node: Node<PipelineNodeData>): NodeSchemaObservation | null {
@@ -3210,9 +3243,36 @@ function buildProvidedSchema(
 	);
 }
 
-function buildRequiredSchema(node: Node<PipelineNodeData>): Record<string, any> {
+function expectedInputTypedSchemaForHandle(
+	node: Node<PipelineNodeData>,
+	targetHandleRaw?: string | null
+): Record<string, unknown> | null {
+	const schemaEnv = ((node.data as any)?.schema ?? {}) as Record<string, any>;
+	const expectedByHandle =
+		schemaEnv?.expectedInputSchemas && typeof schemaEnv.expectedInputSchemas === 'object'
+			? (schemaEnv.expectedInputSchemas as Record<string, any>)
+			: null;
+	const targetHandle = String(targetHandleRaw ?? 'in').trim() || 'in';
+	const handleEnvelope =
+		expectedByHandle && typeof expectedByHandle[targetHandle] === 'object'
+			? (expectedByHandle[targetHandle] as Record<string, any>)
+			: expectedByHandle && typeof expectedByHandle.in === 'object'
+				? (expectedByHandle.in as Record<string, any>)
+				: null;
+	if (handleEnvelope && typeof handleEnvelope.typedSchema === 'object') {
+		return handleEnvelope.typedSchema as Record<string, unknown>;
+	}
+	return typeof schemaEnv?.expectedInputSchema?.typedSchema === 'object'
+		? (schemaEnv.expectedInputSchema.typedSchema as Record<string, unknown>)
+		: null;
+}
+
+function buildRequiredSchema(
+	node: Node<PipelineNodeData>,
+	targetHandleRaw?: string | null
+): Record<string, any> {
 	const explicitInputHint = typedSchemaToPayloadHint(
-		(node.data as any)?.schema?.expectedInputSchema?.typedSchema
+		expectedInputTypedSchemaForHandle(node, targetHandleRaw)
 	);
 	const payload =
 		(explicitInputHint as Record<string, any> | undefined) ??
@@ -3250,10 +3310,11 @@ function computeEdgeSchemaConstraintsInternal(
 		const sourceNode = byNodeId.get(sourceNodeId);
 		const targetNode = byNodeId.get(targetNodeId);
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
 		const mode = normalizeEdgeMode(edge as Edge<PipelineEdgeData>);
 		if (!sourceNode || !targetNode) continue;
 		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
-		const requiredSchema = buildRequiredSchema(targetNode as any);
+		const requiredSchema = buildRequiredSchema(targetNode as any, targetHandle);
 		const check = isSchemaCompatible(providedSchema, requiredSchema, mode);
 		out[edgeId] = {
 			edgeId,
@@ -3865,12 +3926,13 @@ export const graphStore = (() => {
 		return out;
 	}
 
-	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchema';
+	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchema' | 'expectedInputSchemas';
 
 	function setNodeSchemaObservationImpl(
 		nodeId: string,
 		channel: SchemaEnvelopeChannel,
-		typedSchema: Record<string, unknown> | null
+		typedSchema: Record<string, unknown> | null,
+		inputHandleRaw?: string
 	): { ok: boolean; error?: string } {
 		let result: { ok: boolean; error?: string } = { ok: true };
 		update((s) => {
@@ -3884,20 +3946,54 @@ export const graphStore = (() => {
 					? ({ ...(node.data.schema as Record<string, unknown>) } as Record<string, unknown>)
 					: {};
 			if (typedSchema == null) {
-				delete (existingSchema as any)[channel];
+				if (channel === 'expectedInputSchemas') {
+					const handle = String(inputHandleRaw ?? 'in').trim() || 'in';
+					const current =
+						(existingSchema as any).expectedInputSchemas &&
+						typeof (existingSchema as any).expectedInputSchemas === 'object'
+							? ({ ...((existingSchema as any).expectedInputSchemas as Record<string, unknown>) } as Record<
+									string,
+									unknown
+								>)
+							: {};
+					delete current[handle];
+					if (Object.keys(current).length === 0) {
+						delete (existingSchema as any).expectedInputSchemas;
+					} else {
+						(existingSchema as any).expectedInputSchemas = current;
+					}
+				} else {
+					delete (existingSchema as any)[channel];
+				}
 			} else {
 				const normalizedTyped = payloadHintToTypedSchema(typedSchema);
 				if (!normalizedTyped) {
 					result = { ok: false, error: 'Expected schema must include a valid typed schema type.' };
 					return logPush(s, 'warn', result.error, nodeId);
 				}
-				(existingSchema as any)[channel] = {
+				const observation = {
 					typedSchema: normalizedTyped,
 					source: 'declared',
 					state: 'fresh',
 					schemaFingerprint: fingerprintTypedSchema(normalizedTyped),
 					updatedAt: new Date().toISOString()
 				};
+				if (channel === 'expectedInputSchemas') {
+					const handle = String(inputHandleRaw ?? 'in').trim() || 'in';
+					const current =
+						(existingSchema as any).expectedInputSchemas &&
+						typeof (existingSchema as any).expectedInputSchemas === 'object'
+							? ({ ...((existingSchema as any).expectedInputSchemas as Record<string, unknown>) } as Record<
+									string,
+									unknown
+								>)
+							: {};
+					current[handle] = observation;
+					(existingSchema as any).expectedInputSchemas = current;
+					(existingSchema as any).expectedInputSchema = observation;
+				} else {
+					(existingSchema as any)[channel] = observation;
+				}
 			}
 			const parsed = NodeSchemaEnvelopeSchema.safeParse(existingSchema);
 			if (!parsed.success) {
@@ -3929,7 +4025,11 @@ export const graphStore = (() => {
 			const next = logPush(
 				{ ...s, nodes, edges: rechecked.edges },
 				'info',
-				channel === 'expectedInputSchema' ? 'Expected input schema updated' : 'Expected schema updated',
+				channel === 'expectedSchema'
+					? 'Expected schema updated'
+					: channel === 'expectedInputSchemas'
+						? `Expected input schema updated for handle ${String(inputHandleRaw ?? 'in')}`
+						: 'Expected input schema updated',
 				nodeId
 			);
 			persist(next);
@@ -3952,7 +4052,15 @@ export const graphStore = (() => {
 		nodeId: string,
 		typedSchema: Record<string, unknown> | null
 	): { ok: boolean; error?: string } {
-		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchema', typedSchema);
+		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchemas', typedSchema, 'in');
+	}
+
+	function setNodeExpectedInputSchemaForHandleImpl(
+		nodeId: string,
+		inputHandle: string,
+		typedSchema: Record<string, unknown> | null
+	): { ok: boolean; error?: string } {
+		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchemas', typedSchema, inputHandle);
 	}
 
 	type UpdateNodeConfig = {
@@ -4467,6 +4575,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 		setNodeExpectedInputSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
 			return setNodeExpectedInputSchemaImpl(nodeId, typedSchema);
+		},
+		setNodeExpectedInputSchemaForHandle(
+			nodeId: string,
+			inputHandle: string,
+			typedSchema: Record<string, unknown> | null
+		) {
+			return setNodeExpectedInputSchemaForHandleImpl(nodeId, inputHandle, typedSchema);
 		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {

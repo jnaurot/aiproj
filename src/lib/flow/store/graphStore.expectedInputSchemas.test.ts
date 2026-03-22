@@ -1,0 +1,40 @@
+import { get } from 'svelte/store';
+import { describe, expect, it } from 'vitest';
+
+import { graphStore } from './graphStore';
+
+describe('graphStore expected input schemas by handle', () => {
+	it('sets and clears expected input schema per handle', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('transform', { x: 40, y: 40 });
+
+		const saveIn = graphStore.setNodeExpectedInputSchemaForHandle(nodeId, 'in', {
+			type: 'json',
+			fields: []
+		});
+		expect((saveIn as any)?.ok).toBe(true);
+
+		const saveParam = graphStore.setNodeExpectedInputSchemaForHandle(nodeId, 'param_config', {
+			type: 'json',
+			fields: []
+		});
+		expect((saveParam as any)?.ok).toBe(true);
+
+		const afterSave = get(graphStore);
+		const nodeAfterSave = afterSave.nodes.find((n) => n.id === nodeId);
+		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchemas?.in?.typedSchema?.type).toBe('json');
+		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchemas?.param_config?.typedSchema?.type).toBe(
+			'json'
+		);
+		// Back-compat legacy singleton remains aligned to "in"
+		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchema?.typedSchema?.type).toBe('json');
+
+		const clearParam = graphStore.setNodeExpectedInputSchemaForHandle(nodeId, 'param_config', null);
+		expect((clearParam as any)?.ok).toBe(true);
+
+		const afterClear = get(graphStore);
+		const nodeAfterClear = afterClear.nodes.find((n) => n.id === nodeId);
+		expect((nodeAfterClear?.data as any)?.schema?.expectedInputSchemas?.param_config).toBeUndefined();
+		expect((nodeAfterClear?.data as any)?.schema?.expectedInputSchemas?.in?.typedSchema?.type).toBe('json');
+	});
+});

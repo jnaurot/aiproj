@@ -33,6 +33,7 @@ export const NodeSchemaEnvelopeSchema = z
 	.object({
 		inferredSchema: NodeSchemaObservationSchema.optional(),
 		expectedInputSchema: NodeSchemaObservationSchema.optional(),
+		expectedInputSchemas: z.record(z.string(), NodeSchemaObservationSchema).optional(),
 		workInputs: NodeInputClassContractSchema.optional(),
 		paramInputs: NodeInputClassContractSchema.optional(),
 		controlInputs: NodeInputClassContractSchema.optional(),
