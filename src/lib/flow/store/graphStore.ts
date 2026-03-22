@@ -3296,13 +3296,19 @@ function computeEdgeSchemaDiagnosticsInternal(
 ): Record<string, EdgeSchemaDiagnostic | null> {
 	const out: Record<string, EdgeSchemaDiagnostic | null> = {};
 	for (const [edgeId, constraint] of Object.entries(constraints ?? {})) {
+		const modeLabel =
+			constraint.mode === 'param'
+				? 'Param shape mismatch'
+				: constraint.mode === 'control'
+					? 'Control contract mismatch'
+					: 'Work payload mismatch';
 		if (constraint.compatible) {
 			if (constraint.warning === 'lossy_coercion') {
 				out[edgeId] = {
 					edgeId,
 					code: 'TYPE_MISMATCH',
 					severity: 'warning',
-					message: `Lossy coercion: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
+					message: `${modeLabel}: lossy coercion ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 					details: {
 						providedSchema: constraint.providedSchema,
 						requiredSchema: constraint.requiredSchema
@@ -3319,7 +3325,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 				edgeId,
 				code: 'PAYLOAD_SCHEMA_MISMATCH',
 				severity: 'error',
-				message: `Missing required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
+				message: `${modeLabel}: missing required columns ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
 				details: {
 					providedSchema: constraint.providedSchema,
 					requiredSchema: constraint.requiredSchema,
@@ -3334,7 +3340,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 				edgeId,
 				code: 'PAYLOAD_SCHEMA_MISMATCH',
 				severity: 'error',
-				message: `Required typed schema coverage is missing. Required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
+				message: `${modeLabel}: required typed schema coverage is missing. Required columns: ${(constraint.missingColumns ?? []).join(', ') || '(unknown)'}`,
 				details: {
 					providedSchema: constraint.providedSchema,
 					requiredSchema: constraint.requiredSchema,
@@ -3348,7 +3354,7 @@ function computeEdgeSchemaDiagnosticsInternal(
 			edgeId,
 			code: 'TYPE_MISMATCH',
 			severity: 'error',
-			message: `Incompatible schema types: ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
+			message: `${modeLabel}: incompatible schema types ${String(constraint.providedSchema?.type ?? 'unknown')} -> ${String(constraint.requiredSchema?.type ?? 'unknown')}`,
 			details: {
 				providedSchema: constraint.providedSchema,
 				requiredSchema: constraint.requiredSchema

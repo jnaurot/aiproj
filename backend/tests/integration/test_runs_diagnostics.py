@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.runner.validator import GraphValidator
 
 
 def test_runs_diagnostics_endpoint_available():
@@ -23,3 +24,32 @@ def test_runs_diagnostics_endpoint_available():
 		assert isinstance(metrics["schemaFailures"], int)
 		assert isinstance(metrics["coercionApplied"], int)
 		assert isinstance(metrics["componentBindingFailures"], int)
+
+
+def test_mode_specific_validator_messages_are_present():
+	graph = {
+		"nodes": [
+			{"id": "src", "data": {"kind": "source", "label": "src", "params": {}}},
+			{
+				"id": "dst",
+				"data": {
+					"kind": "model",
+					"label": "dst",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+				},
+			},
+		],
+		"edges": [
+			{
+				"id": "e_control_bad",
+				"source": "src",
+				"sourceHandle": "out",
+				"target": "dst",
+				"targetHandle": "in",
+				"data": {"mode": "control"},
+			}
+		],
+	}
+	result = GraphValidator().validate_pre_execution(graph)
+	messages = " | ".join(error.message for error in result.errors)
+	assert "Control contract mismatch" in messages

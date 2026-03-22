@@ -582,13 +582,25 @@ class GraphValidator:
             src_affinity = self._port_affinity(source_node, direction="out", handle=source_handle)
             dst_affinity = self._port_affinity(target_node, direction="in", handle=target_handle)
             if not self._mode_affinity_compatible(edge_mode, src_affinity, dst_affinity):
+                if edge_mode == "control":
+                    mode_message = (
+                        "Control contract mismatch: control edges require control-affinity handles "
+                        f"(source='{src_affinity}', target='{dst_affinity}')"
+                    )
+                elif edge_mode == "param":
+                    mode_message = (
+                        "Param contract mismatch: param edges require param-affinity target handles "
+                        f"(source='{src_affinity}', target='{dst_affinity}')"
+                    )
+                else:
+                    mode_message = (
+                        "Work contract mismatch: work edges require work-affinity source/target handles "
+                        f"(source='{src_affinity}', target='{dst_affinity}')"
+                    )
                 errors.append(
                     ValidationError(
                         code="EDGE_MODE_INCOMPATIBLE",
-                        message=(
-                            f"Edge mode '{edge_mode}' is incompatible with source affinity '{src_affinity}' "
-                            f"and target affinity '{dst_affinity}'"
-                        ),
+                        message=mode_message,
                         edge_id=edge_id,
                         details={
                             "edgeMode": edge_mode,
@@ -614,7 +626,7 @@ class GraphValidator:
                             ValidationError(
                                 code="PARAM_CONTRACT_MISMATCH",
                                 message=(
-                                    f"Param edge '{edge_id}' missing required keys {missing}. "
+                                    f"Param shape mismatch on edge '{edge_id}': missing required keys {missing}. "
                                     f"available={available_keys}"
                                 ),
                                 edge_id=edge_id,
@@ -624,6 +636,10 @@ class GraphValidator:
                                     "availableKeys": available_keys,
                                     "missingKeys": missing,
                                 },
+                                suggestions=[
+                                    "Ensure source payload exposes all requiredKeys for this param edge.",
+                                    "Or relax target requiredKeys/shape to match the provided param payload.",
+                                ],
                             )
                         )
                 continue
@@ -723,7 +739,7 @@ class GraphValidator:
                     errors.append(ValidationError(
                         code=self._schema_code(PAYLOAD_SCHEMA_MISMATCH),
                         message=(
-                            f"Missing required columns on edge: {missing}. "
+                            f"Work payload mismatch: missing required columns on edge: {missing}. "
                             f"provided_schema={self._stable_json(provided_schema)} "
                             f"required_schema={self._stable_json(required_schema)}."
                             f"{suggestion_suffix}"
@@ -750,7 +766,7 @@ class GraphValidator:
                     ValidationError(
                         code=self._schema_code(TYPE_MISMATCH),
                         message=(
-                            f"Incompatible schemas on edge '{edge_id}': "
+                            f"Work payload mismatch on edge '{edge_id}': "
                             f"provided_schema={self._stable_json(provided_schema)} "
                             f"required_schema={self._stable_json(required_schema)}."
                             f"{suggestion_suffix}"

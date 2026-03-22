@@ -61,6 +61,7 @@ Required fields:
 - `edge_exec`
 - `control_signal`
 - `queue_metrics`
+- `node_decision`
 - `log`
 
 ### `control_signal`
@@ -83,6 +84,32 @@ Fields:
 - `metrics.perEdgeMax`
 - `metrics.edges` (per-edge queue depth/rates/age/full/blocked)
 - `nodeMetrics` (per-node input wait, run time, retry count, backpressure status)
+- `runtimeItemMetrics` (itemsEnqueued/itemsDequeued/itemsAccepted/itemsRejected/nodeCounters)
+
+### `node_decision`
+
+Structured node decision signal (non-error accept/reject flow).
+
+Fields:
+
+- `nodeId`
+- `decision` (`accept | reject`)
+- optional `count`
+- optional `reasonCode`
+
+## Mode-Specific Contract Diagnostics
+
+Schema/contract diagnostics are mode-aware:
+
+- `work` edges emit `Work payload mismatch ...` diagnostics for payload type/schema issues.
+- `param` edges emit `Param shape mismatch ...` diagnostics when required param keys/shapes are missing.
+- `control` affinity errors emit `Control contract mismatch ...` diagnostics when control handles/mode contracts are incompatible.
+
+Suggested auto-fixes are also mode-specific:
+
+- `work`: adapter suggestions (for example `text_to_table`, `json_to_table`, `table_to_json`) when available.
+- `param`: align `requiredKeys`/param shape with provided keys or enrich source param payload.
+- `control`: reconnect using control-affinity handles (`control_*`/`ctl_*`) and `mode=control`.
 
 ## Ordering Invariants
 

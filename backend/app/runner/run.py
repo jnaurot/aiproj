@@ -3682,7 +3682,7 @@ async def run_graph(
                             })
                         else:
                             preflight_error = ContractMismatchError(
-                                "Input edge contract mismatch: upstream artifact payload type does not match expected input type",
+                                "Work payload mismatch: upstream artifact payload type does not match expected input type",
                                 code="CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH",
                                 details=_contract_details(
                                     expected={"inputType": expected_in, "coercionPolicy": coercion_policy},
@@ -3698,7 +3698,7 @@ async def run_graph(
                         )
                         if not has_typed_columns:
                             preflight_error = ContractMismatchError(
-                                "Input edge contract mismatch: table input is missing typed schema columns",
+                                "Work payload mismatch: table input is missing typed schema columns",
                                 code="CONTRACT_EDGE_TYPED_SCHEMA_MISSING",
                                 details=_contract_details(
                                     expected={
@@ -3723,7 +3723,7 @@ async def run_graph(
                     )
                     if not ok_ts:
                         preflight_error = ContractMismatchError(
-                            "Input edge contract mismatch: typed schema incompatibility",
+                            "Work payload mismatch: typed schema incompatibility",
                             code="CONTRACT_EDGE_TYPED_SCHEMA_MISMATCH",
                             details=_contract_details(
                                 missing_columns=ts_info.get("missingColumns") if isinstance(ts_info, dict) else [],
