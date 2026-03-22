@@ -50,5 +50,43 @@ describe("NodeSchemaEnvelopeSchema", () => {
 		expect(parsed.observedSchema?.source).toBe("runtime");
 		expect(parsed.observedSchema?.state).toBe("partial");
 	});
+
+	it("supports split input contracts by affinity", () => {
+		const parsed = NodeSchemaEnvelopeSchema.parse({
+			workInputs: {
+				defaultSchema: {
+					source: "declared",
+					typedSchema: { type: "json", fields: [] }
+				},
+				handles: {
+					in: {
+						source: "declared",
+						typedSchema: { type: "json", fields: [] }
+					}
+				}
+			},
+			paramInputs: {
+				handles: {
+					param_filters: {
+						source: "declared",
+						typedSchema: { type: "json", fields: [] }
+					}
+				}
+			},
+			controlInputs: {
+				handles: {
+					control_in: {
+						source: "declared",
+						typedSchema: { type: "text", fields: [] }
+					}
+				}
+			}
+		});
+
+		expect(parsed.workInputs?.defaultSchema?.typedSchema?.type).toBe("json");
+		expect(parsed.workInputs?.handles?.in?.typedSchema?.type).toBe("json");
+		expect(parsed.paramInputs?.handles?.param_filters?.typedSchema?.type).toBe("json");
+		expect(parsed.controlInputs?.handles?.control_in?.typedSchema?.type).toBe("text");
+	});
 });
 

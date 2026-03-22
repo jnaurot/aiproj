@@ -80,17 +80,42 @@ def _canonical_api_contract(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
     outputs_in = value.get("outputs")
     inputs_in = value.get("inputs")
+    work_inputs_in = value.get("workInputs")
+    param_inputs_in = value.get("paramInputs")
+    control_inputs_in = value.get("controlInputs")
     inputs: List[Dict[str, Any]] = []
     outputs: List[Dict[str, Any]] = []
+    work_inputs: List[Dict[str, Any]] = []
+    param_inputs: List[Dict[str, Any]] = []
+    control_inputs: List[Dict[str, Any]] = []
     if isinstance(inputs_in, list):
         for item in inputs_in:
             if isinstance(item, dict):
                 inputs.append(_canonical_api_entry(item))
+    if isinstance(work_inputs_in, list):
+        for item in work_inputs_in:
+            if isinstance(item, dict):
+                work_inputs.append(_canonical_api_entry(item))
+    if isinstance(param_inputs_in, list):
+        for item in param_inputs_in:
+            if isinstance(item, dict):
+                param_inputs.append(_canonical_api_entry(item))
+    if isinstance(control_inputs_in, list):
+        for item in control_inputs_in:
+            if isinstance(item, dict):
+                control_inputs.append(_canonical_api_entry(item))
     if isinstance(outputs_in, list):
         for item in outputs_in:
             if isinstance(item, dict):
                 outputs.append(_canonical_api_entry(item))
-    return {"inputs": inputs, "outputs": outputs}
+    canonical_work_inputs = work_inputs or inputs
+    return {
+        "inputs": canonical_work_inputs,
+        "workInputs": canonical_work_inputs,
+        "paramInputs": param_inputs,
+        "controlInputs": control_inputs,
+        "outputs": outputs,
+    }
 
 
 def migrate_component_definition(

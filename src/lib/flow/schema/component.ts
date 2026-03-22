@@ -43,11 +43,29 @@ export const ComponentApiPortSchema = z
 	.strip();
 
 export const ComponentApiContractSchema = z
-	.object({
-		inputs: z.array(ComponentApiPortSchema).default([]),
-		outputs: z.array(ComponentApiPortSchema).default([])
-	})
-	.strip();
+	.preprocess((value) => {
+		const raw = (value ?? {}) as Record<string, unknown>;
+		const workInputs = Array.isArray(raw.workInputs)
+			? raw.workInputs
+			: Array.isArray(raw.inputs)
+				? raw.inputs
+				: [];
+		return {
+			...raw,
+			inputs: workInputs,
+			workInputs,
+			paramInputs: Array.isArray(raw.paramInputs) ? raw.paramInputs : [],
+			controlInputs: Array.isArray(raw.controlInputs) ? raw.controlInputs : []
+		};
+	}, z
+		.object({
+			inputs: z.array(ComponentApiPortSchema).default([]),
+			workInputs: z.array(ComponentApiPortSchema).default([]),
+			paramInputs: z.array(ComponentApiPortSchema).default([]),
+			controlInputs: z.array(ComponentApiPortSchema).default([]),
+			outputs: z.array(ComponentApiPortSchema).default([])
+		})
+		.strip());
 
 export const ComponentRefSchema = z
 	.object({

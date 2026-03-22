@@ -1,6 +1,20 @@
 {
   "schemaVersion": 1,
   "edgeModes": ["work", "param", "control"],
+  "workItemModes": ["artifact", "json_items", "table_rows"],
+  "processingPolicies": {
+    "consumeModes": ["once", "single_item", "batch"],
+    "defaults": {
+      "consume_mode": "once",
+      "batch_size": 1,
+      "max_inflight": 1
+    }
+  },
+  "inputContracts": {
+    "workInputs": { "behavior": "single_item" },
+    "paramInputs": { "behavior": "read_once" },
+    "controlInputs": { "behavior": "continuous" }
+  },
   "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings", "image", "audio", "video"],
   "nodes": {
     "model": {
@@ -9,6 +23,11 @@
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": ["in"],
+        "paramInputs": ["param_filters", "param_context"],
+        "controlInputs": ["control_in"]
       }
     },
     "llm": {
@@ -17,6 +36,11 @@
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": ["in"],
+        "paramInputs": ["param_filters", "param_context"],
+        "controlInputs": ["control_in"]
       }
     },
     "transform": {
@@ -25,6 +49,11 @@
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": ["in"],
+        "paramInputs": ["param_config"],
+        "controlInputs": ["control_in"]
       }
     },
     "source": {
@@ -33,6 +62,11 @@
       "ports": {
         "in": {},
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": [],
+        "paramInputs": ["param_config"],
+        "controlInputs": ["control_in"]
       }
     },
     "tool": {
@@ -41,6 +75,11 @@
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": ["in"],
+        "paramInputs": ["param_config"],
+        "controlInputs": ["control_in"]
       },
       "byProvider": {
         "mcp": {
@@ -83,6 +122,11 @@
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
         "out": { "default": { "affinity": "work" } }
+      },
+      "inputContracts": {
+        "workInputs": ["in"],
+        "paramInputs": ["param_config"],
+        "controlInputs": ["control_in"]
       }
     }
   }

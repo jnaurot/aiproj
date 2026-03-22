@@ -101,8 +101,45 @@ export type KnownRunEvent =
       cache_miss: number;
       cache_hit_contract_mismatch: number;
       schema_infer?: { hit: number; miss: number; bypass: number };
+    }
+  | {
+      type: "control_signal";
+      runId: string;
+      at: string;
+      signal: "ready" | "busy" | "drain" | "pause" | "blocked" | "resume";
+      nodeId?: string;
+    }
+  | {
+      type: "queue_metrics";
+      runId: string;
+      at: string;
+      metrics?: Record<string, unknown>;
+      nodeMetrics?: Record<string, unknown>;
+      runtimeItemMetrics?: Record<string, unknown>;
+    }
+  | {
+      type: "node_decision";
+      runId: string;
+      at: string;
+      nodeId: string;
+      decision: "accept" | "reject";
+      count?: number;
+      reasonCode?: string;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };
 
 export type RunEvent = KnownRunEvent | UnknownRunEvent;
+
+export type InputContractAffinity = "workInputs" | "paramInputs" | "controlInputs";
+
+export type InputContractShape = {
+	defaultSchema?: Record<string, unknown>;
+	handles?: Record<string, Record<string, unknown>>;
+};
+
+export type NodeInputContracts = {
+	workInputs?: InputContractShape;
+	paramInputs?: InputContractShape;
+	controlInputs?: InputContractShape;
+};

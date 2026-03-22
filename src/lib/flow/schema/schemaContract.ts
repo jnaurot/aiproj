@@ -22,10 +22,20 @@ export const NodeSchemaObservationSchema = z
 	})
 	.strip();
 
+export const NodeInputClassContractSchema = z
+	.object({
+		defaultSchema: NodeSchemaObservationSchema.optional(),
+		handles: z.record(z.string(), NodeSchemaObservationSchema).optional().default({})
+	})
+	.strip();
+
 export const NodeSchemaEnvelopeSchema = z
 	.object({
 		inferredSchema: NodeSchemaObservationSchema.optional(),
 		expectedInputSchema: NodeSchemaObservationSchema.optional(),
+		workInputs: NodeInputClassContractSchema.optional(),
+		paramInputs: NodeInputClassContractSchema.optional(),
+		controlInputs: NodeInputClassContractSchema.optional(),
 		expectedSchema: NodeSchemaObservationSchema.optional(),
 		observedSchema: NodeSchemaObservationSchema.optional()
 	})
@@ -34,5 +44,6 @@ export const NodeSchemaEnvelopeSchema = z
 export type NodeSchemaState = z.infer<typeof NodeSchemaStateSchema>;
 export type NodeSchemaSource = z.infer<typeof NodeSchemaSourceSchema>;
 export type NodeSchemaObservation = z.infer<typeof NodeSchemaObservationSchema>;
+export type NodeInputClassContract = z.infer<typeof NodeInputClassContractSchema>;
 export type NodeSchemaEnvelope = z.infer<typeof NodeSchemaEnvelopeSchema>;
 

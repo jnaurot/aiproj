@@ -32,3 +32,13 @@ def test_capabilities_endpoint_matches_shared_contract_file():
     assert body.get("featureFlags", {}).get("STRICT_SCHEMA_EDGE_CHECKS_V2") in {True, False}
     assert body.get("featureFlags", {}).get("STRICT_COERCION_POLICY") in {True, False}
     assert "LEGACY_COMPONENT_WRAPPER_FALLBACK" not in (body.get("featureFlags", {}) or {})
+    caps = body.get("capabilities", {})
+    assert caps.get("inputContracts", {}).get("workInputs", {}).get("behavior") == "single_item"
+    assert caps.get("inputContracts", {}).get("paramInputs", {}).get("behavior") == "read_once"
+    assert caps.get("inputContracts", {}).get("controlInputs", {}).get("behavior") == "continuous"
+    for node_kind in ("model", "llm", "transform", "source", "tool", "component"):
+        node_caps = caps.get("nodes", {}).get(node_kind, {})
+        node_contracts = node_caps.get("inputContracts", {})
+        assert isinstance(node_contracts.get("workInputs"), list)
+        assert isinstance(node_contracts.get("paramInputs"), list)
+        assert isinstance(node_contracts.get("controlInputs"), list)
