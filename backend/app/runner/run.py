@@ -2222,8 +2222,25 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _declared_in_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
+def _declared_in_port(kind: str, node: Dict[str, Any], input_port: Optional[str] = None) -> Optional[str]:
     params = (node.get("data", {}).get("params", {}) or {})
+    schema = (node.get("data", {}).get("schema", {}) or {})
+    input_handle = str(input_port or "in").strip() or "in"
+    expected_input_schemas = schema.get("expectedInputSchemas") if isinstance(schema.get("expectedInputSchemas"), dict) else {}
+    expected_input_envelope = (
+        expected_input_schemas.get(input_handle)
+        if isinstance(expected_input_schemas.get(input_handle), dict)
+        else expected_input_schemas.get("in")
+        if isinstance(expected_input_schemas.get("in"), dict)
+        else None
+    )
+    if isinstance(expected_input_envelope, dict):
+        typed = expected_input_envelope.get("typedSchema") if isinstance(expected_input_envelope.get("typedSchema"), dict) else {}
+        typed_type = str(typed.get("type") or "").strip().lower()
+        if typed_type == "string":
+            typed_type = "text"
+        if typed_type in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
+            return typed_type
     declared_input_typed = _node_typed_schema_type_from_node(
         node,
         channels=("expectedInputSchema",),
@@ -3673,7 +3690,7 @@ async def run_graph(
                         continue
                     upstream_art = await context.artifact_store.get(upstream_id)
                     upstream_pt = _infer_artifact_payload_type(upstream_art)
-                    expected_in = str(declared_in or "").strip()
+                    expected_in = str(_declared_in_port(kind, n, input_port=input_port) or declared_in or "").strip()
                     actual_ts = _artifact_typed_schema(upstream_art)
                     if expected_in and upstream_pt != expected_in:
                         if coercion_policy == "allow_lossy":
@@ -5550,14 +5567,18 @@ async def run_graph(
                             execution_time_ms=0.0
                         )
                 elif kind in {"llm", "model"}:
-                    llm_in_contract = str((_declared_in_port(kind, n) or "text"))
-
                     # Canonical upstream artifact list (preserve input-handle mapping order if present)
                     llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
 
-                    for upstream_id in llm_upstream_ids:
+                    llm_input_pairs = (
+                        [(str(port or "in"), aid) for port, aid in input_refs]
+                        if input_refs
+                        else [("in", aid) for aid in llm_upstream_ids]
+                    )
+                    for input_port_name, upstream_id in llm_input_pairs:
                         upstream_art = await context.artifact_store.get(upstream_id)
                         upstream_pt = _infer_artifact_payload_type(upstream_art)
+                        llm_in_contract = str((_declared_in_port(kind, n, input_port=input_port_name) or "text"))
 
                         if upstream_pt != llm_in_contract:
                             if strict_schema_edge_checks:
@@ -5565,8 +5586,8 @@ async def run_graph(
                                     "LLM input contract mismatch: upstream artifact payload type does not match expected input type",
                                     code="LLM_INPUT_PORT_MISMATCH",
                                     details=_contract_details(
-                                        expected={"inputType": llm_in_contract},
-                                        actual={"artifactId": upstream_id, "actualType": upstream_pt},
+                                        expected={"inputType": llm_in_contract, "inputPort": input_port_name},
+                                        actual={"artifactId": upstream_id, "actualType": upstream_pt, "inputPort": input_port_name},
                                     ),
                                 )
                             await _emit({
@@ -5575,7 +5596,7 @@ async def run_graph(
                                 "at": iso_now(),
                                 "level": "warn",
                                 "message": (
-                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
+                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:{input_port_name} "
                                     f"payload type {upstream_pt} coerced to {llm_in_contract} "
                                     "(STRICT_SCHEMA_EDGE_CHECKS=off)"
                                 ),
@@ -5592,33 +5613,42 @@ async def run_graph(
                     if tool_mode == "effectful" and not _tool_is_armed(params):
                         raise RuntimeError("Effectful tool requires armed=true")
                     tool_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
-                    tool_in_contract = _declared_in_port("tool", n)
-                    if tool_in_contract:
-                        for upstream_id in tool_upstream_ids:
-                            upstream_art = await context.artifact_store.get(upstream_id)
-                            upstream_pt = _infer_artifact_payload_type(upstream_art)
-                            if upstream_pt != tool_in_contract:
-                                if strict_schema_edge_checks:
-                                    raise ContractMismatchError(
-                                        "Tool input contract mismatch: upstream artifact payload type does not match expected input type",
-                                        code="TOOL_INPUT_PORT_MISMATCH",
-                                        details=_contract_details(
-                                            expected={"inputType": tool_in_contract},
-                                            actual={"artifactId": upstream_id, "actualType": upstream_pt},
-                                        ),
-                                    )
-                                await _emit({
-                                    "type": "log",
-                                    "runId": run_id,
-                                    "at": iso_now(),
-                                    "level": "warn",
-                                    "message": (
-                                        f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:in "
-                                        f"payload type {upstream_pt} coerced to {tool_in_contract} "
-                                        "(STRICT_SCHEMA_EDGE_CHECKS=off)"
+                    tool_input_pairs = (
+                        [(str(port or "in"), aid) for port, aid in input_refs]
+                        if input_refs
+                        else [("in", aid) for aid in tool_upstream_ids]
+                    )
+                    for input_port_name, upstream_id in tool_input_pairs:
+                        tool_in_contract = _declared_in_port("tool", n, input_port=input_port_name)
+                        if not tool_in_contract:
+                            continue
+                        if input_port_name.startswith("param") or input_port_name.startswith("control") or input_port_name.startswith("ctl"):
+                            # Non-work handles are validated separately by affinity/shape contracts.
+                            continue
+                        upstream_art = await context.artifact_store.get(upstream_id)
+                        upstream_pt = _infer_artifact_payload_type(upstream_art)
+                        if upstream_pt != tool_in_contract:
+                            if strict_schema_edge_checks:
+                                raise ContractMismatchError(
+                                    "Tool input contract mismatch: upstream artifact payload type does not match expected input type",
+                                    code="TOOL_INPUT_PORT_MISMATCH",
+                                    details=_contract_details(
+                                        expected={"inputType": tool_in_contract, "inputPort": input_port_name},
+                                        actual={"artifactId": upstream_id, "actualType": upstream_pt, "inputPort": input_port_name},
                                     ),
-                                    "nodeId": node_id,
-                                })
+                                )
+                            await _emit({
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[COERCION_APPLIED] edge {upstream_id}->{node_id}:{input_port_name} "
+                                    f"payload type {upstream_pt} coerced to {tool_in_contract} "
+                                    "(STRICT_SCHEMA_EDGE_CHECKS=off)"
+                                ),
+                                "nodeId": node_id,
+                            })
 
                     tool_params_runtime = dict(params)
                     tool_params_runtime["_request_fingerprint"] = exec_key
