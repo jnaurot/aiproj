@@ -1362,6 +1362,14 @@ async function scrollToBottom() {
 		}
 		if (reaches(conn.target, conn.source)) return false;
 
+		const preflight = graphStore.preflightConnection({
+			source: conn.source,
+			target: conn.target,
+			sourceHandle: conn.sourceHandle ?? null,
+			targetHandle: conn.targetHandle ?? null
+		});
+		if (!preflight.ok) return false;
+
 		return true;
 	}
 

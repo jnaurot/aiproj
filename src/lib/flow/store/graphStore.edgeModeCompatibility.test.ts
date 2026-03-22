@@ -70,4 +70,20 @@ describe('graphStore edge mode compatibility', () => {
 		const edge = get(graphStore).edges.find((item) => item.id === 'e_legacy_param');
 		expect(String((edge?.data as any)?.mode ?? '')).toBe('param');
 	});
+
+	it('blocks preflight when selected mode is incompatible with known port affinities', () => {
+		graphStore.hardResetGraph();
+		const src = graphStore.addNode('source', { x: 0, y: 0 });
+		const dst = graphStore.addNode('model', { x: 200, y: 0 });
+
+		const preflight = graphStore.preflightConnection({
+			source: src,
+			target: dst,
+			sourceHandle: 'out',
+			targetHandle: 'param_filters',
+			mode: 'work'
+		});
+		expect(preflight.ok).toBe(false);
+		expect(String((preflight as any).error ?? '')).toContain('incompatible');
+	});
 });

@@ -3480,6 +3480,32 @@ function nodePortAffinity(
 	return inferred;
 }
 
+function declaredPortHandles(
+	node: Node<PipelineNodeData>,
+	direction: 'in' | 'out'
+): string[] {
+	const data = (node.data ?? {}) as any;
+	const ports = data?.portContracts?.[direction];
+	if (!ports || typeof ports !== 'object') return [];
+	return Object.keys(ports as Record<string, unknown>)
+		.map((value) => String(value ?? '').trim())
+		.filter((value) => value.length > 0 && value !== 'default');
+}
+
+function hasPortHandle(
+	node: Node<PipelineNodeData>,
+	direction: 'in' | 'out',
+	handle: string
+): boolean {
+	const data = (node.data ?? {}) as any;
+	const ports = data?.portContracts?.[direction];
+	if (!ports || typeof ports !== 'object') return true;
+	const normalized = String(handle ?? '').trim();
+	const record = ports as Record<string, unknown>;
+	if (normalized.length === 0) return 'default' in record || 'in' in record || 'out' in record;
+	return normalized in record || 'default' in record;
+}
+
 function edgeModeCompatible(
 	mode: string,
 	sourceAffinity: 'work' | 'param' | 'control',
@@ -3528,6 +3554,9 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	const mode = normalizeEdgeMode(e);
 	const sourceHandle = String((e as any).sourceHandle ?? 'out');
 	const targetHandle = String((e as any).targetHandle ?? 'in');
+	if (!hasPortHandle(targetNode, 'in', targetHandle)) {
+		return { ok: false, reason: 'typed_schema_missing' };
+	}
 	const sourceAffinity = nodePortAffinity(sourceNode, 'out', sourceHandle);
 	const targetAffinity = nodePortAffinity(targetNode, 'in', targetHandle);
 	if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
@@ -3536,7 +3565,7 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	const sourcePayload = sourceNode
 		? sourcePayloadHint(sourceNode as any, 'out', sourceHandle)
 		: undefined;
-	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any) : undefined;
+	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any, targetHandle) : undefined;
 	if (!sourcePayload || !targetPayload) {
 		return { ok: false, reason: 'typed_schema_missing' };
 	}
@@ -4940,6 +4969,74 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return next;
 			});
 			return out;
+		},
+
+		preflightConnection(input: {
+			source: string;
+			target: string;
+			sourceHandle?: string | null;
+			targetHandle?: string | null;
+			mode?: 'work' | 'param' | 'control' | null;
+		}) {
+			const source = String(input?.source ?? '').trim();
+			const target = String(input?.target ?? '').trim();
+			if (!source || !target) {
+				return { ok: false as const, error: 'Missing source or target' };
+			}
+			if (source === target) {
+				return { ok: false as const, error: 'Cannot connect node to itself' };
+			}
+			const state = get({ subscribe } as any) as GraphState;
+			const sourceNode = state.nodes.find((node) => node.id === source);
+			const targetNode = state.nodes.find((node) => node.id === target);
+			if (!sourceNode || !targetNode) {
+				return { ok: false as const, error: 'Source or target node not found' };
+			}
+			const sourceHandle = String(input?.sourceHandle ?? 'out').trim() || 'out';
+			const targetHandleRaw = String(input?.targetHandle ?? '').trim();
+			const modeRaw = String(input?.mode ?? '').trim().toLowerCase();
+			const inferredMode = inferEdgeModeFromHandles({
+				sourceHandle,
+				targetHandle: targetHandleRaw || undefined
+			} as any);
+			const mode =
+				modeRaw === 'work' || modeRaw === 'param' || modeRaw === 'control'
+					? (modeRaw as 'work' | 'param' | 'control')
+					: inferredMode;
+			const sourceAffinity = nodePortAffinity(sourceNode, 'out', sourceHandle);
+
+			if (!targetHandleRaw) {
+				const declared = declaredPortHandles(targetNode, 'in');
+				const candidateHandles = declared.length > 0 ? [...declared] : ['in'];
+				if (hasPortHandle(targetNode, 'in', 'in') && !candidateHandles.includes('in')) {
+					candidateHandles.unshift('in');
+				}
+				const compatible = candidateHandles.some((candidate) =>
+					edgeModeCompatible(mode, sourceAffinity, nodePortAffinity(targetNode, 'in', candidate))
+				);
+				if (!compatible) {
+					return {
+						ok: false as const,
+						error: 'No compatible target input handle for this edge mode'
+					};
+				}
+				return { ok: true as const, deferred: true as const };
+			}
+
+			if (!hasPortHandle(targetNode, 'in', targetHandleRaw)) {
+				return {
+					ok: false as const,
+					error: `Target handle '${targetHandleRaw}' is not declared for this node`
+				};
+			}
+			const targetAffinity = nodePortAffinity(targetNode, 'in', targetHandleRaw);
+			if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
+				return {
+					ok: false as const,
+					error: 'Edge mode is incompatible with source/target port affinities'
+				};
+			}
+			return { ok: true as const, deferred: false as const };
 		},
 
 		addEdge(edge: Edge<PipelineEdgeData>) {
