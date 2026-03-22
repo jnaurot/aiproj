@@ -382,8 +382,20 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 			node.data?.schema && typeof node.data.schema === 'object'
 				? (node.data.schema as Record<string, unknown>)
 				: {};
+		const migratedSchema = { ...existingSchema } as Record<string, unknown>;
+		const legacyExpectedInputSchema =
+			migratedSchema.expectedInputSchema && typeof migratedSchema.expectedInputSchema === 'object'
+				? (migratedSchema.expectedInputSchema as Record<string, unknown>)
+				: null;
+		const splitExpectedInputSchemas =
+			migratedSchema.expectedInputSchemas && typeof migratedSchema.expectedInputSchemas === 'object'
+				? (migratedSchema.expectedInputSchemas as Record<string, unknown>)
+				: null;
+		if (legacyExpectedInputSchema && !splitExpectedInputSchemas) {
+			migratedSchema.expectedInputSchemas = { in: legacyExpectedInputSchema };
+		}
 		const nextSchemaRaw = {
-			...existingSchema,
+			...migratedSchema,
 			...(inferredSchema ? { inferredSchema } : {})
 		};
 		const parsedSchema = NodeSchemaEnvelopeSchema.safeParse(nextSchemaRaw);

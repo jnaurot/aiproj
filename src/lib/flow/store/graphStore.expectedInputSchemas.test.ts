@@ -37,4 +37,38 @@ describe('graphStore expected input schemas by handle', () => {
 		expect((nodeAfterClear?.data as any)?.schema?.expectedInputSchemas?.param_config).toBeUndefined();
 		expect((nodeAfterClear?.data as any)?.schema?.expectedInputSchemas?.in?.typedSchema?.type).toBe('json');
 	});
+
+	it('migrates legacy expectedInputSchema into expectedInputSchemas.in on graph load', () => {
+		graphStore.hardResetGraph();
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'n_model_migrate',
+						type: 'model',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'model',
+							label: 'Model',
+							params: {},
+							status: 'idle',
+							schema: {
+								expectedInputSchema: {
+									typedSchema: { type: 'json', fields: [] },
+									source: 'declared',
+									state: 'fresh'
+								}
+							}
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_expected_input_migrate'
+		);
+		expect(loaded.ok).toBe(true);
+		const node = get(graphStore).nodes.find((item) => item.id === 'n_model_migrate');
+		expect((node?.data as any)?.schema?.expectedInputSchema?.typedSchema?.type).toBe('json');
+		expect((node?.data as any)?.schema?.expectedInputSchemas?.in?.typedSchema?.type).toBe('json');
+	});
 });

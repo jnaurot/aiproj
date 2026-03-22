@@ -58,6 +58,26 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 			}
 		)
 		return
+	expected_input_schema = (
+		canonical_schema.get("expectedInputSchema")
+		if isinstance(canonical_schema.get("expectedInputSchema"), dict)
+		else None
+	)
+	expected_input_schemas = (
+		canonical_schema.get("expectedInputSchemas")
+		if isinstance(canonical_schema.get("expectedInputSchemas"), dict)
+		else None
+	)
+	if expected_input_schema is not None and expected_input_schemas is None:
+		canonical_schema["expectedInputSchemas"] = {"in": copy.deepcopy(expected_input_schema)}
+		changed = True
+		notes.append(
+			{
+				"code": "NODE_SCHEMA_EXPECTED_INPUTS_MIGRATED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Migrated schema.expectedInputSchema to schema.expectedInputSchemas.in",
+			}
+		)
 	data["schema"] = canonical_schema
 	if changed:
 		notes.append(

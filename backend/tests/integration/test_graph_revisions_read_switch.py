@@ -309,3 +309,45 @@ def test_graph_export_import_reports_environment_profile_dependencies(monkeypatc
 		assert any(d.get("profileId") == "core" for d in (report.get("environmentProfiles") or []))
 		assert any(d.get("profileId") == "core" for d in (report.get("missingEnvironmentProfiles") or []))
 		assert any("environment profiles are not installed" in str(w).lower() for w in (report.get("warnings") or []))
+
+
+def test_graph_read_migrates_legacy_expected_input_schema():
+	graph_id = "graph_expected_input_schema_migration"
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "n_model",
+				"type": "model",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "model",
+					"label": "Model",
+					"params": {},
+					"status": "idle",
+					"schema": {
+						"expectedInputSchema": {
+							"typedSchema": {"type": "json", "fields": []},
+							"source": "declared",
+							"state": "fresh",
+						}
+					},
+				},
+			}
+		],
+		"edges": [],
+	}
+	with TestClient(app) as client:
+		created = client.post(
+			"/graphs",
+			json={"graphId": graph_id, "message": "seed expected input schema", "graph": graph},
+		)
+		assert created.status_code == 200, created.text
+		latest = client.get(f"/graphs/{graph_id}/latest")
+		assert latest.status_code == 200, latest.text
+		payload = latest.json()
+		nodes = ((payload.get("graph") or {}).get("nodes") or [])
+		assert len(nodes) == 1
+		schema = (((nodes[0].get("data") or {}).get("schema") or {}))
+		assert ((schema.get("expectedInputSchema") or {}).get("typedSchema") or {}).get("type") == "json"
+		assert ((schema.get("expectedInputSchemas") or {}).get("in") or {}).get("typedSchema", {}).get("type") == "json"
