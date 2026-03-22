@@ -1,26 +1,47 @@
 {
   "schemaVersion": 1,
+  "edgeModes": ["work", "param", "control"],
   "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings", "image", "audio", "video"],
   "nodes": {
     "model": {
       "in": ["text", "json", "table", "image", "audio", "video"],
-      "out": ["text", "json", "embeddings", "image", "audio", "video"]
+      "out": ["text", "json", "embeddings", "image", "audio", "video"],
+      "ports": {
+        "in": { "default": { "affinity": "work", "behavior": "single_item" } },
+        "out": { "default": { "affinity": "work" } }
+      }
     },
     "llm": {
       "in": ["text", "json", "table"],
-      "out": ["text", "json", "embeddings"]
+      "out": ["text", "json", "embeddings"],
+      "ports": {
+        "in": { "default": { "affinity": "work", "behavior": "single_item" } },
+        "out": { "default": { "affinity": "work" } }
+      }
     },
     "transform": {
       "in": ["table", "json", "text"],
-      "out": ["table", "json"]
+      "out": ["table", "json"],
+      "ports": {
+        "in": { "default": { "affinity": "work", "behavior": "single_item" } },
+        "out": { "default": { "affinity": "work" } }
+      }
     },
     "source": {
       "in": [],
-      "out": ["table", "json", "text", "binary"]
+      "out": ["table", "json", "text", "binary"],
+      "ports": {
+        "in": {},
+        "out": { "default": { "affinity": "work" } }
+      }
     },
     "tool": {
       "in": ["table", "json", "text", "binary", "embeddings"],
       "out": ["text", "json", "binary"],
+      "ports": {
+        "in": { "default": { "affinity": "work", "behavior": "single_item" } },
+        "out": { "default": { "affinity": "work" } }
+      },
       "byProvider": {
         "mcp": {
           "in": ["table", "json", "text", "binary", "embeddings"],
@@ -58,7 +79,11 @@
     },
     "component": {
       "in": ["table", "json", "text", "binary", "embeddings"],
-      "out": ["table", "json", "text", "binary", "embeddings"]
+      "out": ["table", "json", "text", "binary", "embeddings"],
+      "ports": {
+        "in": { "default": { "affinity": "work", "behavior": "single_item" } },
+        "out": { "default": { "affinity": "work" } }
+      }
     }
   }
 }

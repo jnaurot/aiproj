@@ -312,10 +312,56 @@
 	let expectedInputSchemaDraft = '';
 	let expectedInputSchemaError = '';
 	let expectedInputSchemaNodeId = '';
+	let edgeConfigErrors: Record<string, string> = {};
 	let expectedSchemaDraft = '';
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
 	let headerSchemaLoading = false;
+
+	type EdgeRuntimeConfig = {
+		mode: 'work' | 'param' | 'control';
+		fatal: boolean;
+		queue: {
+			max: number;
+			overflow: 'block' | 'spill' | 'error';
+		};
+	};
+
+	function readEdgeRuntimeConfig(edgeId: string): EdgeRuntimeConfig {
+		const edge = ($graphStore?.edges ?? []).find((candidate) => String(candidate.id ?? '') === edgeId);
+		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
+		const overflow = String((edge?.data as any)?.queue?.overflow ?? 'block').trim().toLowerCase();
+		return {
+			mode: (mode === 'param' || mode === 'control' ? mode : 'work') as 'work' | 'param' | 'control',
+			fatal: Boolean((edge?.data as any)?.fatal ?? false),
+			queue: {
+				max: Math.max(1, Number((edge?.data as any)?.queue?.max ?? 1000)),
+				overflow: (
+					overflow === 'spill' || overflow === 'error' ? overflow : 'block'
+				) as 'block' | 'spill' | 'error'
+			}
+		};
+	}
+
+	function patchEdgeRuntimeConfig(
+		edgeId: string,
+		patch: {
+			mode?: 'work' | 'param' | 'control';
+			fatal?: boolean;
+			queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+		}
+	): void {
+		const result = graphStore.updateEdgeConfig(edgeId, patch);
+		if ((result as any)?.ok) {
+			const { [edgeId]: _drop, ...rest } = edgeConfigErrors;
+			edgeConfigErrors = rest;
+			return;
+		}
+		edgeConfigErrors = {
+			...edgeConfigErrors,
+			[edgeId]: String((result as any)?.error ?? 'Failed to update edge config')
+		};
+	}
 
 	function normalizeExpectedSchemaDraft(node: any): string {
 		const typed =
@@ -1227,11 +1273,82 @@
 				<div class="schemaEmpty">No connected edges.</div>
 			{:else}
 				{#each schemaContract.edges as edge (edge.edgeId)}
+					{@const edgeRuntimeConfig = readEdgeRuntimeConfig(edge.edgeId)}
 					<div class={`schemaEdge schemaEdge-${edge.severity}`}>
 						<div class="schemaEdgeHead">
 							<span>{edge.direction === 'incoming' ? 'in' : 'out'}: {edge.edgeId}</span>
 							<span>{edge.severity}</span>
 						</div>
+						<div class="schemaEdgeConfig">
+							<label>
+								<span>mode</span>
+								<select
+									value={edgeRuntimeConfig.mode}
+									on:change={(event) =>
+										patchEdgeRuntimeConfig(edge.edgeId, {
+											mode: (event.currentTarget as HTMLSelectElement).value as
+												| 'work'
+												| 'param'
+												| 'control'
+										})}
+								>
+									<option value="work">work</option>
+									<option value="param">param</option>
+									<option value="control">control</option>
+								</select>
+							</label>
+							<label>
+								<span>queue.max</span>
+								<input
+									type="number"
+									min="1"
+									step="1"
+									value={String(edgeRuntimeConfig.queue.max)}
+									on:change={(event) =>
+										patchEdgeRuntimeConfig(edge.edgeId, {
+											queue: {
+												max: Math.max(
+													1,
+													Math.trunc(Number((event.currentTarget as HTMLInputElement).value || '1'))
+												)
+											}
+										})}
+								/>
+							</label>
+							<label>
+								<span>overflow</span>
+								<select
+									value={edgeRuntimeConfig.queue.overflow}
+									on:change={(event) =>
+										patchEdgeRuntimeConfig(edge.edgeId, {
+											queue: {
+												overflow: (event.currentTarget as HTMLSelectElement).value as
+													| 'block'
+													| 'spill'
+													| 'error'
+											}
+										})}
+								>
+									<option value="block">block</option>
+									<option value="spill">spill</option>
+									<option value="error">error</option>
+								</select>
+							</label>
+							<label class="schemaEdgeFatal">
+								<input
+									type="checkbox"
+									checked={edgeRuntimeConfig.fatal}
+									on:change={(event) =>
+										patchEdgeRuntimeConfig(edge.edgeId, {
+											fatal: (event.currentTarget as HTMLInputElement).checked
+										})}
+								/>
+								<span>fatal</span>
+							</label>
+						</div>
+						{#if edgeConfigErrors[edge.edgeId]}
+							<div class="expectedSchemaError">{edgeConfigErrors[edge.edgeId]}</div>
+						{/if}
 						<div class="schemaRow">
 							<span class="schemaLabel">provided</span>
 							<span>{schemaTypeLabel(edge.providedSchema)} [{schemaFieldSummary(edge.providedSchema, 'fields')}]</span>
@@ -1553,6 +1670,29 @@
 		justify-content: space-between;
 		font-size: 11px;
 		font-weight: 600;
+	}
+
+	.schemaEdgeConfig {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 6px;
+	}
+
+	.schemaEdgeConfig label {
+		display: grid;
+		gap: 4px;
+		font-size: 11px;
+	}
+
+	.schemaEdgeConfig select,
+	.schemaEdgeConfig input[type='number'] {
+		width: 100%;
+	}
+
+	.schemaEdgeFatal {
+		display: inline-flex !important;
+		align-items: center;
+		gap: 6px;
 	}
 
 	.schemaRow {

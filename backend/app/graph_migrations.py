@@ -254,6 +254,30 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		tgt_node = node_map.get(tgt_id)
 		src_kind = str((_node_data(src_node).get("kind") if src_node else "") or "").strip().lower()
 		edge_data = next_edge.get("data") if isinstance(next_edge.get("data"), dict) else {}
+		normalized_mode = str(edge_data.get("mode") or "work").strip().lower() or "work"
+		if normalized_mode not in {"work", "param", "control"}:
+			normalized_mode = "work"
+			notes.append(
+				{
+					"code": "EDGE_MODE_DEFAULTED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": "Edge mode defaulted to work",
+				}
+			)
+		edge_data["mode"] = normalized_mode
+		edge_data["fatal"] = bool(edge_data.get("fatal", False))
+		queue_cfg = edge_data.get("queue") if isinstance(edge_data.get("queue"), dict) else {}
+		queue_overflow = str(queue_cfg.get("overflow") or "block").strip().lower() or "block"
+		if queue_overflow not in {"block", "spill", "error"}:
+			queue_overflow = "block"
+		try:
+			queue_max = int(queue_cfg.get("max", 1000))
+		except Exception:
+			queue_max = 1000
+		queue_cfg["overflow"] = queue_overflow
+		queue_cfg["max"] = max(1, queue_max)
+		edge_data["queue"] = queue_cfg
+		next_edge["data"] = edge_data
 
 		source_handle = str(next_edge.get("sourceHandle") or "out").strip() or "out"
 		if src_kind == "component" and src_node is not None:

@@ -280,14 +280,27 @@ function deriveSourceOutPort(data: PipelineNodeData): PayloadType {
 		) {
 			return 'table';
 		}
-		if (fileFormat === 'jpg' || fileFormat === 'jpeg' || fileFormat === 'png' || fileFormat === 'webp' || fileFormat === 'gif' || fileFormat === 'svg' || fileFormat === 'tif' || fileFormat === 'tiff') {
-			return 'image';
-		}
-		if (fileFormat === 'mp3' || fileFormat === 'wav' || fileFormat === 'flac' || fileFormat === 'ogg' || fileFormat === 'm4a' || fileFormat === 'aac') {
-			return 'audio';
-		}
-		if (fileFormat === 'mp4' || fileFormat === 'mov' || fileFormat === 'webm') {
-			return 'video';
+		if (
+			fileFormat === 'jpg' ||
+			fileFormat === 'jpeg' ||
+			fileFormat === 'png' ||
+			fileFormat === 'webp' ||
+			fileFormat === 'gif' ||
+			fileFormat === 'svg' ||
+			fileFormat === 'tif' ||
+			fileFormat === 'tiff' ||
+			fileFormat === 'mp3' ||
+			fileFormat === 'wav' ||
+			fileFormat === 'flac' ||
+			fileFormat === 'ogg' ||
+			fileFormat === 'm4a' ||
+			fileFormat === 'aac' ||
+			fileFormat === 'mp4' ||
+			fileFormat === 'mov' ||
+			fileFormat === 'webm'
+		) {
+			// Source contract parity remains binary for media payloads.
+			return 'binary';
 		}
 		return 'binary';
 	}
@@ -3322,7 +3335,8 @@ export function __computeEdgeSchemaDiagnosticsForTest(
 type EdgeInvalidReason =
 	| 'type_mismatch'
 	| 'schema_mismatch'
-	| 'typed_schema_missing';
+	| 'typed_schema_missing'
+	| 'mode_mismatch';
 type EdgeCheck =
 	| { ok: true; out?: PayloadType; in?: PayloadType }
 	| {
@@ -3338,14 +3352,66 @@ function normalizeHintPayloadType(raw: unknown): PayloadType | undefined {
 	return isPayloadType(t) ? t : undefined;
 }
 
+function inferPortAffinityFromHandle(handle: unknown, direction: 'in' | 'out'): 'work' | 'param' | 'control' {
+	const raw = String(handle ?? (direction === 'in' ? 'in' : 'out'))
+		.trim()
+		.toLowerCase();
+	if (raw.startsWith('param')) return 'param';
+	if (raw.startsWith('control') || raw.startsWith('ctl')) return 'control';
+	return 'work';
+}
+
+function nodePortAffinity(
+	node: Node<PipelineNodeData>,
+	direction: 'in' | 'out',
+	handle: unknown
+): 'work' | 'param' | 'control' {
+	const inferred = inferPortAffinityFromHandle(handle, direction);
+	if (inferred !== 'work') return inferred;
+	const data = (node.data ?? {}) as any;
+	const ports = data?.portContracts?.[direction];
+	const key = String(handle ?? 'default').trim() || 'default';
+	const exact = ports && typeof ports === 'object' ? ports[key] : undefined;
+	const fallback = ports && typeof ports === 'object' ? ports.default : undefined;
+	const affinity = String((exact ?? fallback ?? {}).affinity ?? '')
+		.trim()
+		.toLowerCase();
+	if (affinity === 'work' || affinity === 'param' || affinity === 'control') {
+		return affinity;
+	}
+	return inferred;
+}
+
+function edgeModeCompatible(
+	mode: string,
+	sourceAffinity: 'work' | 'param' | 'control',
+	targetAffinity: 'work' | 'param' | 'control'
+): boolean {
+	const m = String(mode || 'work')
+		.trim()
+		.toLowerCase();
+	if (m === 'work') return sourceAffinity === 'work' && targetAffinity === 'work';
+	if (m === 'param') return (sourceAffinity === 'work' || sourceAffinity === 'param') && targetAffinity === 'param';
+	if (m === 'control') return sourceAffinity === 'control' && targetAffinity === 'control';
+	return false;
+}
+
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
 	if (!sourceNode || !targetNode) {
 		return { ok: false, reason: 'typed_schema_missing' };
 	}
+	const mode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
+	const sourceHandle = String((e as any).sourceHandle ?? 'out');
+	const targetHandle = String((e as any).targetHandle ?? 'in');
+	const sourceAffinity = nodePortAffinity(sourceNode, 'out', sourceHandle);
+	const targetAffinity = nodePortAffinity(targetNode, 'in', targetHandle);
+	if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
+		return { ok: false, reason: 'mode_mismatch' };
+	}
 	const sourcePayload = sourceNode
-		? sourcePayloadHint(sourceNode as any, 'out', String((e as any).sourceHandle ?? 'out'))
+		? sourcePayloadHint(sourceNode as any, 'out', sourceHandle)
 		: undefined;
 	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any) : undefined;
 	if (!sourcePayload || !targetPayload) {
@@ -3443,6 +3509,7 @@ function pruneAndRecontractEdgesStrict(
 			data: {
 				...(e.data ?? {}),
 				exec: e.data?.exec ?? 'idle',
+				mode: String((e.data as any)?.mode ?? 'work').trim().toLowerCase() as any,
 				contract: {
 					out: chk.out,
 					in: chk.in,
@@ -4625,6 +4692,61 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			});
 		},
 
+		updateEdgeConfig(
+			edgeId: string,
+			patch: {
+				mode?: 'work' | 'param' | 'control';
+				fatal?: boolean;
+				queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+			}
+		) {
+			let out: { ok: boolean; error?: string } = { ok: true };
+			update((s) => {
+				const idx = s.edges.findIndex((e) => e.id === edgeId);
+				if (idx < 0) {
+					out = { ok: false, error: 'Edge not found' };
+					return s;
+				}
+				const edge = s.edges[idx];
+				const nextMode = String(patch.mode ?? (edge.data as any)?.mode ?? 'work').trim().toLowerCase();
+				if (!['work', 'param', 'control'].includes(nextMode)) {
+					out = { ok: false, error: 'Invalid edge mode' };
+					return s;
+				}
+				const nextQueue = {
+					max: Math.max(1, Number(patch.queue?.max ?? (edge.data as any)?.queue?.max ?? 1000)),
+					overflow: String(
+						patch.queue?.overflow ?? (edge.data as any)?.queue?.overflow ?? 'block'
+					).toLowerCase() as 'block' | 'spill' | 'error'
+				};
+				if (!['block', 'spill', 'error'].includes(nextQueue.overflow)) {
+					out = { ok: false, error: 'Invalid queue overflow policy' };
+					return s;
+				}
+				const nextEdge: Edge<PipelineEdgeData> = {
+					...edge,
+					data: {
+						...(edge.data ?? { exec: 'idle' as const }),
+						exec: edge.data?.exec ?? 'idle',
+						mode: nextMode as any,
+						fatal: Boolean(patch.fatal ?? (edge.data as any)?.fatal ?? false),
+						queue: nextQueue
+					}
+				};
+				const chk = isEdgeStillValid(s.nodes, nextEdge);
+				if (!chk.ok) {
+					out = { ok: false, error: `Edge incompatible after config update (${chk.reason})` };
+					return s;
+				}
+				const edges = [...s.edges];
+				edges[idx] = nextEdge;
+				const next = logPush({ ...s, edges }, 'info', `Updated edge ${edgeId} config`);
+				persist(next);
+				return next;
+			});
+			return out;
+		},
+
 		addEdge(edge: Edge<PipelineEdgeData>) {
 			let out: {
 				ok: boolean;
@@ -4707,7 +4829,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						suggestion: chk.suggestion,
 						adapterKind: chk.adapterKind,
 						error:
-							chk.reason === 'type_mismatch'
+							chk.reason === 'mode_mismatch'
+								? 'Edge mode is incompatible with source/target port affinities'
+							: chk.reason === 'type_mismatch'
 								? `Incompatible schemas${chk.suggestion ? `. ${chk.suggestion}` : ''}`
 								: chk.reason === 'typed_schema_missing'
 									? `Missing required typed schema coverage: ${(chk.missingColumns ?? []).join(', ') || '(unknown)'}`
@@ -4745,6 +4869,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					data: {
 						...(edge.data ?? {}),
 						exec: edge.data?.exec ?? 'idle',
+						mode: String((edge.data as any)?.mode ?? 'work').trim().toLowerCase() as any,
 						contract: {
 							out: chk.out,
 							in: chk.in,
@@ -4828,7 +4953,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				target: adapterNodeId,
 				sourceHandle,
 				targetHandle: 'in',
-				data: { exec: 'idle' }
+				data: { exec: 'idle', mode: 'work' as any }
 			} as Edge<PipelineEdgeData>);
 			if (!incomingRes.ok) {
 				this.deleteNode(adapterNodeId);
@@ -4844,7 +4969,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				target,
 				sourceHandle: 'out',
 				targetHandle,
-				data: { exec: 'idle' }
+				data: { exec: 'idle', mode: 'work' as any }
 			} as Edge<PipelineEdgeData>);
 			if (!outgoingRes.ok) {
 				if (incomingRes.id) this.deleteEdge(incomingRes.id);

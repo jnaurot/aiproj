@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 import json
 from .schemas import validate_node_params  # Import schema validation
+from .capabilities import allowed_edge_modes, port_contract
 from .schema_diagnostics import (
     SCHEMA_DIAGNOSTIC_CODES,
     TYPE_MISMATCH,
@@ -328,6 +329,53 @@ class GraphValidator:
         return [
             f"Insert an adapter node to convert '{src}' -> '{tgt}' before this target.",
         ]
+
+    @staticmethod
+    def _infer_affinity_from_handle(handle: Any, *, direction: str) -> str:
+        raw = str(handle or ("in" if direction == "in" else "out")).strip().lower()
+        if raw.startswith("param"):
+            return "param"
+        if raw.startswith("ctl") or raw.startswith("control"):
+            return "control"
+        return "work"
+
+    def _port_affinity(
+        self,
+        node: Dict[str, Any],
+        *,
+        direction: str,
+        handle: Any,
+    ) -> str:
+        inferred = self._infer_affinity_from_handle(handle, direction=direction)
+        if inferred != "work":
+            return inferred
+        data = (node.get("data") or {}) if isinstance(node, dict) else {}
+        kind = str(data.get("kind") or "").strip().lower()
+        cfg = port_contract(kind, direction, str(handle or "").strip() or "default")
+        affinity = str((cfg or {}).get("affinity") or "").strip().lower()
+        if affinity in {"work", "param", "control", "any"}:
+            return affinity
+        return inferred
+
+    @staticmethod
+    def _edge_mode(edge: Dict[str, Any]) -> str:
+        data = edge.get("data", {}) if isinstance(edge.get("data"), dict) else {}
+        raw = data.get("mode")
+        mode = str(raw or "work").strip().lower()
+        return mode or "work"
+
+    @staticmethod
+    def _mode_affinity_compatible(mode: str, src_affinity: str, dst_affinity: str) -> bool:
+        m = str(mode or "work").strip().lower()
+        src = str(src_affinity or "work").strip().lower()
+        dst = str(dst_affinity or "work").strip().lower()
+        if m == "work":
+            return src in {"work", "any"} and dst in {"work", "any"}
+        if m == "param":
+            return src in {"work", "param", "any"} and dst in {"param", "any"}
+        if m == "control":
+            return src in {"control", "any"} and dst in {"control", "any"}
+        return False
     
     def _validate_node_params_schema(self, graph: Dict[str, Any]) -> List[ValidationError]:
         """Validate using Pydantic schemas"""
@@ -489,6 +537,38 @@ class GraphValidator:
             # Get payload types
             source_handle = edge.get("sourceHandle", "out")
             target_handle = edge.get("targetHandle", "in")
+            edge_mode = self._edge_mode(edge)
+            valid_modes = allowed_edge_modes()
+            if edge_mode not in valid_modes:
+                errors.append(
+                    ValidationError(
+                        code="EDGE_MODE_INVALID",
+                        message=f"Edge mode '{edge_mode}' is invalid. Allowed: {sorted(valid_modes)}",
+                        edge_id=edge_id,
+                    )
+                )
+                continue
+            src_affinity = self._port_affinity(source_node, direction="out", handle=source_handle)
+            dst_affinity = self._port_affinity(target_node, direction="in", handle=target_handle)
+            if not self._mode_affinity_compatible(edge_mode, src_affinity, dst_affinity):
+                errors.append(
+                    ValidationError(
+                        code="EDGE_MODE_INCOMPATIBLE",
+                        message=(
+                            f"Edge mode '{edge_mode}' is incompatible with source affinity '{src_affinity}' "
+                            f"and target affinity '{dst_affinity}'"
+                        ),
+                        edge_id=edge_id,
+                        details={
+                            "edgeMode": edge_mode,
+                            "sourceAffinity": src_affinity,
+                            "targetAffinity": dst_affinity,
+                            "sourceHandle": source_handle,
+                            "targetHandle": target_handle,
+                        },
+                    )
+                )
+                continue
 
             # Optional payload schema compatibility (forward path)
             contract = (edge.get("data", {}) or {}).get("contract", {}) or {}

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Set
 
 _DEFAULT_CAPABILITIES: Dict[str, Any] = {
     "schemaVersion": 1,
+    "edgeModes": ["work", "param", "control"],
     "allowedPayloadTypes": ["table", "json", "text", "binary", "embeddings", "image", "audio", "video"],
     "nodes": {
         "model": {
@@ -88,6 +89,29 @@ def capabilities_response() -> Dict[str, Any]:
     caps = load_schema_capabilities()
     # Return parsed JSON as-is for FE parity checks.
     return caps
+
+
+def allowed_edge_modes() -> Set[str]:
+    caps = load_schema_capabilities()
+    values = caps.get("edgeModes")
+    if not isinstance(values, list):
+        return {"work", "param", "control"}
+    return {str(v).strip().lower() for v in values if str(v).strip()}
+
+
+def port_contract(kind: str, direction: str, handle: str | None = None) -> Dict[str, Any]:
+    node = _node_caps(kind)
+    ports = node.get("ports") if isinstance(node.get("ports"), dict) else {}
+    by_dir = ports.get(direction) if isinstance(ports, dict) and isinstance(ports.get(direction), dict) else {}
+    h = str(handle or "default").strip() or "default"
+    entry = by_dir.get(h)
+    if not isinstance(entry, dict):
+        entry = by_dir.get("default") if isinstance(by_dir.get("default"), dict) else {}
+    out = dict(entry) if isinstance(entry, dict) else {}
+    out.setdefault("affinity", "work")
+    if direction == "in":
+        out.setdefault("behavior", "single_item")
+    return out
 
 
 def capability_signature() -> str:

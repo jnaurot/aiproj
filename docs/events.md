@@ -53,15 +53,36 @@ Required fields:
 - `run_finished`
 - `run_cancel_requested`
 - `run_cancelled`
-- `level_started`
-- `level_finished`
 - `scheduler_cancelled`
 - `node_started`
 - `node_output`
 - `node_finished`
 - `node_cancelled`
 - `edge_exec`
+- `control_signal`
+- `queue_metrics`
 - `log`
+
+### `control_signal`
+
+Runtime control-state transitions.
+
+Fields:
+
+- `signal` (`ready | busy | drain | pause | blocked | resume`)
+- optional `nodeId`
+
+### `queue_metrics`
+
+Per-run queue observability snapshot.
+
+Fields:
+
+- `metrics.globalDepth`
+- `metrics.globalMax`
+- `metrics.perEdgeMax`
+- `metrics.edges` (per-edge queue depth/rates/age/full/blocked)
+- `nodeMetrics` (per-node input wait, run time, retry count, backpressure status)
 
 ## Ordering Invariants
 

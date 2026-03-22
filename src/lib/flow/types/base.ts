@@ -26,6 +26,7 @@ export type EdgeExecState =
   | "idle"
   | "active"
   | "done";
+export type EdgeMode = "work" | "param" | "control";
 
 export type NodeMeta = {
   createdAt?: string;     // ISO
@@ -61,6 +62,12 @@ export type BaseNodeData<K extends NodeKind, P> = {
 /** ✅ This is what lives inside edge.data */
 export interface PipelineEdgeData extends Record<string, any> {
   exec: EdgeExecState; // make required to simplify runtime state
+  mode?: EdgeMode;
+  fatal?: boolean;
+  queue?: {
+    max?: number;
+    overflow?: "block" | "spill" | "error";
+  };
   contract?: {
     in?: PayloadType;
     out?: PayloadType;

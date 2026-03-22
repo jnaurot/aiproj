@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import inspect
 import json
@@ -26,6 +27,7 @@ from .validator import GraphValidator
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
+from .queues import QueueLimits, QueueRegistry
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .contracts import (
     TABLE_V1,
@@ -365,6 +367,72 @@ def _tool_side_effect_mode(params: Dict[str, Any]) -> str:
     if mode not in ("pure", "idempotent", "effectful"):
         return "pure"
     return mode
+
+
+def _node_runtime_param_mode(node: Dict[str, Any]) -> str:
+    data = (node.get("data") or {}) if isinstance(node, dict) else {}
+    params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
+    candidates = [
+        data.get("runtimeParamMode"),
+        params.get("runtime_param_mode"),
+        params.get("runtimeParamMode"),
+    ]
+    for value in candidates:
+        mode = str(value or "").strip().lower()
+        if mode in {"read_once", "dynamic"}:
+            return mode
+    return "read_once"
+
+
+def _is_node_or_edge_fatal(
+    *,
+    node: Dict[str, Any],
+    incoming_edge_ids: List[str],
+    edges: Dict[str, Dict[str, Any]],
+) -> bool:
+    data = (node.get("data") or {}) if isinstance(node, dict) else {}
+    params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
+    if bool(data.get("fatal")) or bool(params.get("fatal")):
+        return True
+    for edge_id in incoming_edge_ids:
+        edge = edges.get(edge_id) or {}
+        edge_data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+        if bool(edge_data.get("fatal")):
+            return True
+    return False
+
+
+def _resolve_retry_policy(
+    *,
+    graph: Dict[str, Any],
+    node: Dict[str, Any],
+    op_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    defaults = {"max_attempts": 1, "backoff_seconds": 0.0, "jitter_seconds": 0.0}
+    graph_retry = graph.get("retry") if isinstance(graph.get("retry"), dict) else {}
+    node_params = ((node.get("data") or {}).get("params") or {}) if isinstance(((node.get("data") or {}).get("params")), dict) else {}
+    node_retry = node_params.get("retry") if isinstance(node_params.get("retry"), dict) else {}
+    op_retry: Dict[str, Any] = {}
+    if op_name:
+        op_payload = node_params.get(op_name) if isinstance(node_params.get(op_name), dict) else {}
+        op_retry = op_payload.get("retry") if isinstance(op_payload.get("retry"), dict) else {}
+    merged: Dict[str, Any] = {}
+    for src in (defaults, graph_retry, node_retry, op_retry):
+        for key, value in src.items():
+            merged[str(key)] = value
+    try:
+        merged["max_attempts"] = max(1, int(merged.get("max_attempts", 1)))
+    except Exception:
+        merged["max_attempts"] = 1
+    try:
+        merged["backoff_seconds"] = max(0.0, float(merged.get("backoff_seconds", 0.0)))
+    except Exception:
+        merged["backoff_seconds"] = 0.0
+    try:
+        merged["jitter_seconds"] = max(0.0, float(merged.get("jitter_seconds", 0.0)))
+    except Exception:
+        merged["jitter_seconds"] = 0.0
+    return merged
 
 
 def _normalized_params_for_exec_key(
@@ -2488,37 +2556,6 @@ def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, An
     return env
 
 
-def _plan_levels(plan, edges: Dict[str, Dict[str, Any]]) -> list[list[str]]:
-    sub = set(plan.subgraph)
-    indeg: Dict[str, int] = {nid: 0 for nid in sub}
-    adj: Dict[str, list[str]] = {nid: [] for nid in sub}
-    for e in edges.values():
-        s = e.get("source")
-        t = e.get("target")
-        if s in sub and t in sub:
-            adj[s].append(t)
-            indeg[t] += 1
-
-    order_index = {nid: i for i, nid in enumerate(plan.order)}
-    ready = sorted([nid for nid, d in indeg.items() if d == 0], key=lambda n: order_index.get(n, 10**9))
-    levels: list[list[str]] = []
-    seen = 0
-    while ready:
-        level = list(ready)
-        levels.append(level)
-        seen += len(level)
-        nxt: list[str] = []
-        for cur in level:
-            for nb in adj.get(cur, []):
-                indeg[nb] -= 1
-                if indeg[nb] == 0:
-                    nxt.append(nb)
-        ready = sorted(nxt, key=lambda n: order_index.get(n, 10**9))
-    if seen != len(sub):
-        raise ValueError("Graph is not a DAG (cycle detected)")
-    return levels
-
-
 async def _record_consumers(
     *,
     context: GraphContext,
@@ -3083,6 +3120,11 @@ async def run_graph(
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
+        node_param_modes: Dict[str, str] = {nid: _node_runtime_param_mode(node) for nid, node in nodes.items()}
+        node_param_snapshots: Dict[str, Dict[str, Any]] = {
+            nid: copy.deepcopy((node.get("data", {}) or {}).get("params", {}) or {})
+            for nid, node in nodes.items()
+        }
         get_current_artifact = context.bindings.get_current_artifact
         component_runtime_state: Dict[str, Dict[str, Any]] = {}
         component_parent_for_internal = {}
@@ -3274,9 +3316,16 @@ async def run_graph(
             )
 
         async def _resolve_node_execution(node_id: str) -> Dict[str, Any]:
-            n = nodes[node_id]
-            kind = n["data"]["kind"]
-            params = n["data"].get("params", {}) or {}
+            raw_node = nodes[node_id]
+            kind = raw_node["data"]["kind"]
+            if node_param_modes.get(node_id, "read_once") == "dynamic":
+                params = raw_node["data"].get("params", {}) or {}
+                node_param_snapshots[node_id] = copy.deepcopy(params)
+            else:
+                params = copy.deepcopy(node_param_snapshots.get(node_id, raw_node["data"].get("params", {}) or {}))
+            n = copy.deepcopy(raw_node)
+            n.setdefault("data", {})
+            n["data"]["params"] = copy.deepcopy(params)
             tool_provider = str(params.get("provider") or "") if kind == "tool" else None
             determinism_env = _determinism_env_for_node(kind, params)
             component_ctx = (
@@ -5668,7 +5717,34 @@ async def run_graph(
 
                 # Validate output
                 if output.status == "failed":
-                    raise RuntimeError(output.error or "Node execution failed")
+                    meta_obj = getattr(output, "metadata", None)
+                    data_obj = getattr(output, "data", None)
+                    reject_flag = False
+                    if isinstance(meta_obj, dict):
+                        reject_flag = bool(meta_obj.get("reject")) or str(meta_obj.get("decision") or "").strip().lower() == "reject"
+                    if isinstance(data_obj, dict):
+                        payload_obj = data_obj.get("payload") if isinstance(data_obj.get("payload"), dict) else {}
+                        meta_payload = data_obj.get("meta") if isinstance(data_obj.get("meta"), dict) else {}
+                        reject_flag = reject_flag or bool(payload_obj.get("reject")) or bool(meta_payload.get("reject"))
+                    if reject_flag:
+                        await _emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": "Node rejected input (non-error); continuing run",
+                                "nodeId": node_id,
+                            }
+                        )
+                        output = NodeOutput(
+                            status="succeeded",
+                            data={"kind": "json", "payload": {"rejected": True}, "meta": {"decision": "reject"}},
+                            metadata=None,
+                            execution_time_ms=max(0.0, float(getattr(output, "execution_time_ms", 0.0) or 0.0)),
+                        )
+                    else:
+                        raise RuntimeError(output.error or "Node execution failed")
 
                 # Store output for legacy flow / UI
                 context.outputs[node_id] = output
@@ -6199,7 +6275,6 @@ async def run_graph(
             await asyncio.sleep(0.05)
             return {"ok": True, "cached": False}
 
-        levels = _plan_levels(plan, edges)
         run_t0 = asyncio.get_running_loop().time()
         global_sem = asyncio.Semaphore(max_inflight)
         kind_sems = {
@@ -6215,6 +6290,13 @@ async def run_graph(
         total_cached = 0
         total_succeeded = 0
         total_failed = 0
+        node_runtime_metrics: Dict[str, Dict[str, Any]] = {}
+        queue_registry = QueueRegistry(
+            limits=QueueLimits(
+                per_edge_max=_env_int("RUNNER_QUEUE_PER_EDGE_MAX", 1000, minimum=1),
+                global_max=_env_int("RUNNER_QUEUE_GLOBAL_MAX", 50000, minimum=1),
+            )
+        )
 
         async def _run_with_limits(node_id: str) -> Dict[str, Any]:
             nonlocal inflight_current, peak_concurrency
@@ -6223,10 +6305,42 @@ async def run_graph(
             kind_sem = kind_sems.get(kind)
             t0 = asyncio.get_running_loop().time()
             await _component_mark_node_start(node_id)
+            wait_t0 = asyncio.get_running_loop().time()
+            blocked = bool(global_sem.locked() or (kind_sem.locked() if kind_sem else False))
+            if blocked:
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "blocked",
+                        "nodeId": node_id,
+                    }
+                )
             async with global_sem:
+                acquired_t = asyncio.get_running_loop().time()
                 inflight_current += 1
                 if inflight_current > peak_concurrency:
                     peak_concurrency = inflight_current
+                if blocked:
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "resume",
+                            "nodeId": node_id,
+                        }
+                    )
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "busy",
+                        "nodeId": node_id,
+                    }
+                )
                 if kind_sem is None:
                     try:
                         result = await _execute_node(node_id)
@@ -6268,6 +6382,21 @@ async def run_graph(
                         await _component_mark_node_finish(node_id, ok=False, error=str(ex))
                         return {"ok": False, "cached": False}
                     finally:
+                        node_runtime_metrics[node_id] = {
+                            "inputWaitMs": max(0.0, (acquired_t - wait_t0) * 1000.0),
+                            "runTimeMs": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                            "retryCount": 0,
+                            "backpressureStatus": "blocked" if blocked else "clear",
+                        }
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "ready",
+                                "nodeId": node_id,
+                            }
+                        )
                         inflight_current -= 1
                 try:
                     async with kind_sem:
@@ -6314,214 +6443,216 @@ async def run_graph(
                             await _component_mark_node_finish(node_id, ok=False, error=str(ex))
                             return {"ok": False, "cached": False}
                 finally:
+                    node_runtime_metrics[node_id] = {
+                        "inputWaitMs": max(0.0, (acquired_t - wait_t0) * 1000.0),
+                        "runTimeMs": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
+                        "retryCount": 0,
+                        "backpressureStatus": "blocked" if blocked else "clear",
+                    }
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "ready",
+                            "nodeId": node_id,
+                        }
+                    )
                     inflight_current -= 1
 
+        # Queue-oriented scheduler (replaces levelized execution).
+        sub = set(plan.subgraph)
+        indeg: Dict[str, int] = {nid: 0 for nid in sub}
+        adj: Dict[str, List[str]] = {nid: [] for nid in sub}
+        for e in edges.values():
+            s = e.get("source")
+            t = e.get("target")
+            if s in sub and t in sub:
+                adj[s].append(t)
+                indeg[t] += 1
+        outbound_edges_by_source: Dict[str, List[Dict[str, Any]]] = {nid: [] for nid in sub}
+        for edge_id, e in edges.items():
+            s = e.get("source")
+            t = e.get("target")
+            if s in sub and t in sub:
+                outbound_edges_by_source[s].append(
+                    {
+                        "edgeId": str(edge_id),
+                        "target": str(t),
+                        "targetHandle": str(e.get("targetHandle") or "in"),
+                    }
+                )
+        order_index = {nid: i for i, nid in enumerate(plan.order)}
+        for nid in adj:
+            adj[nid].sort(key=lambda n: order_index.get(n, 10**9))
+        for nid in outbound_edges_by_source:
+            outbound_edges_by_source[nid].sort(key=lambda item: order_index.get(str(item.get("target") or ""), 10**9))
+        ready: List[str] = sorted(
+            [nid for nid, d in indeg.items() if d == 0],
+            key=lambda n: order_index.get(n, 10**9),
+        )
+        inflight: Dict[asyncio.Task, str] = {}
+        completed_count = 0
         run_failed = False
-        for level_idx, level_nodes in enumerate(levels, start=1):
-            elapsed_before_level_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
-            if max_runtime_ms > 0 and elapsed_before_level_ms > max_runtime_ms:
-                timeout_msg = (
-                    f"RUN_TIMEOUT: runtime exceeded {max_runtime_ms}ms "
-                    f"before level {level_idx} (elapsed={elapsed_before_level_ms}ms)"
-                )
-                await _emit({
-                    "type": "log",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "level": "error",
-                    "message": timeout_msg,
-                })
-                await _emit({
-                    "type": "run_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "status": "failed",
-                    "error": timeout_msg,
-                    "errorCode": "RUN_TIMEOUT",
-                })
-                await _emit_cache_summary_once()
-                return
-            if cancel_event and cancel_event.is_set():
-                await _emit({
-                    "type": "scheduler_cancelled",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "levelIndex": level_idx,
-                    "scheduled": 0,
-                    "inflightCancelled": 0,
-                    "completedBeforeCancel": 0,
-                })
-                await _emit({
-                    "type": "run_cancelled",
-                    "runId": run_id,
-                    "at": iso_now(),
-                })
-                await _emit({
-                    "type": "run_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "status": "cancelled"
-                })
-                await _emit_cache_summary_once()
-                return
-
-            kind_counts: Dict[str, int] = {"source": 0, "transform": 0, "model": 0, "llm": 0, "tool": 0}
-            for nid in level_nodes:
-                k = (nodes.get(nid, {}).get("data", {}) or {}).get("kind")
-                if k in kind_counts:
-                    kind_counts[k] += 1
-
-            await _emit({
-                "type": "level_started",
-                "runId": run_id,
-                "at": iso_now(),
-                "levelIndex": level_idx,
-                "nodesInLevel": len(level_nodes),
-                "globalCap": max_inflight,
-                "caps": {
-                    "source": max_source,
-                    "transform": max_transform,
-                    "model": max_model,
-                    "llm": max_llm,
-                    "tool": max_tool,
-                },
-                "kindCounts": kind_counts,
-            })
-            await _emit({
+        await _emit(
+            {
                 "type": "log",
                 "runId": run_id,
                 "at": iso_now(),
                 "level": "info",
                 "message": (
-                    f"[scheduler] level {level_idx} start nodes={len(level_nodes)} "
-                    f"caps(g={max_inflight},s={max_source},t={max_transform},m={max_model},l={max_llm},tool={max_tool}) "
-                    f"kinds={kind_counts}"
+                    f"[scheduler] queue start nodes={len(sub)} ready={len(ready)} "
+                    f"caps(g={max_inflight},s={max_source},t={max_transform},m={max_model},l={max_llm},tool={max_tool})"
                 ),
-            })
+            }
+        )
+        await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "ready"})
 
-            level_t0 = asyncio.get_running_loop().time()
-            tasks = []
-            for nid in level_nodes:
-                if cancel_event and cancel_event.is_set():
-                    break
-                tasks.append(asyncio.create_task(_run_with_limits(nid)))
-
-            cancelled_tasks = 0
+        while ready or inflight:
+            elapsed_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
+            if max_runtime_ms > 0 and elapsed_ms > max_runtime_ms:
+                timeout_msg = (
+                    f"RUN_TIMEOUT: runtime exceeded {max_runtime_ms}ms "
+                    f"during queue scheduling (elapsed={elapsed_ms}ms)"
+                )
+                await _emit({"type": "log", "runId": run_id, "at": iso_now(), "level": "error", "message": timeout_msg})
+                await _emit(
+                    {
+                        "type": "run_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "status": "failed",
+                        "error": timeout_msg,
+                        "errorCode": "RUN_TIMEOUT",
+                    }
+                )
+                await _emit_cache_summary_once()
+                return
             if cancel_event and cancel_event.is_set():
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
+                cancelled_tasks = 0
+                for task in list(inflight.keys()):
+                    if not task.done():
+                        task.cancel()
                         cancelled_tasks += 1
-
-            raw_results = []
-            if tasks:
-                pending = set(tasks)
-                while pending:
-                    if cancel_event and cancel_event.is_set():
-                        for t in pending:
-                            if not t.done():
-                                t.cancel()
-                                cancelled_tasks += 1
-                    done, pending = await asyncio.wait(
-                        pending,
-                        timeout=0.05,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for d in done:
-                        try:
-                            raw_results.append(d.result())
-                        except asyncio.CancelledError as ce:
-                            raw_results.append(ce)
-                        except Exception as ex:
-                            raw_results.append(ex)
-            results = []
-            for r in raw_results:
-                if isinstance(r, asyncio.CancelledError):
-                    results.append({"ok": False, "cached": False, "cancelled": True})
-                elif isinstance(r, Exception):
-                    raise r
-                else:
-                    results.append(r)
-            level_cached = sum(1 for r in results if r.get("cached"))
-            level_failed = sum(1 for r in results if not r.get("ok"))
-            level_cancelled = sum(1 for r in results if r.get("cancelled"))
-            level_succeeded = len(results) - level_failed - level_cached
-            total_cached += level_cached
-            total_failed += level_failed
-            total_succeeded += level_succeeded
-            level_elapsed_ms = int((asyncio.get_running_loop().time() - level_t0) * 1000)
-
-            await _emit({
-                "type": "level_finished",
-                "runId": run_id,
-                "at": iso_now(),
-                "levelIndex": level_idx,
-                "succeeded": level_succeeded,
-                "failed": level_failed,
-                "skipped": level_cached,
-                "elapsedMs": level_elapsed_ms,
-            })
-            await _emit({
-                "type": "log",
-                "runId": run_id,
-                "at": iso_now(),
-                "level": "info",
-                "message": (
-                    f"[scheduler] level {level_idx} done ok={level_succeeded} "
-                    f"failed={level_failed} cached={level_cached} elapsed_ms={level_elapsed_ms}"
-                ),
-            })
-
-            if cancel_event and cancel_event.is_set():
-                await _emit({
-                    "type": "scheduler_cancelled",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "levelIndex": level_idx,
-                    "scheduled": len(tasks),
-                    "inflightCancelled": max(cancelled_tasks, level_cancelled),
-                    "completedBeforeCancel": max(0, len(results) - level_cancelled),
-                })
-                await _emit({
-                    "type": "run_cancelled",
-                    "runId": run_id,
-                    "at": iso_now(),
-                })
-                await _emit({
-                    "type": "run_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "status": "cancelled"
-                })
-                await _emit_cache_summary_once()
-                return
-
-            if level_failed > 0:
-                run_failed = True
-                break
-            elapsed_after_level_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
-            if max_runtime_ms > 0 and elapsed_after_level_ms > max_runtime_ms:
-                timeout_msg = (
-                    f"RUN_TIMEOUT: runtime exceeded {max_runtime_ms}ms "
-                    f"after level {level_idx} (elapsed={elapsed_after_level_ms}ms)"
+                await _emit(
+                    {
+                        "type": "scheduler_cancelled",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "scheduled": completed_count + len(inflight),
+                        "inflightCancelled": cancelled_tasks,
+                        "completedBeforeCancel": completed_count,
+                    }
                 )
-                await _emit({
-                    "type": "log",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "level": "error",
-                    "message": timeout_msg,
-                })
-                await _emit({
-                    "type": "run_finished",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "status": "failed",
-                    "error": timeout_msg,
-                    "errorCode": "RUN_TIMEOUT",
-                })
+                await _emit({"type": "run_cancelled", "runId": run_id, "at": iso_now()})
+                await _emit({"type": "run_finished", "runId": run_id, "at": iso_now(), "status": "cancelled"})
                 await _emit_cache_summary_once()
                 return
+
+            while ready and len(inflight) < max_inflight:
+                nid = ready.pop(0)
+                task = asyncio.create_task(
+                    _run_with_limits(
+                        nid,
+                    )
+                )
+                inflight[task] = nid
+
+            if not inflight:
+                await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})
+                break
+
+            done, _pending = await asyncio.wait(
+                set(inflight.keys()),
+                timeout=0.05,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                node_id = inflight.pop(task, "")
+                completed_count += 1
+                try:
+                    result = task.result()
+                except asyncio.CancelledError:
+                    result = {"ok": False, "cached": False, "cancelled": True}
+                except Exception as ex:
+                    raise ex
+                ok = bool(result.get("ok"))
+                cached = bool(result.get("cached"))
+                cancelled = bool(result.get("cancelled"))
+                if cached:
+                    total_cached += 1
+                elif ok:
+                    total_succeeded += 1
+                else:
+                    total_failed += 1
+                if cancelled:
+                    run_failed = True
+                if not ok:
+                    node_fatal = _is_node_or_edge_fatal(
+                        node=nodes.get(node_id, {}),
+                        incoming_edge_ids=plan.incoming_edges.get(node_id, []),
+                        edges=edges,
+                    )
+                    await _emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "warn" if not node_fatal else "error",
+                            "message": (
+                                f"[scheduler] node failure node={node_id} fatal={str(node_fatal).lower()} "
+                                "propagation=localized"
+                                if not node_fatal
+                                else f"[scheduler] node failure node={node_id} fatal=true propagation=run_stop"
+                            ),
+                            "nodeId": node_id,
+                        }
+                    )
+                    if node_fatal:
+                        run_failed = True
+                        break
+                    # Localized failure: do not release downstream dependencies from this node.
+                    continue
+                # Node succeeded/cached, release downstream dependencies through per-edge queues.
+                for edge_info in outbound_edges_by_source.get(node_id, []):
+                    edge_id = str(edge_info.get("edgeId") or "")
+                    nb = str(edge_info.get("target") or "")
+                    target_handle = str(edge_info.get("targetHandle") or "in")
+                    if not edge_id or not nb:
+                        continue
+                    await queue_registry.enqueue(
+                        edge_id,
+                        target_handle,
+                        {"fromNodeId": node_id, "at": iso_now()},
+                        overflow="block",
+                    )
+                    indeg[nb] = max(0, indeg.get(nb, 0) - 1)
+                    if indeg[nb] == 0:
+                        for incoming_edge_id in plan.incoming_edges.get(nb, []):
+                            incoming_edge = edges.get(incoming_edge_id) or {}
+                            incoming_handle = str(incoming_edge.get("targetHandle") or "in")
+                            await queue_registry.dequeue(str(incoming_edge_id), incoming_handle, timeout_sec=0.0)
+                        ready.append(nb)
+                ready.sort(key=lambda n: order_index.get(n, 10**9))
+                await _emit(
+                    {
+                        "type": "queue_metrics",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "metrics": queue_registry.metrics(),
+                        "nodeMetrics": node_runtime_metrics,
+                    }
+                )
+
+            if run_failed:
+                for task in list(inflight.keys()):
+                    if not task.done():
+                        task.cancel()
+                if inflight:
+                    await asyncio.gather(*list(inflight.keys()), return_exceptions=True)
+                break
+
+        await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 
         total_runtime_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
         await _emit({
