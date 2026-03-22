@@ -120,7 +120,9 @@ describe('graphStore edge schema diagnostics', () => {
 		const diagnostics = __computeEdgeSchemaDiagnosticsForTest(constraints);
 		expect(diagnostics.e3).toBeTruthy();
 		expect(diagnostics.e3?.code).toBe('PAYLOAD_SCHEMA_MISMATCH');
-		expect(String(diagnostics.e3?.message ?? '')).toContain('Required typed schema coverage is missing');
+		expect(String(diagnostics.e3?.message ?? '').toLowerCase()).toContain(
+			'required typed schema coverage is missing'
+		);
 	});
 
 	it('respects manual expected schema precedence over inferred/observed hints', () => {

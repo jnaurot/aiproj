@@ -110,4 +110,60 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 		const state = get(graphStore);
 		expect(state.edges.length).toBe(2);
 	});
+
+	it('supports mixed mode wiring for jobflow-style work + param inputs', () => {
+		__setStrictSchemaFeatureFlagsForTest({ STRICT_SCHEMA_EDGE_CHECKS_V2: true });
+		graphStore.hardResetGraph();
+		const jobsId = graphStore.addNode('source', { x: 0, y: 0 });
+		const resumeId = graphStore.addNode('source', { x: 0, y: 180 });
+		const selectId = graphStore.addNode('model', { x: 300, y: 0 });
+		const generateId = graphStore.addNode('model', { x: 620, y: 0 });
+
+		graphStore.updateNodeConfig(jobsId, {
+			params: { file_format: 'json', output: { mode: 'json' } }
+		});
+		graphStore.updateNodeConfig(resumeId, {
+			params: { file_format: 'txt', output: { mode: 'json' } }
+		});
+		graphStore.setNodeExpectedInputSchema(selectId, { type: 'json', fields: [] });
+		graphStore.setNodeExpectedSchema(selectId, { type: 'json', fields: [] });
+		graphStore.setNodeExpectedInputSchema(generateId, { type: 'json', fields: [] });
+		graphStore.setNodeExpectedSchema(generateId, { type: 'json', fields: [] });
+
+		const workEdge = graphStore.addEdge({
+			id: 'e_jobs_to_select_work',
+			source: jobsId,
+			target: selectId,
+			targetHandle: 'in',
+			data: { exec: 'idle', mode: 'work' }
+		} as any);
+		expect(workEdge.ok).toBe(true);
+
+		const paramEdge = graphStore.addEdge({
+			id: 'e_resume_to_select_param',
+			source: resumeId,
+			target: selectId,
+			targetHandle: 'param_resume',
+			data: { exec: 'idle', mode: 'param' }
+		} as any);
+		expect(paramEdge.ok).toBe(true);
+		expect(paramEdge.adapterKind ?? null).toBeNull();
+
+		const downstreamWork = graphStore.addEdge({
+			id: 'e_select_to_generate_work',
+			source: selectId,
+			target: generateId,
+			targetHandle: 'in',
+			data: { exec: 'idle', mode: 'work' }
+		} as any);
+		expect(downstreamWork.ok).toBe(true);
+
+		const state = get(graphStore);
+		expect(state.edges.length).toBe(3);
+		expect(state.edges.map((e) => String((e.data as any)?.mode || 'work')).sort()).toEqual([
+			'param',
+			'work',
+			'work'
+		]);
+	});
 });
