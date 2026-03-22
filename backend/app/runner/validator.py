@@ -159,14 +159,23 @@ class GraphValidator:
         return None
 
     @staticmethod
-    def _node_schema_declared_input_type(node: Dict[str, Any]) -> Optional[str]:
+    def _node_schema_declared_input_type(node: Dict[str, Any], target_handle: Any = None) -> Optional[str]:
         data = (node.get("data") or {}) if isinstance(node, dict) else {}
         schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
         if not isinstance(schema_env, dict):
             return None
-        # Input contract is modeled by expectedInputSchema.
+        # Input contract is modeled by expectedInputSchemas(handle) first, then expectedInputSchema legacy fallback.
         # expectedSchema is output-side and must not be reused for incoming edge checks.
-        obs = schema_env.get("expectedInputSchema")
+        target_key = str(target_handle or "in").strip() or "in"
+        obs = None
+        expected_by_handle = schema_env.get("expectedInputSchemas")
+        if isinstance(expected_by_handle, dict):
+            if isinstance(expected_by_handle.get(target_key), dict):
+                obs = expected_by_handle.get(target_key)
+            elif isinstance(expected_by_handle.get("in"), dict):
+                obs = expected_by_handle.get("in")
+        if not isinstance(obs, dict):
+            obs = schema_env.get("expectedInputSchema")
         if isinstance(obs, dict):
             typed = obs.get("typedSchema")
             if isinstance(typed, dict):
@@ -673,7 +682,7 @@ class GraphValidator:
                 or source_type
             )
             target_type = (
-                self._node_schema_declared_input_type(target_node)
+                self._node_schema_declared_input_type(target_node, target_handle)
                 or self._target_default_type(target_node)
                 or target_type
             )
