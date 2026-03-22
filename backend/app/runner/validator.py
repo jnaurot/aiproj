@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from .schemas import validate_node_params  # Import schema validation
 from .capabilities import allowed_edge_modes, port_contract
+from app.component_contracts import edge_mode_requires_payload_compatibility, normalize_edge_mode
 from .schema_diagnostics import (
     SCHEMA_DIAGNOSTIC_CODES,
     TYPE_MISMATCH,
@@ -360,9 +361,7 @@ class GraphValidator:
     @staticmethod
     def _edge_mode(edge: Dict[str, Any]) -> str:
         data = edge.get("data", {}) if isinstance(edge.get("data"), dict) else {}
-        raw = data.get("mode")
-        mode = str(raw or "work").strip().lower()
-        return mode or "work"
+        return normalize_edge_mode(data.get("mode"))
 
     @staticmethod
     def _mode_affinity_compatible(mode: str, src_affinity: str, dst_affinity: str) -> bool:
@@ -568,6 +567,9 @@ class GraphValidator:
                         },
                     )
                 )
+                continue
+            if not edge_mode_requires_payload_compatibility(edge_mode):
+                # Param/control edges use affinity and mode-specific semantics instead of payload typing.
                 continue
 
             # Optional payload schema compatibility (forward path)

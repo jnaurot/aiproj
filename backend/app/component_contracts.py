@@ -9,6 +9,7 @@ from .graph_migrations import canonicalize_graph_payload
 COMPONENT_SCHEMA_VERSION = 1
 ALLOWED_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
 ALLOWED_TYPED_TYPES = {"table", "json", "text", "binary", "embeddings", "unknown"}
+ALLOWED_EDGE_MODES = {"work", "param", "control"}
 
 
 @dataclass
@@ -196,3 +197,12 @@ def canonicalize_component_definition(
     schema_version: int = COMPONENT_SCHEMA_VERSION,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     return migrate_component_definition(definition, int(schema_version), COMPONENT_SCHEMA_VERSION)
+
+
+def normalize_edge_mode(raw: Any) -> str:
+    mode = str(raw or "work").strip().lower() or "work"
+    return mode if mode in ALLOWED_EDGE_MODES else "work"
+
+
+def edge_mode_requires_payload_compatibility(raw: Any) -> bool:
+    return normalize_edge_mode(raw) == "work"

@@ -1685,6 +1685,29 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			);
 			return { ...state, edges };
 		}
+		case 'control_signal': {
+			const nodePart = evt.nodeId ? ` node=${evt.nodeId}` : '';
+			return logPush(state, 'info', `[control] ${evt.signal}${nodePart}`, evt.nodeId);
+		}
+		case 'queue_metrics': {
+			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
+			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
+			const itemStats = (evt as any)?.runtimeItemMetrics ?? {};
+			const enq = Number(itemStats?.itemsEnqueued ?? 0);
+			const deq = Number(itemStats?.itemsDequeued ?? 0);
+			const rej = Number(itemStats?.itemsRejected ?? 0);
+			return logPush(
+				state,
+				'info',
+				`[queue] depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej}`
+			);
+		}
+		case 'node_decision': {
+			const count = Number((evt as any)?.count ?? 1);
+			const reason = String((evt as any)?.reasonCode ?? '').trim();
+			const suffix = reason ? ` reason=${reason}` : '';
+			return logPush(state, evt.decision === 'reject' ? 'warn' : 'info', `[decision] ${evt.decision} x${count}${suffix}`, evt.nodeId);
+		}
 		case 'log':
 			return logPush(state, evt.level, evt.message, evt.nodeId, (evt as any).componentPath);
 		case 'node_finished': {
@@ -3050,8 +3073,13 @@ type SchemaCompatibility =
 
 function isSchemaCompatible(
 	providedSchema: Record<string, any> | undefined,
-	requiredSchema: Record<string, any> | undefined
+	requiredSchema: Record<string, any> | undefined,
+	edgeModeRaw: unknown = 'work'
 ): SchemaCompatibility {
+	const edgeMode = String(edgeModeRaw ?? 'work').trim().toLowerCase() || 'work';
+	if (edgeMode !== 'work') {
+		return { ok: true };
+	}
 	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
 	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
 	if (requiredType === 'unknown') {
@@ -3118,6 +3146,7 @@ function isSchemaCompatible(
 
 export type EdgeSchemaConstraint = {
 	edgeId: string;
+	mode: 'work' | 'param' | 'control';
 	sourceNodeId: string;
 	targetNodeId: string;
 	providedSchema: Record<string, any>;
@@ -3221,12 +3250,16 @@ function computeEdgeSchemaConstraintsInternal(
 		const sourceNode = byNodeId.get(sourceNodeId);
 		const targetNode = byNodeId.get(targetNodeId);
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		const modeRaw = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+		const mode: 'work' | 'param' | 'control' =
+			modeRaw === 'param' || modeRaw === 'control' ? modeRaw : 'work';
 		if (!sourceNode || !targetNode) continue;
 		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
 		const requiredSchema = buildRequiredSchema(targetNode as any);
-		const check = isSchemaCompatible(providedSchema, requiredSchema);
+		const check = isSchemaCompatible(providedSchema, requiredSchema, mode);
 		out[edgeId] = {
 			edgeId,
+			mode,
 			sourceNodeId,
 			targetNodeId,
 			providedSchema,
@@ -3417,7 +3450,7 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	if (!sourcePayload || !targetPayload) {
 		return { ok: false, reason: 'typed_schema_missing' };
 	}
-	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any);
+	const schemaCheck = isSchemaCompatible(sourcePayload as any, targetPayload as any, mode);
 	if (!schemaCheck.ok) {
 		if (schemaCheck.reason === 'missing_typed_schema') {
 			return {
@@ -4698,6 +4731,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				mode?: 'work' | 'param' | 'control';
 				fatal?: boolean;
 				queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+				work?: { item_mode?: 'artifact' | 'json_items' | 'table_rows'; max_items?: number };
 			}
 		) {
 			let out: { ok: boolean; error?: string } = { ok: true };
@@ -4723,6 +4757,22 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					out = { ok: false, error: 'Invalid queue overflow policy' };
 					return s;
 				}
+				const nextWork = {
+					item_mode: String(
+						patch.work?.item_mode ??
+							(edge.data as any)?.work?.item_mode ??
+							(edge.data as any)?.work?.itemMode ??
+							'artifact'
+					).toLowerCase() as 'artifact' | 'json_items' | 'table_rows',
+					max_items: Math.max(
+						1,
+						Number(patch.work?.max_items ?? (edge.data as any)?.work?.max_items ?? (edge.data as any)?.work?.maxItems ?? 256)
+					)
+				};
+				if (!['artifact', 'json_items', 'table_rows'].includes(nextWork.item_mode)) {
+					out = { ok: false, error: 'Invalid work item mode' };
+					return s;
+				}
 				const nextEdge: Edge<PipelineEdgeData> = {
 					...edge,
 					data: {
@@ -4730,7 +4780,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						exec: edge.data?.exec ?? 'idle',
 						mode: nextMode as any,
 						fatal: Boolean(patch.fatal ?? (edge.data as any)?.fatal ?? false),
-						queue: nextQueue
+						queue: nextQueue,
+						work: nextWork
 					}
 				};
 				const chk = isEdgeStillValid(s.nodes, nextEdge);
@@ -4870,6 +4921,20 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						...(edge.data ?? {}),
 						exec: edge.data?.exec ?? 'idle',
 						mode: String((edge.data as any)?.mode ?? 'work').trim().toLowerCase() as any,
+						fatal: Boolean((edge.data as any)?.fatal ?? false),
+						queue: {
+							max: Math.max(1, Number((edge.data as any)?.queue?.max ?? 1000)),
+							overflow: String((edge.data as any)?.queue?.overflow ?? 'block').trim().toLowerCase() as
+								| 'block'
+								| 'spill'
+								| 'error'
+						},
+						work: {
+							item_mode: String((edge.data as any)?.work?.item_mode ?? (edge.data as any)?.work?.itemMode ?? 'artifact')
+								.trim()
+								.toLowerCase() as 'artifact' | 'json_items' | 'table_rows',
+							max_items: Math.max(1, Number((edge.data as any)?.work?.max_items ?? (edge.data as any)?.work?.maxItems ?? 256))
+						},
 						contract: {
 							out: chk.out,
 							in: chk.in,
@@ -4998,6 +5063,46 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				persist(next);
 				return next;
 			});
+		},
+
+		updateNodeProcessingPolicy(
+			nodeId: string,
+			patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+		) {
+			let out: { ok: boolean; error?: string } = { ok: true };
+			update((s) => {
+				const node = s.nodes.find((n) => n.id === nodeId);
+				if (!node) {
+					out = { ok: false, error: 'Node not found' };
+					return s;
+				}
+				const existing = ((node.data as any)?.processingPolicy ?? {}) as Record<string, any>;
+				const nextMode = String(patch.consume_mode ?? existing.consume_mode ?? 'once').trim().toLowerCase();
+				if (!['once', 'single_item', 'batch'].includes(nextMode)) {
+					out = { ok: false, error: 'Invalid consume mode' };
+					return s;
+				}
+				const nextPolicy = {
+					consume_mode: nextMode as 'once' | 'single_item' | 'batch',
+					batch_size: Math.max(1, Number(patch.batch_size ?? existing.batch_size ?? 1)),
+					max_inflight: Math.max(1, Number(patch.max_inflight ?? existing.max_inflight ?? 1))
+				};
+				const nodes = s.nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									processingPolicy: nextPolicy
+								}
+							}
+						: n
+				);
+				const next = logPush({ ...s, nodes }, 'info', `Updated node ${nodeId} processing policy`);
+				persist(next);
+				return next;
+			});
+			return out;
 		},
 
 		setNodeMeta(nodeId: string, patch: Record<string, unknown>) {
