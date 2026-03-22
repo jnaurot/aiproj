@@ -3250,9 +3250,7 @@ function computeEdgeSchemaConstraintsInternal(
 		const sourceNode = byNodeId.get(sourceNodeId);
 		const targetNode = byNodeId.get(targetNodeId);
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
-		const modeRaw = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
-		const mode: 'work' | 'param' | 'control' =
-			modeRaw === 'param' || modeRaw === 'control' ? modeRaw : 'work';
+		const mode = normalizeEdgeMode(edge as Edge<PipelineEdgeData>);
 		if (!sourceNode || !targetNode) continue;
 		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
 		const requiredSchema = buildRequiredSchema(targetNode as any);
@@ -3435,13 +3433,38 @@ function edgeModeCompatible(
 	return false;
 }
 
+function inferEdgeModeFromHandles(edge: Edge<PipelineEdgeData>): 'work' | 'param' | 'control' {
+	const sourceHandle = String((edge as any)?.sourceHandle ?? '').trim().toLowerCase();
+	const targetHandle = String((edge as any)?.targetHandle ?? '').trim().toLowerCase();
+	if (
+		sourceHandle.startsWith('control') ||
+		sourceHandle.startsWith('ctl') ||
+		targetHandle.startsWith('control') ||
+		targetHandle.startsWith('ctl')
+	) {
+		return 'control';
+	}
+	if (sourceHandle.startsWith('param') || targetHandle.startsWith('param')) {
+		return 'param';
+	}
+	return 'work';
+}
+
+function normalizeEdgeMode(edge: Edge<PipelineEdgeData>): 'work' | 'param' | 'control' {
+	const rawMode = String((edge.data as any)?.mode ?? '').trim().toLowerCase();
+	if (rawMode === 'work' || rawMode === 'param' || rawMode === 'control') {
+		return rawMode;
+	}
+	return inferEdgeModeFromHandles(edge);
+}
+
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
 	if (!sourceNode || !targetNode) {
 		return { ok: false, reason: 'typed_schema_missing' };
 	}
-	const mode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
+	const mode = normalizeEdgeMode(e);
 	const sourceHandle = String((e as any).sourceHandle ?? 'out');
 	const targetHandle = String((e as any).targetHandle ?? 'in');
 	const sourceAffinity = nodePortAffinity(sourceNode, 'out', sourceHandle);
@@ -3548,7 +3571,7 @@ function pruneAndRecontractEdgesStrict(
 			data: {
 				...(e.data ?? {}),
 				exec: e.data?.exec ?? 'idle',
-				mode: String((e.data as any)?.mode ?? 'work').trim().toLowerCase() as any,
+				mode: normalizeEdgeMode(e),
 				contract: {
 					out: chk.out,
 					in: chk.in,
@@ -4748,7 +4771,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					return s;
 				}
 				const edge = s.edges[idx];
-				const nextMode = String(patch.mode ?? (edge.data as any)?.mode ?? 'work').trim().toLowerCase();
+				const nextMode = String(patch.mode ?? normalizeEdgeMode(edge)).trim().toLowerCase();
 				if (!['work', 'param', 'control'].includes(nextMode)) {
 					out = { ok: false, error: 'Invalid edge mode' };
 					return s;
@@ -4926,7 +4949,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					data: {
 						...(edge.data ?? {}),
 						exec: edge.data?.exec ?? 'idle',
-						mode: String((edge.data as any)?.mode ?? 'work').trim().toLowerCase() as any,
+						mode: normalizeEdgeMode(edge),
 						fatal: Boolean((edge.data as any)?.fatal ?? false),
 						queue: {
 							max: Math.max(1, Number((edge.data as any)?.queue?.max ?? 1000)),

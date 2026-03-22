@@ -27,6 +27,21 @@ def _node_data(node: Dict[str, Any]) -> Dict[str, Any]:
 	return data
 
 
+def _infer_edge_mode_from_handles(edge: Dict[str, Any]) -> str:
+	source_handle = str(edge.get("sourceHandle") or "").strip().lower()
+	target_handle = str(edge.get("targetHandle") or "").strip().lower()
+	if (
+		source_handle.startswith("control")
+		or source_handle.startswith("ctl")
+		or target_handle.startswith("control")
+		or target_handle.startswith("ctl")
+	):
+		return "control"
+	if source_handle.startswith("param") or target_handle.startswith("param"):
+		return "param"
+	return "work"
+
+
 def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
 	data = _node_data(node)
 	raw_schema = data.get("schema")
@@ -201,6 +216,35 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		kind = str(data.get("kind") or "").strip().lower()
 		if kind:
 			data["kind"] = kind
+		processing_policy = data.get("processingPolicy") if isinstance(data.get("processingPolicy"), dict) else {}
+		consume_mode = str(
+			processing_policy.get("consume_mode")
+			or processing_policy.get("consumeMode")
+			or "once"
+		).strip().lower() or "once"
+		if consume_mode not in {"once", "single_item", "batch"}:
+			consume_mode = "once"
+		try:
+			batch_size = int(
+				processing_policy.get("batch_size")
+				or processing_policy.get("batchSize")
+				or 1
+			)
+		except Exception:
+			batch_size = 1
+		try:
+			max_inflight = int(
+				processing_policy.get("max_inflight")
+				or processing_policy.get("maxInflight")
+				or 1
+			)
+		except Exception:
+			max_inflight = 1
+		data["processingPolicy"] = {
+			"consume_mode": consume_mode,
+			"batch_size": max(1, batch_size),
+			"max_inflight": max(1, max_inflight),
+		}
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node
@@ -254,14 +298,24 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		tgt_node = node_map.get(tgt_id)
 		src_kind = str((_node_data(src_node).get("kind") if src_node else "") or "").strip().lower()
 		edge_data = next_edge.get("data") if isinstance(next_edge.get("data"), dict) else {}
-		normalized_mode = str(edge_data.get("mode") or "work").strip().lower() or "work"
+		raw_mode = str(edge_data.get("mode") or "").strip().lower()
+		inferred_mode = _infer_edge_mode_from_handles(next_edge)
+		normalized_mode = raw_mode or inferred_mode
 		if normalized_mode not in {"work", "param", "control"}:
-			normalized_mode = "work"
+			normalized_mode = inferred_mode
 			notes.append(
 				{
 					"code": "EDGE_MODE_DEFAULTED",
 					"edgeId": str(next_edge.get("id") or ""),
-					"message": "Edge mode defaulted to work",
+					"message": f"Edge mode defaulted to {normalized_mode}",
+				}
+			)
+		elif not raw_mode:
+			notes.append(
+				{
+					"code": "EDGE_MODE_INFERRED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": f"Inferred edge mode '{normalized_mode}' from handles",
 				}
 			)
 		edge_data["mode"] = normalized_mode
@@ -277,6 +331,17 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		queue_cfg["overflow"] = queue_overflow
 		queue_cfg["max"] = max(1, queue_max)
 		edge_data["queue"] = queue_cfg
+		work_cfg = edge_data.get("work") if isinstance(edge_data.get("work"), dict) else {}
+		item_mode = str(work_cfg.get("item_mode") or work_cfg.get("itemMode") or "artifact").strip().lower() or "artifact"
+		if item_mode not in {"artifact", "json_items", "table_rows"}:
+			item_mode = "artifact"
+		try:
+			work_max_items = int(work_cfg.get("max_items") or work_cfg.get("maxItems") or 256)
+		except Exception:
+			work_max_items = 256
+		work_cfg["item_mode"] = item_mode
+		work_cfg["max_items"] = max(1, work_max_items)
+		edge_data["work"] = work_cfg
 		next_edge["data"] = edge_data
 
 		source_handle = str(next_edge.get("sourceHandle") or "out").strip() or "out"

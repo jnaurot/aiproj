@@ -71,6 +71,61 @@ def test_graph_read_path_always_enabled(monkeypatch):
 		assert body["graph"]["nodes"][0]["data"]["label"] == "seeded"
 
 
+def test_graph_revision_load_infers_legacy_edge_mode_from_handles():
+	graph_id = "graph_mode_infer_switch"
+	graph = {
+		"version": 1,
+		"nodes": [
+			{
+				"id": "src",
+				"type": "source",
+				"position": {"x": 0, "y": 0},
+				"data": {
+					"kind": "source",
+					"label": "Source",
+					"sourceKind": "file",
+					"status": "idle",
+					"params": {"source_type": "text", "text": "x"},
+				},
+			},
+			{
+				"id": "dst",
+				"type": "model",
+				"position": {"x": 220, "y": 0},
+				"data": {
+					"kind": "model",
+					"label": "Model",
+					"status": "idle",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+				},
+			},
+		],
+		"edges": [
+			{
+				"id": "e_legacy",
+				"source": "src",
+				"sourceHandle": "out",
+				"target": "dst",
+				"targetHandle": "param_filters",
+				"data": {},
+			}
+		],
+	}
+
+	with TestClient(app) as client:
+		created = client.post(
+			"/graphs",
+			json={"graphId": graph_id, "message": "seed mode infer", "graph": graph},
+		)
+		assert created.status_code == 200, created.text
+		latest = client.get(f"/graphs/{graph_id}/latest")
+		assert latest.status_code == 200, latest.text
+		body = latest.json()
+		edges = (body.get("graph") or {}).get("edges") or []
+		assert len(edges) == 1
+		assert ((edges[0].get("data") or {}).get("mode")) == "param"
+
+
 def test_graph_feature_flags_runtime_update():
 	with TestClient(app) as client:
 		before = client.get("/graphs/feature-flags")
