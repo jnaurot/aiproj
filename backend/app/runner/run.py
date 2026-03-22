@@ -473,6 +473,14 @@ def _edge_work_item_mode(edge: Dict[str, Any]) -> str:
     return mode
 
 
+def _edge_mode(edge: Dict[str, Any]) -> str:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    mode = str(data.get("mode") or "work").strip().lower() or "work"
+    if mode not in {"work", "param", "control"}:
+        return "work"
+    return mode
+
+
 def _edge_work_max_items(edge: Dict[str, Any]) -> int:
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     work = data.get("work") if isinstance(data.get("work"), dict) else {}
@@ -6742,6 +6750,8 @@ async def run_graph(
             infos: List[Dict[str, str]] = []
             for incoming_edge_id in plan.incoming_edges.get(node_id, []):
                 incoming_edge = edges.get(incoming_edge_id) or {}
+                if _edge_mode(incoming_edge) != "work":
+                    continue
                 infos.append(
                     {
                         "edgeId": str(incoming_edge_id),
@@ -6983,6 +6993,15 @@ async def run_graph(
                     if not edge_id or not nb:
                         continue
                     edge_obj = edges.get(edge_id) or {}
+                    edge_mode = _edge_mode(edge_obj)
+                    if edge_mode != "work":
+                        if not bool(edge_dependency_released.get(edge_id, False)):
+                            edge_dependency_released[edge_id] = True
+                            indeg[nb] = max(0, indeg.get(nb, 0) - 1)
+                            if indeg[nb] == 0:
+                                deps_released[nb] = True
+                                _enqueue_ready_if_possible(nb)
+                        continue
                     work_items = await _expand_edge_work_items(
                         source_node_id=node_id,
                         edge_obj=edge_obj,
