@@ -3595,6 +3595,26 @@ async def run_graph(
                     "message": f"PARAM_NORMALIZE_FALLBACK: {str(ex)}",
                     "nodeId": node_id,
                 })
+            # Streaming work nodes must produce distinct execution keys per item/batch.
+            # `_work_item`/`_work_batch` are runtime keys and intentionally excluded from the
+            # general fingerprint sanitizer, so we add a stable runtime work fingerprint here.
+            if isinstance(work_batch, list) and work_batch:
+                runtime_work_fingerprint: List[Dict[str, Any]] = []
+                for item in work_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    runtime_work_fingerprint.append(
+                        {
+                            "edgeId": str(item.get("edgeId") or ""),
+                            "sourceNodeId": str(item.get("sourceNodeId") or ""),
+                            "targetHandle": str(item.get("targetHandle") or "in"),
+                            "artifactId": str(item.get("artifactId") or ""),
+                            "itemMode": str(item.get("itemMode") or "artifact"),
+                            "itemIndex": int(item.get("itemIndex") or 0),
+                        }
+                    )
+                if runtime_work_fingerprint:
+                    normalized_params_for_hash["runtime_work_fingerprint"] = runtime_work_fingerprint
             if kind == "source":
                 debug_payload = {
                     "nodeId": node_id,

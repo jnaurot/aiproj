@@ -18,7 +18,7 @@ def _ensure_duckdb_stub() -> None:
 
 
 @pytest.mark.asyncio
-async def test_port_runtime_legacy_migration_golden_emits_deprecation_warnings() -> None:
+async def test_port_runtime_legacy_migration_golden_emits_deprecation_warnings(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")
 	events: list[dict] = []
@@ -31,7 +31,7 @@ async def test_port_runtime_legacy_migration_golden_emits_deprecation_warnings()
 			data={"kind": "json", "payload": {"ok": True}, "meta": {}},
 		)
 
-	run_mod.exec_tool = _fake_exec_tool
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
 	graph = {
 		"nodes": [
 			{

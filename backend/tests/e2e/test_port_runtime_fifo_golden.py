@@ -19,7 +19,7 @@ def _ensure_duckdb_stub() -> None:
 
 
 @pytest.mark.asyncio
-async def test_port_runtime_fifo_golden_same_handle_multi_producer() -> None:
+async def test_port_runtime_fifo_golden_same_handle_multi_producer(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")
 	seen_order: list[str] = []
@@ -49,7 +49,7 @@ async def test_port_runtime_fifo_golden_same_handle_multi_producer() -> None:
 			data={"kind": "json", "payload": payload, "meta": {}},
 		)
 
-	run_mod.exec_tool = _fake_exec_tool
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
 	graph = {
 		"nodes": [
 			{"id": "producer_a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
