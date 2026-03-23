@@ -10,6 +10,15 @@
       "max_inflight": 1
     }
   },
+  "portDeclarations": {
+    "planes": ["work", "param", "control"],
+    "directions": ["in", "out"],
+    "cardinality": ["one", "many"],
+    "defaults": {
+      "required": false,
+      "cardinality": "many"
+    }
+  },
   "inputContracts": {
     "workInputs": { "behavior": "single_item" },
     "paramInputs": { "behavior": "read_once" },

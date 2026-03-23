@@ -54,13 +54,21 @@ function inferAffinityFromHandle(handle: string): 'work' | 'param' | 'control' {
 function readHandleAffinity(node: MinimalNode | undefined, handle: string): 'work' | 'param' | 'control' {
 	const inferred = inferAffinityFromHandle(handle);
 	if (inferred !== 'work') return inferred;
+	const portDeclarations = (node?.data as any)?.portDeclarations;
+	const declarationInPorts =
+		portDeclarations && typeof portDeclarations === 'object' ? portDeclarations.in : undefined;
 	const portContracts = (node?.data as any)?.portContracts;
-	const inPorts = portContracts && typeof portContracts === 'object' ? portContracts.in : undefined;
+	const inPorts =
+		declarationInPorts && typeof declarationInPorts === 'object'
+			? declarationInPorts
+			: portContracts && typeof portContracts === 'object'
+				? portContracts.in
+				: undefined;
 	if (!inPorts || typeof inPorts !== 'object') return 'work';
 	const key = String(handle ?? '').trim() || 'in';
 	const exact = (inPorts as Record<string, unknown>)[key] as Record<string, unknown> | undefined;
 	const fallback = (inPorts as Record<string, unknown>).default as Record<string, unknown> | undefined;
-	const affinity = String((exact ?? fallback ?? {}).affinity ?? '')
+	const affinity = String((exact ?? fallback ?? {}).plane ?? (exact ?? fallback ?? {}).affinity ?? '')
 		.trim()
 		.toLowerCase();
 	if (affinity === 'work' || affinity === 'param' || affinity === 'control') {
@@ -92,7 +100,7 @@ export function collectExpectedInputHandles(
 		}
 	}
 
-	const inPorts = (node?.data as any)?.portContracts?.in;
+	const inPorts = (node?.data as any)?.portDeclarations?.in ?? (node?.data as any)?.portContracts?.in;
 	if (inPorts && typeof inPorts === 'object') {
 		for (const rawHandle of Object.keys(inPorts as Record<string, unknown>)) {
 			const handle = String(rawHandle ?? '').trim();

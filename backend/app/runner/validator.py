@@ -3,7 +3,12 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 import json
 from .schemas import validate_node_params  # Import schema validation
-from .capabilities import allowed_edge_modes, port_contract
+from .capabilities import (
+    allowed_edge_modes,
+    port_contract,
+    resolve_node_port_declaration,
+    resolve_node_port_declarations,
+)
 from app.component_contracts import edge_mode_requires_payload_compatibility, normalize_edge_mode
 from .contracts import evaluate_schema_coercion, normalize_coercion_policy
 from .schema_diagnostics import (
@@ -48,6 +53,7 @@ class GraphValidator:
         errors.extend(type_errors)
         warnings.extend(type_warnings)
         errors.extend(self._validate_transform_join_arity(graph))
+        errors.extend(self._validate_port_declaration_constraints(graph))
         
         # 3. Schema validation
         errors.extend(self._validate_node_params_schema(graph))
@@ -394,11 +400,79 @@ class GraphValidator:
             return inferred
         data = (node.get("data") or {}) if isinstance(node, dict) else {}
         kind = str(data.get("kind") or "").strip().lower()
-        cfg = port_contract(kind, direction, str(handle or "").strip() or "default")
+        cfg = resolve_node_port_declaration(node, direction, str(handle or "").strip() or "default")
+        if not cfg:
+            cfg = port_contract(kind, direction, str(handle or "").strip() or "default")
         affinity = str((cfg or {}).get("affinity") or "").strip().lower()
         if affinity in {"work", "param", "control", "any"}:
             return affinity
         return inferred
+
+    def _validate_port_declaration_constraints(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        errors: List[ValidationError] = []
+        nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+        edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+        incoming_counts: Dict[str, Dict[str, int]] = {}
+        outgoing_counts: Dict[str, Dict[str, int]] = {}
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("source") or "").strip()
+            target = str(edge.get("target") or "").strip()
+            source_handle = str(edge.get("sourceHandle") or "out").strip() or "out"
+            target_handle = str(edge.get("targetHandle") or "in").strip() or "in"
+            if source:
+                outgoing_counts.setdefault(source, {})
+                outgoing_counts[source][source_handle] = int(outgoing_counts[source].get(source_handle) or 0) + 1
+            if target:
+                incoming_counts.setdefault(target, {})
+                incoming_counts[target][target_handle] = int(incoming_counts[target].get(target_handle) or 0) + 1
+
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip()
+            in_decls = resolve_node_port_declarations(node, "in")
+            out_decls = resolve_node_port_declarations(node, "out")
+            for handle, decl in in_decls.items():
+                if not isinstance(decl, dict):
+                    continue
+                required = bool(decl.get("required", False))
+                cardinality = str(decl.get("cardinality") or "many").strip().lower() or "many"
+                count = int((incoming_counts.get(node_id, {}) or {}).get(handle) or 0)
+                if required and count == 0:
+                    errors.append(
+                        ValidationError(
+                            code="MISSING_REQUIRED_PORT_EDGE",
+                            message=f"Required input port '{handle}' has no inbound edge",
+                            node_id=node_id,
+                            details={"direction": "in", "handle": handle, "required": True},
+                        )
+                    )
+                if cardinality == "one" and count > 1:
+                    errors.append(
+                        ValidationError(
+                            code="PORT_CARDINALITY_EXCEEDED",
+                            message=f"Input port '{handle}' allows only one edge (found {count})",
+                            node_id=node_id,
+                            details={"direction": "in", "handle": handle, "cardinality": "one", "edgeCount": count},
+                        )
+                    )
+            for handle, decl in out_decls.items():
+                if not isinstance(decl, dict):
+                    continue
+                cardinality = str(decl.get("cardinality") or "many").strip().lower() or "many"
+                count = int((outgoing_counts.get(node_id, {}) or {}).get(handle) or 0)
+                if cardinality == "one" and count > 1:
+                    errors.append(
+                        ValidationError(
+                            code="PORT_CARDINALITY_EXCEEDED",
+                            message=f"Output port '{handle}' allows only one edge (found {count})",
+                            node_id=node_id,
+                            details={"direction": "out", "handle": handle, "cardinality": "one", "edgeCount": count},
+                        )
+                    )
+        return errors
 
     @staticmethod
     def _edge_mode(edge: Dict[str, Any]) -> str:

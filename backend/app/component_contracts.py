@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from .graph_migrations import canonicalize_graph_payload
+from .runner.capabilities import normalize_node_port_declarations
 
 COMPONENT_SCHEMA_VERSION = 1
 ALLOWED_PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings"}
@@ -256,3 +257,10 @@ def canonicalize_input_contracts(raw: Any) -> Dict[str, Dict[str, Any]]:
         key: _canonical_input_contract_class(value.get(key))
         for key in INPUT_CONTRACT_CLASSES
     }
+
+
+def canonicalize_port_declarations(kind: str, raw: Any) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """
+    Canonicalize per-node port declarations for FE/BE parity.
+    """
+    return normalize_node_port_declarations(str(kind or "").strip().lower(), raw)

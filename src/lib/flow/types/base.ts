@@ -27,6 +27,17 @@ export type EdgeExecState =
   | "active"
   | "done";
 export type EdgeMode = "work" | "param" | "control";
+export type PortPlane = "work" | "param" | "control";
+export type PortDirection = "in" | "out";
+export type PortCardinality = "one" | "many";
+
+export type NodePortDeclaration = {
+	plane?: PortPlane;
+	affinity?: PortPlane;
+	required?: boolean;
+	cardinality?: PortCardinality;
+	behavior?: "once" | "single_item" | "batch";
+};
 
 export type NodeMeta = {
   createdAt?: string;     // ISO
@@ -59,6 +70,10 @@ export type BaseNodeData<K extends NodeKind, P> = {
         max_inflight?: number;
       }
     >;
+  };
+  portDeclarations?: {
+    in?: Record<string, NodePortDeclaration>;
+    out?: Record<string, NodePortDeclaration>;
   };
 
   // execution bookkeeping (optional for now)

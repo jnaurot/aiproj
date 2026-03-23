@@ -377,6 +377,69 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 		if (mode === 'batch') return 'batch';
 		return 'once';
 	};
+	const normalizePlane = (raw: unknown): 'work' | 'param' | 'control' => {
+		const plane = String(raw ?? 'work').trim().toLowerCase();
+		if (plane === 'param' || plane === 'control') return plane;
+		return 'work';
+	};
+	const normalizeCardinality = (raw: unknown): 'one' | 'many' => {
+		const cardinality = String(raw ?? 'many').trim().toLowerCase();
+		return cardinality === 'one' ? 'one' : 'many';
+	};
+	const normalizePortDeclarations = (
+		raw: unknown
+	): { in: Record<string, any>; out: Record<string, any> } => {
+		const value = raw && typeof raw === 'object' ? (raw as Record<string, any>) : {};
+		const out: { in: Record<string, any>; out: Record<string, any> } = { in: {}, out: {} };
+		for (const direction of ['in', 'out'] as const) {
+			const byDir = value[direction];
+			if (!byDir || typeof byDir !== 'object') continue;
+			for (const [handle, decl] of Object.entries(byDir as Record<string, any>)) {
+				const key = String(handle ?? '').trim();
+				if (!key || !decl || typeof decl !== 'object') continue;
+				const plane = normalizePlane((decl as any).plane ?? (decl as any).affinity);
+				const normalized: Record<string, any> = {
+					plane,
+					affinity: plane,
+					required: Boolean((decl as any).required ?? false),
+					cardinality: normalizeCardinality((decl as any).cardinality)
+				};
+				if (direction === 'in') {
+					normalized.behavior = normalizeMode((decl as any).behavior ?? (decl as any).consume_mode);
+				}
+				out[direction][key] = normalized;
+			}
+		}
+		return out;
+	};
+	const portDeclarationsFromPortContracts = (
+		raw: unknown
+	): { in: Record<string, any>; out: Record<string, any> } | null => {
+		if (!raw || typeof raw !== 'object') return null;
+		const value = raw as Record<string, any>;
+		const out: { in: Record<string, any>; out: Record<string, any> } = { in: {}, out: {} };
+		for (const direction of ['in', 'out'] as const) {
+			const byDir = value[direction];
+			if (!byDir || typeof byDir !== 'object') continue;
+			for (const [handle, contract] of Object.entries(byDir as Record<string, any>)) {
+				const key = String(handle ?? '').trim();
+				if (!key || !contract || typeof contract !== 'object') continue;
+				const plane = normalizePlane((contract as any).affinity);
+				const normalized: Record<string, any> = {
+					plane,
+					affinity: plane,
+					required: false,
+					cardinality: 'many'
+				};
+				if (direction === 'in') {
+					normalized.behavior = normalizeMode((contract as any).behavior);
+				}
+				out[direction][key] = normalized;
+			}
+		}
+		const hasAny = Object.keys(out.in).length > 0 || Object.keys(out.out).length > 0;
+		return hasAny ? out : null;
+	};
 	return nodes.map((node) => {
 		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
@@ -449,11 +512,39 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 			),
 			input_handles: normalizedInputHandles
 		};
+		const rawPortDeclarations =
+			(node.data as any)?.portDeclarations && typeof (node.data as any).portDeclarations === 'object'
+				? ((node.data as any).portDeclarations as Record<string, unknown>)
+				: null;
+		const rawPortContracts =
+			(node.data as any)?.portContracts && typeof (node.data as any).portContracts === 'object'
+				? ((node.data as any).portContracts as Record<string, unknown>)
+				: null;
+		const normalizedPortDeclarations = rawPortDeclarations
+			? normalizePortDeclarations(rawPortDeclarations)
+			: portDeclarationsFromPortContracts(rawPortContracts);
+		const portContractsFromDeclarations: Record<string, Record<string, any>> = { in: {}, out: {} };
+		if (normalizedPortDeclarations) {
+			for (const direction of ['in', 'out'] as const) {
+				for (const [handle, decl] of Object.entries(normalizedPortDeclarations[direction])) {
+					const entry: Record<string, any> = { affinity: String((decl as any).plane ?? 'work') };
+					if (direction === 'in') entry.behavior = String((decl as any).behavior ?? 'single_item');
+					portContractsFromDeclarations[direction][handle] = entry;
+				}
+			}
+		}
 		return {
 			...node,
 			data: {
 				...node.data,
 				processingPolicy: normalizedProcessingPolicy,
+				...(normalizedPortDeclarations ? { portDeclarations: normalizedPortDeclarations } : {}),
+				portContracts: normalizedPortDeclarations
+					? {
+							...(((node.data as any)?.portContracts as Record<string, unknown>) ?? {}),
+							...portContractsFromDeclarations
+						}
+					: ((node.data as any)?.portContracts as any),
 				...(nextSchema ? { schema: nextSchema } : {})
 			}
 		};
@@ -3567,11 +3658,12 @@ function nodePortAffinity(
 	const inferred = inferPortAffinityFromHandle(handle, direction);
 	if (inferred !== 'work') return inferred;
 	const data = (node.data ?? {}) as any;
-	const ports = data?.portContracts?.[direction];
+	const declared = data?.portDeclarations?.[direction];
+	const ports = declared && typeof declared === 'object' ? declared : data?.portContracts?.[direction];
 	const key = String(handle ?? 'default').trim() || 'default';
 	const exact = ports && typeof ports === 'object' ? ports[key] : undefined;
 	const fallback = ports && typeof ports === 'object' ? ports.default : undefined;
-	const affinity = String((exact ?? fallback ?? {}).affinity ?? '')
+	const affinity = String((exact ?? fallback ?? {}).plane ?? (exact ?? fallback ?? {}).affinity ?? '')
 		.trim()
 		.toLowerCase();
 	if (affinity === 'work' || affinity === 'param' || affinity === 'control') {
@@ -3585,7 +3677,10 @@ function declaredPortHandles(
 	direction: 'in' | 'out'
 ): string[] {
 	const data = (node.data ?? {}) as any;
-	const ports = data?.portContracts?.[direction];
+	const ports =
+		data?.portDeclarations?.[direction] && typeof data?.portDeclarations?.[direction] === 'object'
+			? data.portDeclarations[direction]
+			: data?.portContracts?.[direction];
 	if (!ports || typeof ports !== 'object') return [];
 	return Object.keys(ports as Record<string, unknown>)
 		.map((value) => String(value ?? '').trim())
@@ -3598,12 +3693,33 @@ function hasPortHandle(
 	handle: string
 ): boolean {
 	const data = (node.data ?? {}) as any;
-	const ports = data?.portContracts?.[direction];
+	const ports =
+		data?.portDeclarations?.[direction] && typeof data?.portDeclarations?.[direction] === 'object'
+			? data.portDeclarations[direction]
+			: data?.portContracts?.[direction];
 	if (!ports || typeof ports !== 'object') return true;
 	const normalized = String(handle ?? '').trim();
 	const record = ports as Record<string, unknown>;
 	if (normalized.length === 0) return 'default' in record || 'in' in record || 'out' in record;
 	return normalized in record || 'default' in record;
+}
+
+function portCardinality(
+	node: Node<PipelineNodeData>,
+	direction: 'in' | 'out',
+	handle: string
+): 'one' | 'many' {
+	const data = (node.data ?? {}) as any;
+	const ports =
+		data?.portDeclarations?.[direction] && typeof data?.portDeclarations?.[direction] === 'object'
+			? data.portDeclarations[direction]
+			: null;
+	if (!ports || typeof ports !== 'object') return 'many';
+	const key = String(handle ?? '').trim() || (direction === 'in' ? 'in' : 'out');
+	const exact = (ports as Record<string, any>)[key];
+	const fallback = (ports as Record<string, any>).default;
+	const cardinality = String((exact ?? fallback ?? {}).cardinality ?? 'many').trim().toLowerCase();
+	return cardinality === 'one' ? 'one' : 'many';
 }
 
 function edgeModeCompatible(
@@ -5179,6 +5295,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					error: `Target handle '${targetHandleRaw}' is not declared for this node`
 				};
 			}
+			if (portCardinality(targetNode, 'in', targetHandleRaw) === 'one') {
+				const existingInbound = state.edges.filter(
+					(edge) =>
+						String((edge as any).target ?? '') === target &&
+						(String((edge as any).targetHandle ?? 'in').trim() || 'in') === targetHandleRaw
+				);
+				if (existingInbound.length >= 1) {
+					return {
+						ok: false as const,
+						error: `Target handle '${targetHandleRaw}' allows only one inbound edge`
+					};
+				}
+			}
 			const targetAffinity = nodePortAffinity(targetNode, 'in', targetHandleRaw);
 			if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
 				return {
@@ -5282,6 +5411,22 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					id,
 					sourceHandle: canonicalSourceHandle
 				};
+				const targetNodeForCardinality = s.nodes.find((n) => n.id === edgeForValidation.target);
+				const targetHandle = String((edgeForValidation as any).targetHandle ?? 'in').trim() || 'in';
+				if (targetNodeForCardinality && portCardinality(targetNodeForCardinality as any, 'in', targetHandle) === 'one') {
+					const existingInbound = s.edges.filter(
+						(existing) =>
+							String((existing as any).target ?? '') === String(edgeForValidation.target ?? '') &&
+							(String((existing as any).targetHandle ?? 'in').trim() || 'in') === targetHandle
+					);
+					if (existingInbound.length >= 1) {
+						out = {
+							ok: false,
+							error: `Target handle '${targetHandle}' allows only one inbound edge`
+						};
+						return s;
+					}
+				}
 
 				// Validate schema compatibility and refresh edge contract metadata.
 				const chk = isEdgeStillValid(s.nodes, edgeForValidation);

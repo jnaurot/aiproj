@@ -4,7 +4,7 @@ import copy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from .runner.capabilities import allowed_payload_types
+from .runner.capabilities import allowed_payload_types, normalize_node_port_declarations
 from .schema_contracts import canonicalize_schema_envelope
 
 
@@ -218,6 +218,43 @@ def _canonicalize_builtin_tool_params(node: Dict[str, Any], notes: List[Dict[str
 		)
 
 
+def _canonicalize_node_port_declarations(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	kind = str(data.get("kind") or "").strip().lower()
+	if not kind:
+		return
+	raw_decls = data.get("portDeclarations") if isinstance(data.get("portDeclarations"), dict) else None
+	normalized = normalize_node_port_declarations(kind, raw_decls)
+	changed = normalized != raw_decls
+	data["portDeclarations"] = normalized
+
+	# Keep legacy frontend helpers working by reflecting affinity/behavior into portContracts.
+	port_contracts: Dict[str, Dict[str, Dict[str, Any]]] = {"in": {}, "out": {}}
+	for direction in ("in", "out"):
+		decls = normalized.get(direction) if isinstance(normalized.get(direction), dict) else {}
+		for handle, decl in decls.items():
+			if not isinstance(decl, dict):
+				continue
+			entry: Dict[str, Any] = {
+				"affinity": str(decl.get("plane") or "work").strip().lower() or "work",
+			}
+			if direction == "in":
+				entry["behavior"] = str(decl.get("behavior") or "single_item").strip().lower() or "single_item"
+			port_contracts[direction][str(handle)] = entry
+	prev_port_contracts = data.get("portContracts") if isinstance(data.get("portContracts"), dict) else None
+	if prev_port_contracts != port_contracts:
+		data["portContracts"] = port_contracts
+		changed = True
+	if changed:
+		notes.append(
+			{
+				"code": "NODE_PORT_DECLARATIONS_CANONICALIZED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Canonicalized node.data.portDeclarations and synced node.data.portContracts.",
+			}
+		)
+
+
 def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
 	notes: List[Dict[str, Any]] = []
 	graph = copy.deepcopy(raw if isinstance(raw, dict) else {})
@@ -317,6 +354,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			"max_inflight": max(1, max_inflight),
 			"input_handles": input_handles,
 		}
+		_canonicalize_node_port_declarations(next_node, notes)
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
 			node_map[nid] = next_node
