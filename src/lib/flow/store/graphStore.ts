@@ -747,6 +747,11 @@ export type GraphState = {
 	nodeOutputs: Record<string, NodeOutputInfo>;
 	nodeBindings: Record<string, NormalizedNodeBinding>;
 	activeRunId: string | null;
+	queueRuntime?: {
+		metrics?: Record<string, unknown>;
+		nodeMetrics?: Record<string, unknown>;
+		runtimeItemMetrics?: Record<string, unknown>;
+	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
 };
@@ -1709,8 +1714,16 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const enq = Number(itemStats?.itemsEnqueued ?? 0);
 			const deq = Number(itemStats?.itemsDequeued ?? 0);
 			const rej = Number(itemStats?.itemsRejected ?? 0);
+			const nextState = {
+				...state,
+				queueRuntime: {
+					metrics: (evt as any)?.metrics ?? {},
+					nodeMetrics: (evt as any)?.nodeMetrics ?? {},
+					runtimeItemMetrics: itemStats ?? {}
+				}
+			};
 			return logPush(
-				state,
+				nextState,
 				'info',
 				`[queue] depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej}`
 			);

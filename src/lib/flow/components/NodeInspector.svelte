@@ -349,6 +349,38 @@
 		selectedNode as any,
 		(schemaContract.edges ?? []) as NodeSchemaContractEdge[]
 	);
+	$: nodeQueuePortStats = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId) return [] as Array<Record<string, unknown>>;
+		const runtimeEdges = (($graphStore as any)?.queueRuntime?.metrics as any)?.edges;
+		if (!runtimeEdges || typeof runtimeEdges !== 'object') return [] as Array<Record<string, unknown>>;
+		const out: Array<Record<string, unknown>> = [];
+		for (const edge of ($graphStore?.edges ?? []) as any[]) {
+			const edgeId = String(edge?.id ?? '').trim();
+			if (!edgeId) continue;
+			if (String(edge?.target ?? '') === nodeId) {
+				const handle = String(edge?.targetHandle ?? 'in').trim() || 'in';
+				const metric = (runtimeEdges as Record<string, any>)[`${edgeId}:${handle}`] ?? null;
+				out.push({
+					direction: 'in',
+					edgeId,
+					handle,
+					metric
+				});
+			}
+			if (String(edge?.source ?? '') === nodeId) {
+				const handle = String(edge?.targetHandle ?? 'in').trim() || 'in';
+				const metric = (runtimeEdges as Record<string, any>)[`${edgeId}:${handle}`] ?? null;
+				out.push({
+					direction: 'out',
+					edgeId,
+					handle,
+					metric
+				});
+			}
+		}
+		return out;
+	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
@@ -1466,6 +1498,23 @@
 				</div>
 			{/if}
 		</div>
+		{#if nodeQueuePortStats.length > 0}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Queue Port Status</div>
+				<div class="guidedAssistList">
+					{#each nodeQueuePortStats as row, idx (`${row.direction}:${row.edgeId}:${row.handle}:${idx}`)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">
+								{String(row.direction)} {String(row.edgeId)}:{String(row.handle)}
+							</div>
+							<div class="guidedAssistDesc">
+								depth {String((row.metric as any)?.depth ?? 0)} | blocked {String((row.metric as any)?.blocked ?? false)} | full {String((row.metric as any)?.full ?? false)} | age {String((row.metric as any)?.oldestAgeSec ?? '-')}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
 		{#if !isComponent}
 			<div class="expectedSchemaEditor">
 				<div class="expectedSchemaHead">Expected Input Schemas</div>
