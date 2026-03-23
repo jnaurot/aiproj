@@ -3,8 +3,8 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
+	import { resolveNodeHandles, type NodeHandleDef } from './portHandles';
 
-	type NodeHandleDef = { id: string; label?: string };
 
 	// xyflow passes these props into node components
 	export let id: string;
@@ -25,18 +25,8 @@
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
 	$: inputType = derivedIo.in ?? null;
 	$: outputType = derivedIo.out ?? null;
-	$: effectiveTargetHandles =
-		Array.isArray(targetHandles) && targetHandles.length > 0
-			? targetHandles.filter((h) => String(h?.id ?? '').trim().length > 0)
-			: inputType !== null
-				? [{ id: 'in' }]
-				: [];
-	$: effectiveSourceHandles =
-		Array.isArray(sourceHandles) && sourceHandles.length > 0
-			? sourceHandles.filter((h) => String(h?.id ?? '').trim().length > 0)
-			: outputType !== null
-				? [{ id: 'out' }]
-				: [];
+	$: effectiveTargetHandles = resolveNodeHandles(data, 'in', targetHandles, inputType);
+	$: effectiveSourceHandles = resolveNodeHandles(data, 'out', sourceHandles, outputType);
 
 	function handleTop(index: number, total: number): string {
 		if (total <= 1) return '50%';
@@ -50,6 +40,7 @@
 		type="target"
 		position={Position.Left}
 		id={h.id}
+		class={`portHandle portHandle-target plane-${h.plane ?? 'work'}`}
 		style={`top:${handleTop(i, effectiveTargetHandles.length)};`}
 	/>
 {/each}
@@ -59,6 +50,7 @@
 		type="source"
 		position={Position.Right}
 		id={h.id}
+		class={`portHandle portHandle-source plane-${h.plane ?? 'work'}`}
 		style={`top:${handleTop(i, effectiveSourceHandles.length)};`}
 	/>
 {/each}
@@ -71,11 +63,23 @@
 
 	<slot />
 
-	{#if effectiveSourceHandles.length > 1}
+	{#if effectiveTargetHandles.length > 0}
+		<div class="targetLabels">
+			{#each effectiveTargetHandles as h, i (`label-in:${h.id}`)}
+				<div class="targetLabel" style={`top:${handleTop(i, effectiveTargetHandles.length)};`}>
+					<span class={`planeBadge plane-${h.plane ?? 'work'}`}>{h.plane ?? 'work'}</span>
+					<span class="portText">{h.label ?? h.id}</span>
+				</div>
+			{/each}
+		</div>
+	{/if}
+
+	{#if effectiveSourceHandles.length > 0}
 		<div class="sourceLabels">
-			{#each effectiveSourceHandles as h, i (`label:${h.id}`)}
+			{#each effectiveSourceHandles as h, i (`label-out:${h.id}`)}
 				<div class="sourceLabel" style={`top:${handleTop(i, effectiveSourceHandles.length)};`}>
-					{h.label ?? h.id}
+					<span class="portText">{h.label ?? h.id}</span>
+					<span class={`planeBadge plane-${h.plane ?? 'work'}`}>{h.plane ?? 'work'}</span>
 				</div>
 			{/each}
 		</div>
@@ -152,6 +156,85 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.targetLabels {
+		position: absolute;
+		left: 10px;
+		top: 0;
+		bottom: 0;
+		width: 110px;
+		pointer-events: none;
+	}
+
+	.targetLabel {
+		position: absolute;
+		transform: translateY(-50%);
+		left: 12px;
+		max-width: 100%;
+		font-size: 10px;
+		line-height: 1;
+		opacity: 0.72;
+		text-align: left;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.portText {
+		max-width: 68px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.planeBadge {
+		border: 1px solid rgba(255, 255, 255, 0.2);
+		border-radius: 999px;
+		padding: 1px 6px;
+		font-size: 9px;
+		line-height: 1;
+		text-transform: lowercase;
+	}
+
+	.planeBadge.plane-work {
+		color: #8ab4ff;
+		border-color: rgba(138, 180, 255, 0.45);
+	}
+
+	.planeBadge.plane-param {
+		color: #f2cc60;
+		border-color: rgba(242, 204, 96, 0.45);
+	}
+
+	.planeBadge.plane-control {
+		color: #7ee787;
+		border-color: rgba(126, 231, 135, 0.45);
+	}
+
+	:global(.portHandle) {
+		width: 13px;
+		height: 13px;
+		border: 2px solid #0f1115;
+		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+	}
+
+	:global(.portHandle.plane-work) {
+		background: #4b8cff;
+	}
+
+	:global(.portHandle.plane-param) {
+		background: #d8ac3f;
+	}
+
+	:global(.portHandle.plane-control) {
+		background: #2fbf71;
 	}
 
 	/* status coloring */
