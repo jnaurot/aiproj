@@ -1905,6 +1905,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const enq = Number(itemStats?.itemsEnqueued ?? 0);
 			const deq = Number(itemStats?.itemsDequeued ?? 0);
 			const rej = Number(itemStats?.itemsRejected ?? 0);
+			const planeStats = (itemStats?.byPlane ?? {}) as Record<string, any>;
+			const workEnq = Number(planeStats?.work?.itemsEnqueued ?? 0);
+			const paramEnq = Number(planeStats?.param?.itemsEnqueued ?? 0);
+			const controlEnq = Number(planeStats?.control?.itemsEnqueued ?? 0);
 			const nextState = {
 				...state,
 				queueRuntime: {
@@ -1916,7 +1920,19 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return logPush(
 				nextState,
 				'info',
-				`[queue] depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej}`
+				`[queue] depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej} by_plane(work=${workEnq},param=${paramEnq},control=${controlEnq})`
+			);
+		}
+		case 'contract_drift': {
+			const edgeId = String((evt as any)?.edgeId ?? '').trim();
+			const targetNodeId = String((evt as any)?.targetNodeId ?? '').trim();
+			const srcFp = String((evt as any)?.snapshotSourceSchemaFingerprint ?? '').trim().slice(0, 12);
+			const curFp = String((evt as any)?.currentSourceSchemaFingerprint ?? '').trim().slice(0, 12);
+			return logPush(
+				state,
+				'warn',
+				`[contract-drift] edge=${edgeId || '(unknown)'} snapshot=${srcFp || '(missing)'} current=${curFp || '(missing)'}`,
+				targetNodeId || undefined
 			);
 		}
 		case 'node_decision': {

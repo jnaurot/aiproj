@@ -6517,7 +6517,51 @@ async def run_graph(
             "itemsRejected": 0,
             "itemsAccepted": 0,
             "nodeCounters": node_accept_reject_counters,
+            "byPlane": {
+                "work": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+                "param": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+                "control": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+            },
+            "byHandle": {},
         }
+
+        def _metric_plane(mode: str) -> str:
+            value = str(mode or "work").strip().lower()
+            return value if value in {"work", "param", "control"} else "work"
+
+        def _ensure_handle_metrics(node_id: str, handle: str, plane: str) -> Dict[str, Any]:
+            by_handle = runtime_item_metrics.setdefault("byHandle", {})
+            key = f"{str(node_id or '').strip()}:{str(handle or 'in').strip() or 'in'}"
+            existing = by_handle.get(key)
+            if isinstance(existing, dict):
+                if not existing.get("plane"):
+                    existing["plane"] = plane
+                return existing
+            metrics = {
+                "nodeId": str(node_id or "").strip(),
+                "handle": str(handle or "in").strip() or "in",
+                "plane": plane,
+                "itemsEnqueued": 0,
+                "itemsDequeued": 0,
+                "itemsAccepted": 0,
+                "itemsRejected": 0,
+            }
+            by_handle[key] = metrics
+            return metrics
+
+        def _inc_runtime_metric(*, plane: str, node_id: str, handle: str, field: str, amount: int = 1) -> None:
+            inc = max(0, int(amount))
+            if inc <= 0:
+                return
+            p = _metric_plane(plane)
+            by_plane = runtime_item_metrics.setdefault("byPlane", {})
+            plane_bucket = by_plane.setdefault(
+                p,
+                {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+            )
+            plane_bucket[field] = int(plane_bucket.get(field, 0)) + inc
+            handle_bucket = _ensure_handle_metrics(node_id, handle, p)
+            handle_bucket[field] = int(handle_bucket.get(field, 0)) + inc
 
         async def _expand_edge_work_items(
             *,
@@ -6896,6 +6940,13 @@ async def run_graph(
                 if item is None:
                     break
                 runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
+                _inc_runtime_metric(
+                    plane=_edge_mode(edges.get(str(primary.get("edgeId") or "")) or {}),
+                    node_id=node_id,
+                    handle=primary_handle,
+                    field="itemsDequeued",
+                    amount=1,
+                )
                 out.append(item if isinstance(item, dict) else {"item": item})
             # Additional handles can each apply their own policy.
             for info in incoming[1:]:
@@ -6916,6 +6967,13 @@ async def run_graph(
                     if item is None:
                         break
                     runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
+                    _inc_runtime_metric(
+                        plane=_edge_mode(edges.get(str(info.get("edgeId") or "")) or {}),
+                        node_id=node_id,
+                        handle=handle,
+                        field="itemsDequeued",
+                        amount=1,
+                    )
                     out.append(item if isinstance(item, dict) else {"item": item})
             return out
 
@@ -7083,10 +7141,46 @@ async def run_graph(
                     runtime_item_metrics["itemsRejected"] = int(runtime_item_metrics.get("itemsRejected", 0)) + max(1, len(work_batch or []))
                     node_accept_reject_counters.setdefault(node_id, {"accepted": 0, "rejected": 0})
                     node_accept_reject_counters[node_id]["rejected"] = int(node_accept_reject_counters[node_id].get("rejected", 0)) + max(1, len(work_batch or []))
+                    if work_batch:
+                        for item in work_batch:
+                            handle = str((item or {}).get("targetHandle") or "in").strip() or "in"
+                            _inc_runtime_metric(
+                                plane="work",
+                                node_id=node_id,
+                                handle=handle,
+                                field="itemsRejected",
+                                amount=1,
+                            )
+                    else:
+                        _inc_runtime_metric(
+                            plane="work",
+                            node_id=node_id,
+                            handle="in",
+                            field="itemsRejected",
+                            amount=1,
+                        )
                 else:
                     runtime_item_metrics["itemsAccepted"] = int(runtime_item_metrics.get("itemsAccepted", 0)) + max(1, len(work_batch or []))
                     node_accept_reject_counters.setdefault(node_id, {"accepted": 0, "rejected": 0})
                     node_accept_reject_counters[node_id]["accepted"] = int(node_accept_reject_counters[node_id].get("accepted", 0)) + max(1, len(work_batch or []))
+                    if work_batch:
+                        for item in work_batch:
+                            handle = str((item or {}).get("targetHandle") or "in").strip() or "in"
+                            _inc_runtime_metric(
+                                plane="work",
+                                node_id=node_id,
+                                handle=handle,
+                                field="itemsAccepted",
+                                amount=1,
+                            )
+                    else:
+                        _inc_runtime_metric(
+                            plane="work",
+                            node_id=node_id,
+                            handle="in",
+                            field="itemsAccepted",
+                            amount=1,
+                        )
                 await _emit(
                     {
                         "type": "node_decision",
@@ -7101,6 +7195,16 @@ async def run_graph(
                 if decision == "reject":
                     # Reject is non-error; do not release downstream dependencies from this item.
                     _enqueue_ready_if_possible(node_id)
+                    await _emit(
+                        {
+                            "type": "queue_metrics",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "metrics": queue_registry.metrics(),
+                            "nodeMetrics": node_runtime_metrics,
+                            "runtimeItemMetrics": runtime_item_metrics,
+                        }
+                    )
                     continue
                 # Node succeeded/cached, release downstream dependencies through per-edge queues.
                 for edge_info in outbound_edges_by_source.get(node_id, []):
@@ -7137,6 +7241,13 @@ async def run_graph(
                             overflow=overflow_mode if overflow_mode in {"block", "spill", "error"} else "block",
                         )
                         runtime_item_metrics["itemsEnqueued"] = int(runtime_item_metrics.get("itemsEnqueued", 0)) + 1
+                        _inc_runtime_metric(
+                            plane=edge_mode,
+                            node_id=nb,
+                            handle=target_handle,
+                            field="itemsEnqueued",
+                            amount=1,
+                        )
                     if not bool(edge_dependency_released.get(edge_id, False)):
                         edge_dependency_released[edge_id] = True
                         indeg[nb] = max(0, indeg.get(nb, 0) - 1)
