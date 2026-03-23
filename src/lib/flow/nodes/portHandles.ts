@@ -106,13 +106,16 @@ export function resolveNodeHandles(
 					.map((h) => ({ id: String(h?.id ?? '').trim(), label: h?.label, plane: h?.plane }))
 					.filter((h) => h.id.length > 0)
 			: [];
-	const base =
-		fromProvided.length > 0
-			? fromProvided
-			: (() => {
-					const ids = declaredHandleIds(data, direction);
-					if (ids.length > 0) return ids.map((id) => ({ id }));
-					return ioType !== null && ioType !== undefined ? [{ id: direction === 'in' ? 'in' : 'out' }] : [];
-				})();
-	return base.map((h) => normalizeHandle(data, direction, h));
+	const fromDeclared = declaredHandleIds(data, direction).map((id) => ({ id }));
+	const hasAny = fromProvided.length > 0 || fromDeclared.length > 0;
+	const fallback =
+		!hasAny && ioType !== null && ioType !== undefined ? [{ id: direction === 'in' ? 'in' : 'out' }] : [];
+	const merged = [...fromProvided, ...fromDeclared, ...fallback];
+	const deduped = new Map<string, NodeHandleDef>();
+	for (const handle of merged) {
+		const id = String(handle?.id ?? '').trim();
+		if (!id) continue;
+		if (!deduped.has(id)) deduped.set(id, handle);
+	}
+	return Array.from(deduped.values()).map((h) => normalizeHandle(data, direction, h));
 }

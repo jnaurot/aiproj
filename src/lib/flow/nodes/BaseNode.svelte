@@ -25,8 +25,32 @@
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
 	$: inputType = derivedIo.in ?? null;
 	$: outputType = derivedIo.out ?? null;
-	$: effectiveTargetHandles = resolveNodeHandles(data, 'in', targetHandles, inputType);
-	$: effectiveSourceHandles = resolveNodeHandles(data, 'out', sourceHandles, outputType);
+	$: connectedTargetHandles = (() => {
+		const out: NodeHandleDef[] = [];
+		for (const edge of $graphStore?.edges ?? []) {
+			if (String((edge as any)?.target ?? '') !== String(id)) continue;
+			const handleId = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
+			const mode = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+			const plane = mode === 'param' || mode === 'control' ? mode : 'work';
+			out.push({ id: handleId, plane: plane as 'work' | 'param' | 'control' });
+		}
+		return out;
+	})();
+	$: connectedSourceHandles = (() => {
+		const out: NodeHandleDef[] = [];
+		for (const edge of $graphStore?.edges ?? []) {
+			if (String((edge as any)?.source ?? '') !== String(id)) continue;
+			const handleId = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+			const mode = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+			const plane = mode === 'param' || mode === 'control' ? mode : 'work';
+			out.push({ id: handleId, plane: plane as 'work' | 'param' | 'control' });
+		}
+		return out;
+	})();
+	$: mergedTargetHandles = [...(Array.isArray(targetHandles) ? targetHandles : []), ...connectedTargetHandles];
+	$: mergedSourceHandles = [...(Array.isArray(sourceHandles) ? sourceHandles : []), ...connectedSourceHandles];
+	$: effectiveTargetHandles = resolveNodeHandles(data, 'in', mergedTargetHandles, inputType);
+	$: effectiveSourceHandles = resolveNodeHandles(data, 'out', mergedSourceHandles, outputType);
 
 	function handleTop(index: number, total: number): string {
 		if (total <= 1) return '50%';

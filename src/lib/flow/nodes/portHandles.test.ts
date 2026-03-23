@@ -49,6 +49,29 @@ describe('portHandles', () => {
 		expect(out[0].plane).toBe('param');
 	});
 
+	it('merges explicit and declared handles without dropping connected ids', () => {
+		const nodeData: any = {
+			kind: 'model',
+			label: 'Model',
+			params: {},
+			portDeclarations: {
+				in: {
+					in: { plane: 'work', label: 'Data In' },
+					param_filters: { plane: 'param', label: 'Filters' }
+				}
+			}
+		};
+		const inHandles = resolveNodeHandles(
+			nodeData,
+			'in',
+			[{ id: 'in' }, { id: 'legacy_param_context', plane: 'param' }],
+			{ type: 'json' }
+		);
+		expect(inHandles.map((h) => h.id)).toEqual(['in', 'legacy_param_context', 'param_filters']);
+		expect(inHandles.find((h) => h.id === 'legacy_param_context')?.plane).toBe('param');
+		expect(inHandles.find((h) => h.id === 'param_filters')?.plane).toBe('param');
+	});
+
 	it('falls back to default in/out for legacy nodes without declarations', () => {
 		const legacy: any = { kind: 'source', label: 'Legacy', params: {} };
 		const inHandles = resolveNodeHandles(legacy, 'in', null, { type: 'json' });
