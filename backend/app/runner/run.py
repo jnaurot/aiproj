@@ -3104,11 +3104,12 @@ async def run_graph(
 
     # ===== PHASE 1.5: COMPONENT EXPANSION =====
     component_expansion = None
-    execution_graph = graph
+    # Snapshot the graph at run start so rewires/edits apply on the next run only.
+    execution_graph = copy.deepcopy(graph)
     component_store = getattr(runtime_ref, "component_revisions", None) if runtime_ref is not None else None
     try:
         component_expansion = expand_graph_components(
-            graph,
+            copy.deepcopy(graph),
             component_store=component_store,
             max_depth=5,
         )
