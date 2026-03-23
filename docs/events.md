@@ -87,6 +87,8 @@ Fields:
 - `metrics.edges` (per-edge queue depth/rates/age/full/blocked)
 - `nodeMetrics` (per-node input wait, run time, retry count, backpressure status)
 - `runtimeItemMetrics` (itemsEnqueued/itemsDequeued/itemsAccepted/itemsRejected/nodeCounters)
+  - includes `byPlane` counters (`work|param|control`)
+  - includes `byHandle` counters keyed as `<nodeId>:<handle>`
 
 ### `node_decision`
 
