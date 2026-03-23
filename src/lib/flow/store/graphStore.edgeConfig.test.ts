@@ -20,7 +20,8 @@ describe('graphStore edge config', () => {
 		const updated = graphStore.updateEdgeConfig('e_cfg', {
 			mode: 'work',
 			fatal: true,
-			queue: { max: 50, overflow: 'block' }
+			queue: { max: 50, overflow: 'block' },
+			work: { item_mode: 'json_items', max_items: 25 }
 		});
 		expect(updated.ok).toBe(true);
 	});

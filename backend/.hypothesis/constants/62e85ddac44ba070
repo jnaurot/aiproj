@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\llm_ollama.py
+# hypothesis_version: 6.151.9
+
+[0.0, 10.0, 1000.0, 300, ',', ':', '<missing-node-id>', 'POST', '_raw_text', '_warnings', 'at', 'base_url', 'bus', 'cache_decision', 'choices', 'content', 'context is None', 'context missing bus', 'cost_estimate_usd', 'delta', 'done', 'error', 'executed', 'failed', 'id', 'info', 'inputChars', 'input_chars', 'input_tokens_est', 'json', 'json_parse_failed', 'latency_ms', 'level', 'llm_delta', 'llm_thinking_delta', 'log', 'message', 'model', 'model_observability', 'nodeId', 'none', 'ollama', 'output', 'output_chars', 'output_mode', 'output_tokens_est', 'preview', 'preview_text', 'prompt_revision_id', 'provider', 'reasoning', 'reasoning_content', 'response', 'retries', 'runId', 'snippet', 'soft', 'stream', 'strict', 'succeeded', 'text', 'thinking', 'total_tokens_est', 'type', 'upstreamCount', 'utf-8', 'value', 'visible', 'warn', '{input}']

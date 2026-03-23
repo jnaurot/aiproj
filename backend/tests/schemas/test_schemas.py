@@ -68,7 +68,9 @@ class TestLLMParams:
         }
 
         result = normalize_llm_params_frontend(input_params)
-        assert result["output_mode"] == "text"
+        assert "output_mode" not in result
+        assert isinstance(result.get("output"), dict)
+        assert result["output"].get("mode") == "text"
     
     def test_normalize_stop_sequences(self):
         """Test stop_sequences normalization"""

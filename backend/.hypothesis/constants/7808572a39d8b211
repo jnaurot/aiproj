@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\model_adapters.py
+# hypothesis_version: 6.151.9
+
+[',', '/', ':', ';', 'Content-Type', 'application/json', 'audio', 'content', 'data', 'data:', 'dataUrl', 'embeddings', 'embeddings.json', 'format', 'frequency_penalty', 'hidden', 'image', 'image_url', 'input', 'input_audio', 'json', 'json_object', 'max_tokens', 'messages', 'mimeType', 'model', 'none', 'num_predict', 'ollama', 'openai_compat', 'options', 'output_mode', 'presence_penalty', 'repeat_penalty', 'response_format', 'role', 'seed', 'stop', 'stream', 'system', 'temperature', 'text', 'think', 'top_p', 'txt', 'type', 'url', 'user', 'visible', 'wav', '{input}']

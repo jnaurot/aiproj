@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\schema_infer.py
+# hypothesis_version: 6.151.9
+
+[0.5, 0.6, 0.78, 0.8, 0.82, 0.95, 0.99, 512, ',', ':', 'additionalProperties', 'anyOf', 'array', 'audio', 'binary', 'bool', 'boolean', 'bypass', 'confidence', 'entries', 'fields', 'float', 'hit', 'image', 'int', 'integer', 'items', 'json', 'max_depth', 'miss', 'name', 'null', 'nullable', 'number', 'object', 'properties', 'reason', 'required', 'schema', 'string', 'table', 'text', 'type', 'union', 'unknown', 'utf-8', 'video']

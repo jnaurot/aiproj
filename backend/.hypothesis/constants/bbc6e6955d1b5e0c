@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\model_eval_gate.py
+# hypothesis_version: 6.151.9
+
+['_warnings', 'embeddings', 'enabled', 'eval_gate disabled', 'eval_gate passed', 'fail_on_warnings', 'json', 'min_output_chars', 'required_json_keys', 'required_substring']

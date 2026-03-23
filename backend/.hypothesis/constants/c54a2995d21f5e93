@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\AppData\Roaming\Python\Python314\site-packages\PIL\PcxImagePlugin.py
+# hypothesis_version: 6.151.9
+
+[b'\x00', b'\xff', -769, 100, 128, 256, 768, 769, '.pcx', '1', 'BBox: %s %s %s %s', 'L', 'P', 'PCX', 'Paintbrush', 'RGB', 'RGB;L', 'bad PCX image size', 'dpi', 'image/x-pcx', 'not a PCX file', 'pcx', 'size: %sx%s', 'unknown PCX mode']

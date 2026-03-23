@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\component_contracts.py
+# hypothesis_version: 6.151.9
+
+['INVALID_API', 'INVALID_API_ENTRY', 'INVALID_API_SECTION', 'INVALID_DEFINITION', 'INVALID_GRAPH', 'INVALID_GRAPH_EDGES', 'INVALID_GRAPH_NODES', 'MISSING_ENTRY_NAME', 'MISSING_TYPED_SCHEMA', 'action', 'api', 'binary', 'canonicalize', 'code', 'configSchema', 'control', 'controlInputs', 'definition', 'edges', 'embeddings', 'error', 'fields', 'fromSchemaVersion', 'graph', 'graph.edges', 'graph.nodes', 'graph_canonicalize', 'inputs', 'json', 'message', 'name', 'name is required', 'nativeType', 'nodes', 'nullable', 'outputs', 'param', 'paramInputs', 'path', 'required', 'severity', 'string', 'table', 'text', 'toSchemaVersion', 'type', 'typedSchema', 'unknown', 'warning', 'work', 'workInputs']

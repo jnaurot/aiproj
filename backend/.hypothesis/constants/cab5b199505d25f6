@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\metadata.py
+# hypothesis_version: 6.151.9
+
+[0.0, 'binary', 'csv', 'excel', 'failed', 'http', 'image', 'json', 'local', 'parquet', 'pdf', 'postgres', 's3', 'skipped', 'succeeded', 'tsv', 'txt', 'v1']

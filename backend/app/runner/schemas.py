@@ -33,9 +33,6 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     # frontend output object -> backend output_schema/strict/embedding_contract
     out = p.get("output")
     if isinstance(out, dict):
-        if "mode" in out:
-            # Canonical schema-first mode; override stale legacy output_mode if present.
-            p["output_mode"] = out.get("mode")
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
@@ -44,6 +41,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_validation_mode"] = out.get("validationMode")
         if "embedding" in out and "embedding_contract" not in p:
             p["embedding_contract"] = out.get("embedding")
+    # Schema-first: ignore legacy flattened output mode key.
+    p.pop("output_mode", None)
 
     # frontend may send stopSequences, inputMapping (if you add later)
     if "stopSequences" in p and "stop_sequences" not in p:

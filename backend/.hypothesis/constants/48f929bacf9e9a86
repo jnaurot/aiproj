@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\model_policy.py
+# hypothesis_version: 6.151.9
+
+[0.0, 0.5, 1.0, 2.0, 8.0, 30.0, 60.0, 300.0, 3600.0, -2147483648, 100, 1000, 4096, 2147483647, 'backoff', 'base_seconds', 'batching', 'circuit_breaker', 'determinism', 'enabled', 'fail_threshold', 'failures', 'fallback_chain', 'jitter_seconds', 'max_items', 'max_seconds', 'open_until', 'reset_seconds', 'retries', 'seed', 'stable_order', 'timeout_seconds']

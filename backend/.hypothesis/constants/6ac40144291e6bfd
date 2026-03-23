@@ -1,0 +1,4 @@
+# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\contracts.py
+# hypothesis_version: 6.151.9
+
+[',', ':', 'AUDIO_V1', 'BINARY_V1', 'EMBEDDINGS_ANY_V1', 'IMAGE_V1', 'JSON_ANY_V1', 'TABLE_V1', 'TEXT_V1', 'VIDEO_V1', 'aac', 'api', 'audio', 'binary', 'columns', 'contract', 'csv', 'data', 'database', 'dtype', 'embeddings', 'excel', 'expectedSchema', 'file', 'file_format', 'flac', 'gif', 'image', 'jpeg', 'jpg', 'json', 'kind', 'llm', 'm4a', 'mode', 'model', 'mov', 'mp3', 'mp4', 'name', 'object_store', 'ogg', 'output', 'params', 'parquet', 'pdf', 'png', 'schema', 'schema_version', 'source', 'sourceKind', 'source_type', 'string', 'svg', 'table', 'text', 'tif', 'tiff', 'tool', 'transform', 'tsv', 'txt', 'type', 'typedSchema', 'unknown', 'utf-8', 'version', 'video', 'warehouse', 'wav', 'webm', 'webp']

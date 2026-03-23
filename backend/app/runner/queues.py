@@ -118,6 +118,10 @@ class QueueRegistry:
 			self._queues[key] = queue
 		return queue
 
+	def depth(self, edge_id: str, input_handle: str = "in") -> int:
+		q = self.get_queue(edge_id, input_handle)
+		return int(q.depth)
+
 	async def enqueue(
 		self,
 		edge_id: str,

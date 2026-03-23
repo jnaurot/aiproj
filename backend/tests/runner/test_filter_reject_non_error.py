@@ -25,9 +25,9 @@ async def test_reject_marked_in_output_is_non_error(monkeypatch) -> None:
 	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
 		return NodeOutput(
 			status="failed",
-			metadata={"reject": True, "decision": "reject"},
+			metadata=None,
 			execution_time_ms=1.0,
-			data={"kind": "json", "payload": {"reject": True}, "meta": {"reject": True}},
+			data={"kind": "json", "payload": {"reject": True}, "meta": {"reject": True, "decision": "reject"}},
 		)
 
 	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
