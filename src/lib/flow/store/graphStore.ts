@@ -545,12 +545,15 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 							max_inflight: Math.max(
 								1,
 								Number((policy as any).max_inflight ?? (policy as any).maxInflight ?? 1)
+							),
+							read_once: Boolean(
+								(policy as any).read_once ?? (policy as any).readOnce ?? false
 							)
 						}
 					];
 				})
 				.filter(
-					(entry): entry is [string, { consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number }] =>
+					(entry): entry is [string, { consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number; read_once: boolean }] =>
 						Array.isArray(entry) && String(entry[0] ?? '').trim().length > 0
 				)
 		);
@@ -560,6 +563,9 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 			max_inflight: Math.max(
 				1,
 				Number(processingPolicyRaw.max_inflight ?? processingPolicyRaw.maxInflight ?? 1)
+			),
+			read_once: Boolean(
+				processingPolicyRaw.read_once ?? processingPolicyRaw.readOnce ?? false
 			),
 			input_handles: normalizedInputHandles
 		};
@@ -5923,7 +5929,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		updateNodeProcessingPolicy(
 			nodeId: string,
-			patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+			patch: {
+				consume_mode?: 'once' | 'single_item' | 'batch';
+				batch_size?: number;
+				max_inflight?: number;
+				read_once?: boolean;
+			}
 		) {
 			let out: { ok: boolean; error?: string } = { ok: true };
 			update((s) => {
@@ -5941,7 +5952,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const nextPolicy = {
 					consume_mode: nextMode as 'once' | 'single_item' | 'batch',
 					batch_size: Math.max(1, Number(patch.batch_size ?? existing.batch_size ?? 1)),
-					max_inflight: Math.max(1, Number(patch.max_inflight ?? existing.max_inflight ?? 1))
+					max_inflight: Math.max(1, Number(patch.max_inflight ?? existing.max_inflight ?? 1)),
+					read_once: Boolean(patch.read_once ?? existing.read_once ?? existing.readOnce ?? false)
 				};
 				const nodes = s.nodes.map((n) =>
 					n.id === nodeId
@@ -5964,7 +5976,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		updateNodeInputHandleProcessingPolicy(
 			nodeId: string,
 			inputHandle: string,
-			patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+			patch: {
+				consume_mode?: 'once' | 'single_item' | 'batch';
+				batch_size?: number;
+				max_inflight?: number;
+				read_once?: boolean;
+			}
 		) {
 			let out: { ok: boolean; error?: string } = { ok: true };
 			update((s) => {
@@ -5991,6 +6008,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					max_inflight: Math.max(
 						1,
 						Number(patch.max_inflight ?? existingHandle.max_inflight ?? existing.max_inflight ?? 1)
+					),
+					read_once: Boolean(
+						patch.read_once ?? existingHandle.read_once ?? existingHandle.readOnce ?? existing.read_once ?? false
 					)
 				};
 				const nextPolicy = {

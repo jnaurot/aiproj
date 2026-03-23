@@ -458,6 +458,7 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
     elif isinstance(params.get("processingPolicy"), dict):
         policy = params.get("processingPolicy") or {}
     consume_mode = _normalize_consume_mode(policy.get("consume_mode") or policy.get("consumeMode") or "once")
+    read_once = bool(policy.get("read_once") or policy.get("readOnce") or consume_mode == "once")
     try:
         batch_size = max(1, int(policy.get("batch_size") or policy.get("batchSize") or 1))
     except Exception:
@@ -475,6 +476,7 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
                 or handle_policy.get("consumeMode")
                 or consume_mode
             )
+            read_once = bool(handle_policy.get("read_once") or handle_policy.get("readOnce") or consume_mode == "once")
             try:
                 batch_size = max(
                     1,
@@ -489,10 +491,13 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
                 )
             except Exception:
                 max_inflight = max(1, max_inflight)
+    if read_once:
+        consume_mode = "once"
     return {
         "consume_mode": consume_mode,
         "batch_size": batch_size,
         "max_inflight": max_inflight,
+        "read_once": read_once,
     }
 
 

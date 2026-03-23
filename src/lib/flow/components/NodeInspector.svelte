@@ -176,12 +176,15 @@
 		const policyRaw =
 			((selectedNode?.data as any)?.processingPolicy ?? {}) as Record<string, unknown>;
 		const consumeMode = String(policyRaw?.consume_mode ?? 'once').trim().toLowerCase();
+		const readOnceRaw =
+			(policyRaw as any)?.read_once ?? (policyRaw as any)?.readOnce ?? consumeMode === 'once';
 		return {
 			consume_mode: (
 				consumeMode === 'single_item' || consumeMode === 'batch' ? consumeMode : 'once'
 			) as 'once' | 'single_item' | 'batch',
 			batch_size: Math.max(1, Number(policyRaw?.batch_size ?? 1)),
-			max_inflight: Math.max(1, Number(policyRaw?.max_inflight ?? 1))
+			max_inflight: Math.max(1, Number(policyRaw?.max_inflight ?? 1)),
+			read_once: Boolean(readOnceRaw)
 		};
 	})();
 	$: nodeProcessingPolicyByHandle = (() => {
@@ -193,7 +196,7 @@
 				: {};
 		const out: Record<
 			string,
-			{ consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number }
+			{ consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number; read_once: boolean }
 		> = {};
 		for (const handleSummary of expectedInputHandles ?? []) {
 			const handle = String(handleSummary?.handle ?? '').trim();
@@ -207,6 +210,8 @@
 			)
 				.trim()
 				.toLowerCase();
+			const readOnceRaw =
+				(handleRaw as any)?.read_once ?? (handleRaw as any)?.readOnce ?? consumeMode === 'once';
 			out[handle] = {
 				consume_mode: (
 					consumeMode === 'single_item' || consumeMode === 'batch' ? consumeMode : 'once'
@@ -218,7 +223,8 @@
 				max_inflight: Math.max(
 					1,
 					Number((handleRaw as any)?.max_inflight ?? nodeProcessingPolicy.max_inflight ?? 1)
-				)
+				),
+				read_once: Boolean(readOnceRaw)
 			};
 		}
 		return out;
@@ -1023,7 +1029,12 @@
 	}
 
 	function updateNodeProcessingPolicy(
-		patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+		patch: {
+			consume_mode?: 'once' | 'single_item' | 'batch';
+			batch_size?: number;
+			max_inflight?: number;
+			read_once?: boolean;
+		}
 	): void {
 		if (!selectedNode?.id) return;
 		graphStore.updateNodeProcessingPolicy(selectedNode.id, patch);
@@ -1031,7 +1042,12 @@
 
 	function updateNodeProcessingPolicyForHandle(
 		inputHandle: string,
-		patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+		patch: {
+			consume_mode?: 'once' | 'single_item' | 'batch';
+			batch_size?: number;
+			max_inflight?: number;
+			read_once?: boolean;
+		}
 	): void {
 		if (!selectedNode?.id) return;
 		graphStore.updateNodeInputHandleProcessingPolicy(selectedNode.id, inputHandle, patch);
@@ -1481,6 +1497,17 @@
 							})}
 					/>
 				</label>
+				<label class="guidedToggle schemaEdgeFatal">
+					<input
+						type="checkbox"
+						checked={Boolean(nodeProcessingPolicy.read_once)}
+						on:change={(event) =>
+							updateNodeProcessingPolicy({
+								read_once: (event.currentTarget as HTMLInputElement).checked
+							})}
+					/>
+					<span>read once</span>
+				</label>
 			</div>
 			{#if expectedInputHandles.length > 0}
 				<div class="guidedAssistList">
@@ -1536,6 +1563,20 @@
 												)
 											})}
 									/>
+								</label>
+								<label class="guidedToggle schemaEdgeFatal">
+									<input
+										type="checkbox"
+										checked={Boolean(
+											nodeProcessingPolicyByHandle[handleSummary.handle]?.read_once ??
+												nodeProcessingPolicy.read_once
+										)}
+										on:change={(event) =>
+											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
+												read_once: (event.currentTarget as HTMLInputElement).checked
+											})}
+									/>
+									<span>read once</span>
 								</label>
 							</div>
 						</div>
