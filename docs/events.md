@@ -64,6 +64,7 @@ Required fields:
 - `node_decision`
 - `node_reject`
 - `branch_cascade`
+- `node_handle_satisfaction`
 - `contract_drift`
 - `log`
 
@@ -131,6 +132,18 @@ Fields:
 - `originNodeId`
 - `blockedNodeIds` (all transitively blocked descendants in deterministic order)
 - optional `reasonCode`
+
+### `node_handle_satisfaction`
+
+Per-node input-handle satisfaction status for same-handle multi-edge work inputs.
+
+Fields:
+
+- `nodeId`
+- `handle`
+- `status` (`all | partial | none`)
+- `connectedEdges`
+- `providedEdges`
 
 ### `contract_drift`
 

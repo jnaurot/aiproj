@@ -134,6 +134,16 @@ export type KnownRunEvent =
       decision: "accept" | "reject";
       count?: number;
       reasonCode?: string;
+    }
+  | {
+      type: "node_handle_satisfaction";
+      runId: string;
+      at: string;
+      nodeId: string;
+      handle: string;
+      status: "all" | "partial" | "none";
+      connectedEdges: number;
+      providedEdges: number;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

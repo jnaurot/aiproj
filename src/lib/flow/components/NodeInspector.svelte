@@ -452,6 +452,30 @@
 			})
 			.filter((entry) => entry.originNodeId === nodeId || entry.blockedNodeIds.includes(nodeId));
 	})();
+	$: nodeHandleSatisfaction = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId) return [] as Array<{ handle: string; status: string; connectedEdges: number; providedEdges: number; updatedAt?: string }>;
+		const map =
+			(($graphStore as any)?.queueRuntime?.handleSatisfaction &&
+			typeof ($graphStore as any).queueRuntime.handleSatisfaction === 'object'
+				? (($graphStore as any).queueRuntime.handleSatisfaction as Record<string, unknown>)
+				: null) ?? null;
+		if (!map) return [] as Array<{ handle: string; status: string; connectedEdges: number; providedEdges: number; updatedAt?: string }>;
+		const out: Array<{ handle: string; status: string; connectedEdges: number; providedEdges: number; updatedAt?: string }> = [];
+		for (const [key, value] of Object.entries(map)) {
+			if (!String(key).startsWith(`${nodeId}:`)) continue;
+			const row = (value ?? {}) as Record<string, unknown>;
+			out.push({
+				handle: String(row.handle ?? '').trim(),
+				status: String(row.status ?? 'all').trim(),
+				connectedEdges: Number(row.connectedEdges ?? 0),
+				providedEdges: Number(row.providedEdges ?? 0),
+				updatedAt: String(row.updatedAt ?? '').trim()
+			});
+		}
+		out.sort((a, b) => a.handle.localeCompare(b.handle));
+		return out;
+	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
@@ -1800,6 +1824,21 @@
 							<div class="guidedAssistLabel">origin {row.originNodeId || '-'}</div>
 							<div class="guidedAssistDesc">
 								blocked {row.blockedNodeIds.join(', ') || '-'} | reason {row.reasonCode || '-'} | at {row.at || '-'}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if nodeHandleSatisfaction.length > 0}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Handle Satisfaction</div>
+				<div class="guidedAssistList">
+					{#each nodeHandleSatisfaction as row (`${row.handle}:${row.status}:${row.updatedAt}`)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">{row.handle}</div>
+							<div class="guidedAssistDesc">
+								status {row.status} | provided {row.providedEdges}/{row.connectedEdges} | at {row.updatedAt || '-'}
 							</div>
 						</div>
 					{/each}

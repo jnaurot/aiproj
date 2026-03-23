@@ -191,3 +191,29 @@ class QueueRegistry:
 			"perEdgeMax": self._limits.per_edge_max,
 			"edges": edge_metrics,
 		}
+
+
+def next_nonempty_key(
+	keys: list[str],
+	*,
+	start_index: int = 0,
+	has_items,
+) -> tuple[Optional[str], int]:
+	"""Round-robin select next key with available items.
+
+	Returns (selected_key, next_index). selected_key is None when no key has data.
+	"""
+	ordered = [str(k or "").strip() for k in keys if str(k or "").strip()]
+	if not ordered:
+		return None, 0
+	length = len(ordered)
+	idx = max(0, int(start_index)) % length
+	for offset in range(length):
+		candidate_index = (idx + offset) % length
+		candidate = ordered[candidate_index]
+		try:
+			if bool(has_items(candidate)):
+				return candidate, (candidate_index + 1) % length
+		except Exception:
+			continue
+	return None, idx

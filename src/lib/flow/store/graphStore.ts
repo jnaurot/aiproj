@@ -1016,6 +1016,17 @@ export type GraphState = {
 			reasonCode?: string;
 			at?: string;
 		}>;
+		handleSatisfaction?: Record<
+			string,
+			{
+				nodeId: string;
+				handle: string;
+				status: 'all' | 'partial' | 'none';
+				connectedEdges: number;
+				providedEdges: number;
+				updatedAt?: string;
+			}
+		>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2036,6 +2047,42 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				originNodeId || undefined
 			);
 		}
+		case 'node_handle_satisfaction': {
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			const handle = String((evt as any)?.handle ?? '').trim();
+			const statusRaw = String((evt as any)?.status ?? '').trim().toLowerCase();
+			const status = statusRaw === 'partial' || statusRaw === 'none' ? statusRaw : 'all';
+			if (!nodeId || !handle) return state;
+			const key = `${nodeId}:${handle}`;
+			const previous =
+				(state.queueRuntime?.handleSatisfaction && typeof state.queueRuntime.handleSatisfaction === 'object'
+					? state.queueRuntime.handleSatisfaction
+					: {}) ?? {};
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					handleSatisfaction: {
+						...previous,
+						[key]: {
+							nodeId,
+							handle,
+							status,
+							connectedEdges: Number((evt as any)?.connectedEdges ?? 0),
+							providedEdges: Number((evt as any)?.providedEdges ?? 0),
+							updatedAt: String((evt as any)?.at ?? '')
+						}
+					}
+				}
+			};
+			const level = status === 'all' ? 'info' : status === 'partial' ? 'warn' : 'error';
+			return logPush(
+				nextState,
+				level,
+				`[handle] ${handle} status=${status} provided=${Number((evt as any)?.providedEdges ?? 0)}/${Number((evt as any)?.connectedEdges ?? 0)}`,
+				nodeId
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
@@ -2079,7 +2126,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					branchCascade:
 						Array.isArray((state.queueRuntime as any)?.branchCascade)
 							? ((state.queueRuntime as any).branchCascade as any[])
-							: []
+							: [],
+					handleSatisfaction:
+						(state.queueRuntime?.handleSatisfaction &&
+						typeof state.queueRuntime.handleSatisfaction === 'object'
+							? state.queueRuntime.handleSatisfaction
+							: {}) ?? {}
 				}
 			};
 			return logPush(

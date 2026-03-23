@@ -28,7 +28,7 @@ from .validator import GraphValidator, collect_transitive_descendants
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
-from .queues import QueueLimits, QueueRegistry
+from .queues import QueueLimits, QueueRegistry, next_nonempty_key
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .contracts import (
     TABLE_V1,
@@ -6631,14 +6631,18 @@ async def run_graph(
                     }
                 ]
             if item_mode == "json_items":
+                explicit_json_items_source = False
                 try:
                     parsed = json.loads(payload.decode("utf-8"))
                 except Exception:
                     parsed = None
                 iterable = parsed if isinstance(parsed, list) else []
+                if isinstance(parsed, list):
+                    explicit_json_items_source = True
                 if not iterable and isinstance(parsed, dict):
                     payload_obj = parsed.get("payload")
                     if isinstance(payload_obj, list):
+                        explicit_json_items_source = True
                         iterable = payload_obj
                 for idx, entry in enumerate(iterable):
                     if idx >= max_items:
@@ -6654,6 +6658,8 @@ async def run_graph(
                             "itemPreview": entry if isinstance(entry, (dict, list, str, int, float, bool, type(None))) else str(entry),
                         }
                     )
+                if explicit_json_items_source and not items:
+                    return []
             elif item_mode == "table_rows":
                 try:
                     df = load_table_from_artifact_bytes(upstream_art, payload)
@@ -6958,6 +6964,67 @@ async def run_graph(
         inflight: Dict[asyncio.Task, Dict[str, Any]] = {}
         completed_count = 0
         run_failed = False
+        connected_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
+        provided_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
+        handle_satisfaction_state: Dict[str, Dict[str, str]] = {nid: {} for nid in sub}
+
+        for nid in sub:
+            for incoming_edge_id in plan.incoming_edges.get(nid, []):
+                incoming_edge = edges.get(incoming_edge_id) or {}
+                if _edge_mode(incoming_edge) != "work":
+                    continue
+                handle = str(incoming_edge.get("targetHandle") or "in").strip() or "in"
+                connected_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set()).add(str(incoming_edge_id))
+                provided_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set())
+
+        def _handle_satisfaction_status(node_id: str, handle: str) -> Tuple[str, int, int]:
+            connected = connected_work_edges_by_handle.get(node_id, {}).get(handle) or set()
+            provided = provided_work_edges_by_handle.get(node_id, {}).get(handle) or set()
+            connected_count = len(connected)
+            provided_count = len(provided.intersection(connected))
+            if connected_count <= 0:
+                return "all", 0, 0
+            if provided_count <= 0:
+                return "none", connected_count, 0
+            if provided_count < connected_count:
+                return "partial", connected_count, provided_count
+            return "all", connected_count, provided_count
+
+        async def _emit_handle_satisfaction_if_changed(node_id: str, handle: str) -> None:
+            connected = connected_work_edges_by_handle.get(node_id, {}).get(handle) or set()
+            if len(connected) <= 1:
+                return
+            status, connected_count, provided_count = _handle_satisfaction_status(node_id, handle)
+            previous = handle_satisfaction_state.setdefault(node_id, {}).get(handle)
+            if previous == status:
+                return
+            handle_satisfaction_state[node_id][handle] = status
+            await _emit(
+                {
+                    "type": "node_handle_satisfaction",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": node_id,
+                    "handle": handle,
+                    "status": status,
+                    "connectedEdges": connected_count,
+                    "providedEdges": provided_count,
+                }
+            )
+            level = "info" if status == "all" else "warn" if status == "partial" else "error"
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": level,
+                    "message": (
+                        f"[handle-satisfaction] node={node_id} handle={handle} status={status} "
+                        f"provided={provided_count}/{connected_count}"
+                    ),
+                    "nodeId": node_id,
+                }
+            )
 
         def _incoming_edge_infos(node_id: str) -> List[Dict[str, str]]:
             infos: List[Dict[str, str]] = []
@@ -7003,12 +7070,21 @@ async def run_graph(
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
                 return True
+            incoming_by_handle: Dict[str, List[str]] = {}
             for info in incoming:
                 handle = str(info.get("inputHandle") or "in")
-                policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
-                consume_mode = str(policy.get("consume_mode") or "once")
-                needed = 1 if consume_mode in {"once", "single_item"} else max(1, int(policy.get("batch_size") or 1))
-                if queue_registry.depth(str(info.get("edgeId") or ""), handle) < needed:
+                edge_id = str(info.get("edgeId") or "")
+                if not edge_id:
+                    continue
+                incoming_by_handle.setdefault(handle, []).append(edge_id)
+            if not incoming_by_handle:
+                return False
+            for handle, edge_ids in incoming_by_handle.items():
+                handle_depth = sum(
+                    max(0, int(queue_registry.depth(str(edge_id), handle) or 0))
+                    for edge_id in edge_ids
+                )
+                if handle_depth <= 0:
                     return False
             return True
 
@@ -7017,8 +7093,9 @@ async def run_graph(
             if not incoming:
                 return []
             out: List[Dict[str, Any]] = []
-            per_handle_take: List[Tuple[str, int]] = []
-            incoming_by_handle: Dict[str, Dict[str, str]] = {}
+            per_handle_take_map: Dict[str, int] = {}
+            incoming_by_handle: Dict[str, List[Dict[str, str]]] = {}
+            handle_cursor: Dict[str, int] = {}
             for info in incoming:
                 handle = str(info.get("inputHandle") or "in")
                 handle_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
@@ -7028,13 +7105,31 @@ async def run_graph(
                     if consume_mode == "batch"
                     else 1
                 )
-                per_handle_take.append((handle, handle_take))
-                incoming_by_handle[handle] = {
+                per_handle_take_map[handle] = max(int(per_handle_take_map.get(handle, 0)), handle_take)
+                incoming_by_handle.setdefault(handle, []).append(
+                    {
                     "edgeId": str(info.get("edgeId") or ""),
                     "inputHandle": handle,
-                }
+                    }
+                )
+            for handle in incoming_by_handle.keys():
+                handle_cursor[handle] = 0
+            per_handle_take: List[Tuple[str, int]] = [
+                (handle, int(count))
+                for handle, count in sorted(per_handle_take_map.items(), key=lambda item: item[0])
+            ]
             for handle in _build_fair_dequeue_plan(per_handle_take):
-                incoming_info = incoming_by_handle.get(handle) or {}
+                handle_edges = incoming_by_handle.get(handle) or []
+                edge_keys = [str((item or {}).get("edgeId") or "") for item in handle_edges if str((item or {}).get("edgeId") or "")]
+                selected_edge_id, next_cursor = next_nonempty_key(
+                    edge_keys,
+                    start_index=int(handle_cursor.get(handle, 0)),
+                    has_items=lambda edge_id: queue_registry.depth(str(edge_id), handle) > 0,
+                )
+                handle_cursor[handle] = next_cursor
+                if not selected_edge_id:
+                    continue
+                incoming_info = {"edgeId": selected_edge_id, "inputHandle": handle}
                 item = await queue_registry.dequeue(
                     str(incoming_info.get("edgeId") or ""),
                     handle,
@@ -7051,6 +7146,7 @@ async def run_graph(
                     amount=1,
                 )
                 out.append(item if isinstance(item, dict) else {"item": item})
+                await _emit_handle_satisfaction_if_changed(node_id, handle)
             return out
 
         def _enqueue_ready_if_possible(node_id: str) -> None:
@@ -7418,6 +7514,7 @@ async def run_graph(
                             item,
                             overflow=overflow_mode if overflow_mode in {"block", "spill", "error"} else "block",
                         )
+                        provided_work_edges_by_handle.setdefault(nb, {}).setdefault(target_handle, set()).add(edge_id)
                         runtime_item_metrics["itemsEnqueued"] = int(runtime_item_metrics.get("itemsEnqueued", 0)) + 1
                         _inc_runtime_metric(
                             plane=edge_mode,
@@ -7432,6 +7529,7 @@ async def run_graph(
                         if indeg[nb] == 0:
                             deps_released[nb] = True
                             _enqueue_ready_if_possible(nb)
+                    await _emit_handle_satisfaction_if_changed(nb, target_handle)
                 _enqueue_ready_if_possible(node_id)
                 ready.sort(key=lambda n: order_index.get(n, 10**9))
                 await _emit(
@@ -7453,6 +7551,52 @@ async def run_graph(
                 if inflight:
                     await asyncio.gather(*list(inflight.keys()), return_exceptions=True)
                 break
+
+            if not inflight and not ready:
+                for candidate in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
+                    if not deps_released.get(candidate, False):
+                        continue
+                    if node_started_once.get(candidate, False):
+                        continue
+                    handle_map = connected_work_edges_by_handle.get(candidate, {}) or {}
+                    for handle, edge_ids in handle_map.items():
+                        if len(edge_ids) <= 1:
+                            continue
+                        status, connected_count, provided_count = _handle_satisfaction_status(candidate, handle)
+                        if status != "none":
+                            continue
+                        await _emit_handle_satisfaction_if_changed(candidate, handle)
+                        await _emit(
+                            {
+                                "type": "node_finished",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "nodeId": candidate,
+                                "status": "failed",
+                                "error": "required work input handle had none provided",
+                                "errorCode": "HANDLE_INPUT_NONE_PROVIDED",
+                                "errorDetails": {
+                                    "expected": {"handle": handle, "connectedEdges": connected_count},
+                                    "actual": {"providedEdges": provided_count},
+                                },
+                                "execution_time_ms": 0.0,
+                            }
+                        )
+                        total_failed += 1
+                        await _emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[scheduler] node failure node={candidate} fatal=false propagation=localized "
+                                    "reason=HANDLE_INPUT_NONE_PROVIDED"
+                                ),
+                                "nodeId": candidate,
+                            }
+                        )
+                        break
 
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 
