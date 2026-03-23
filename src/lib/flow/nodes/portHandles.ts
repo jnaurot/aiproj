@@ -8,6 +8,15 @@ export type NodeHandleDef = {
 	plane?: HandlePlane;
 };
 
+export function portHintText(direction: 'in' | 'out', handle: NodeHandleDef): string {
+	const plane = String(handle?.plane ?? inferPlaneFromHandleId(String(handle?.id ?? ''))).trim() || 'work';
+	const id = String(handle?.id ?? '').trim() || (direction === 'in' ? 'in' : 'out');
+	const label = String(handle?.label ?? '').trim();
+	const role = direction === 'in' ? 'Input' : 'Output';
+	const shown = label.length > 0 ? `${label} (${id})` : id;
+	return `${role}: ${shown} [${plane}]`;
+}
+
 function toPlane(value: unknown): HandlePlane | null {
 	const v = String(value ?? '')
 		.trim()

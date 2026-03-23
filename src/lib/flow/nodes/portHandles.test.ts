@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferPlaneFromHandleId, resolveNodeHandles } from './portHandles';
+import { inferPlaneFromHandleId, portHintText, resolveNodeHandles } from './portHandles';
 
 describe('portHandles', () => {
 	it('infers plane from handle id prefixes', () => {
@@ -81,5 +81,12 @@ describe('portHandles', () => {
 		expect(inputs[0].plane).toBe('param');
 		expect(outputs[0].label).toBe('Result');
 		expect(outputs[0].plane).toBe('work');
+	});
+
+	it('formats port hover hints with role, label/id, and plane', () => {
+		expect(portHintText('in', { id: 'param_context', label: 'Context', plane: 'param' })).toBe(
+			'Input: Context (param_context) [param]'
+		);
+		expect(portHintText('out', { id: 'out', plane: 'work' })).toBe('Output: out [work]');
 	});
 });

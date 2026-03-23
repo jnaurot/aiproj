@@ -3,7 +3,7 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
-	import { resolveNodeHandles, type NodeHandleDef } from './portHandles';
+	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
 
 
 	// xyflow passes these props into node components
@@ -41,6 +41,8 @@
 		position={Position.Left}
 		id={h.id}
 		class={`portHandle portHandle-target plane-${h.plane ?? 'work'}`}
+		title={portHintText('in', h)}
+		data-port-hint={portHintText('in', h)}
 		style={`top:${handleTop(i, effectiveTargetHandles.length)};`}
 	/>
 {/each}
@@ -51,6 +53,8 @@
 		position={Position.Right}
 		id={h.id}
 		class={`portHandle portHandle-source plane-${h.plane ?? 'work'}`}
+		title={portHintText('out', h)}
+		data-port-hint={portHintText('out', h)}
 		style={`top:${handleTop(i, effectiveSourceHandles.length)};`}
 	/>
 {/each}
@@ -119,6 +123,7 @@
 		height: 13px;
 		border: 2px solid #0f1115;
 		box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.16);
+		position: relative;
 	}
 
 	:global(.portHandle.plane-work) {
@@ -131,6 +136,26 @@
 
 	:global(.portHandle.plane-control) {
 		background: #2fbf71;
+	}
+
+	:global(.portHandle:hover)::after,
+	:global(.portHandle:focus-visible)::after {
+		content: attr(data-port-hint);
+		position: absolute;
+		left: 50%;
+		top: -8px;
+		transform: translate(-50%, -100%);
+		white-space: nowrap;
+		pointer-events: none;
+		z-index: 50;
+		font-size: 10px;
+		line-height: 1.2;
+		padding: 3px 7px;
+		border-radius: 8px;
+		border: 1px solid #2b3854;
+		background: rgba(9, 14, 26, 0.95);
+		color: #dbeafe;
+		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
 	}
 
 	/* status coloring */
