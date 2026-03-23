@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\schema_contracts.py
-# hypothesis_version: 6.151.9
-
-['artifact', 'binary', 'component_contract', 'declared', 'embeddings', 'extra', 'fresh', 'ignore', 'json', 'partial', 'runtime', 'sample', 'stale', 'table', 'text', 'unknown']

@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\schema_infer.py
-# hypothesis_version: 6.151.9
-
-[512, ',', ':', 'additionalProperties', 'anyOf', 'array', 'boolean', 'bypass', 'entries', 'hit', 'integer', 'items', 'max_depth', 'miss', 'null', 'number', 'object', 'properties', 'reason', 'required', 'string', 'type', 'union', 'unknown', 'utf-8']

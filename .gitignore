@@ -93,6 +93,7 @@ backend/data/artifacts/
 *.sqlite-wal
 *.sqlite-journal
 backend/data/artifacts/meta/*.sqlite-shm
+backend/.hypothesis/
 
 # Virtual environments (very common names)
 venv/

@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\routes\env_profiles.py
-# hypothesis_version: 6.151.9
-
-[422, '/profiles', '/profiles/install', '/profiles/validate', 'ENV_PROFILE_INVALID', 'allowed', 'already_installed', 'attemptId', 'audit', 'available', 'blocked', 'blockedPackages', 'code', 'command', 'core', 'cpu_dev', 'customPackages', 'durationMs', 'executable', 'finishedAt', 'full', 'health', 'installTarget', 'installed', 'llm_finetune', 'message', 'missing', 'missingPackages', 'noop', 'ok', 'packages', 'partial', 'platformNotes', 'profileId', 'profiles', 'python', 'requested', 'returncode', 'schemaVersion', 'source', 'startedAt', 'status', 'stderr', 'stderrTail', 'stdoutTail', 'toolId', 'version', 'win']

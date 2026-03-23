@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\capabilities.py
-# hypothesis_version: 6.151.9
-
-[',', ':', 'affinity', 'allowedPayloadTypes', 'audio', 'behavior', 'binary', 'byProvider', 'component', 'control', 'default', 'edgeModes', 'embeddings', 'image', 'in', 'json', 'llm', 'model', 'nodes', 'out', 'param', 'ports', 'schemaVersion', 'shared', 'single_item', 'source', 'table', 'text', 'tool', 'transform', 'utf-8', 'video', 'work']

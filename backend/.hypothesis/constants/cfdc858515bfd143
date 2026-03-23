@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\components.py
-# hypothesis_version: 6.151.9
-
-['_componentContext', 'api', 'artifact', 'bindings', 'component', 'componentApi', 'componentBindings', 'componentConfig', 'componentId', 'componentNodeCount', 'componentRef', 'componentRevisionId', 'config', 'contractSnapshot', 'current', 'data', 'depth', 'edges', 'graph', 'id', 'instanceNodeId', 'internalNodeId', 'kind', 'label', 'last', 'matchCount', 'maxDepth', 'meta', 'name', 'node', 'nodeId', 'nodes', 'output', 'outputRef', 'outputs', 'params', 'revisionId', 'source', 'sourceHandle', 'stack', 'target', 'targetHandle']

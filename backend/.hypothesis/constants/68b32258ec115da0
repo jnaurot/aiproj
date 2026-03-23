@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\AppData\Roaming\Python\Python314\site-packages\pandas\io\formats\csvs.py
-# hypothesis_version: 6.151.9
-
-[100000, '"', ',', 'date_format', 'decimal', 'float_format', 'infer', 'na_rep', 'nlevels', 'quoting', 'strict', 'w']

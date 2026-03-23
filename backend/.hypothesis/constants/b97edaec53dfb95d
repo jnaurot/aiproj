@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\runner\capabilities.py
-# hypothesis_version: 6.151.9
-
-[',', ':', 'allowedPayloadTypes', 'binary', 'byProvider', 'component', 'embeddings', 'in', 'json', 'llm', 'nodes', 'out', 'schemaVersion', 'shared', 'source', 'table', 'text', 'tool', 'transform', 'utf-8']

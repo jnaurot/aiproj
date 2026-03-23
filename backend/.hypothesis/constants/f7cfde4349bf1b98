@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\model_registry.py
-# hypothesis_version: 6.151.9
-
-[500, ',', ':', 'DELETE FROM models', 'artifactId', 'artifact_id', 'baseline', 'baselineVersionId', 'baseline_version_id', 'candidate', 'changed', 'createdAt', 'created_at', 'demotedVersionId', 'environment', 'environment_json', 'fromStage', 'graphId', 'graph_id', 'latestVersionId', 'latest_version_id', 'm', 'metrics', 'metrics_json', 'modelId', 'modelName', 'model_id', 'model_name', 'ok', 'params', 'params_json', 'prod', 'prodVersionId', 'prod_version_id', 'promotedAt', 'promotedBy', 'promoted_at', 'promoted_by', 'provenance', 'provenance_json', 'runId', 'run_id', 'stage', 'system', 'toStage', 'updatedAt', 'updated_at', 'versionCount', 'versionId', 'versionNumber', 'version_count', 'version_id', 'version_not_found', 'version_number']

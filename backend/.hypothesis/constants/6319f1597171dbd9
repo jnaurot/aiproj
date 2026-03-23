@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\model_registry.py
-# hypothesis_version: 6.151.9
-
-['[^A-Za-z0-9_]', '_', 'api_key', 'api_key_ref', 'baseUrl', 'base_url', 'connection_ref', 'params']

@@ -71,8 +71,17 @@ import {
 
 	let outputOpen = false;
 	let outputNodeId: string | null = null;
-	const PORT_TYPE_LEGEND_DISMISSED_KEY = 'flow.portTypeLegend.dismissed.v1';
-	let showPortTypeLegend = true;
+	const PORT_TYPE_LEGEND_MINIMIZED_KEY = 'flow.portTypeLegend.minimized.v1';
+	const PORT_TYPE_LEGEND_POS_X_KEY = 'flow.portTypeLegend.posX.v1';
+	const PORT_TYPE_LEGEND_POS_Y_KEY = 'flow.portTypeLegend.posY.v1';
+	const PORT_TYPE_LEGEND_DEFAULT_POS = { x: 18, y: 74 };
+	let portTypeLegendMinimized = false;
+	let portTypeLegendPos = { ...PORT_TYPE_LEGEND_DEFAULT_POS };
+	let flowPaneEl: HTMLDivElement | null = null;
+	let topbarEl: HTMLDivElement | null = null;
+	let portTypeLegendEl: HTMLDivElement | null = null;
+	let isDraggingPortTypeLegend = false;
+	let portTypeLegendDragOffset = { x: 0, y: 0 };
 
 	// local bind state (SvelteFlow requires bind)
 	let nodes: Node<PipelineNodeData>[] = [];
@@ -2340,15 +2349,22 @@ async function scrollToBottom() {
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 		if (toastTimer) clearTimeout(toastTimer);
+		endPortTypeLegendDrag();
 		clearLongPressState();
 	});
 
 	onMount(async () => {
 		await refreshSchemaCapabilitiesFromBackend();
 		try {
-			showPortTypeLegend = localStorage.getItem(PORT_TYPE_LEGEND_DISMISSED_KEY) !== '1';
+			portTypeLegendMinimized = localStorage.getItem(PORT_TYPE_LEGEND_MINIMIZED_KEY) === '1';
+			const savedX = Number(localStorage.getItem(PORT_TYPE_LEGEND_POS_X_KEY));
+			const savedY = Number(localStorage.getItem(PORT_TYPE_LEGEND_POS_Y_KEY));
+			if (Number.isFinite(savedX) && Number.isFinite(savedY)) {
+				portTypeLegendPos = { x: Math.max(8, savedX), y: Math.max(8, savedY) };
+			}
 		} catch {
-			showPortTypeLegend = true;
+			portTypeLegendMinimized = false;
+			portTypeLegendPos = { ...PORT_TYPE_LEGEND_DEFAULT_POS };
 		}
 		try {
 			const config = await getGlobalCacheConfig();
@@ -2387,15 +2403,68 @@ async function scrollToBottom() {
 			}
 		}
 		await tick();
+		clampPortTypeLegendPosition();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 	});
 
-	function dismissPortTypeLegend() {
-		showPortTypeLegend = false;
+	function togglePortTypeLegendMinimized() {
+		portTypeLegendMinimized = !portTypeLegendMinimized;
 		try {
-			localStorage.setItem(PORT_TYPE_LEGEND_DISMISSED_KEY, '1');
+			localStorage.setItem(PORT_TYPE_LEGEND_MINIMIZED_KEY, portTypeLegendMinimized ? '1' : '0');
 		} catch {
 			/* noop */
+		}
+	}
+
+	function beginPortTypeLegendDrag(event: PointerEvent): void {
+		if (!flowPaneEl) return;
+		clampPortTypeLegendPosition();
+		isDraggingPortTypeLegend = true;
+		const rect = flowPaneEl.getBoundingClientRect();
+		portTypeLegendDragOffset = {
+			x: event.clientX - (rect.left + portTypeLegendPos.x),
+			y: event.clientY - (rect.top + portTypeLegendPos.y)
+		};
+		window.addEventListener('pointermove', onPortTypeLegendDragMove);
+		window.addEventListener('pointerup', endPortTypeLegendDrag);
+	}
+
+	function onPortTypeLegendDragMove(event: PointerEvent): void {
+		if (!isDraggingPortTypeLegend || !flowPaneEl) return;
+		const rect = flowPaneEl.getBoundingClientRect();
+		const nextX = event.clientX - rect.left - portTypeLegendDragOffset.x;
+		const nextY = event.clientY - rect.top - portTypeLegendDragOffset.y;
+		const minY = Math.max(8, Number(topbarEl?.offsetHeight ?? 0) + 8);
+		const legendWidth = Number(portTypeLegendEl?.offsetWidth ?? 178);
+		const legendHeight = Number(portTypeLegendEl?.offsetHeight ?? 38);
+		const clampedX = Math.min(Math.max(8, nextX), Math.max(8, rect.width - legendWidth - 8));
+		const clampedY = Math.min(Math.max(minY, nextY), Math.max(minY, rect.height - legendHeight - 8));
+		portTypeLegendPos = { x: clampedX, y: clampedY };
+	}
+
+	function endPortTypeLegendDrag(): void {
+		if (!isDraggingPortTypeLegend) return;
+		isDraggingPortTypeLegend = false;
+		window.removeEventListener('pointermove', onPortTypeLegendDragMove);
+		window.removeEventListener('pointerup', endPortTypeLegendDrag);
+		try {
+			localStorage.setItem(PORT_TYPE_LEGEND_POS_X_KEY, String(Math.round(portTypeLegendPos.x)));
+			localStorage.setItem(PORT_TYPE_LEGEND_POS_Y_KEY, String(Math.round(portTypeLegendPos.y)));
+		} catch {
+			/* noop */
+		}
+	}
+
+	function clampPortTypeLegendPosition(): void {
+		if (!flowPaneEl) return;
+		const rect = flowPaneEl.getBoundingClientRect();
+		const minY = Math.max(8, Number(topbarEl?.offsetHeight ?? 0) + 8);
+		const legendWidth = Number(portTypeLegendEl?.offsetWidth ?? 178);
+		const legendHeight = Number(portTypeLegendEl?.offsetHeight ?? 38);
+		const clampedX = Math.min(Math.max(8, portTypeLegendPos.x), Math.max(8, rect.width - legendWidth - 8));
+		const clampedY = Math.min(Math.max(minY, portTypeLegendPos.y), Math.max(minY, rect.height - legendHeight - 8));
+		if (clampedX !== portTypeLegendPos.x || clampedY !== portTypeLegendPos.y) {
+			portTypeLegendPos = { x: clampedX, y: clampedY };
 		}
 	}
 </script>
@@ -2404,11 +2473,13 @@ async function scrollToBottom() {
 	on:pointermove={onInspectorSplitMove}
 	on:pointerup={onInspectorSplitUp}
 	on:keydown={onWindowKeyDown}
+	on:resize={clampPortTypeLegendPosition}
 />
 
 <div class="layout">
 	<div
 		class="flow"
+		bind:this={flowPaneEl}
 		on:pointerdown={onFlowPointerDown}
 		on:pointermove={onFlowPointerMove}
 		on:pointerup={onFlowPointerUp}
@@ -2422,7 +2493,7 @@ async function scrollToBottom() {
 				{/if}
 			</div>
 		{/if}
-		<div class="topbar" role="toolbar" aria-label="Graph toolbar">
+		<div class="topbar" role="toolbar" aria-label="Graph toolbar" bind:this={topbarEl}>
 			<div class="toolbarZone projectActions">
 				<ToolbarMenu
 					label="Project"
@@ -2580,14 +2651,32 @@ async function scrollToBottom() {
 			<Controls />
 		</SvelteFlow>
 
-		{#if showPortTypeLegend}
-			<div class="portTypeLegend" role="note" aria-label="Port type key">
-				<div class="portTypeLegendHead">
-					<b>Port Type Key</b>
-					<button type="button" class="portTypeLegendClose" on:click={dismissPortTypeLegend} aria-label="Hide port type key">
-						x
-					</button>
-				</div>
+		<div
+			bind:this={portTypeLegendEl}
+			class={`portTypeLegend ${portTypeLegendMinimized ? 'is-minimized' : ''}`}
+			role="note"
+			aria-label="Port type key"
+			style={`left:${portTypeLegendPos.x}px; top:${portTypeLegendPos.y}px;`}
+		>
+			<div
+				class="portTypeLegendHead"
+				role="button"
+				tabindex="0"
+				aria-label="Drag port type key"
+				on:pointerdown={beginPortTypeLegendDrag}
+			>
+				<b>Port Type Key</b>
+				<button
+					type="button"
+					class="portTypeLegendClose"
+					on:pointerdown|stopPropagation
+					on:click={togglePortTypeLegendMinimized}
+					aria-label={portTypeLegendMinimized ? 'Expand port type key' : 'Minimize port type key'}
+				>
+					{portTypeLegendMinimized ? '+' : '-'}
+				</button>
+			</div>
+			{#if !portTypeLegendMinimized}
 				<div class="portTypeLegendRow">
 					<span class="portTypeDot portTypeDot-work" aria-hidden="true"></span>
 					<span>Data / work</span>
@@ -2600,8 +2689,8 @@ async function scrollToBottom() {
 					<span class="portTypeDot portTypeDot-control" aria-hidden="true"></span>
 					<span>Control</span>
 				</div>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
 
 	<aside class="inspector" bind:this={inspectorPane}>
@@ -3229,8 +3318,6 @@ async function scrollToBottom() {
 
 	.portTypeLegend {
 		position: absolute;
-		left: 12px;
-		bottom: 12px;
 		z-index: 8;
 		padding: 8px 10px;
 		border-radius: 10px;
@@ -3241,6 +3328,11 @@ async function scrollToBottom() {
 		min-width: 178px;
 	}
 
+	.portTypeLegend.is-minimized {
+		min-width: 130px;
+		padding-bottom: 6px;
+	}
+
 	.portTypeLegendHead {
 		display: flex;
 		align-items: center;
@@ -3248,6 +3340,12 @@ async function scrollToBottom() {
 		gap: 8px;
 		margin-bottom: 6px;
 		font-size: 12px;
+		cursor: grab;
+		user-select: none;
+	}
+
+	.portTypeLegendHead:active {
+		cursor: grabbing;
 	}
 
 	.portTypeLegendClose {

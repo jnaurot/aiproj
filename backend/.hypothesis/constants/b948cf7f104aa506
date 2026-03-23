@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\graph_migrations.py
-# hypothesis_version: 6.151.9
-
-['EDGE_DROPPED', 'NODE_DROPPED', 'api', 'binary', 'bindings', 'builtin', 'code', 'component', 'contract', 'core', 'customPackages', 'data', 'edgeId', 'edges', 'embeddings', 'fields', 'id', 'json', 'kind', 'locked', 'message', 'name', 'nodeId', 'nodes', 'out', 'outputs', 'params', 'porttype', 'profileId', 'provider', 'schema', 'source', 'sourceHandle', 'sourceNodeId', 'string', 'target', 'text', 'tool', 'type', 'typedSchema']

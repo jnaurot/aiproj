@@ -177,10 +177,7 @@ jobs:
 			- run: npm ci
 			- run: python -m pip install -r backend/requirements.txt
 			- name: Frontend race/scope smoke
-				run: |
-					npm run test -- \
-						src/lib/flow/store/graphStore.race.test.ts \
-						src/lib/flow/store/graphStore.runScope.test.ts
+				run: npm run test:smoke:frontend
 			- name: Backend diagnostics/perf telemetry smoke
 				run: |
 					cd backend

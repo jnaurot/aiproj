@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\executors\builtin_profiles.py
-# hypothesis_version: 6.151.9
-
-[', ', '-', '[<>=!~]', '_', 'accelerate', 'core', 'cpu_dev', 'custom', 'customPackages', 'data', 'datasets', 'dateutil', 'duckdb', 'evaluate', 'full', 'huggingface_hub', 'installTarget', 'lightgbm', 'llm_finetune', 'locked', 'matplotlib', 'ml', 'numpy', 'openpyxl', 'packages', 'pandas', 'peft', 'polars', 'profile', 'profileId', 'pyarrow', 'pydantic', 'python-dateutil', 'requests', 'rocm_train', 'safetensors', 'scikit-learn', 'scipy', 'seaborn', 'sentencepiece', 'sklearn', 'source', 'tokenizers', 'torch', 'transformers', 'trl', 'xgboost']

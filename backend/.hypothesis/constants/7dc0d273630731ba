@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\routes\snapshots.py
-# hypothesis_version: 6.151.9
-
-[400, 404, 500, 1024, './data/artifacts', '.upload', '/{snapshot_id}', '/{snapshot_id}/meta', 'Snapshot not found', '__snapshots__', '_root', 'byteSize', 'graphId', 'importedAt', 'metadata', 'mimeType', 'originalFilename', 'snapshotId', 'snapshot_', 'tmp_uploads', 'wb']

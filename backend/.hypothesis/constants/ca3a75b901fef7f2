@@ -1,4 +1,0 @@
-# file: C:\Users\Owner\Desktop\aiproj\backend\app\component_dependencies.py
-# hypothesis_version: 6.151.9
-
-['ancestry', 'code', 'component', 'componentId', 'componentRef', 'data', 'dependencies', 'depth', 'error', 'graph', 'graph.nodes', 'id', 'kind', 'message', 'nodeId', 'nodes', 'params', 'path', 'revisionId', 'schemaVersion', 'severity', 'unresolved']
