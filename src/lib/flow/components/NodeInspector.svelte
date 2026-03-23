@@ -349,6 +349,16 @@
 		selectedNode as any,
 		(schemaContract.edges ?? []) as NodeSchemaContractEdge[]
 	);
+	$: nodePortDeclarations = (() => {
+		const decls =
+			((selectedNode?.data as any)?.portDeclarations ?? null) as
+				| { in?: Record<string, any>; out?: Record<string, any> }
+				| null;
+		return {
+			in: decls?.in && typeof decls.in === 'object' ? decls.in : {},
+			out: decls?.out && typeof decls.out === 'object' ? decls.out : {}
+		};
+	})();
 	$: nodeQueuePortStats = (() => {
 		const nodeId = String(selectedNode?.id ?? '').trim();
 		if (!nodeId) return [] as Array<Record<string, unknown>>;
@@ -389,6 +399,9 @@
 	let expectedSchemaError = '';
 	let expectedSchemaNodeId = '';
 	let headerSchemaLoading = false;
+	let newPortHandle = '';
+	let newPortDirection: 'in' | 'out' = 'in';
+	let newPortPlane: 'work' | 'param' | 'control' = 'work';
 
 	type EdgeRuntimeConfig = {
 		mode: 'work' | 'param' | 'control';
@@ -1022,6 +1035,37 @@
 		if (!selectedNode?.id) return;
 		graphStore.updateNodeInputHandleProcessingPolicy(selectedNode.id, inputHandle, patch);
 	}
+
+	function updatePortDeclaration(
+		direction: 'in' | 'out',
+		handle: string,
+		patch: {
+			plane?: 'work' | 'param' | 'control';
+			required?: boolean;
+			cardinality?: 'one' | 'many';
+			behavior?: 'once' | 'single_item' | 'batch';
+		}
+	): void {
+		if (!selectedNode?.id) return;
+		graphStore.updateNodePortDeclaration(selectedNode.id, direction, handle, patch);
+	}
+
+	function removePortDeclaration(direction: 'in' | 'out', handle: string): void {
+		if (!selectedNode?.id) return;
+		graphStore.removeNodePortDeclaration(selectedNode.id, direction, handle);
+	}
+
+	function addPortDeclaration(): void {
+		const handle = String(newPortHandle ?? '').trim();
+		if (!selectedNode?.id || !handle) return;
+		updatePortDeclaration(newPortDirection, handle, {
+			plane: newPortPlane,
+			required: false,
+			cardinality: 'many',
+			behavior: newPortDirection === 'in' ? 'single_item' : undefined
+		});
+		newPortHandle = '';
+	}
 </script>
 
 {#if selectedNode}
@@ -1497,6 +1541,103 @@
 					{/each}
 				</div>
 			{/if}
+		</div>
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Port Declarations</div>
+			<div class="assistActionRow">
+				<select bind:value={newPortDirection}>
+					<option value="in">in</option>
+					<option value="out">out</option>
+				</select>
+				<input type="text" placeholder="handle (e.g. param_filters)" bind:value={newPortHandle} />
+				<select bind:value={newPortPlane}>
+					<option value="work">work</option>
+					<option value="param">param</option>
+					<option value="control">control</option>
+				</select>
+				<button type="button" class="small" on:click={addPortDeclaration}>Add</button>
+			</div>
+			<div class="guidedAssistList">
+				{#each Object.entries(nodePortDeclarations.in) as [handle, decl] (`in-${handle}`)}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">in.{handle}</div>
+						<div class="assistActionRow">
+							<select
+								value={String((decl as any)?.plane ?? 'work')}
+								on:change={(event) =>
+									updatePortDeclaration('in', handle, {
+										plane: (event.currentTarget as HTMLSelectElement).value as
+											| 'work'
+											| 'param'
+											| 'control'
+									})}
+							>
+								<option value="work">work</option>
+								<option value="param">param</option>
+								<option value="control">control</option>
+							</select>
+							<select
+								value={String((decl as any)?.cardinality ?? 'many')}
+								on:change={(event) =>
+									updatePortDeclaration('in', handle, {
+										cardinality: (event.currentTarget as HTMLSelectElement).value as 'one' | 'many'
+									})}
+							>
+								<option value="many">many</option>
+								<option value="one">one</option>
+							</select>
+							<label class="guidedToggle">
+								<input
+									type="checkbox"
+									checked={Boolean((decl as any)?.required)}
+									on:change={(event) =>
+										updatePortDeclaration('in', handle, {
+											required: (event.currentTarget as HTMLInputElement).checked
+										})}
+								/>
+								<span>required</span>
+							</label>
+							<button type="button" class="small danger" on:click={() => removePortDeclaration('in', handle)}>
+								Remove
+							</button>
+						</div>
+					</div>
+				{/each}
+				{#each Object.entries(nodePortDeclarations.out) as [handle, decl] (`out-${handle}`)}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">out.{handle}</div>
+						<div class="assistActionRow">
+							<select
+								value={String((decl as any)?.plane ?? 'work')}
+								on:change={(event) =>
+									updatePortDeclaration('out', handle, {
+										plane: (event.currentTarget as HTMLSelectElement).value as
+											| 'work'
+											| 'param'
+											| 'control'
+									})}
+							>
+								<option value="work">work</option>
+								<option value="param">param</option>
+								<option value="control">control</option>
+							</select>
+							<select
+								value={String((decl as any)?.cardinality ?? 'many')}
+								on:change={(event) =>
+									updatePortDeclaration('out', handle, {
+										cardinality: (event.currentTarget as HTMLSelectElement).value as 'one' | 'many'
+									})}
+							>
+								<option value="many">many</option>
+								<option value="one">one</option>
+							</select>
+							<button type="button" class="small danger" on:click={() => removePortDeclaration('out', handle)}>
+								Remove
+							</button>
+						</div>
+					</div>
+				{/each}
+			</div>
 		</div>
 		{#if nodeQueuePortStats.length > 0}
 			<div class="guidedAssistCard">

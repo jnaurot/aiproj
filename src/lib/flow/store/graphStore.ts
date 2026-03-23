@@ -440,6 +440,57 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 		const hasAny = Object.keys(out.in).length > 0 || Object.keys(out.out).length > 0;
 		return hasAny ? out : null;
 	};
+	const defaultPortDeclarationsForKind = (
+		kindRaw: unknown
+	): { in: Record<string, any>; out: Record<string, any> } => {
+		const kind = String(kindRaw ?? '').trim().toLowerCase();
+		const out: { in: Record<string, any>; out: Record<string, any> } = {
+			in: {},
+			out: {
+				out: { plane: 'work', affinity: 'work', required: false, cardinality: 'many' }
+			}
+		};
+		if (kind === 'source') return out;
+		out.in.in = {
+			plane: 'work',
+			affinity: 'work',
+			required: false,
+			cardinality: 'many',
+			behavior: 'single_item'
+		};
+		if (kind === 'model' || kind === 'llm') {
+			out.in.param_filters = {
+				plane: 'param',
+				affinity: 'param',
+				required: false,
+				cardinality: 'many',
+				behavior: 'once'
+			};
+			out.in.param_context = {
+				plane: 'param',
+				affinity: 'param',
+				required: false,
+				cardinality: 'many',
+				behavior: 'once'
+			};
+		} else {
+			out.in.param_config = {
+				plane: 'param',
+				affinity: 'param',
+				required: false,
+				cardinality: 'many',
+				behavior: 'once'
+			};
+		}
+		out.in.control_in = {
+			plane: 'control',
+			affinity: 'control',
+			required: false,
+			cardinality: 'many',
+			behavior: 'single_item'
+		};
+		return out;
+	};
 	return nodes.map((node) => {
 		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
@@ -522,7 +573,8 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 				: null;
 		const normalizedPortDeclarations = rawPortDeclarations
 			? normalizePortDeclarations(rawPortDeclarations)
-			: portDeclarationsFromPortContracts(rawPortContracts);
+			: portDeclarationsFromPortContracts(rawPortContracts) ??
+				defaultPortDeclarationsForKind((node.data as any)?.kind);
 		const portContractsFromDeclarations: Record<string, Record<string, any>> = { in: {}, out: {} };
 		if (normalizedPortDeclarations) {
 			for (const direction of ['in', 'out'] as const) {
@@ -2601,6 +2653,27 @@ function sourcePayloadHint(
 	}
 	const derived = deriveNodeIoForData(node.data);
 	const fallbackType = normalizeHintType(whichPort === 'in' ? derived.in ?? 'unknown' : derived.out ?? 'unknown');
+	const baseHint =
+		fallbackType === 'table'
+			? { type: 'table' }
+			: fallbackType === 'json'
+				? { type: 'json' }
+				: fallbackType === 'text'
+					? { type: 'string' }
+					: fallbackType === 'binary'
+						? { type: 'binary' }
+						: fallbackType === 'embeddings'
+							? { type: 'embeddings' }
+							: { type: 'unknown' };
+	if (whichPort === 'in' && (node.data.kind === 'llm' || node.data.kind === 'model')) {
+		const policy = String(((node.data as any)?.params ?? {})?.coercion_policy ?? 'strict')
+			.trim()
+			.toLowerCase();
+		return {
+			...baseHint,
+			coercion_policy: policy || 'strict'
+		};
+	}
 	if (fallbackType === 'table') return { type: 'table' };
 	if (fallbackType === 'json') return { type: 'json' };
 	if (fallbackType === 'text') return { type: 'string' };
@@ -3677,14 +3750,20 @@ function declaredPortHandles(
 	direction: 'in' | 'out'
 ): string[] {
 	const data = (node.data ?? {}) as any;
-	const ports =
+	const declared =
 		data?.portDeclarations?.[direction] && typeof data?.portDeclarations?.[direction] === 'object'
 			? data.portDeclarations[direction]
-			: data?.portContracts?.[direction];
+			: null;
+	const ports = declared ?? data?.portContracts?.[direction];
 	if (!ports || typeof ports !== 'object') return [];
-	return Object.keys(ports as Record<string, unknown>)
+	const raw = Object.keys(ports as Record<string, unknown>)
 		.map((value) => String(value ?? '').trim())
 		.filter((value) => value.length > 0 && value !== 'default');
+	if (declared && typeof declared === 'object' && Object.prototype.hasOwnProperty.call(declared, 'default')) {
+		const implicit = direction === 'in' ? 'in' : 'out';
+		if (!raw.includes(implicit)) raw.unshift(implicit);
+	}
+	return raw;
 }
 
 function hasPortHandle(
@@ -3693,10 +3772,17 @@ function hasPortHandle(
 	handle: string
 ): boolean {
 	const data = (node.data ?? {}) as any;
-	const ports =
+	const declaredPorts =
 		data?.portDeclarations?.[direction] && typeof data?.portDeclarations?.[direction] === 'object'
 			? data.portDeclarations[direction]
-			: data?.portContracts?.[direction];
+			: null;
+	if (declaredPorts && typeof declaredPorts === 'object') {
+		const normalized = String(handle ?? '').trim();
+		const record = declaredPorts as Record<string, unknown>;
+		if (normalized.length === 0) return (direction === 'in' ? 'in' : 'out') in record;
+		return normalized in record;
+	}
+	const ports = data?.portContracts?.[direction];
 	if (!ports || typeof ports !== 'object') return true;
 	const normalized = String(handle ?? '').trim();
 	const record = ports as Record<string, unknown>;
@@ -5109,12 +5195,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		// ----- node CRUD -----
 		addNode(kind: NodeKind, position: { x: number; y: number }) {
 			const id = `n_${crypto.randomUUID()}`;
-			const node: Node<PipelineNodeData> = {
+			const baseNode: Node<PipelineNodeData> = {
 				id,
 				type: kind,
 				position,
 				data: defaultNodeData(kind)
 			};
+			const node = canonicalizeNodeSchemas([baseNode])[0] as Node<PipelineNodeData>;
+			if ((node.data as any)?.schema) {
+				delete (node.data as any).schema;
+			}
 
 			update((s) => {
 				const nodeBindings = {
@@ -5733,6 +5823,176 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					{ ...s, nodes },
 					'info',
 					`Updated node ${nodeId} processing policy for input handle ${handle}`
+				);
+				persist(next);
+				return next;
+			});
+			return out;
+		},
+
+		updateNodePortDeclaration(
+			nodeId: string,
+			direction: 'in' | 'out',
+			handle: string,
+			patch: {
+				plane?: 'work' | 'param' | 'control';
+				required?: boolean;
+				cardinality?: 'one' | 'many';
+				behavior?: 'once' | 'single_item' | 'batch';
+			}
+		) {
+			let out: { ok: boolean; error?: string } = { ok: true };
+			update((s) => {
+				const node = s.nodes.find((n) => n.id === nodeId);
+				if (!node) {
+					out = { ok: false, error: 'Node not found' };
+					return s;
+				}
+				const dir = direction === 'out' ? 'out' : 'in';
+				const key = String(handle ?? '').trim();
+				if (!key) {
+					out = { ok: false, error: 'Handle is required' };
+					return s;
+				}
+				const data = (node.data ?? {}) as Record<string, any>;
+				const existingDecls =
+					data.portDeclarations && typeof data.portDeclarations === 'object'
+						? (data.portDeclarations as Record<string, any>)
+						: {};
+				const byDir =
+					existingDecls[dir] && typeof existingDecls[dir] === 'object'
+						? (existingDecls[dir] as Record<string, any>)
+						: {};
+				const existing = (byDir[key] ?? {}) as Record<string, any>;
+				const nextPlane = String(patch.plane ?? existing.plane ?? existing.affinity ?? 'work')
+					.trim()
+					.toLowerCase();
+				if (!['work', 'param', 'control'].includes(nextPlane)) {
+					out = { ok: false, error: 'Invalid plane' };
+					return s;
+				}
+				const nextCardinality = String(patch.cardinality ?? existing.cardinality ?? 'many')
+					.trim()
+					.toLowerCase();
+				if (!['one', 'many'].includes(nextCardinality)) {
+					out = { ok: false, error: 'Invalid cardinality' };
+					return s;
+				}
+				const nextDecl: Record<string, any> = {
+					plane: nextPlane,
+					affinity: nextPlane,
+					required: Boolean(patch.required ?? existing.required ?? false),
+					cardinality: nextCardinality
+				};
+				if (dir === 'in') {
+					const nextBehavior = String(patch.behavior ?? existing.behavior ?? 'single_item')
+						.trim()
+						.toLowerCase();
+					if (!['once', 'single_item', 'batch'].includes(nextBehavior)) {
+						out = { ok: false, error: 'Invalid behavior' };
+						return s;
+					}
+					nextDecl.behavior = nextBehavior;
+				}
+				const nextPortDeclarations: Record<string, any> = {
+					...existingDecls,
+					[dir]: {
+						...byDir,
+						[key]: nextDecl
+					}
+				};
+				const nextPortContractsByDir: Record<string, any> = {
+					...((data.portContracts && typeof data.portContracts === 'object'
+						? data.portContracts
+						: {}) as Record<string, any>),
+					[dir]: {
+						...(((data.portContracts as any)?.[dir] ?? {}) as Record<string, any>),
+						[key]: {
+							affinity: nextPlane,
+							...(dir === 'in' ? { behavior: String(nextDecl.behavior ?? 'single_item') } : {})
+						}
+					}
+				};
+				const nodes = s.nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									portDeclarations: nextPortDeclarations,
+									portContracts: nextPortContractsByDir
+								}
+							}
+						: n
+				);
+				const next = logPush(
+					{ ...s, nodes },
+					'info',
+					`Updated node ${nodeId} ${dir} port declaration ${key}`
+				);
+				persist(next);
+				return next;
+			});
+			return out;
+		},
+
+		removeNodePortDeclaration(nodeId: string, direction: 'in' | 'out', handle: string) {
+			let out: { ok: boolean; error?: string } = { ok: true };
+			update((s) => {
+				const node = s.nodes.find((n) => n.id === nodeId);
+				if (!node) {
+					out = { ok: false, error: 'Node not found' };
+					return s;
+				}
+				const dir = direction === 'out' ? 'out' : 'in';
+				const key = String(handle ?? '').trim();
+				if (!key) {
+					out = { ok: false, error: 'Handle is required' };
+					return s;
+				}
+				const data = (node.data ?? {}) as Record<string, any>;
+				const existingDecls =
+					data.portDeclarations && typeof data.portDeclarations === 'object'
+						? (data.portDeclarations as Record<string, any>)
+						: {};
+				const byDir =
+					existingDecls[dir] && typeof existingDecls[dir] === 'object'
+						? ({ ...(existingDecls[dir] as Record<string, any>) } as Record<string, any>)
+						: {};
+				if (!Object.prototype.hasOwnProperty.call(byDir, key)) {
+					return s;
+				}
+				delete byDir[key];
+				const nextPortDeclarations = {
+					...existingDecls,
+					[dir]: byDir
+				};
+				const existingContracts =
+					data.portContracts && typeof data.portContracts === 'object'
+						? ({ ...(data.portContracts as Record<string, any>) } as Record<string, any>)
+						: {};
+				const nextContractsByDir =
+					existingContracts[dir] && typeof existingContracts[dir] === 'object'
+						? ({ ...(existingContracts[dir] as Record<string, any>) } as Record<string, any>)
+						: {};
+				delete nextContractsByDir[key];
+				existingContracts[dir] = nextContractsByDir;
+				const nodes = s.nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									portDeclarations: nextPortDeclarations,
+									portContracts: existingContracts
+								}
+							}
+						: n
+				);
+				const next = logPush(
+					{ ...s, nodes },
+					'info',
+					`Removed node ${nodeId} ${dir} port declaration ${key}`
 				);
 				persist(next);
 				return next;
