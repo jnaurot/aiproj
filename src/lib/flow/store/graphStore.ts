@@ -3414,6 +3414,11 @@ export type EdgeSchemaConstraint = {
 	adapterKind?: AdapterTransformKind | null;
 	reason?: 'type_mismatch' | 'missing_required_columns' | 'missing_typed_schema';
 	missingColumns?: string[];
+	snapshotSourceSchemaFingerprint?: string;
+	snapshotTargetSchemaFingerprint?: string;
+	currentSourceSchemaFingerprint?: string;
+	currentTargetSchemaFingerprint?: string;
+	snapshotDrift?: boolean;
 	suggestions: string[];
 };
 
@@ -3433,6 +3438,11 @@ export type EdgeSchemaDiagnostic = {
 		mode?: 'work' | 'param' | 'control';
 		sourceAffinity?: 'work' | 'param' | 'control';
 		targetAffinity?: 'work' | 'param' | 'control';
+		snapshotSourceSchemaFingerprint?: string;
+		snapshotTargetSchemaFingerprint?: string;
+		currentSourceSchemaFingerprint?: string;
+		currentTargetSchemaFingerprint?: string;
+		snapshotDrift?: boolean;
 	};
 	suggestions: string[];
 };
@@ -3547,6 +3557,21 @@ function computeEdgeSchemaConstraintsInternal(
 		const targetAffinity = nodePortAffinity(targetNode as any, 'in', targetHandle);
 		const providedSchema = buildProvidedSchema(sourceNode as any, sourceHandle);
 		const requiredSchema = buildRequiredSchema(targetNode as any, targetHandle);
+		const existingContract = ((edge.data ?? {}) as Record<string, any>)?.contract ?? {};
+		const snapshot =
+			existingContract && typeof existingContract.snapshot === 'object'
+				? (existingContract.snapshot as Record<string, any>)
+				: {};
+		const snapshotSourceSchemaFingerprint = String(snapshot?.sourceSchemaFingerprint ?? '').trim() || undefined;
+		const snapshotTargetSchemaFingerprint = String(snapshot?.targetSchemaFingerprint ?? '').trim() || undefined;
+		const currentSourceSchemaFingerprint = stableSchemaSignature(providedSchema ?? null);
+		const currentTargetSchemaFingerprint = stableSchemaSignature(requiredSchema ?? null);
+		const snapshotDrift = Boolean(
+			snapshotSourceSchemaFingerprint &&
+				snapshotTargetSchemaFingerprint &&
+				(snapshotSourceSchemaFingerprint !== currentSourceSchemaFingerprint ||
+					snapshotTargetSchemaFingerprint !== currentTargetSchemaFingerprint)
+		);
 		const check = isSchemaCompatible(providedSchema, requiredSchema, mode);
 		out[edgeId] = {
 			edgeId,
@@ -3564,6 +3589,11 @@ function computeEdgeSchemaConstraintsInternal(
 			adapterKind: check.adapterKind ?? null,
 			reason: check.ok ? undefined : check.reason,
 			missingColumns: check.ok ? undefined : check.missingColumns,
+			snapshotSourceSchemaFingerprint,
+			snapshotTargetSchemaFingerprint,
+			currentSourceSchemaFingerprint,
+			currentTargetSchemaFingerprint,
+			snapshotDrift,
 			suggestions:
 				check.ok
 					? check.warning && check.suggestion
@@ -3613,9 +3643,44 @@ function computeEdgeSchemaDiagnosticsInternal(
 						targetNodeId: constraint.targetNodeId,
 						mode: constraint.mode,
 						sourceAffinity: constraint.sourceAffinity,
-						targetAffinity: constraint.targetAffinity
+						targetAffinity: constraint.targetAffinity,
+						snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+						snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+						currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+						currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
+						snapshotDrift: constraint.snapshotDrift
 					},
 					suggestions: constraint.suggestions ?? []
+				};
+				continue;
+			}
+			if (constraint.snapshotDrift) {
+				out[edgeId] = {
+					edgeId,
+					code: 'TYPE_MISMATCH',
+					severity: 'warning',
+					message: `${modeLabel}: edge contract snapshot drift detected (current schema no longer matches persisted snapshot)`,
+					details: {
+						providedSchema: constraint.providedSchema,
+						requiredSchema: constraint.requiredSchema,
+						targetHandle: constraint.targetHandle,
+						sourceHandle: constraint.sourceHandle,
+						sourceNodeId: constraint.sourceNodeId,
+						targetNodeId: constraint.targetNodeId,
+						mode: constraint.mode,
+						sourceAffinity: constraint.sourceAffinity,
+						targetAffinity: constraint.targetAffinity,
+						snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+						snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+						currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+						currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
+						snapshotDrift: true
+					},
+					suggestions: [
+						'Refresh edge contract snapshot from current schemas.',
+						'If this drift is intentional, accept coercion or insert an adapter before target.',
+						'If drift is accidental, restore expected input/output schemas and rebind the edge.'
+					]
 				};
 				continue;
 			}
@@ -3638,7 +3703,12 @@ function computeEdgeSchemaDiagnosticsInternal(
 					targetNodeId: constraint.targetNodeId,
 					mode: constraint.mode,
 					sourceAffinity: constraint.sourceAffinity,
-					targetAffinity: constraint.targetAffinity
+					targetAffinity: constraint.targetAffinity,
+					snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+					snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+					currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+					currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
+					snapshotDrift: constraint.snapshotDrift
 				},
 				suggestions: constraint.suggestions ?? []
 			};
@@ -3660,7 +3730,12 @@ function computeEdgeSchemaDiagnosticsInternal(
 					targetNodeId: constraint.targetNodeId,
 					mode: constraint.mode,
 					sourceAffinity: constraint.sourceAffinity,
-					targetAffinity: constraint.targetAffinity
+					targetAffinity: constraint.targetAffinity,
+					snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+					snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+					currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+					currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
+					snapshotDrift: constraint.snapshotDrift
 				},
 				suggestions: constraint.suggestions ?? []
 			};
@@ -3680,7 +3755,12 @@ function computeEdgeSchemaDiagnosticsInternal(
 				targetNodeId: constraint.targetNodeId,
 				mode: constraint.mode,
 				sourceAffinity: constraint.sourceAffinity,
-				targetAffinity: constraint.targetAffinity
+				targetAffinity: constraint.targetAffinity,
+				snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+				snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+				currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+				currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
+				snapshotDrift: constraint.snapshotDrift
 			},
 			suggestions: constraint.suggestions ?? []
 		};
@@ -7119,6 +7199,11 @@ export type NodeSchemaContractEdge = {
 	providedSchema: Record<string, any>;
 	requiredSchema: Record<string, any>;
 	severity: 'clean' | 'warning' | 'error';
+	snapshotDrift?: boolean;
+	snapshotSourceSchemaFingerprint?: string;
+	snapshotTargetSchemaFingerprint?: string;
+	currentSourceSchemaFingerprint?: string;
+	currentTargetSchemaFingerprint?: string;
 	suggestions: string[];
 	adapterKind: AdapterTransformKind | null;
 };
@@ -7158,6 +7243,11 @@ function buildNodeSchemaContractSnapshotInternal(
 			providedSchema: constraint.providedSchema,
 			requiredSchema: constraint.requiredSchema,
 			severity,
+			snapshotDrift: constraint.snapshotDrift,
+			snapshotSourceSchemaFingerprint: constraint.snapshotSourceSchemaFingerprint,
+			snapshotTargetSchemaFingerprint: constraint.snapshotTargetSchemaFingerprint,
+			currentSourceSchemaFingerprint: constraint.currentSourceSchemaFingerprint,
+			currentTargetSchemaFingerprint: constraint.currentTargetSchemaFingerprint,
 			suggestions: constraint.suggestions ?? [],
 			adapterKind: constraint.adapterKind ?? null
 		});

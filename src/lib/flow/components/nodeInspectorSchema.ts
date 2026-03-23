@@ -38,6 +38,15 @@ export type SchemaModeGroup = {
 	edges: NodeSchemaContractEdge[];
 };
 
+export function schemaEdgeDriftGuidance(edge: NodeSchemaContractEdge): string | null {
+	if (!edge?.snapshotDrift) return null;
+	const snapSource = String(edge.snapshotSourceSchemaFingerprint ?? '').slice(0, 12);
+	const snapTarget = String(edge.snapshotTargetSchemaFingerprint ?? '').slice(0, 12);
+	const curSource = String(edge.currentSourceSchemaFingerprint ?? '').slice(0, 12);
+	const curTarget = String(edge.currentTargetSchemaFingerprint ?? '').slice(0, 12);
+	return `Contract drift detected: snapshot (${snapSource} / ${snapTarget}) != current (${curSource} / ${curTarget}).`;
+}
+
 export type ExpectedInputHandleSummary = {
 	handle: string;
 	affinity: 'work' | 'param' | 'control';

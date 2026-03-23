@@ -62,6 +62,7 @@ Required fields:
 - `control_signal`
 - `queue_metrics`
 - `node_decision`
+- `contract_drift`
 - `log`
 
 ### `control_signal`
@@ -96,6 +97,23 @@ Fields:
 - `decision` (`accept | reject`)
 - optional `count`
 - optional `reasonCode`
+
+### `contract_drift`
+
+Edge contract snapshot drift signal emitted during pre-execution validation warnings.
+
+Fields:
+
+- `edgeId`
+- `sourceNodeId`
+- `targetNodeId`
+- `sourceHandle`
+- `targetHandle`
+- `snapshotSourceSchemaFingerprint`
+- `snapshotTargetSchemaFingerprint`
+- `currentSourceSchemaFingerprint`
+- `currentTargetSchemaFingerprint`
+- optional `suggestions` (string[])
 
 ## Mode-Specific Contract Diagnostics
 

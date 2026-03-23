@@ -33,6 +33,7 @@
 		collectExpectedInputHandles,
 		groupSchemaEdgesByMode,
 		schemaEdgeCounterpartyName,
+		schemaEdgeDriftGuidance,
 		type ExpectedInputHandleSummary
 	} from '$lib/flow/components/nodeInspectorSchema';
 
@@ -1858,6 +1859,9 @@
 									<span class="schemaLabel">required</span>
 									<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
 								</div>
+								{#if edge.snapshotDrift}
+									<div class="schemaSuggestions">{schemaEdgeDriftGuidance(edge)}</div>
+								{/if}
 								{#if edge.suggestions.length > 0}
 									<div class="schemaSuggestions">{edge.suggestions.join(' ')}</div>
 								{/if}

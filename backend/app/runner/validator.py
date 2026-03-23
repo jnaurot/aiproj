@@ -71,6 +71,11 @@ class GraphValidator:
 
     def _validate_edge_contract_snapshots(self, graph: Dict[str, Any]) -> List[ValidationError]:
         warnings: List[ValidationError] = []
+        nodes = {
+            str(n.get("id") or "").strip(): n
+            for n in (graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else [])
+            if isinstance(n, dict)
+        }
         edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
         for edge in edges:
             if not isinstance(edge, dict):
@@ -83,14 +88,75 @@ class GraphValidator:
             snapshot = contract.get("snapshot") if isinstance(contract.get("snapshot"), dict) else {}
             source_fp = str(snapshot.get("sourceSchemaFingerprint") or "").strip()
             target_fp = str(snapshot.get("targetSchemaFingerprint") or "").strip()
-            if source_fp and target_fp:
+            if not (source_fp and target_fp):
+                warnings.append(
+                    ValidationError(
+                        code="EDGE_CONTRACT_SNAPSHOT_MISSING",
+                        message="Edge contract snapshot is missing schema fingerprints; graph import should recanonicalize edge contracts.",
+                        edge_id=edge_id,
+                        details={"edgeId": edge_id},
+                    )
+                )
                 continue
+
+            payload = contract.get("payload") if isinstance(contract.get("payload"), dict) else {}
+            source_payload = payload.get("source") if isinstance(payload, dict) and isinstance(payload.get("source"), dict) else {}
+            target_payload = payload.get("target") if isinstance(payload, dict) and isinstance(payload.get("target"), dict) else {}
+
+            source_id = str(edge.get("source") or "").strip()
+            target_id = str(edge.get("target") or "").strip()
+            source_handle = str(edge.get("sourceHandle") or "out").strip() or "out"
+            target_handle = str(edge.get("targetHandle") or "in").strip() or "in"
+            source_node = nodes.get(source_id)
+            target_node = nodes.get(target_id)
+
+            source_type = None
+            target_type = None
+            if source_node:
+                source_type = self._normalize_payload_type(
+                    self._node_schema_declared_type(source_node)
+                ) or self._normalize_payload_type(self._source_default_type(source_node))
+            if target_node:
+                target_type = self._normalize_payload_type(
+                    self._node_schema_declared_input_type(target_node, target_handle)
+                ) or self._normalize_payload_type(self._target_default_type(target_node))
+
+            current_source_payload = dict(source_payload) if isinstance(source_payload, dict) else {}
+            current_target_payload = dict(target_payload) if isinstance(target_payload, dict) else {}
+            if source_type and not current_source_payload.get("type"):
+                current_source_payload["type"] = source_type
+            if target_type and not current_target_payload.get("type"):
+                current_target_payload["type"] = target_type
+            current_source_fp = self._stable_json(current_source_payload)
+            current_target_fp = self._stable_json(current_target_payload)
+
+            if current_source_fp == source_fp and current_target_fp == target_fp:
+                continue
+
             warnings.append(
                 ValidationError(
-                    code="EDGE_CONTRACT_SNAPSHOT_MISSING",
-                    message="Edge contract snapshot is missing schema fingerprints; graph import should recanonicalize edge contracts.",
+                    code="EDGE_CONTRACT_DRIFT",
+                    message=(
+                        "Edge contract drift detected: current source/target schemas differ from the persisted edge snapshot. "
+                        "Refresh edge contract snapshot or rebind the edge."
+                    ),
                     edge_id=edge_id,
-                    details={"edgeId": edge_id},
+                    details={
+                        "edgeId": edge_id,
+                        "sourceNodeId": source_id,
+                        "targetNodeId": target_id,
+                        "sourceHandle": source_handle,
+                        "targetHandle": target_handle,
+                        "snapshotSourceSchemaFingerprint": source_fp,
+                        "snapshotTargetSchemaFingerprint": target_fp,
+                        "currentSourceSchemaFingerprint": current_source_fp,
+                        "currentTargetSchemaFingerprint": current_target_fp,
+                    },
+                    suggestions=[
+                        "Open Schema Contract for this edge and refresh the contract snapshot.",
+                        "If drift is intentional, accept coercion or insert an adapter transform.",
+                        "If drift is accidental, rebind handles or restore expected schemas.",
+                    ],
                 )
             )
         return warnings

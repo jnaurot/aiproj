@@ -3093,6 +3093,23 @@ async def run_graph(
         return
 
     for warning in validation.warnings:
+        if str(getattr(warning, "code", "")).strip().upper() == "EDGE_CONTRACT_DRIFT":
+            details = warning.details if isinstance(warning.details, dict) else {}
+            await _emit({
+                "type": "contract_drift",
+                "runId": run_id,
+                "at": iso_now(),
+                "edgeId": str(getattr(warning, "edge_id", "") or details.get("edgeId") or ""),
+                "sourceNodeId": str(details.get("sourceNodeId") or ""),
+                "targetNodeId": str(details.get("targetNodeId") or ""),
+                "sourceHandle": str(details.get("sourceHandle") or "out"),
+                "targetHandle": str(details.get("targetHandle") or "in"),
+                "snapshotSourceSchemaFingerprint": str(details.get("snapshotSourceSchemaFingerprint") or ""),
+                "snapshotTargetSchemaFingerprint": str(details.get("snapshotTargetSchemaFingerprint") or ""),
+                "currentSourceSchemaFingerprint": str(details.get("currentSourceSchemaFingerprint") or ""),
+                "currentTargetSchemaFingerprint": str(details.get("currentTargetSchemaFingerprint") or ""),
+                "suggestions": list(getattr(warning, "suggestions", None) or []),
+            })
         await _emit({
             "type": "log",
             "runId": run_id,
