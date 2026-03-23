@@ -94,6 +94,7 @@
 	.node {
 		position: relative;
 		width: 220px;
+		overflow: visible;
 		border-radius: 12px;
 		border: 1px solid #2a2a2a;
 		background: #0f1115;
@@ -137,43 +138,17 @@
 
 	.sourceLabels {
 		position: absolute;
-		right: 10px;
+		right: -132px;
 		top: 0;
 		bottom: 0;
-		width: 92px;
+		width: 126px;
 		pointer-events: none;
 	}
 
 	.sourceLabel {
 		position: absolute;
 		transform: translateY(-50%);
-		right: 12px;
-		max-width: 100%;
-		font-size: 10px;
-		line-height: 1;
-		opacity: 0.72;
-		text-align: right;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.targetLabels {
-		position: absolute;
-		left: 10px;
-		top: 0;
-		bottom: 0;
-		width: 110px;
-		pointer-events: none;
-	}
-
-	.targetLabel {
-		position: absolute;
-		transform: translateY(-50%);
-		left: 12px;
+		left: 0;
 		max-width: 100%;
 		font-size: 10px;
 		line-height: 1;
@@ -187,8 +162,34 @@
 		gap: 6px;
 	}
 
+	.targetLabels {
+		position: absolute;
+		left: -132px;
+		top: 0;
+		bottom: 0;
+		width: 126px;
+		pointer-events: none;
+	}
+
+	.targetLabel {
+		position: absolute;
+		transform: translateY(-50%);
+		right: 0;
+		max-width: 100%;
+		font-size: 10px;
+		line-height: 1;
+		opacity: 0.72;
+		text-align: right;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
 	.portText {
-		max-width: 68px;
+		max-width: 78px;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
