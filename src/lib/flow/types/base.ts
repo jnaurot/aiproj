@@ -107,6 +107,18 @@ export interface PipelineEdgeData extends Record<string, any> {
       source?: Record<string, any>;
       target?: Record<string, any>;
     };
+	snapshot?: {
+		sourceSchemaFingerprint?: string;
+		targetSchemaFingerprint?: string;
+		compatible?: boolean;
+		decision?: "native" | "coerced" | "adapter" | "incompatible";
+		coercion?: {
+			allowed?: boolean;
+			lossy?: boolean;
+			mode?: "native" | "widened" | "coerced";
+		};
+		updatedAt?: string;
+	};
   };
 }
 

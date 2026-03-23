@@ -61,12 +61,39 @@ class GraphValidator:
         
         # 4. Resource validation
         warnings.extend(self._check_resource_availability(graph))
+        warnings.extend(self._validate_edge_contract_snapshots(graph))
         
         return ValidationResult(
             valid=len(errors) == 0,
             errors=errors,
             warnings=warnings
         )
+
+    def _validate_edge_contract_snapshots(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        warnings: List[ValidationError] = []
+        edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_id = str(edge.get("id") or "").strip()
+            data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+            contract = data.get("contract") if isinstance(data.get("contract"), dict) else {}
+            if not contract:
+                continue
+            snapshot = contract.get("snapshot") if isinstance(contract.get("snapshot"), dict) else {}
+            source_fp = str(snapshot.get("sourceSchemaFingerprint") or "").strip()
+            target_fp = str(snapshot.get("targetSchemaFingerprint") or "").strip()
+            if source_fp and target_fp:
+                continue
+            warnings.append(
+                ValidationError(
+                    code="EDGE_CONTRACT_SNAPSHOT_MISSING",
+                    message="Edge contract snapshot is missing schema fingerprints; graph import should recanonicalize edge contracts.",
+                    edge_id=edge_id,
+                    details={"edgeId": edge_id},
+                )
+            )
+        return warnings
 
     def _schema_code(self, code: str) -> str:
         return code if code in self._schema_diagnostic_codes else code

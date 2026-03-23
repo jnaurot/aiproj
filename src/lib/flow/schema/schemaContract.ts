@@ -41,9 +41,28 @@ export const NodeSchemaEnvelopeSchema = z
 	})
 	.strip();
 
+export const EdgeContractSnapshotSchema = z
+	.object({
+		sourceSchemaFingerprint: z.string().optional(),
+		targetSchemaFingerprint: z.string().optional(),
+		compatible: z.boolean().optional(),
+		decision: z.enum(['native', 'coerced', 'adapter', 'incompatible']).optional(),
+		coercion: z
+			.object({
+				allowed: z.boolean().optional(),
+				lossy: z.boolean().optional(),
+				mode: z.enum(['native', 'widened', 'coerced']).optional()
+			})
+			.strip()
+			.optional(),
+		updatedAt: z.string().optional()
+	})
+	.strip();
+
 export type NodeSchemaState = z.infer<typeof NodeSchemaStateSchema>;
 export type NodeSchemaSource = z.infer<typeof NodeSchemaSourceSchema>;
 export type NodeSchemaObservation = z.infer<typeof NodeSchemaObservationSchema>;
 export type NodeInputClassContract = z.infer<typeof NodeInputClassContractSchema>;
 export type NodeSchemaEnvelope = z.infer<typeof NodeSchemaEnvelopeSchema>;
+export type EdgeContractSnapshot = z.infer<typeof EdgeContractSnapshotSchema>;
 

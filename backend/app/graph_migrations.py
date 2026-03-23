@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +19,14 @@ def _normalize_payload_type(value: Any) -> Optional[str]:
 	if not norm:
 		return None
 	return norm if norm in set(allowed_payload_types()) else None
+
+
+def _stable_schema_fingerprint(value: Any) -> str:
+	try:
+		payload = json.dumps(value if value is not None else None, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+	except Exception:
+		payload = str(value)
+	return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _node_data(node: Dict[str, Any]) -> Dict[str, Any]:
@@ -452,6 +462,33 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		work_cfg["item_mode"] = item_mode
 		work_cfg["max_items"] = max(1, work_max_items)
 		edge_data["work"] = work_cfg
+		contract = edge_data.get("contract") if isinstance(edge_data.get("contract"), dict) else {}
+		payload = contract.get("payload") if isinstance(contract.get("payload"), dict) else {}
+		source_payload = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+		target_payload = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+		snapshot = contract.get("snapshot") if isinstance(contract.get("snapshot"), dict) else {}
+		compatible = bool(snapshot.get("compatible", True))
+		decision = str(snapshot.get("decision") or ("native" if compatible else "incompatible")).strip().lower()
+		if decision not in {"native", "coerced", "adapter", "incompatible"}:
+			decision = "native" if compatible else "incompatible"
+		coercion = snapshot.get("coercion") if isinstance(snapshot.get("coercion"), dict) else {}
+		coercion_mode = str(coercion.get("mode") or ("native" if decision == "native" else "coerced")).strip().lower()
+		if coercion_mode not in {"native", "widened", "coerced"}:
+			coercion_mode = "native"
+		contract["payload"] = {"source": source_payload, "target": target_payload}
+		contract["snapshot"] = {
+			"sourceSchemaFingerprint": str(snapshot.get("sourceSchemaFingerprint") or _stable_schema_fingerprint(source_payload)),
+			"targetSchemaFingerprint": str(snapshot.get("targetSchemaFingerprint") or _stable_schema_fingerprint(target_payload)),
+			"compatible": compatible,
+			"decision": decision,
+			"coercion": {
+				"allowed": bool(coercion.get("allowed", compatible)),
+				"lossy": bool(coercion.get("lossy", False)),
+				"mode": coercion_mode,
+			},
+			"updatedAt": str(snapshot.get("updatedAt") or datetime.now(timezone.utc).isoformat()),
+		}
+		edge_data["contract"] = contract
 		next_edge["data"] = edge_data
 
 		source_handle = str(next_edge.get("sourceHandle") or "out").strip() or "out"

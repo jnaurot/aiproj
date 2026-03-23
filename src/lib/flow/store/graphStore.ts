@@ -3759,6 +3759,16 @@ function declaredPortHandles(
 	const raw = Object.keys(ports as Record<string, unknown>)
 		.map((value) => String(value ?? '').trim())
 		.filter((value) => value.length > 0 && value !== 'default');
+	if (direction === 'in') {
+		const expectedInputSchemas =
+			data?.schema?.expectedInputSchemas && typeof data.schema.expectedInputSchemas === 'object'
+				? (data.schema.expectedInputSchemas as Record<string, unknown>)
+				: {};
+		for (const handle of Object.keys(expectedInputSchemas)) {
+			const key = String(handle ?? '').trim();
+			if (key.length > 0 && !raw.includes(key)) raw.push(key);
+		}
+	}
 	if (declared && typeof declared === 'object' && Object.prototype.hasOwnProperty.call(declared, 'default')) {
 		const implicit = direction === 'in' ? 'in' : 'out';
 		if (!raw.includes(implicit)) raw.unshift(implicit);
@@ -3779,6 +3789,15 @@ function hasPortHandle(
 	if (declaredPorts && typeof declaredPorts === 'object') {
 		const normalized = String(handle ?? '').trim();
 		const record = declaredPorts as Record<string, unknown>;
+		if (direction === 'in') {
+			const expectedInputSchemas =
+				data?.schema?.expectedInputSchemas && typeof data.schema.expectedInputSchemas === 'object'
+					? (data.schema.expectedInputSchemas as Record<string, unknown>)
+					: {};
+			if (normalized.length > 0 && Object.prototype.hasOwnProperty.call(expectedInputSchemas, normalized)) {
+				return true;
+			}
+		}
 		if (normalized.length === 0) return (direction === 'in' ? 'in' : 'out') in record;
 		return normalized in record;
 	}
@@ -3864,6 +3883,36 @@ function stableSchemaSignature(value: unknown): string {
 	} catch {
 		return '';
 	}
+}
+
+function edgeContractSnapshotFromSchemas(
+	providedSchema: Record<string, any> | undefined,
+	requiredSchema: Record<string, any> | undefined,
+	compatibility: SchemaCompatibility,
+	edgeMode: 'work' | 'param' | 'control'
+): Record<string, any> {
+	const providedType = normalizeHintType(providedSchema?.type ?? 'unknown');
+	const requiredType = normalizeHintType(requiredSchema?.type ?? 'unknown');
+	const policy = String(requiredSchema?.coercion_policy ?? 'safe_widening').trim().toLowerCase();
+	const coercion = evaluateSchemaCoercion(providedType, requiredType, policy);
+	let decision: 'native' | 'coerced' | 'adapter' | 'incompatible' = 'incompatible';
+	if (compatibility.ok) {
+		decision = coercion.mode === 'native' ? 'native' : 'coerced';
+		if (compatibility.adapterKind) decision = 'adapter';
+	}
+	return {
+		edgeMode,
+		sourceSchemaFingerprint: stableSchemaSignature(providedSchema ?? null),
+		targetSchemaFingerprint: stableSchemaSignature(requiredSchema ?? null),
+		compatible: compatibility.ok,
+		decision,
+		coercion: {
+			allowed: coercion.allowed,
+			lossy: coercion.lossy,
+			mode: coercion.mode
+		},
+		updatedAt: new Date().toISOString()
+	};
 }
 
 function sameHandleProvidedSchemaConflict(
@@ -4084,6 +4133,27 @@ function recomputeEdgeContractsBestEffort(
 			source: sourcePayloadHint(sourceNode as any, 'out', sourceHandle),
 			target: targetPayloadHint(targetNode as any)
 		};
+		const edgeMode = normalizeEdgeMode(edge);
+		const snapshotCompatibility: SchemaCompatibility = chk.ok
+			? { ok: true }
+			: {
+					ok: false,
+					reason:
+						chk.reason === 'schema_mismatch'
+							? 'missing_required_columns'
+							: chk.reason === 'typed_schema_missing'
+								? 'missing_typed_schema'
+								: 'type_mismatch',
+					missingColumns: chk.missingColumns,
+					suggestion: chk.suggestion ?? null,
+					adapterKind: chk.adapterKind ?? null
+				};
+		const snapshot = edgeContractSnapshotFromSchemas(
+			payload.source as any,
+			payload.target as any,
+			snapshotCompatibility,
+			edgeMode
+		);
 		if (chk.ok) {
 			return {
 				...edge,
@@ -4092,7 +4162,8 @@ function recomputeEdgeContractsBestEffort(
 					contract: {
 						out: chk.out,
 						in: chk.in,
-						payload
+						payload,
+						snapshot
 					}
 				}
 			};
@@ -4104,7 +4175,8 @@ function recomputeEdgeContractsBestEffort(
 				contract: {
 					out: existingContract?.out,
 					in: existingContract?.in,
-					payload
+					payload,
+					snapshot
 				}
 			}
 		};
@@ -4220,7 +4292,7 @@ export const graphStore = (() => {
 
 	function updateNodeConfigImpl(
 		nodeId: string,
-		config: { params?: unknown }
+		config: { params?: unknown; schema?: Record<string, unknown> }
 	) {
 		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
 
@@ -4246,6 +4318,24 @@ export const graphStore = (() => {
 					return logPush(s, 'error', res.error, nodeId);
 				}
 				nodes = res.nodes;
+			}
+			if (config.schema !== undefined) {
+				const parsed = NodeSchemaEnvelopeSchema.safeParse(config.schema ?? {});
+				if (!parsed.success) {
+					out = { ok: false, error: 'Invalid schema envelope payload.' };
+					return logPush(s, 'error', out.error, nodeId);
+				}
+				nodes = nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									schema: parsed.data
+								}
+							}
+						: n
+				);
 			}
 
 			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
@@ -5605,7 +5695,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							payload: {
 								source: sourceHint,
 								target: targetHint
-							}
+							},
+							snapshot: edgeContractSnapshotFromSchemas(
+								sourceHint as Record<string, any>,
+								targetHint as Record<string, any>,
+								{ ok: true },
+								normalizeEdgeMode(edgeForValidation as any)
+							)
 						}
 					}
 				};
