@@ -5677,6 +5677,41 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					error: 'Edge mode is incompatible with source/target port affinities'
 				};
 			}
+			const edgeCandidate = {
+				id: '__preflight__',
+				source,
+				target,
+				sourceHandle,
+				targetHandle: targetHandleRaw,
+				data: { exec: 'idle', mode }
+			} as any;
+			const schemaCheck = isEdgeStillValid(state.nodes, edgeCandidate);
+			if (!schemaCheck.ok) {
+				return {
+					ok: false as const,
+					error:
+						schemaCheck.reason === 'mode_mismatch'
+							? 'Edge mode is incompatible with source/target port affinities'
+							: schemaCheck.reason === 'type_mismatch'
+								? `Incompatible schemas${schemaCheck.suggestion ? `. ${schemaCheck.suggestion}` : ''}`
+								: schemaCheck.reason === 'typed_schema_missing'
+									? `Missing required typed schema coverage: ${(schemaCheck.missingColumns ?? []).join(', ') || '(unknown)'}`
+									: schemaCheck.reason === 'schema_mismatch'
+										? `Missing required columns: ${(schemaCheck.missingColumns ?? []).join(', ') || '(unknown)'}`
+										: 'Cannot resolve schema compatibility for this connection',
+					suggestion: schemaCheck.suggestion ?? null,
+					adapterKind: schemaCheck.adapterKind ?? null
+				};
+			}
+			if (schemaCheck.warning === 'lossy_coercion' || schemaCheck.adapterKind || schemaCheck.suggestion) {
+				return {
+					ok: true as const,
+					deferred: false as const,
+					warning: schemaCheck.warning ?? null,
+					suggestion: schemaCheck.suggestion ?? null,
+					adapterKind: schemaCheck.adapterKind ?? null
+				};
+			}
 			const preflightEdgeId = '__preflight__';
 			const sameHandleConflict = sameHandleProvidedSchemaConflict(
 				state.nodes as any,

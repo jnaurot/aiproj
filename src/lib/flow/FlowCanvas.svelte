@@ -1338,14 +1338,22 @@ async function scrollToBottom() {
 			.filter((name) => name.length > 0).length;
 	}
 
-	function isValidConnection(conn: Connection) {
-		if (!conn.source || !conn.target) return false;
-		if (conn.source === conn.target) return false;
+	function validateConnection(conn: Connection): {
+		ok: boolean;
+		error?: string;
+		suggestion?: string | null;
+		adapterKind?: string | null;
+	} {
+		if (!conn.source || !conn.target) return { ok: false, error: 'Missing source or target' };
+		if (conn.source === conn.target) return { ok: false, error: 'Cannot connect node to itself' };
 		if (
 			componentOutputCount(conn.source) > 1 &&
 			String(conn.sourceHandle ?? 'out').trim() === 'out'
 		) {
-			return false;
+			return {
+				ok: false,
+				error: 'Component output handle is required when component has multiple outputs'
+			};
 		}
 
 		// Basic cycle prevention (reuse your old DFS idea, but based on local edges)
@@ -1360,7 +1368,9 @@ async function scrollToBottom() {
 			}
 			return false;
 		}
-		if (reaches(conn.target, conn.source)) return false;
+		if (reaches(conn.target, conn.source)) {
+			return { ok: false, error: 'Connection would create a cycle' };
+		}
 
 		const preflight = graphStore.preflightConnection({
 			source: conn.source,
@@ -1368,13 +1378,47 @@ async function scrollToBottom() {
 			sourceHandle: conn.sourceHandle ?? null,
 			targetHandle: conn.targetHandle ?? null
 		});
-		if (!preflight.ok) return false;
+		if (!preflight.ok) {
+			return {
+				ok: false,
+				error: String((preflight as any).error ?? 'Connection preflight failed'),
+				suggestion: (preflight as any).suggestion ?? null,
+				adapterKind: (preflight as any).adapterKind ?? null
+			};
+		}
 
-		return true;
+		return { ok: true };
 	}
 
 	function onconnect(conn: Connection) {
-		if (!isValidConnection(conn)) return;
+		const validation = validateConnection(conn);
+		if (!validation.ok) {
+			const msg = validation.suggestion
+				? `${validation.error ?? 'Connection rejected'} ${validation.suggestion}`
+				: validation.error ?? 'Connection rejected';
+			if (validation.adapterKind) {
+				showToast(msg, 'warn', {
+					label: 'Insert adapter',
+					onClick: () => {
+						const inserted = graphStore.insertSchemaAdapterForEdgeConnection({
+							source: conn.source!,
+							target: conn.target!,
+							sourceHandle: conn.sourceHandle ?? null,
+							targetHandle: conn.targetHandle ?? null,
+							adapterKind: validation.adapterKind as any
+						});
+						if (!inserted.ok) {
+							showToast(String(inserted.error ?? 'Failed to insert adapter'), 'error');
+							return;
+						}
+						showToast('Inserted schema adapter.', 'info');
+					}
+				});
+			} else {
+				showToast(msg, 'error');
+			}
+			return;
+		}
 
 		const e: Edge<PipelineEdgeData> = {
 			id: `e_${crypto.randomUUID()}`,
