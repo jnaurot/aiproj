@@ -47,6 +47,15 @@ export function schemaEdgeDriftGuidance(edge: NodeSchemaContractEdge): string | 
 	return `Contract drift detected: snapshot (${snapSource} / ${snapTarget}) != current (${curSource} / ${curTarget}).`;
 }
 
+export function schemaEdgeContractBadges(edge: NodeSchemaContractEdge): string[] {
+	const badges: string[] = [];
+	if (edge?.snapshotDrift) badges.push('drift');
+	const suggestions = Array.isArray(edge?.suggestions) ? edge.suggestions.join(' ').toLowerCase() : '';
+	if (suggestions.includes('coercion') || edge?.severity === 'warning') badges.push('coercion');
+	if (edge?.adapterKind) badges.push(`adapter:${String(edge.adapterKind)}`);
+	return badges;
+}
+
 export type ExpectedInputHandleSummary = {
 	handle: string;
 	affinity: 'work' | 'param' | 'control';

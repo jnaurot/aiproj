@@ -31,6 +31,7 @@
 	} from '$lib/flow/store/graphStore';
 	import {
 		collectExpectedInputHandles,
+		schemaEdgeContractBadges,
 		groupSchemaEdgesByMode,
 		schemaEdgeCounterpartyName,
 		schemaEdgeDriftGuidance,
@@ -1900,6 +1901,29 @@
 									<span class="schemaLabel">required</span>
 									<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
 								</div>
+								<div class="schemaContractDiffPanel">
+									<div class="schemaContractDiffHead">
+										<span>contract diff</span>
+										{#each schemaEdgeContractBadges(edge) as badge (`${edge.edgeId}-${badge}`)}
+											<span class="schemaContractBadge">{badge}</span>
+										{/each}
+									</div>
+									<div class="schemaRow">
+										<span class="schemaLabel">source (current)</span>
+										<span>{schemaTypeLabel(edge.providedSchema)} [{schemaFieldSummary(edge.providedSchema, 'fields')}]</span>
+									</div>
+									<div class="schemaRow">
+										<span class="schemaLabel">snapshot</span>
+										<span>
+											src={(edge.snapshotSourceSchemaFingerprint ?? '').slice(0, 12) || '(none)'} /
+											tgt={(edge.snapshotTargetSchemaFingerprint ?? '').slice(0, 12) || '(none)'}
+										</span>
+									</div>
+									<div class="schemaRow">
+										<span class="schemaLabel">target (current)</span>
+										<span>{schemaTypeLabel(edge.requiredSchema)} [{schemaFieldSummary(edge.requiredSchema, 'required_fields')}]</span>
+									</div>
+								</div>
 								{#if edge.snapshotDrift}
 									<div class="schemaSuggestions">{schemaEdgeDriftGuidance(edge)}</div>
 								{/if}
@@ -2300,5 +2324,36 @@
 		justify-self: start;
 		font-size: 11px;
 		padding: 4px 8px;
+	}
+
+	.schemaContractDiffPanel {
+		display: grid;
+		gap: 4px;
+		border: 1px dashed var(--ni-border);
+		border-radius: 8px;
+		padding: 6px;
+	}
+
+	.schemaContractDiffHead {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.02em;
+		color: var(--ni-muted);
+	}
+
+	.schemaContractBadge {
+		display: inline-flex;
+		align-items: center;
+		padding: 1px 6px;
+		border-radius: 999px;
+		border: 1px solid var(--ni-border);
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: none;
+		color: var(--ni-text);
 	}
 </style>
