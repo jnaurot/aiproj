@@ -183,6 +183,45 @@
 			max_inflight: Math.max(1, Number(policyRaw?.max_inflight ?? 1))
 		};
 	})();
+	$: nodeProcessingPolicyByHandle = (() => {
+		const policyRaw =
+			((selectedNode?.data as any)?.processingPolicy ?? {}) as Record<string, unknown>;
+		const inputHandlesRaw =
+			policyRaw?.input_handles && typeof policyRaw.input_handles === 'object'
+				? (policyRaw.input_handles as Record<string, unknown>)
+				: {};
+		const out: Record<
+			string,
+			{ consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number }
+		> = {};
+		for (const handleSummary of expectedInputHandles ?? []) {
+			const handle = String(handleSummary?.handle ?? '').trim();
+			if (!handle) continue;
+			const handleRaw =
+				inputHandlesRaw && typeof inputHandlesRaw[handle] === 'object'
+					? (inputHandlesRaw[handle] as Record<string, unknown>)
+					: {};
+			const consumeMode = String(
+				(handleRaw as any)?.consume_mode ?? nodeProcessingPolicy.consume_mode ?? 'once'
+			)
+				.trim()
+				.toLowerCase();
+			out[handle] = {
+				consume_mode: (
+					consumeMode === 'single_item' || consumeMode === 'batch' ? consumeMode : 'once'
+				) as 'once' | 'single_item' | 'batch',
+				batch_size: Math.max(
+					1,
+					Number((handleRaw as any)?.batch_size ?? nodeProcessingPolicy.batch_size ?? 1)
+				),
+				max_inflight: Math.max(
+					1,
+					Number((handleRaw as any)?.max_inflight ?? nodeProcessingPolicy.max_inflight ?? 1)
+				)
+			};
+		}
+		return out;
+	})();
 
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
@@ -943,6 +982,14 @@
 		if (!selectedNode?.id) return;
 		graphStore.updateNodeProcessingPolicy(selectedNode.id, patch);
 	}
+
+	function updateNodeProcessingPolicyForHandle(
+		inputHandle: string,
+		patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+	): void {
+		if (!selectedNode?.id) return;
+		graphStore.updateNodeInputHandleProcessingPolicy(selectedNode.id, inputHandle, patch);
+	}
 </script>
 
 {#if selectedNode}
@@ -1358,6 +1405,66 @@
 					/>
 				</label>
 			</div>
+			{#if expectedInputHandles.length > 0}
+				<div class="guidedAssistList">
+					{#each expectedInputHandles as handleSummary (handleSummary.handle)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">input {handleSummary.handle}</div>
+							<div class="assistActionRow">
+								<label class="guidedToggle">
+									<span>consume</span>
+									<select
+										value={nodeProcessingPolicyByHandle[handleSummary.handle]?.consume_mode ?? nodeProcessingPolicy.consume_mode}
+										on:change={(event) =>
+											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
+												consume_mode: (event.currentTarget as HTMLSelectElement).value as
+													| 'once'
+													| 'single_item'
+													| 'batch'
+											})}
+									>
+										<option value="once">once</option>
+										<option value="single_item">single_item</option>
+										<option value="batch">batch</option>
+									</select>
+								</label>
+								<label class="guidedToggle">
+									<span>batch</span>
+									<input
+										type="number"
+										min="1"
+										step="1"
+										value={String(nodeProcessingPolicyByHandle[handleSummary.handle]?.batch_size ?? nodeProcessingPolicy.batch_size)}
+										on:change={(event) =>
+											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
+												batch_size: Math.max(
+													1,
+													Number((event.currentTarget as HTMLInputElement).value || '1')
+												)
+											})}
+									/>
+								</label>
+								<label class="guidedToggle">
+									<span>inflight</span>
+									<input
+										type="number"
+										min="1"
+										step="1"
+										value={String(nodeProcessingPolicyByHandle[handleSummary.handle]?.max_inflight ?? nodeProcessingPolicy.max_inflight)}
+										on:change={(event) =>
+											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
+												max_inflight: Math.max(
+													1,
+													Number((event.currentTarget as HTMLInputElement).value || '1')
+												)
+											})}
+									/>
+								</label>
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</div>
 		{#if !isComponent}
 			<div class="expectedSchemaEditor">

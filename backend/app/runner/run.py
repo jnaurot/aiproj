@@ -436,7 +436,18 @@ def _resolve_retry_policy(
     return merged
 
 
-def _node_processing_policy(node: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_consume_mode(raw: Any) -> str:
+    mode = str(raw or "once").strip().lower()
+    if mode in {"read_once", "once"}:
+        return "once"
+    if mode in {"continuous", "single_item"}:
+        return "single_item"
+    if mode == "batch":
+        return "batch"
+    return "once"
+
+
+def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = None) -> Dict[str, Any]:
     data = (node.get("data") or {}) if isinstance(node, dict) else {}
     params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
     policy = {}
@@ -446,9 +457,7 @@ def _node_processing_policy(node: Dict[str, Any]) -> Dict[str, Any]:
         policy = params.get("processing_policy") or {}
     elif isinstance(params.get("processingPolicy"), dict):
         policy = params.get("processingPolicy") or {}
-    consume_mode = str(policy.get("consume_mode") or policy.get("consumeMode") or "once").strip().lower()
-    if consume_mode not in {"once", "single_item", "batch"}:
-        consume_mode = "once"
+    consume_mode = _normalize_consume_mode(policy.get("consume_mode") or policy.get("consumeMode") or "once")
     try:
         batch_size = max(1, int(policy.get("batch_size") or policy.get("batchSize") or 1))
     except Exception:
@@ -457,6 +466,29 @@ def _node_processing_policy(node: Dict[str, Any]) -> Dict[str, Any]:
         max_inflight = max(1, int(policy.get("max_inflight") or policy.get("maxInflight") or 1))
     except Exception:
         max_inflight = 1
+    if input_handle:
+        by_handle = policy.get("input_handles") if isinstance(policy.get("input_handles"), dict) else {}
+        handle_policy = by_handle.get(str(input_handle)) if isinstance(by_handle, dict) else {}
+        if isinstance(handle_policy, dict):
+            consume_mode = _normalize_consume_mode(
+                handle_policy.get("consume_mode")
+                or handle_policy.get("consumeMode")
+                or consume_mode
+            )
+            try:
+                batch_size = max(
+                    1,
+                    int(handle_policy.get("batch_size") or handle_policy.get("batchSize") or batch_size),
+                )
+            except Exception:
+                batch_size = max(1, batch_size)
+            try:
+                max_inflight = max(
+                    1,
+                    int(handle_policy.get("max_inflight") or handle_policy.get("maxInflight") or max_inflight),
+                )
+            except Exception:
+                max_inflight = max(1, max_inflight)
     return {
         "consume_mode": consume_mode,
         "batch_size": batch_size,
@@ -6785,12 +6817,41 @@ async def run_graph(
             infos.sort(key=lambda item: (item.get("inputHandle") or "", item.get("edgeId") or ""))
             return infos
 
+        def _effective_node_runtime_policy(node_id: str) -> Dict[str, Any]:
+            node_obj = nodes.get(node_id, {})
+            base = _node_processing_policy(node_obj)
+            incoming = _incoming_edge_infos(node_id)
+            if not incoming:
+                return base
+            merged_mode = str(base.get("consume_mode") or "once")
+            merged_batch = int(base.get("batch_size") or 1)
+            inflight_caps = [max(1, int(base.get("max_inflight") or 1))]
+            for info in incoming:
+                handle = str(info.get("inputHandle") or "in")
+                handle_policy = _node_processing_policy(node_obj, input_handle=handle)
+                inflight_caps.append(max(1, int(handle_policy.get("max_inflight") or 1)))
+                handle_mode = str(handle_policy.get("consume_mode") or "once")
+                if handle_mode == "batch":
+                    merged_mode = "batch"
+                elif handle_mode == "single_item" and merged_mode == "once":
+                    merged_mode = "single_item"
+                merged_batch = max(merged_batch, max(1, int(handle_policy.get("batch_size") or 1)))
+            return {
+                "consume_mode": merged_mode,
+                "batch_size": merged_batch,
+                "max_inflight": min(inflight_caps),
+            }
+
         def _node_has_ready_work(node_id: str) -> bool:
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
                 return True
             for info in incoming:
-                if queue_registry.depth(str(info.get("edgeId") or ""), str(info.get("inputHandle") or "in")) <= 0:
+                handle = str(info.get("inputHandle") or "in")
+                policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
+                consume_mode = str(policy.get("consume_mode") or "once")
+                needed = 1 if consume_mode in {"once", "single_item"} else max(1, int(policy.get("batch_size") or 1))
+                if queue_registry.depth(str(info.get("edgeId") or ""), handle) < needed:
                     return False
             return True
 
@@ -6798,30 +6859,44 @@ async def run_graph(
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
                 return []
-            policy = node_processing_policy.get(node_id, {"consume_mode": "once", "batch_size": 1})
-            consume_mode = str(policy.get("consume_mode") or "once")
-            batch_size = max(1, int(policy.get("batch_size") or 1))
-            max_take = 1 if consume_mode == "single_item" else batch_size if consume_mode == "batch" else 1
             primary = incoming[0]
             out: List[Dict[str, Any]] = []
-            for _ in range(max_take):
+            primary_handle = str(primary.get("inputHandle") or "in")
+            primary_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=primary_handle)
+            primary_mode = str(primary_policy.get("consume_mode") or "once")
+            primary_take = (
+                max(1, int(primary_policy.get("batch_size") or 1))
+                if primary_mode == "batch"
+                else 1
+            )
+            for _ in range(primary_take):
                 item = await queue_registry.dequeue(
                     str(primary.get("edgeId") or ""),
-                    str(primary.get("inputHandle") or "in"),
+                    primary_handle,
                     timeout_sec=0.0,
                 )
                 if item is None:
                     break
                 runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
                 out.append(item if isinstance(item, dict) else {"item": item})
-            # For additional incoming edges keep one item alignment token if available.
+            # Additional handles can each apply their own policy.
             for info in incoming[1:]:
-                item = await queue_registry.dequeue(
-                    str(info.get("edgeId") or ""),
-                    str(info.get("inputHandle") or "in"),
-                    timeout_sec=0.0,
+                handle = str(info.get("inputHandle") or "in")
+                handle_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
+                consume_mode = str(handle_policy.get("consume_mode") or "once")
+                handle_take = (
+                    max(1, int(handle_policy.get("batch_size") or 1))
+                    if consume_mode == "batch"
+                    else 1
                 )
-                if item is not None:
+                for _ in range(handle_take):
+                    item = await queue_registry.dequeue(
+                        str(info.get("edgeId") or ""),
+                        handle,
+                        timeout_sec=0.0,
+                    )
+                    if item is None:
+                        break
                     runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
                     out.append(item if isinstance(item, dict) else {"item": item})
             return out
@@ -6829,7 +6904,7 @@ async def run_graph(
         def _enqueue_ready_if_possible(node_id: str) -> None:
             if not deps_released.get(node_id, False):
                 return
-            policy = node_processing_policy.get(node_id, {"consume_mode": "once", "max_inflight": 1})
+            policy = _effective_node_runtime_policy(node_id)
             consume_mode = str(policy.get("consume_mode") or "once")
             per_node_max = max(1, int(policy.get("max_inflight") or 1))
             in_flight_for_node = int(node_inflight_counts.get(node_id, 0))
@@ -6900,7 +6975,7 @@ async def run_graph(
 
             while ready and len(inflight) < max_inflight:
                 nid = ready.pop(0)
-                policy = node_processing_policy.get(nid, {"consume_mode": "once", "max_inflight": 1})
+                policy = _effective_node_runtime_policy(nid)
                 consume_mode = str(policy.get("consume_mode") or "once")
                 per_node_max = max(1, int(policy.get("max_inflight") or 1))
                 if int(node_inflight_counts.get(nid, 0)) >= per_node_max:

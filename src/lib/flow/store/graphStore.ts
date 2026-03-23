@@ -5473,6 +5473,67 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			return out;
 		},
 
+		updateNodeInputHandleProcessingPolicy(
+			nodeId: string,
+			inputHandle: string,
+			patch: { consume_mode?: 'once' | 'single_item' | 'batch'; batch_size?: number; max_inflight?: number }
+		) {
+			let out: { ok: boolean; error?: string } = { ok: true };
+			update((s) => {
+				const node = s.nodes.find((n) => n.id === nodeId);
+				if (!node) {
+					out = { ok: false, error: 'Node not found' };
+					return s;
+				}
+				const handle = String(inputHandle ?? '').trim() || 'in';
+				const existing = ((node.data as any)?.processingPolicy ?? {}) as Record<string, any>;
+				const existingByHandle =
+					existing.input_handles && typeof existing.input_handles === 'object'
+						? (existing.input_handles as Record<string, any>)
+						: {};
+				const existingHandle = (existingByHandle[handle] ?? {}) as Record<string, any>;
+				const nextMode = String(patch.consume_mode ?? existingHandle.consume_mode ?? 'once').trim().toLowerCase();
+				if (!['once', 'single_item', 'batch'].includes(nextMode)) {
+					out = { ok: false, error: 'Invalid consume mode' };
+					return s;
+				}
+				const nextHandlePolicy = {
+					consume_mode: nextMode as 'once' | 'single_item' | 'batch',
+					batch_size: Math.max(1, Number(patch.batch_size ?? existingHandle.batch_size ?? existing.batch_size ?? 1)),
+					max_inflight: Math.max(
+						1,
+						Number(patch.max_inflight ?? existingHandle.max_inflight ?? existing.max_inflight ?? 1)
+					)
+				};
+				const nextPolicy = {
+					...(existing as Record<string, any>),
+					input_handles: {
+						...existingByHandle,
+						[handle]: nextHandlePolicy
+					}
+				};
+				const nodes = s.nodes.map((n) =>
+					n.id === nodeId
+						? {
+								...n,
+								data: {
+									...n.data,
+									processingPolicy: nextPolicy
+								}
+							}
+						: n
+				);
+				const next = logPush(
+					{ ...s, nodes },
+					'info',
+					`Updated node ${nodeId} processing policy for input handle ${handle}`
+				);
+				persist(next);
+				return next;
+			});
+			return out;
+		},
+
 		setNodeMeta(nodeId: string, patch: Record<string, unknown>) {
 			update((s) => {
 				const node = s.nodes.find((n) => n.id === nodeId);

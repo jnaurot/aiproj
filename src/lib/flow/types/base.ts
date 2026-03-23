@@ -47,6 +47,19 @@ export type BaseNodeData<K extends NodeKind, P> = {
   label: string;
   params: P;
   status: NodeStatus;
+  processingPolicy?: {
+    consume_mode?: "once" | "single_item" | "batch";
+    batch_size?: number;
+    max_inflight?: number;
+    input_handles?: Record<
+      string,
+      {
+        consume_mode?: "once" | "single_item" | "batch";
+        batch_size?: number;
+        max_inflight?: number;
+      }
+    >;
+  };
 
   // execution bookkeeping (optional for now)
   lastRunId?: string;
@@ -67,6 +80,10 @@ export interface PipelineEdgeData extends Record<string, any> {
   queue?: {
     max?: number;
     overflow?: "block" | "spill" | "error";
+  };
+  work?: {
+    item_mode?: "artifact" | "json_items" | "table_rows";
+    max_items?: number;
   };
   contract?: {
     in?: PayloadType;

@@ -245,7 +245,11 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			or processing_policy.get("consumeMode")
 			or "once"
 		).strip().lower() or "once"
-		if consume_mode not in {"once", "single_item", "batch"}:
+		if consume_mode in {"read_once"}:
+			consume_mode = "once"
+		elif consume_mode in {"continuous"}:
+			consume_mode = "single_item"
+		elif consume_mode not in {"once", "single_item", "batch"}:
 			consume_mode = "once"
 		try:
 			batch_size = int(
@@ -263,10 +267,55 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			)
 		except Exception:
 			max_inflight = 1
+		input_handles: Dict[str, Dict[str, Any]] = {}
+		input_handles_raw = (
+			processing_policy.get("input_handles")
+			if isinstance(processing_policy.get("input_handles"), dict)
+			else {}
+		)
+		for handle, policy_raw in (input_handles_raw or {}).items():
+			if not isinstance(policy_raw, dict):
+				continue
+			handle_name = str(handle or "").strip()
+			if not handle_name:
+				continue
+			handle_mode = str(
+				policy_raw.get("consume_mode")
+				or policy_raw.get("consumeMode")
+				or consume_mode
+			).strip().lower() or consume_mode
+			if handle_mode in {"read_once"}:
+				handle_mode = "once"
+			elif handle_mode in {"continuous"}:
+				handle_mode = "single_item"
+			elif handle_mode not in {"once", "single_item", "batch"}:
+				handle_mode = consume_mode
+			try:
+				handle_batch = int(
+					policy_raw.get("batch_size")
+					or policy_raw.get("batchSize")
+					or batch_size
+				)
+			except Exception:
+				handle_batch = batch_size
+			try:
+				handle_inflight = int(
+					policy_raw.get("max_inflight")
+					or policy_raw.get("maxInflight")
+					or max_inflight
+				)
+			except Exception:
+				handle_inflight = max_inflight
+			input_handles[handle_name] = {
+				"consume_mode": handle_mode,
+				"batch_size": max(1, handle_batch),
+				"max_inflight": max(1, handle_inflight),
+			}
 		data["processingPolicy"] = {
 			"consume_mode": consume_mode,
 			"batch_size": max(1, batch_size),
 			"max_inflight": max(1, max_inflight),
+			"input_handles": input_handles,
 		}
 		nid = str(next_node.get("id") or "").strip()
 		if nid:
