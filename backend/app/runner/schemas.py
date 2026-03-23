@@ -220,6 +220,10 @@ def normalize_source_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["retry"] = p.pop("retryPolicy")
     if "rateLimit" in p and "rate_limit" not in p:
         p["rate_limit"] = p.pop("rateLimit")
+    if "jsonItemPath" in p and "json_item_path" not in p:
+        p["json_item_path"] = p.pop("jsonItemPath")
+    if "jsonItemStrict" in p and "json_item_strict" not in p:
+        p["json_item_strict"] = p.pop("jsonItemStrict")
     if "__managedHeaders" in p and "managed_headers" not in p:
         p["managed_headers"] = p.pop("__managedHeaders")
     if isinstance(p.get("body"), dict):
@@ -548,6 +552,8 @@ class SourceAPIParams(NodeParamSchema):
         }
     )
     rate_limit: Dict[str, Any] = Field(default_factory=lambda: {"burst": 1})
+    json_item_path: Optional[str] = None
+    json_item_strict: bool = False
     cache_policy: Dict[str, Any] = Field(default_factory=lambda: {"mode": "default"})
     priming: SourcePrimingParams = Field(default_factory=SourcePrimingParams)
     output_mode: Literal["table", "text", "json", "binary"] = "json"

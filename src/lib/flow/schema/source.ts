@@ -298,6 +298,8 @@ export const SourceAPIParamsSchema = z
 			retry_on_status: [429, 500, 502, 503, 504]
 		}),
 		rate_limit: SourceApiRateLimitSchema.default({ burst: 1 }),
+		json_item_path: z.string().min(1).optional(),
+		json_item_strict: z.boolean().default(false),
 		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
 		priming: SourcePrimingSchema.default({
 			enabled: false,

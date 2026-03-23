@@ -663,6 +663,16 @@ class TestSourceAPIParams:
         api_params = SourceAPIParams.model_validate(params)
         assert api_params.timeout_seconds == 10
 
+    def test_json_item_extraction_fields(self):
+        params = {
+            "url": "https://api.example.com/data",
+            "json_item_path": "jobs",
+            "json_item_strict": True,
+        }
+        api_params = SourceAPIParams.model_validate(params)
+        assert api_params.json_item_path == "jobs"
+        assert api_params.json_item_strict is True
+
 
 class TestNormalizeSourceParamsFrontend:
     def test_database_connection_ref_camel_case_is_normalized(self):
@@ -693,6 +703,8 @@ class TestNormalizeSourceParamsFrontend:
             "bodyJson": {"q": "x"},
             "bodyForm": {"a": "1"},
             "bodyRaw": "hello",
+            "jsonItemPath": "$.jobs[]",
+            "jsonItemStrict": True,
             "__managedHeaders": {"contentType": True},
             "retryPolicy": {"maxAttempts": 3, "backoffSeconds": 0.2, "jitterSeconds": 0.1, "retryOnStatus": [429]},
             "rateLimit": {"rpsLimit": 4},
@@ -704,6 +716,8 @@ class TestNormalizeSourceParamsFrontend:
         assert out["body_form"] == {"a": "1"}
         assert out["body_raw"] == "hello"
         assert out["managed_headers"] == {"contentType": True}
+        assert out["json_item_path"] == "$.jobs[]"
+        assert out["json_item_strict"] is True
         assert out["retry"]["max_attempts"] == 3
         assert out["retry"]["backoff_seconds"] == 0.2
         assert out["retry"]["jitter_seconds"] == 0.1

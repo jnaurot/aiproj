@@ -1220,6 +1220,100 @@ async def test_source_api_retry_succeeds_after_transient_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_source_api_json_item_path_extracts_nested_array(monkeypatch):
+	class _Resp:
+		headers = {"content-type": "application/json"}
+
+		def raise_for_status(self):
+			return None
+
+		def json(self):
+			return {
+				"job-count": 2,
+				"jobs": [{"id": 1, "title": "A"}, {"id": 2, "title": "B"}],
+			}
+
+		@property
+		def text(self):
+			return '{"job-count":2,"jobs":[{"id":1,"title":"A"},{"id":2,"title":"B"}]}'
+
+	class _Client:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		async def request(self, **kwargs):
+			return _Resp()
+
+	monkeypatch.setattr("app.executors.source.httpx.AsyncClient", _Client)
+	node = {
+		"id": "n_api_extract",
+		"data": {
+			"sourceKind": "api",
+			"params": {
+				"source_type": "api",
+				"url": "https://example.com",
+				"method": "GET",
+				"output": {"mode": "json"},
+				"json_item_path": "jobs",
+			},
+		},
+	}
+	result = await exec_source("run_api_extract", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	assert result.data[0]["id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_source_api_json_item_path_strict_fails_when_path_missing(monkeypatch):
+	class _Resp:
+		headers = {"content-type": "application/json"}
+
+		def raise_for_status(self):
+			return None
+
+		def json(self):
+			return {"job-count": 2, "jobs": [{"id": 1}, {"id": 2}]}
+
+		@property
+		def text(self):
+			return '{"job-count":2,"jobs":[{"id":1},{"id":2}]}'
+
+	class _Client:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		async def request(self, **kwargs):
+			return _Resp()
+
+	monkeypatch.setattr("app.executors.source.httpx.AsyncClient", _Client)
+	node = {
+		"id": "n_api_extract_missing",
+		"data": {
+			"sourceKind": "api",
+			"params": {
+				"source_type": "api",
+				"url": "https://example.com",
+				"method": "GET",
+				"output": {"mode": "json"},
+				"json_item_path": "missing.jobs",
+				"json_item_strict": True,
+			},
+		},
+	}
+	result = await exec_source("run_api_extract_missing", node, _ctx())
+	assert result.status == "failed"
+	assert "JSON_ITEM_PATH_NOT_FOUND" in str(result.error or "")
+
+
+@pytest.mark.asyncio
 async def test_source_invalid_type_returns_failed():
 	node = {"id": "n_bad", "data": {"params": {"source_type": "invalid"}}}
 	result = await exec_source("run_4", node, _ctx())

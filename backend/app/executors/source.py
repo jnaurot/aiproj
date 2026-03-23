@@ -1671,6 +1671,31 @@ def _merge_partition_results(output_mode: str, results: list[Dict[str, Any]]) ->
     return _canonical_table_rows(merged_rows)
 
 
+def _extract_json_item_path(payload: Any, raw_path: str) -> tuple[Any, bool]:
+    path = str(raw_path or "").strip()
+    if not path:
+        return payload, True
+    expect_array = path.endswith("[]")
+    if expect_array:
+        path = path[:-2].strip()
+    if path.startswith("$"):
+        path = path[1:]
+    if path.startswith("."):
+        path = path[1:]
+    if not path:
+        return payload, True
+    parts = [seg.strip() for seg in path.split(".") if seg.strip()]
+    cur: Any = payload
+    for part in parts:
+        if isinstance(cur, dict) and part in cur:
+            cur = cur.get(part)
+            continue
+        return None, False
+    if expect_array and not isinstance(cur, list):
+        return None, False
+    return cur, True
+
+
 async def exec_source(
     run_id: str,
     node: Dict[str, Any],
@@ -2582,6 +2607,8 @@ async def _handle_api_source(
 ) -> NodeOutput:
     schema = SourceAPIParams.model_validate(params)
     output_mode = forced_output_mode or "json"
+    json_item_path = str(getattr(schema, "json_item_path", None) or "").strip()
+    json_item_strict = bool(getattr(schema, "json_item_strict", False))
 
     headers = {str(k): str(v) for k, v in dict(schema.headers).items()}
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
@@ -2700,7 +2727,20 @@ async def _handle_api_source(
             else:
                 part_data = [{"text": line} for line in text_payload.splitlines() if line.strip()]
         elif output_mode == "json":
-            part_data = json_payload if json_payload is not None else {"text": text_payload}
+            if json_payload is None:
+                part_data = {"text": text_payload}
+            elif json_item_path:
+                extracted, ok = _extract_json_item_path(json_payload, json_item_path)
+                if not ok:
+                    if json_item_strict:
+                        raise RuntimeError(
+                            f"JSON_ITEM_PATH_NOT_FOUND: path='{json_item_path}' partition_id={part_id}"
+                        )
+                    part_data = json_payload
+                else:
+                    part_data = extracted
+            else:
+                part_data = json_payload
         elif output_mode == "binary":
             part_data = response.content
         else:

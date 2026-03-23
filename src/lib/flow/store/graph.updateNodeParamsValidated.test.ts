@@ -157,4 +157,19 @@ describe('updateNodeParamsValidated source api map replacement', () => {
 		>;
 		expect(params.query).toEqual({});
 	});
+
+	it('persists json_item_path and json_item_strict settings', () => {
+		const nodes = [sourceApiNodeWithQuery({ limit: '50' })];
+		const result = updateNodeParamsValidated(nodes, 'n_source_api', {
+			json_item_path: '$.jobs[]',
+			json_item_strict: true
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_source_api')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.json_item_path).toBe('$.jobs[]');
+		expect(params.json_item_strict).toBe(true);
+	});
 });

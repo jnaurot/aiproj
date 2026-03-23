@@ -71,6 +71,8 @@
 	$: contentTypeValue = (params?.contentType as ContentType | undefined) ?? undefined;
 	$: selectedContentType = contentTypeValue ?? 'none';
 	$: outputMode = (asString(params?.output?.mode, 'json') as SourceOutputMode) ?? 'json';
+	$: jsonItemPath = asString((params as any)?.json_item_path, '');
+	$: jsonItemStrict = Boolean((params as any)?.json_item_strict ?? false);
 	$: cacheMode = asString(params?.cache_policy?.mode, 'default');
 	$: cacheTtl = asNumberOrEmpty(params?.cache_policy?.ttl_seconds);
 	$: retryMaxAttempts = asNumberOrEmpty(params?.retry?.max_attempts ?? 1);
@@ -857,6 +859,32 @@
 					{/each}
 				</select>
 			</Field>
+
+			{#if outputMode === 'json'}
+				<Field label="json item path">
+					<Input
+						value={jsonItemPath}
+						placeholder="jobs or $.jobs"
+						onInput={(event) => draft({ json_item_path: (event.currentTarget as HTMLInputElement).value })}
+						onBlur={(event) => {
+							const next = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
+							commit({ json_item_path: next.length > 0 ? next : undefined });
+						}}
+					/>
+				</Field>
+
+				<Field label="json item strict">
+					<input
+						type="checkbox"
+						checked={jsonItemStrict}
+						on:change={(event) => {
+							const checked = (event.currentTarget as HTMLInputElement).checked;
+							draft({ json_item_strict: checked });
+							commit({ json_item_strict: checked });
+						}}
+					/>
+				</Field>
+			{/if}
 
 			<Field label="partition.on_error">
 				<select
