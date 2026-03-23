@@ -7198,6 +7198,39 @@ async def run_graph(
                     }
                 )
                 if decision == "reject":
+                    reject_reason = str(result.get("reasonCode") or "NODE_REJECTED").strip() or "NODE_REJECTED"
+                    handle_counts: Dict[str, int] = {}
+                    for item in work_batch or []:
+                        handle = str((item or {}).get("targetHandle") or "in").strip() or "in"
+                        handle_counts[handle] = int(handle_counts.get(handle, 0)) + 1
+                    await _emit(
+                        {
+                            "type": "node_reject",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "plane": "work",
+                            "reasonCode": reject_reason,
+                            "count": max(1, len(work_batch or [])),
+                            "handleCounts": handle_counts,
+                            "counters": {
+                                "itemsRejected": int(runtime_item_metrics.get("itemsRejected", 0)),
+                                "nodeRejected": int(
+                                    (node_accept_reject_counters.get(node_id) or {}).get("rejected") or 0
+                                ),
+                            },
+                        }
+                    )
+                    reject_fatal = False
+                    node_data = (nodes.get(node_id, {}) or {}).get("data", {}) if isinstance(nodes.get(node_id, {}), dict) else {}
+                    params_obj = (node_data.get("params") or {}) if isinstance(node_data, dict) else {}
+                    policy_obj = (node_data.get("processingPolicy") or {}) if isinstance(node_data, dict) else {}
+                    reject_fatal = bool(
+                        (params_obj.get("reject_fatal") if isinstance(params_obj, dict) else False)
+                        or (params_obj.get("rejectFatal") if isinstance(params_obj, dict) else False)
+                        or (policy_obj.get("reject_fatal") if isinstance(policy_obj, dict) else False)
+                        or (policy_obj.get("rejectFatal") if isinstance(policy_obj, dict) else False)
+                    )
                     # Reject is non-error; do not release downstream dependencies from this item.
                     _enqueue_ready_if_possible(node_id)
                     await _emit(
@@ -7210,6 +7243,18 @@ async def run_graph(
                             "runtimeItemMetrics": runtime_item_metrics,
                         }
                     )
+                    if reject_fatal:
+                        await _emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "error",
+                                "message": f"[scheduler] node reject treated as fatal node={node_id} reason={reject_reason}",
+                                "nodeId": node_id,
+                            }
+                        )
+                        run_failed = True
                     continue
                 # Node succeeded/cached, release downstream dependencies through per-edge queues.
                 for edge_info in outbound_edges_by_source.get(node_id, []):

@@ -1947,6 +1947,17 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const suffix = reason ? ` reason=${reason}` : '';
 			return logPush(state, evt.decision === 'reject' ? 'warn' : 'info', `[decision] ${evt.decision} x${count}${suffix}`, evt.nodeId);
 		}
+		case 'node_reject': {
+			const count = Number((evt as any)?.count ?? 1);
+			const reason = String((evt as any)?.reasonCode ?? '').trim();
+			const plane = String((evt as any)?.plane ?? 'work').trim();
+			return logPush(
+				state,
+				'warn',
+				`[reject] plane=${plane} x${count}${reason ? ` reason=${reason}` : ''}`,
+				(evt as any)?.nodeId
+			);
+		}
 		case 'log':
 			return logPush(state, evt.level, evt.message, evt.nodeId, (evt as any).componentPath);
 		case 'node_finished': {

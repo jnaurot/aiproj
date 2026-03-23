@@ -62,6 +62,7 @@ Required fields:
 - `control_signal`
 - `queue_metrics`
 - `node_decision`
+- `node_reject`
 - `contract_drift`
 - `log`
 
@@ -97,6 +98,19 @@ Fields:
 - `decision` (`accept | reject`)
 - optional `count`
 - optional `reasonCode`
+
+### `node_reject`
+
+Structured non-fatal reject event emitted when a node explicitly rejects input.
+
+Fields:
+
+- `nodeId`
+- `plane` (`work | param | control`)
+- `reasonCode`
+- `count`
+- optional `handleCounts` (map of handle -> rejected count)
+- optional `counters` (reject totals at runtime and node scope)
 
 ### `contract_drift`
 

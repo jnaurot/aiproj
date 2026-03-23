@@ -18,14 +18,12 @@ def _ensure_duckdb_stub() -> None:
 
 
 @pytest.mark.asyncio
-async def test_node_reject_emits_node_decision_and_does_not_fail_run(monkeypatch) -> None:
+async def test_reject_is_fatal_when_enabled(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")
-	executed: list[str] = []
 
 	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
 		node_id = str(node["id"])
-		executed.append(node_id)
 		if node_id == "b":
 			return NodeOutput(
 				status="failed",
@@ -45,33 +43,30 @@ async def test_node_reject_emits_node_decision_and_does_not_fail_run(monkeypatch
 	graph = {
 		"nodes": [
 			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
-			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
-			{"id": "c", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{
+				"id": "b",
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "reject_fatal": True},
+				},
+			},
 		],
-		"edges": [
-			{"id": "e1", "source": "a", "target": "b", "data": {"mode": "work"}},
-			{"id": "e2", "source": "b", "target": "c", "data": {"mode": "work"}},
-		],
+		"edges": [{"id": "e1", "source": "a", "target": "b", "data": {"mode": "work"}}],
 	}
 	events: list[dict] = []
-	bus = RunEventBus("run-qflow-019-reject", on_emit=lambda evt: events.append(dict(evt)))
+	bus = RunEventBus("run-reject-fatal", on_emit=lambda evt: events.append(dict(evt)))
 	await run_mod.run_graph(
-		run_id="run-qflow-019-reject",
+		run_id="run-reject-fatal",
 		graph=graph,
 		run_from=None,
 		bus=bus,
 		artifact_store=MemoryArtifactStore(),
 		cache=ExecutionCache(),
-		graph_id="graph-qflow-019-reject",
+		graph_id="graph-reject-fatal",
 	)
 
-	decision_events = [evt for evt in events if evt.get("type") == "node_decision" and evt.get("nodeId") == "b"]
-	assert decision_events
-	assert decision_events[-1].get("decision") == "reject"
-	reject_events = [evt for evt in events if evt.get("type") == "node_reject" and evt.get("nodeId") == "b"]
-	assert reject_events
-	assert reject_events[-1].get("plane") == "work"
-	# rejected branch does not continue to downstream node c
-	assert "c" not in executed
 	finished = [evt for evt in events if evt.get("type") == "run_finished"]
-	assert finished and finished[-1].get("status") == "succeeded"
+	assert finished
+	assert finished[-1].get("status") == "failed"
+	assert any("reject treated as fatal" in str(evt.get("message") or "") for evt in events if evt.get("type") == "log")
+
