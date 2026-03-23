@@ -108,6 +108,15 @@ export type KnownRunEvent =
       at: string;
       signal: "ready" | "busy" | "drain" | "pause" | "blocked" | "resume";
       nodeId?: string;
+      handle?: string;
+    }
+  | {
+      type: "branch_cascade";
+      runId: string;
+      at: string;
+      originNodeId: string;
+      blockedNodeIds: string[];
+      reasonCode?: string;
     }
   | {
       type: "queue_metrics";

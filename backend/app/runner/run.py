@@ -24,7 +24,7 @@ from app.runner.nodes.transform import (
 from .compile import compile_plan
 from .components import ComponentExpansionError, expand_graph_components
 from .events import RunEventBus
-from .validator import GraphValidator
+from .validator import GraphValidator, collect_transitive_descendants
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
@@ -6492,7 +6492,7 @@ async def run_graph(
                         ),
                         "nodeId": node_id,
                     })
-                return {"ok": False, "cached": False}
+                return {"ok": False, "cached": False, "errorCode": error_code}
 
             # Mark incoming edges as done
             for edge_id in plan.incoming_edges.get(node_id, []):
@@ -6954,6 +6954,7 @@ async def run_graph(
         deps_released: Dict[str, bool] = {nid: indeg.get(nid, 0) == 0 for nid in sub}
         node_started_once: Dict[str, bool] = {nid: False for nid in sub}
         node_inflight_counts: Dict[str, int] = {nid: 0 for nid in sub}
+        blocked_descendants: set[str] = set()
         inflight: Dict[asyncio.Task, Dict[str, Any]] = {}
         completed_count = 0
         run_failed = False
@@ -7053,6 +7054,8 @@ async def run_graph(
             return out
 
         def _enqueue_ready_if_possible(node_id: str) -> None:
+            if node_id in blocked_descendants:
+                return
             if not deps_released.get(node_id, False):
                 return
             policy = _effective_node_runtime_policy(node_id)
@@ -7126,6 +7129,8 @@ async def run_graph(
 
             while ready and len(inflight) < max_inflight:
                 nid = ready.pop(0)
+                if nid in blocked_descendants:
+                    continue
                 policy = _effective_node_runtime_policy(nid)
                 consume_mode = str(policy.get("consume_mode") or "once")
                 per_node_max = max(1, int(policy.get("max_inflight") or 1))
@@ -7206,7 +7211,59 @@ async def run_graph(
                     if node_fatal:
                         run_failed = True
                         break
-                    # Localized failure: do not release downstream dependencies from this node.
+                    # Localized failure: block transitive descendants on this branch.
+                    cascade_reason = str(result.get("errorCode") or "").strip()
+                    should_cascade = cascade_reason in {
+                        "HANDLE_INPUT_NONE_PROVIDED",
+                        "HANDLE_INPUT_SATISFACTION_NONE_PROVIDED",
+                    }
+                    if should_cascade:
+                        cascade_nodes = collect_transitive_descendants(
+                            adj,
+                            node_id,
+                            allowed_nodes=sub,
+                        )
+                        newly_blocked: List[str] = []
+                        for blocked_id in cascade_nodes:
+                            if blocked_id in blocked_descendants or blocked_id == node_id:
+                                continue
+                            blocked_descendants.add(blocked_id)
+                            newly_blocked.append(blocked_id)
+                        if newly_blocked:
+                            ready = [ready_node for ready_node in ready if ready_node not in blocked_descendants]
+                            await _emit(
+                                {
+                                    "type": "branch_cascade",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "originNodeId": node_id,
+                                    "blockedNodeIds": newly_blocked,
+                                    "reasonCode": cascade_reason,
+                                }
+                            )
+                            for blocked_id in sorted(newly_blocked, key=lambda item: order_index.get(item, 10**9)):
+                                await _emit(
+                                    {
+                                        "type": "control_signal",
+                                        "runId": run_id,
+                                        "at": iso_now(),
+                                        "signal": "blocked",
+                                        "nodeId": blocked_id,
+                                    }
+                                )
+                                await _emit(
+                                    {
+                                        "type": "log",
+                                        "runId": run_id,
+                                        "at": iso_now(),
+                                        "level": "warn",
+                                        "message": (
+                                            f"[scheduler] branch cascade origin={node_id} blocked={blocked_id} "
+                                            f"reason={cascade_reason}"
+                                        ),
+                                        "nodeId": blocked_id,
+                                    }
+                                )
                     continue
                 # decision / reject semantics
                 decision = str(result.get("decision") or "accept").strip().lower() if isinstance(result, dict) else "accept"

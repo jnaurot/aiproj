@@ -1010,6 +1010,12 @@ export type GraphState = {
 			signal: string;
 			at: string;
 		}>;
+		branchCascade?: Array<{
+			originNodeId: string;
+			blockedNodeIds: string[];
+			reasonCode?: string;
+			at?: string;
+		}>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2001,6 +2007,35 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			};
 			return logPush(nextState, 'info', `[control] ${evt.signal}${nodePart}${handlePart}`, evt.nodeId);
 		}
+		case 'branch_cascade': {
+			const originNodeId = String((evt as any)?.originNodeId ?? '').trim();
+			const blockedNodeIds = Array.isArray((evt as any)?.blockedNodeIds)
+				? ((evt as any).blockedNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
+				: [];
+			const reasonCode = String((evt as any)?.reasonCode ?? '').trim();
+			const previous = Array.isArray((state.queueRuntime as any)?.branchCascade)
+				? (((state.queueRuntime as any).branchCascade as any[]) ?? [])
+				: [];
+			const entry = {
+				originNodeId,
+				blockedNodeIds,
+				reasonCode,
+				at: String((evt as any)?.at ?? '')
+			};
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					branchCascade: [...previous.slice(Math.max(0, previous.length - 99)), entry]
+				}
+			};
+			return logPush(
+				nextState,
+				'warn',
+				`[cascade] origin=${originNodeId || '(unknown)'} blocked=${blockedNodeIds.join(',') || '(none)'}${reasonCode ? ` reason=${reasonCode}` : ''}`,
+				originNodeId || undefined
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
@@ -2040,6 +2075,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							: {}) ?? {},
 					handleTimeline:
 						Array.isArray(state.queueRuntime?.handleTimeline) ? state.queueRuntime.handleTimeline : []
+					,
+					branchCascade:
+						Array.isArray((state.queueRuntime as any)?.branchCascade)
+							? ((state.queueRuntime as any).branchCascade as any[])
+							: []
 				}
 			};
 			return logPush(

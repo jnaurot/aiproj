@@ -19,6 +19,37 @@ from .schema_diagnostics import (
 
 from typing import Set
 
+
+def collect_transitive_descendants(
+    adjacency: Dict[str, List[str]],
+    origin_node_id: str,
+    *,
+    allowed_nodes: Optional[Set[str]] = None,
+) -> List[str]:
+    """Return deterministic transitive descendants for localized runtime cascade."""
+    origin = str(origin_node_id or "").strip()
+    if not origin:
+        return []
+    if allowed_nodes is not None and origin not in allowed_nodes:
+        return []
+    visited: Set[str] = set()
+    ordered: List[str] = []
+    stack: List[str] = [origin]
+    while stack:
+        node_id = stack.pop()
+        downstream = sorted(
+            [str(item or "").strip() for item in (adjacency.get(node_id) or []) if str(item or "").strip()]
+        )
+        for child in downstream:
+            if allowed_nodes is not None and child not in allowed_nodes:
+                continue
+            if child in visited or child == origin:
+                continue
+            visited.add(child)
+            ordered.append(child)
+            stack.append(child)
+    return ordered
+
 @dataclass
 class ValidationError:
     code: str

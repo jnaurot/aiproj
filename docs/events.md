@@ -63,6 +63,7 @@ Required fields:
 - `queue_metrics`
 - `node_decision`
 - `node_reject`
+- `branch_cascade`
 - `contract_drift`
 - `log`
 
@@ -120,6 +121,16 @@ Fields:
 - `count`
 - optional `handleCounts` (map of handle -> rejected count)
 - optional `counters` (reject totals at runtime and node scope)
+
+### `branch_cascade`
+
+Structured localized-failure cascade event for downstream descendants.
+
+Fields:
+
+- `originNodeId`
+- `blockedNodeIds` (all transitively blocked descendants in deterministic order)
+- optional `reasonCode`
 
 ### `contract_drift`
 

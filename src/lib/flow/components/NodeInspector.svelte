@@ -434,6 +434,24 @@
 				: null) ?? null;
 		return collectNodeHandleStates(nodeId, raw);
 	})();
+	$: nodeBranchCascade = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId) return [] as Array<{ originNodeId: string; blockedNodeIds: string[]; reasonCode?: string; at?: string }>;
+		const entries = Array.isArray(($graphStore as any)?.queueRuntime?.branchCascade)
+			? (((($graphStore as any).queueRuntime.branchCascade as unknown[]) ?? []) as Array<Record<string, unknown>>)
+			: [];
+		return entries
+			.map((entry) => {
+				const originNodeId = String(entry?.originNodeId ?? '').trim();
+				const blockedNodeIds = Array.isArray(entry?.blockedNodeIds)
+					? (entry.blockedNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
+					: [];
+				const reasonCode = String(entry?.reasonCode ?? '').trim();
+				const at = String(entry?.at ?? '').trim();
+				return { originNodeId, blockedNodeIds, reasonCode, at };
+			})
+			.filter((entry) => entry.originNodeId === nodeId || entry.blockedNodeIds.includes(nodeId));
+	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
@@ -1768,6 +1786,21 @@
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">{row.handle}</div>
 							<div class="guidedAssistDesc">state {row.state} | at {row.updatedAt || '-'}</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if nodeBranchCascade.length > 0}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Branch Cascade</div>
+				<div class="guidedAssistList">
+					{#each nodeBranchCascade as row, idx (`${row.originNodeId}:${row.at}:${idx}`)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">origin {row.originNodeId || '-'}</div>
+							<div class="guidedAssistDesc">
+								blocked {row.blockedNodeIds.join(', ') || '-'} | reason {row.reasonCode || '-'} | at {row.at || '-'}
+							</div>
 						</div>
 					{/each}
 				</div>
