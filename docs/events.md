@@ -177,6 +177,23 @@ Fields:
 - `currentTargetSchemaFingerprint`
 - optional `suggestions` (string[])
 
+### Deprecation Diagnostics (Validation Warnings)
+
+Port-runtime deprecation diagnostics are emitted as `log` events with `level=warn` during
+pre-execution validation. Current warning codes:
+
+- `LEGACY_EXPECTED_INPUT_SCHEMA_DEPRECATED`
+  - legacy field: `data.schema.expectedInputSchema`
+  - replacement: `data.schema.expectedInputSchemas.<handle>`
+  - scheduled removal target: `2026-06-30`
+- `LEGACY_PORT_CONTRACTS_DEPRECATED`
+  - legacy field: `data.portContracts` (as primary contract source)
+  - replacement: `data.portDeclarations`
+  - scheduled removal target: `2026-06-30`
+- `EDGE_QUEUE_POLICY_PREVIEW`
+  - field: `edge.data.queue.policy=round_robin`
+  - note: preview policy; `fifo` remains the stable default
+
 ## Mode-Specific Contract Diagnostics
 
 Schema/contract diagnostics are mode-aware:

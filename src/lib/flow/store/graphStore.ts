@@ -2792,6 +2792,50 @@ function buildSavePreflightDiagnostics(
 	const workingNodes = normalized.nodes;
 	const workingEdges = normalized.edges;
 	const diagnostics: SavePreflightDiagnostic[] = [];
+	for (const node of nodes) {
+		const schemaEnv =
+			(node.data as any)?.schema && typeof (node.data as any).schema === 'object'
+				? ((node.data as any).schema as Record<string, unknown>)
+				: {};
+		if (schemaEnv.expectedInputSchema && typeof schemaEnv.expectedInputSchema === 'object') {
+			diagnostics.push({
+				code: 'LEGACY_EXPECTED_INPUT_SCHEMA_DEPRECATED',
+				path: `nodes.${String(node.id)}.data.schema.expectedInputSchema`,
+				message:
+					'Legacy data.schema.expectedInputSchema is deprecated; use data.schema.expectedInputSchemas.<handle> before 2026-06-30.',
+				severity: 'warning'
+			});
+		}
+		const portDeclarations = (node.data as any)?.portDeclarations;
+		const portContracts = (node.data as any)?.portContracts;
+		if (
+			portContracts &&
+			typeof portContracts === 'object' &&
+			Object.keys(portContracts as Record<string, unknown>).length > 0 &&
+			(!portDeclarations || typeof portDeclarations !== 'object')
+		) {
+			diagnostics.push({
+				code: 'LEGACY_PORT_CONTRACTS_DEPRECATED',
+				path: `nodes.${String(node.id)}.data.portContracts`,
+				message:
+					'Legacy data.portContracts is deprecated as the primary port model; declare data.portDeclarations before 2026-06-30.',
+				severity: 'warning'
+			});
+		}
+	}
+	for (const edge of edges) {
+		const queuePolicy = String((edge as any)?.data?.queue?.policy ?? 'fifo')
+			.trim()
+			.toLowerCase();
+		if (queuePolicy === 'round_robin') {
+			diagnostics.push({
+				code: 'EDGE_QUEUE_POLICY_PREVIEW',
+				path: `edges.${String(edge.id ?? '')}.data.queue.policy`,
+				message: 'queue.policy=round_robin is preview-only; default fifo remains the stable policy.',
+				severity: 'warning'
+			});
+		}
+	}
 	for (const edge of workingEdges) {
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
 		const sourceNode = workingNodes.find((n) => n.id === edge.source);
@@ -6751,7 +6795,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					graphId: String(created.graphId),
 					graphName: created.graphName ?? null,
 					revisionId: String(created.revisionId),
-					createdAt: String(created.createdAt)
+					createdAt: String(created.createdAt),
+					diagnostics: preflight.diagnostics
 				};
 			} catch (error) {
 				return { ok: false, reason: 'save_failed' as const, error: String(error) };
@@ -6789,7 +6834,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					graphId: String(created.graphId),
 					revisionId: String(created.revisionId),
 					versionName: created.versionName ?? null,
-					createdAt: String(created.createdAt)
+					createdAt: String(created.createdAt),
+					diagnostics: preflight.diagnostics
 				};
 			} catch (error) {
 				return { ok: false, reason: 'save_failed' as const, error: String(error) };
@@ -6834,7 +6880,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					graphId: String(created.graphId),
 					graphName: created.graphName ?? null,
 					revisionId: String(created.revisionId),
-					createdAt: String(created.createdAt)
+					createdAt: String(created.createdAt),
+					diagnostics: preflight.diagnostics
 				};
 			} catch (error) {
 				return { ok: false, reason: 'save_failed' as const, error: String(error) };

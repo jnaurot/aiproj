@@ -97,6 +97,12 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 				"code": "NODE_SCHEMA_EXPECTED_INPUTS_MIGRATED",
 				"nodeId": str(node.get("id") or ""),
 				"message": "Migrated schema.expectedInputSchema to schema.expectedInputSchemas.in",
+				"severity": "warning",
+				"deprecation": {
+					"field": "data.schema.expectedInputSchema",
+					"replacement": "data.schema.expectedInputSchemas.<handle>",
+					"removeAfter": "2026-06-30",
+				},
 			}
 		)
 	if "expectedInputSchema" in canonical_schema:
@@ -302,9 +308,24 @@ def _canonicalize_node_port_declarations(node: Dict[str, Any], notes: List[Dict[
 	if not kind:
 		return
 	raw_decls = data.get("portDeclarations") if isinstance(data.get("portDeclarations"), dict) else None
+	raw_port_contracts = data.get("portContracts") if isinstance(data.get("portContracts"), dict) else None
 	normalized = normalize_node_port_declarations(kind, raw_decls)
 	changed = normalized != raw_decls
 	data["portDeclarations"] = normalized
+	if raw_decls is None and isinstance(raw_port_contracts, dict) and raw_port_contracts:
+		notes.append(
+			{
+				"code": "NODE_PORT_CONTRACTS_DEPRECATED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Legacy node.data.portContracts was consumed to derive canonical portDeclarations.",
+				"severity": "warning",
+				"deprecation": {
+					"field": "data.portContracts",
+					"replacement": "data.portDeclarations",
+					"removeAfter": "2026-06-30",
+				},
+			}
+		)
 
 	# Keep legacy frontend helpers working by reflecting affinity/behavior into portContracts.
 	port_contracts: Dict[str, Dict[str, Dict[str, Any]]] = {"in": {}, "out": {}}

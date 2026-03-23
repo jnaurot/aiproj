@@ -122,6 +122,41 @@
 		? __buildNodeSchemaContractSnapshotForTest($graphStore as any, selectedNode.id)
 		: { nodeId: '', status: 'clean', edges: [] as NodeSchemaContractEdge[] };
 	$: schemaContractGroups = groupSchemaEdgesByMode(schemaContract.edges ?? []);
+	$: schemaDeprecationNotices = (() => {
+		if (!selectedNode) return [] as string[];
+		const notices: string[] = [];
+		const nodeData = (selectedNode.data ?? {}) as Record<string, any>;
+		const schema = nodeData?.schema && typeof nodeData.schema === 'object' ? (nodeData.schema as Record<string, any>) : {};
+		if (schema.expectedInputSchema && typeof schema.expectedInputSchema === 'object') {
+			notices.push(
+				'Legacy data.schema.expectedInputSchema detected. Migrate to data.schema.expectedInputSchemas.<handle> before 2026-06-30.'
+			);
+		}
+		const hasPortDeclarations =
+			nodeData?.portDeclarations && typeof nodeData.portDeclarations === 'object';
+		const hasPortContracts =
+			nodeData?.portContracts &&
+			typeof nodeData.portContracts === 'object' &&
+			Object.keys(nodeData.portContracts as Record<string, unknown>).length > 0;
+		if (!hasPortDeclarations && hasPortContracts) {
+			notices.push(
+				'Legacy data.portContracts is acting as the primary port model. Declare data.portDeclarations before 2026-06-30.'
+			);
+		}
+		const connectedEdges = ($graphStore.edges ?? []).filter(
+			(edge) =>
+				String((edge as any)?.source ?? '') === String(selectedNode.id) ||
+				String((edge as any)?.target ?? '') === String(selectedNode.id)
+		);
+		if (
+			connectedEdges.some(
+				(edge) => String((edge as any)?.data?.queue?.policy ?? 'fifo').trim().toLowerCase() === 'round_robin'
+			)
+		) {
+			notices.push('One or more connected edges use queue.policy=round_robin (preview).');
+		}
+		return notices;
+	})();
 	$: guidedControls = isTransform ? guidedControlsForTransform(transformKind as TransformKind) : [];
 	$: transformPreviewDiff = isTransform
 		? buildTransformPreviewDiff({
@@ -1988,6 +2023,14 @@
 		<div class={`schemaContract schemaContract-${schemaContract.status}`}>
 			<div class="schemaHead">Schema Contract</div>
 			<div class="schemaStatus">Status: {schemaContract.status}</div>
+			{#if schemaDeprecationNotices.length > 0}
+				<div class="schemaDeprecationBox">
+					<div class="schemaDeprecationHead">Deprecation Notices</div>
+					{#each schemaDeprecationNotices as notice (`dep-${notice}`)}
+						<div class="schemaDeprecationItem">{notice}</div>
+					{/each}
+				</div>
+			{/if}
 			{#if schemaContract.edges.length === 0}
 				<div class="schemaEmpty">No connected edges.</div>
 			{:else}
@@ -2471,6 +2514,28 @@
 	.schemaSuggestions {
 		font-size: 11px;
 		opacity: 0.86;
+	}
+
+	.schemaDeprecationBox {
+		border: 1px solid #f59e0b;
+		background: color-mix(in srgb, #f59e0b 12%, transparent);
+		border-radius: 8px;
+		padding: 6px;
+		display: grid;
+		gap: 4px;
+	}
+
+	.schemaDeprecationHead {
+		font-size: 11px;
+		font-weight: 700;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: #f59e0b;
+	}
+
+	.schemaDeprecationItem {
+		font-size: 11px;
+		line-height: 1.35;
 	}
 
 	.schemaModeGroup {

@@ -93,12 +93,81 @@ class GraphValidator:
         # 4. Resource validation
         warnings.extend(self._check_resource_availability(graph))
         warnings.extend(self._validate_edge_contract_snapshots(graph))
+        warnings.extend(self._validate_port_runtime_deprecations(graph))
         
         return ValidationResult(
             valid=len(errors) == 0,
             errors=errors,
             warnings=warnings
         )
+
+    def _validate_port_runtime_deprecations(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        warnings: List[ValidationError] = []
+        nodes = graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else []
+        edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            node_id = str(node.get("id") or "").strip() or None
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            schema = data.get("schema") if isinstance(data.get("schema"), dict) else {}
+            if isinstance(schema.get("expectedInputSchema"), dict):
+                warnings.append(
+                    ValidationError(
+                        code="LEGACY_EXPECTED_INPUT_SCHEMA_DEPRECATED",
+                        message=(
+                            "Legacy data.schema.expectedInputSchema is deprecated; use "
+                            "data.schema.expectedInputSchemas.<handle>."
+                        ),
+                        node_id=node_id,
+                        details={
+                            "field": "data.schema.expectedInputSchema",
+                            "replacement": "data.schema.expectedInputSchemas.<handle>",
+                            "removeAfter": "2026-06-30",
+                        },
+                    )
+                )
+            port_contracts = data.get("portContracts")
+            port_decls = data.get("portDeclarations")
+            if isinstance(port_contracts, dict) and port_contracts and not isinstance(port_decls, dict):
+                warnings.append(
+                    ValidationError(
+                        code="LEGACY_PORT_CONTRACTS_DEPRECATED",
+                        message=(
+                            "Legacy data.portContracts is deprecated as the primary port model; "
+                            "declare data.portDeclarations instead."
+                        ),
+                        node_id=node_id,
+                        details={
+                            "field": "data.portContracts",
+                            "replacement": "data.portDeclarations",
+                            "removeAfter": "2026-06-30",
+                        },
+                    )
+                )
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_id = str(edge.get("id") or "").strip() or None
+            edge_data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+            queue_cfg = edge_data.get("queue") if isinstance(edge_data.get("queue"), dict) else {}
+            queue_policy = str(queue_cfg.get("policy") or "fifo").strip().lower() or "fifo"
+            if queue_policy == "round_robin":
+                warnings.append(
+                    ValidationError(
+                        code="EDGE_QUEUE_POLICY_PREVIEW",
+                        message=(
+                            "queue.policy=round_robin is preview-only; default fifo remains the stable policy."
+                        ),
+                        edge_id=edge_id,
+                        details={
+                            "field": "data.queue.policy",
+                            "value": "round_robin",
+                            "default": "fifo",
+                        },
+                    )
+                )
+        return warnings
 
     def _validate_edge_contract_snapshots(self, graph: Dict[str, Any]) -> List[ValidationError]:
         warnings: List[ValidationError] = []

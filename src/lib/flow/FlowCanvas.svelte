@@ -1995,6 +1995,15 @@ async function scrollToBottom() {
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 		const resolvedName = String((result as any)?.graphName ?? graphName ?? '').trim();
 		if (resolvedName) currentGraphName = resolvedName;
+		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
+			(item) => String(item?.severity ?? '').toLowerCase() === 'warning'
+		);
+		if (saveWarnings.length > 0) {
+			showToast(
+				`Saved with ${saveWarnings.length} warning${saveWarnings.length === 1 ? '' : 's'} (see preflight diagnostics).`,
+				'warn'
+			);
+		}
 		showToast(`Saved graph revision ${(result as any).revisionId.slice(0, 10)}`, 'info');
 	}
 
@@ -2011,6 +2020,15 @@ async function scrollToBottom() {
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
+			(item) => String(item?.severity ?? '').toLowerCase() === 'warning'
+		);
+		if (saveWarnings.length > 0) {
+			showToast(
+				`Saved version with ${saveWarnings.length} warning${saveWarnings.length === 1 ? '' : 's'} (see preflight diagnostics).`,
+				'warn'
+			);
+		}
 		showToast(`Saved version ${(result as any).versionName ?? versionName}`, 'info');
 	}
 
@@ -2029,6 +2047,15 @@ async function scrollToBottom() {
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 		currentGraphName = graphName;
+		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
+			(item) => String(item?.severity ?? '').toLowerCase() === 'warning'
+		);
+		if (saveWarnings.length > 0) {
+			showToast(
+				`Saved graph with ${saveWarnings.length} warning${saveWarnings.length === 1 ? '' : 's'} (see preflight diagnostics).`,
+				'warn'
+			);
+		}
 		showToast(`Saved new graph ${graphName}`, 'info');
 	}
 
