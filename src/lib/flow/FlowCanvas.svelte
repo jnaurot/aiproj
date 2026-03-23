@@ -1379,15 +1379,24 @@ async function scrollToBottom() {
 			targetHandle: conn.targetHandle ?? null
 		});
 		if (!preflight.ok) {
+			const details = (preflight as any).details ?? null;
+			const detailText =
+				details && typeof details === 'object'
+					? ` [mode=${String(details.mode ?? 'work')} source=${String(details.sourceHandle ?? 'out')}(${String(details.sourceAffinity ?? 'work')}) target=${String(details.targetHandle ?? 'in')}(${String(details.targetAffinity ?? '?')})]`
+					: '';
 			return {
 				ok: false,
-				error: String((preflight as any).error ?? 'Connection preflight failed'),
+				error: `${String((preflight as any).error ?? 'Connection preflight failed')}${detailText}`,
 				suggestion: (preflight as any).suggestion ?? null,
 				adapterKind: (preflight as any).adapterKind ?? null
 			};
 		}
 
 		return { ok: true };
+	}
+
+	function isValidConnection(conn: Connection): boolean {
+		return validateConnection(conn).ok;
 	}
 
 	function onconnect(conn: Connection) {

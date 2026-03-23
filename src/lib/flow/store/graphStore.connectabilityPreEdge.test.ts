@@ -46,6 +46,9 @@ describe('graphStore preflight connection', () => {
 		});
 		expect(preflight.ok).toBe(true);
 		expect((preflight as any).deferred).toBe(true);
+		expect((preflight as any).details?.mode).toBe('work');
+		expect((preflight as any).details?.sourceAffinity).toBe('work');
+		expect(Array.isArray((preflight as any).details?.candidateHandles)).toBe(true);
 	});
 
 	it('fails preflight when target handle is not declared', () => {
@@ -90,5 +93,7 @@ describe('graphStore preflight connection', () => {
 		});
 		expect(preflight.ok).toBe(false);
 		expect(String((preflight as any).error ?? '')).toContain('not declared');
+		expect((preflight as any).details?.mode).toBe('work');
+		expect((preflight as any).details?.sourceHandle).toBe('out');
 	});
 });

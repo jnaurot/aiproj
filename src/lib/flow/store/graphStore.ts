@@ -5697,6 +5697,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					? (modeRaw as 'work' | 'param' | 'control')
 					: inferredMode;
 			const sourceAffinity = nodePortAffinity(sourceNode, 'out', sourceHandle);
+			const detailsBase = {
+				mode,
+				sourceHandle,
+				sourceAffinity,
+				targetHandle: targetHandleRaw || null
+			};
 
 			if (!targetHandleRaw) {
 				const declared = declaredPortHandles(targetNode, 'in');
@@ -5710,16 +5716,28 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (!compatible) {
 					return {
 						ok: false as const,
-						error: 'No compatible target input handle for this edge mode'
+						error: 'No compatible target input handle for this edge mode',
+						details: {
+							...detailsBase,
+							candidateHandles
+						}
 					};
 				}
-				return { ok: true as const, deferred: true as const };
+				return {
+					ok: true as const,
+					deferred: true as const,
+					details: {
+						...detailsBase,
+						candidateHandles
+					}
+				};
 			}
 
 			if (!hasPortHandle(targetNode, 'in', targetHandleRaw)) {
 				return {
 					ok: false as const,
-					error: `Target handle '${targetHandleRaw}' is not declared for this node`
+					error: `Target handle '${targetHandleRaw}' is not declared for this node`,
+					details: detailsBase
 				};
 			}
 			if (portCardinality(targetNode, 'in', targetHandleRaw) === 'one') {
@@ -5731,7 +5749,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (existingInbound.length >= 1) {
 					return {
 						ok: false as const,
-						error: `Target handle '${targetHandleRaw}' allows only one inbound edge`
+						error: `Target handle '${targetHandleRaw}' allows only one inbound edge`,
+						details: detailsBase
 					};
 				}
 			}
@@ -5739,7 +5758,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
 				return {
 					ok: false as const,
-					error: 'Edge mode is incompatible with source/target port affinities'
+					error: 'Edge mode is incompatible with source/target port affinities',
+					details: {
+						...detailsBase,
+						targetHandle: targetHandleRaw,
+						targetAffinity
+					}
 				};
 			}
 			const edgeCandidate = {
@@ -5765,7 +5789,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 										? `Missing required columns: ${(schemaCheck.missingColumns ?? []).join(', ') || '(unknown)'}`
 										: 'Cannot resolve schema compatibility for this connection',
 					suggestion: schemaCheck.suggestion ?? null,
-					adapterKind: schemaCheck.adapterKind ?? null
+					adapterKind: schemaCheck.adapterKind ?? null,
+					details: {
+						...detailsBase,
+						targetHandle: targetHandleRaw,
+						targetAffinity
+					}
 				};
 			}
 			if (schemaCheck.warning === 'lossy_coercion' || schemaCheck.adapterKind || schemaCheck.suggestion) {
@@ -5794,10 +5823,23 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return {
 					ok: false as const,
 					error:
-						'Multiple inbound work edges on the same target handle must provide identical schemas'
+						'Multiple inbound work edges on the same target handle must provide identical schemas',
+					details: {
+						...detailsBase,
+						targetHandle: targetHandleRaw,
+						targetAffinity
+					}
 				};
 			}
-			return { ok: true as const, deferred: false as const };
+			return {
+				ok: true as const,
+				deferred: false as const,
+				details: {
+					...detailsBase,
+					targetHandle: targetHandleRaw,
+					targetAffinity
+				}
+			};
 		},
 
 		addEdge(edge: Edge<PipelineEdgeData>) {
