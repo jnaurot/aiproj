@@ -292,11 +292,18 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			or processing_policy.get("consumeMode")
 			or "once"
 		).strip().lower() or "once"
+		read_once = bool(
+			processing_policy.get("read_once")
+			or processing_policy.get("readOnce")
+			or str(processing_policy.get("consume_mode") or processing_policy.get("consumeMode") or "").strip().lower() in {"once", "read_once"}
+		)
 		if consume_mode in {"read_once"}:
 			consume_mode = "once"
 		elif consume_mode in {"continuous"}:
 			consume_mode = "single_item"
 		elif consume_mode not in {"once", "single_item", "batch"}:
+			consume_mode = "once"
+		if read_once:
 			consume_mode = "once"
 		try:
 			batch_size = int(
@@ -331,12 +338,19 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 				or policy_raw.get("consumeMode")
 				or consume_mode
 			).strip().lower() or consume_mode
+			handle_read_once = bool(
+				policy_raw.get("read_once")
+				or policy_raw.get("readOnce")
+				or str(policy_raw.get("consume_mode") or policy_raw.get("consumeMode") or "").strip().lower() in {"once", "read_once"}
+			)
 			if handle_mode in {"read_once"}:
 				handle_mode = "once"
 			elif handle_mode in {"continuous"}:
 				handle_mode = "single_item"
 			elif handle_mode not in {"once", "single_item", "batch"}:
 				handle_mode = consume_mode
+			if handle_read_once:
+				handle_mode = "once"
 			try:
 				handle_batch = int(
 					policy_raw.get("batch_size")
@@ -357,11 +371,13 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 				"consume_mode": handle_mode,
 				"batch_size": max(1, handle_batch),
 				"max_inflight": max(1, handle_inflight),
+				"read_once": bool(handle_read_once),
 			}
 		data["processingPolicy"] = {
 			"consume_mode": consume_mode,
 			"batch_size": max(1, batch_size),
 			"max_inflight": max(1, max_inflight),
+			"read_once": bool(read_once),
 			"input_handles": input_handles,
 		}
 		_canonicalize_node_port_declarations(next_node, notes)

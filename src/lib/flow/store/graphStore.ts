@@ -547,7 +547,13 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 								Number((policy as any).max_inflight ?? (policy as any).maxInflight ?? 1)
 							),
 							read_once: Boolean(
-								(policy as any).read_once ?? (policy as any).readOnce ?? false
+								(policy as any).read_once ??
+									(policy as any).readOnce ??
+									['once', 'read_once'].includes(
+										String((policy as any).consume_mode ?? (policy as any).consumeMode ?? '')
+											.trim()
+											.toLowerCase()
+									)
 							)
 						}
 					];
@@ -565,7 +571,13 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 				Number(processingPolicyRaw.max_inflight ?? processingPolicyRaw.maxInflight ?? 1)
 			),
 			read_once: Boolean(
-				processingPolicyRaw.read_once ?? processingPolicyRaw.readOnce ?? false
+				processingPolicyRaw.read_once ??
+					processingPolicyRaw.readOnce ??
+					['once', 'read_once'].includes(
+						String(processingPolicyRaw.consume_mode ?? processingPolicyRaw.consumeMode ?? '')
+							.trim()
+							.toLowerCase()
+					)
 			),
 			input_handles: normalizedInputHandles
 		};
@@ -4177,18 +4189,33 @@ function pruneAndRecontractEdgesStrict(
 				...(e.data ?? {}),
 				exec: e.data?.exec ?? 'idle',
 				mode: normalizeEdgeMode(e),
-				contract: {
-					out: chk.out,
-					in: chk.in,
-					payload: {
-						source: sourcePayloadHint(
-							nodes.find((n) => n.id === e.source)! as any,
-							'out',
-							String((e as any).sourceHandle ?? 'out')
-						),
-						target: targetPayloadHint(nodes.find((n) => n.id === e.target)! as any)
-					}
-				}
+				contract: (() => {
+					const sourceHandle = String((e as any).sourceHandle ?? 'out').trim() || 'out';
+					const targetHandle = String((e as any).targetHandle ?? 'in').trim() || 'in';
+					const sourceNode = nodes.find((n) => n.id === e.source)!;
+					const targetNode = nodes.find((n) => n.id === e.target)!;
+					const payloadSource = sourcePayloadHint(sourceNode as any, 'out', sourceHandle) as Record<string, any>;
+					const payloadTarget = buildRequiredSchema(targetNode as any, targetHandle) as Record<string, any>;
+					const compatibility = isSchemaCompatible(
+						payloadSource ?? { type: 'unknown' },
+						payloadTarget ?? { type: 'unknown' },
+						normalizeEdgeMode(e)
+					);
+					return {
+						out: chk.out,
+						in: chk.in,
+						payload: {
+							source: payloadSource,
+							target: payloadTarget
+						},
+						snapshot: edgeContractSnapshotFromSchemas(
+							payloadSource,
+							payloadTarget,
+							compatibility,
+							normalizeEdgeMode(e)
+						)
+					};
+				})()
 			}
 		});
 	}
