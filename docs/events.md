@@ -74,6 +74,7 @@ Fields:
 
 - `signal` (`ready | busy | drain | pause | blocked | resume`)
 - optional `nodeId`
+- optional `handle` (input handle id when the signal is scoped to a specific port)
 
 ### `queue_metrics`
 

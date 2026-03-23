@@ -163,3 +163,31 @@ export function groupSchemaEdgesByMode(edges: NodeSchemaContractEdge[]): SchemaM
 	}
 	return groups.filter((group) => group.edges.length > 0);
 }
+
+export type NodeHandleRuntimeState = {
+	handle: string;
+	state: string;
+	updatedAt: string;
+};
+
+export function collectNodeHandleStates(
+	nodeId: string | null | undefined,
+	handleStates: Record<string, unknown> | null | undefined
+): NodeHandleRuntimeState[] {
+	const selectedNodeId = String(nodeId ?? '').trim();
+	if (!selectedNodeId || !handleStates || typeof handleStates !== 'object') return [];
+	const out: NodeHandleRuntimeState[] = [];
+	for (const [key, value] of Object.entries(handleStates)) {
+		if (!key.startsWith(`${selectedNodeId}:`)) continue;
+		const handle = String(key.slice(selectedNodeId.length + 1) ?? '').trim();
+		if (!handle) continue;
+		const row = (value ?? {}) as Record<string, unknown>;
+		out.push({
+			handle,
+			state: String(row.state ?? '').trim() || 'unknown',
+			updatedAt: String(row.updatedAt ?? '').trim()
+		});
+	}
+	out.sort((a, b) => a.handle.localeCompare(b.handle));
+	return out;
+}

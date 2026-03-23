@@ -960,6 +960,13 @@ export type GraphState = {
 		metrics?: Record<string, unknown>;
 		nodeMetrics?: Record<string, unknown>;
 		runtimeItemMetrics?: Record<string, unknown>;
+		handleStates?: Record<string, { state: string; updatedAt?: string }>;
+		handleTimeline?: Array<{
+			nodeId: string;
+			handle: string;
+			signal: string;
+			at: string;
+		}>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -1914,7 +1921,42 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		}
 		case 'control_signal': {
 			const nodePart = evt.nodeId ? ` node=${evt.nodeId}` : '';
-			return logPush(state, 'info', `[control] ${evt.signal}${nodePart}`, evt.nodeId);
+			const handle = String((evt as any)?.handle ?? '').trim();
+			const handlePart = handle ? ` handle=${handle}` : '';
+			if (!evt.nodeId || !handle) {
+				return logPush(state, 'info', `[control] ${evt.signal}${nodePart}${handlePart}`, evt.nodeId);
+			}
+			const key = `${evt.nodeId}:${handle}`;
+			const prevQueueRuntime =
+				state.queueRuntime && typeof state.queueRuntime === 'object' ? state.queueRuntime : {};
+			const prevHandleStates =
+				prevQueueRuntime.handleStates && typeof prevQueueRuntime.handleStates === 'object'
+					? prevQueueRuntime.handleStates
+					: {};
+			const prevTimeline = Array.isArray(prevQueueRuntime.handleTimeline) ? prevQueueRuntime.handleTimeline : [];
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...prevQueueRuntime,
+					handleStates: {
+						...prevHandleStates,
+						[key]: {
+							state: String(evt.signal ?? '').trim(),
+							updatedAt: String((evt as any)?.at ?? '')
+						}
+					},
+					handleTimeline: [
+						...prevTimeline.slice(Math.max(0, prevTimeline.length - 199)),
+						{
+							nodeId: String(evt.nodeId),
+							handle,
+							signal: String(evt.signal ?? '').trim(),
+							at: String((evt as any)?.at ?? '')
+						}
+					]
+				}
+			};
+			return logPush(nextState, 'info', `[control] ${evt.signal}${nodePart}${handlePart}`, evt.nodeId);
 		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);

@@ -6692,11 +6692,32 @@ async def run_graph(
             n = nodes[node_id]
             kind = n.get("data", {}).get("kind")
             kind_sem = kind_sems.get(kind)
+            handle_ids: List[str] = []
+            if isinstance(work_batch, list):
+                seen_handles: Dict[str, bool] = {}
+                for item in work_batch:
+                    if not isinstance(item, dict):
+                        continue
+                    handle = str(item.get("targetHandle") or "in").strip() or "in"
+                    if handle not in seen_handles:
+                        seen_handles[handle] = True
+                        handle_ids.append(handle)
             t0 = asyncio.get_running_loop().time()
             await _component_mark_node_start(node_id)
             wait_t0 = asyncio.get_running_loop().time()
             blocked = bool(global_sem.locked() or (kind_sem.locked() if kind_sem else False))
             if blocked:
+                for handle in handle_ids:
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "blocked",
+                            "nodeId": node_id,
+                            "handle": handle,
+                        }
+                    )
                 await _emit(
                     {
                         "type": "control_signal",
@@ -6712,6 +6733,17 @@ async def run_graph(
                 if inflight_current > peak_concurrency:
                     peak_concurrency = inflight_current
                 if blocked:
+                    for handle in handle_ids:
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "resume",
+                                "nodeId": node_id,
+                                "handle": handle,
+                            }
+                        )
                     await _emit(
                         {
                             "type": "control_signal",
@@ -6719,6 +6751,17 @@ async def run_graph(
                             "at": iso_now(),
                             "signal": "resume",
                             "nodeId": node_id,
+                        }
+                    )
+                for handle in handle_ids:
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "busy",
+                            "nodeId": node_id,
+                            "handle": handle,
                         }
                     )
                 await _emit(
@@ -6777,6 +6820,17 @@ async def run_graph(
                             "retryCount": 0,
                             "backpressureStatus": "blocked" if blocked else "clear",
                         }
+                        for handle in handle_ids:
+                            await _emit(
+                                {
+                                    "type": "control_signal",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "signal": "ready",
+                                    "nodeId": node_id,
+                                    "handle": handle,
+                                }
+                            )
                         await _emit(
                             {
                                 "type": "control_signal",
@@ -6839,6 +6893,17 @@ async def run_graph(
                         "retryCount": 0,
                         "backpressureStatus": "blocked" if blocked else "clear",
                     }
+                    for handle in handle_ids:
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "ready",
+                                "nodeId": node_id,
+                                "handle": handle,
+                            }
+                        )
                     await _emit(
                         {
                             "type": "control_signal",

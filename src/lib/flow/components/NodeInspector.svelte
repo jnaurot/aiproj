@@ -31,6 +31,7 @@
 	} from '$lib/flow/store/graphStore';
 	import {
 		collectExpectedInputHandles,
+		collectNodeHandleStates,
 		schemaEdgeContractBadges,
 		groupSchemaEdgesByMode,
 		schemaEdgeCounterpartyName,
@@ -398,6 +399,15 @@
 			}
 		}
 		return out;
+	})();
+	$: nodeHandleStates = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		const raw =
+			(($graphStore as any)?.queueRuntime?.handleStates &&
+			typeof ($graphStore as any).queueRuntime.handleStates === 'object'
+				? (($graphStore as any).queueRuntime.handleStates as Record<string, unknown>)
+				: null) ?? null;
+		return collectNodeHandleStates(nodeId, raw);
 	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
@@ -1694,6 +1704,19 @@
 							<div class="guidedAssistDesc">
 								depth {String((row.metric as any)?.depth ?? 0)} | blocked {String((row.metric as any)?.blocked ?? false)} | full {String((row.metric as any)?.full ?? false)} | age {String((row.metric as any)?.oldestAgeSec ?? '-')}
 							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if nodeHandleStates.length > 0}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Handle States</div>
+				<div class="guidedAssistList">
+					{#each nodeHandleStates as row (`${row.handle}:${row.state}:${row.updatedAt}`)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">{row.handle}</div>
+							<div class="guidedAssistDesc">state {row.state} | at {row.updatedAt || '-'}</div>
 						</div>
 					{/each}
 				</div>
