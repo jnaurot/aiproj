@@ -191,3 +191,16 @@ export function collectNodeHandleStates(
 	out.sort((a, b) => a.handle.localeCompare(b.handle));
 	return out;
 }
+
+export function queueMetricScopeSummary(queueRuntime: Record<string, unknown> | null | undefined): {
+	runScopedPresent: boolean;
+	aggregatePresent: boolean;
+} {
+	const runtime = (queueRuntime ?? {}) as Record<string, unknown>;
+	return {
+		runScopedPresent: Boolean(runtime.runScoped && typeof runtime.runScoped === 'object'),
+		aggregatePresent: Boolean(
+			runtime.aggregateDiagnostics && typeof runtime.aggregateDiagnostics === 'object'
+		),
+	};
+}

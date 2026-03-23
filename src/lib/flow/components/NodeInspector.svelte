@@ -400,6 +400,31 @@
 		}
 		return out;
 	})();
+	$: runScopedQueueSummary = (() => {
+		const runScoped = (($graphStore as any)?.queueRuntime?.runScoped ?? null) as Record<string, any> | null;
+		if (!runScoped || typeof runScoped !== 'object') return null;
+		const itemStats = (runScoped.runtimeItemMetrics ?? {}) as Record<string, unknown>;
+		return {
+			runId: String(runScoped.runId ?? '').trim(),
+			scope: String(runScoped.scope ?? 'run').trim(),
+			enq: Number(itemStats.itemsEnqueued ?? 0),
+			deq: Number(itemStats.itemsDequeued ?? 0),
+			accepted: Number(itemStats.itemsAccepted ?? 0),
+			rejected: Number(itemStats.itemsRejected ?? 0)
+		};
+	})();
+	$: aggregateQueueSummary = (() => {
+		const aggregate =
+			(($graphStore as any)?.queueRuntime?.aggregateDiagnostics ?? null) as Record<string, unknown> | null;
+		if (!aggregate || typeof aggregate !== 'object') return null;
+		return {
+			events: Number(aggregate.queueMetricEvents ?? 0),
+			enq: Number(aggregate.itemsEnqueued ?? 0),
+			deq: Number(aggregate.itemsDequeued ?? 0),
+			accepted: Number(aggregate.itemsAccepted ?? 0),
+			rejected: Number(aggregate.itemsRejected ?? 0)
+		};
+	})();
 	$: nodeHandleStates = (() => {
 		const nodeId = String(selectedNode?.id ?? '').trim();
 		const raw =
@@ -1706,6 +1731,32 @@
 							</div>
 						</div>
 					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if runScopedQueueSummary}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Run-Scoped Queue Metrics</div>
+				<div class="guidedAssistList">
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">run {runScopedQueueSummary.runId || '-'}</div>
+						<div class="guidedAssistDesc">
+							scope {runScopedQueueSummary.scope} | enq {runScopedQueueSummary.enq} | deq {runScopedQueueSummary.deq} | accepted {runScopedQueueSummary.accepted} | rejected {runScopedQueueSummary.rejected}
+						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
+		{#if aggregateQueueSummary}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Aggregate Queue Diagnostics</div>
+				<div class="guidedAssistList">
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">events {aggregateQueueSummary.events}</div>
+						<div class="guidedAssistDesc">
+							enq {aggregateQueueSummary.enq} | deq {aggregateQueueSummary.deq} | accepted {aggregateQueueSummary.accepted} | rejected {aggregateQueueSummary.rejected}
+						</div>
+					</div>
 				</div>
 			</div>
 		{/if}

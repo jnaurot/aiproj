@@ -960,6 +960,20 @@ export type GraphState = {
 		metrics?: Record<string, unknown>;
 		nodeMetrics?: Record<string, unknown>;
 		runtimeItemMetrics?: Record<string, unknown>;
+		runScoped?: {
+			runId?: string;
+			scope?: string;
+			metrics?: Record<string, unknown>;
+			nodeMetrics?: Record<string, unknown>;
+			runtimeItemMetrics?: Record<string, unknown>;
+		};
+		aggregateDiagnostics?: {
+			queueMetricEvents: number;
+			itemsEnqueued: number;
+			itemsDequeued: number;
+			itemsAccepted: number;
+			itemsRejected: number;
+		};
 		handleStates?: Record<string, { state: string; updatedAt?: string }>;
 		handleTimeline?: Array<{
 			nodeId: string;
@@ -1969,18 +1983,40 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const workEnq = Number(planeStats?.work?.itemsEnqueued ?? 0);
 			const paramEnq = Number(planeStats?.param?.itemsEnqueued ?? 0);
 			const controlEnq = Number(planeStats?.control?.itemsEnqueued ?? 0);
+			const prevAggregate = ((state.queueRuntime as any)?.aggregateDiagnostics ?? {}) as Record<string, unknown>;
+			const nextAggregate = {
+				queueMetricEvents: Number(prevAggregate.queueMetricEvents ?? 0) + 1,
+				itemsEnqueued: Number(prevAggregate.itemsEnqueued ?? 0) + enq,
+				itemsDequeued: Number(prevAggregate.itemsDequeued ?? 0) + deq,
+				itemsAccepted: Number(prevAggregate.itemsAccepted ?? 0) + Number(itemStats?.itemsAccepted ?? 0),
+				itemsRejected: Number(prevAggregate.itemsRejected ?? 0) + rej
+			};
 			const nextState = {
 				...state,
 				queueRuntime: {
 					metrics: (evt as any)?.metrics ?? {},
 					nodeMetrics: (evt as any)?.nodeMetrics ?? {},
-					runtimeItemMetrics: itemStats ?? {}
+					runtimeItemMetrics: itemStats ?? {},
+					runScoped: {
+						runId: String((evt as any)?.runId ?? ''),
+						scope: String((evt as any)?.scope ?? 'run'),
+						metrics: (evt as any)?.metrics ?? {},
+						nodeMetrics: (evt as any)?.nodeMetrics ?? {},
+						runtimeItemMetrics: itemStats ?? {}
+					},
+					aggregateDiagnostics: nextAggregate,
+					handleStates:
+						(state.queueRuntime?.handleStates && typeof state.queueRuntime.handleStates === 'object'
+							? state.queueRuntime.handleStates
+							: {}) ?? {},
+					handleTimeline:
+						Array.isArray(state.queueRuntime?.handleTimeline) ? state.queueRuntime.handleTimeline : []
 				}
 			};
 			return logPush(
 				nextState,
 				'info',
-				`[queue] depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej} by_plane(work=${workEnq},param=${paramEnq},control=${controlEnq})`
+				`[queue] scope=run depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej} by_plane(work=${workEnq},param=${paramEnq},control=${controlEnq})`
 			);
 		}
 		case 'contract_drift': {

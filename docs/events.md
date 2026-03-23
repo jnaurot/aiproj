@@ -82,6 +82,7 @@ Per-run queue observability snapshot.
 
 Fields:
 
+- `scope` (`run`)
 - `metrics.globalDepth`
 - `metrics.globalMax`
 - `metrics.perEdgeMax`
@@ -90,6 +91,11 @@ Fields:
 - `runtimeItemMetrics` (itemsEnqueued/itemsDequeued/itemsAccepted/itemsRejected/nodeCounters)
   - includes `byPlane` counters (`work|param|control`)
   - includes `byHandle` counters keyed as `<nodeId>:<handle>`
+
+Notes:
+
+- `queue_metrics` payloads are run-scoped snapshots (`scope=run`).
+- Cross-run aggregate diagnostics are computed client-side and should be displayed separately from run-scoped metrics.
 
 ### `node_decision`
 
