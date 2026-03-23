@@ -5,6 +5,7 @@ import json
 from .schemas import validate_node_params  # Import schema validation
 from .capabilities import allowed_edge_modes, port_contract
 from app.component_contracts import edge_mode_requires_payload_compatibility, normalize_edge_mode
+from .contracts import evaluate_schema_coercion, normalize_coercion_policy
 from .schema_diagnostics import (
     SCHEMA_DIAGNOSTIC_CODES,
     TYPE_MISMATCH,
@@ -43,7 +44,9 @@ class GraphValidator:
         errors.extend(self._check_orphaned_nodes(graph))
         
         # 2. Type validation
-        errors.extend(self._validate_payload_types(graph))
+        type_errors, type_warnings = self._validate_payload_types(graph)
+        errors.extend(type_errors)
+        warnings.extend(type_warnings)
         errors.extend(self._validate_transform_join_arity(graph))
         
         # 3. Schema validation
@@ -542,9 +545,20 @@ class GraphValidator:
         
         return errors
     
-    def _validate_payload_types(self, graph: Dict[str, Any]) -> List[ValidationError]:
+    def _target_coercion_policy(self, node: Dict[str, Any]) -> str:
+        params = ((node.get("data") or {}).get("params") or {}) if isinstance(node, dict) else {}
+        raw = (
+            params.get("coercion_policy")
+            or params.get("coercionPolicy")
+            or ((params.get("coercion") or {}).get("policy") if isinstance(params.get("coercion"), dict) else None)
+            or "safe_widening"
+        )
+        return normalize_coercion_policy(raw)
+
+    def _validate_payload_types(self, graph: Dict[str, Any]) -> tuple[List[ValidationError], List[ValidationError]]:
         """Ensure all connections have compatible schemas/types."""
         errors = []
+        warnings = []
         edges = graph.get("edges", [])
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
         work_handle_signatures: Dict[tuple[str, str], Dict[str, Any]] = {}
@@ -816,6 +830,33 @@ class GraphValidator:
 
             # Schema constraint solver (compile-time): schema compatibility + actionable adapter hints.
             if source_type and target_type and source_type != target_type:
+                coercion_policy = self._target_coercion_policy(target_node)
+                coercion = evaluate_schema_coercion(source_type, target_type, coercion_policy)
+                if coercion.get("allowed"):
+                    if coercion.get("lossy"):
+                        warnings.append(
+                            ValidationError(
+                                code="TYPE_COERCION_WARNING",
+                                message=(
+                                    f"Work payload coercion warning on edge '{edge_id}': lossy coercion "
+                                    f"{source_type}->{target_type} is allowed by policy '{coercion_policy}'."
+                                ),
+                                edge_id=edge_id,
+                                details={
+                                    "edgeId": edge_id,
+                                    "sourceNodeId": source_id,
+                                    "targetNodeId": target_id,
+                                    "sourceHandle": source_handle,
+                                    "targetHandle": target_handle,
+                                    "mode": edge_mode,
+                                    "coercionMode": coercion.get("mode"),
+                                    "coercionPolicy": coercion_policy,
+                                    "provided_schema": provided_schema,
+                                    "required_schema": required_schema,
+                                },
+                            )
+                        )
+                    continue
                 suggestions = self._adapter_suggestions(source_type, target_type, target_node)
                 suggestion_suffix = (
                     f" Auto-adapter suggestion: {' | '.join(suggestions)}"
@@ -886,7 +927,7 @@ class GraphValidator:
                     ],
                 )
             )
-        return errors
+        return errors, warnings
 
     def _validate_llm_input_arity(self, graph: Dict[str, Any]) -> List[ValidationError]:
         """Current runtime supports exactly one upstream artifact for each LLM node."""

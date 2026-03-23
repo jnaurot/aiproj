@@ -18,9 +18,61 @@ IMAGE_V1 = "IMAGE_V1"
 AUDIO_V1 = "AUDIO_V1"
 VIDEO_V1 = "VIDEO_V1"
 
+COERCION_POLICY_STRICT = "strict"
+COERCION_POLICY_SAFE_WIDENING = "safe_widening"
+COERCION_POLICY_ALLOW_LOSSY = "allow_lossy"
+
+_SAFE_COERCIONS = {
+    ("text", "table"),
+    ("json", "table"),
+    ("table", "json"),
+}
+
+_LOSSY_COERCIONS = {
+    ("json", "text"),
+    ("text", "json"),
+}
+
 
 def _canon_json(obj: Any) -> str:
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+
+
+def normalize_coercion_policy(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value == COERCION_POLICY_ALLOW_LOSSY:
+        return COERCION_POLICY_ALLOW_LOSSY
+    if value in {"strict", "forbid"}:
+        return COERCION_POLICY_STRICT
+    return COERCION_POLICY_SAFE_WIDENING
+
+
+def evaluate_schema_coercion(
+    provided_type_raw: Any,
+    required_type_raw: Any,
+    policy_raw: Any = COERCION_POLICY_SAFE_WIDENING,
+) -> Dict[str, Any]:
+    provided_type = str(provided_type_raw or "").strip().lower()
+    required_type = str(required_type_raw or "").strip().lower()
+    policy = normalize_coercion_policy(policy_raw)
+    if provided_type == "string":
+        provided_type = "text"
+    if required_type == "string":
+        required_type = "text"
+    if not provided_type or not required_type:
+        return {"mode": "blocked", "allowed": False, "lossy": False, "policy": policy}
+    if provided_type == required_type:
+        return {"mode": "native", "allowed": True, "lossy": False, "policy": policy}
+    pair = (provided_type, required_type)
+    if pair in _SAFE_COERCIONS:
+        if policy == COERCION_POLICY_STRICT:
+            return {"mode": "blocked", "allowed": False, "lossy": False, "policy": policy}
+        return {"mode": "safe", "allowed": True, "lossy": False, "policy": policy}
+    if pair in _LOSSY_COERCIONS:
+        if policy != COERCION_POLICY_ALLOW_LOSSY:
+            return {"mode": "blocked", "allowed": False, "lossy": False, "policy": policy}
+        return {"mode": "lossy", "allowed": True, "lossy": True, "policy": policy}
+    return {"mode": "blocked", "allowed": False, "lossy": False, "policy": policy}
 
 
 def schema_fingerprint(schema_obj: Any) -> str:

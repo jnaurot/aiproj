@@ -109,6 +109,7 @@ Schema/contract diagnostics are mode-aware:
 Suggested auto-fixes are also mode-specific:
 
 - `work`: adapter suggestions (for example `text_to_table`, `json_to_table`, `table_to_json`) when available.
+- `work`: coercion policy is applied (`strict`, `safe_widening`, `allow_lossy`); allowed lossy conversions emit `TYPE_COERCION_WARNING` with coercion details.
 - `param`: align `requiredKeys`/param shape with provided keys or enrich source param payload.
 - `control`: reconnect using control-affinity handles (`control_*`/`ctl_*`) and `mode=control`.
 
