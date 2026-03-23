@@ -112,20 +112,6 @@
 		margin-top: 6px;
 	}
 
-	button.small {
-		padding: 6px 10px;
-		font-size: 12px;
-		border-radius: 10px;
-		border: 1px solid rgba(255, 255, 255, 0.16);
-		background: rgba(255, 255, 255, 0.06);
-		color: inherit;
-		cursor: pointer;
-	}
-
-	button.ghost {
-		background: transparent;
-	}
-
 	code {
 		font-family: ui-monospace, Menlo, Consolas, monospace;
 		font-size: 12px;

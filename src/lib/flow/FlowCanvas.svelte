@@ -2479,6 +2479,8 @@ async function scrollToBottom() {
 <div class="layout">
 	<div
 		class="flow"
+		role="region"
+		aria-label="Flow canvas"
 		bind:this={flowPaneEl}
 		on:pointerdown={onFlowPointerDown}
 		on:pointermove={onFlowPointerMove}

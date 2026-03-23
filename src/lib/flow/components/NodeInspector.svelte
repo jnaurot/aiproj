@@ -235,9 +235,9 @@
 	let inputSchemas: InputSchemaView[] = [];
 	let inputSchemaReqSeq = 0;
 	let lastInputSignature = '';
-	let transformGuidedMode = true;
-	let sourceGuidedMode = true;
-	let modelGuidedMode = true;
+	let transformGuidedMode = false;
+	let sourceGuidedMode = false;
+	let modelGuidedMode = false;
 	let modelAdvancedOpen = false;
 	let modelEditorNodeId = '';
 	let inputPreviewRows: Array<Record<string, unknown>> = [];
@@ -560,7 +560,7 @@
 
 	$: if (isLlm && selectedNode?.id && selectedNode.id !== modelEditorNodeId) {
 		modelEditorNodeId = selectedNode.id;
-		modelGuidedMode = true;
+		modelGuidedMode = false;
 		modelAdvancedOpen = false;
 	}
 

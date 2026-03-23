@@ -350,11 +350,6 @@
 		background: transparent;
 	}
 
-	button.danger {
-		border-color: rgba(239, 68, 68, 0.5);
-		background: rgba(239, 68, 68, 0.14);
-	}
-
 	button:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;

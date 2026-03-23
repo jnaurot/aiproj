@@ -977,8 +977,7 @@ export let onJumpToNode: ((nodeId: string) => void) | undefined = undefined;
 	.pager,
 	.tableWrap,
 	.markdown,
-	pre,
-	code {
+	pre {
 		color: var(--av-text);
 	}
 	.meta {

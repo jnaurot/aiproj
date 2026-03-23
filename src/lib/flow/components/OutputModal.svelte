@@ -64,11 +64,11 @@
 </script>
 
 {#if open}
-	<div class="backdrop" on:click={close} />
+	<button type="button" class="backdrop" on:click={close} aria-label="Close output modal"></button>
 	<div class="modal" role="dialog" aria-modal="true">
 		<div class="header">
 			<div class="title">Node output</div>
-			<button class="x" on:click={close}>✕</button>
+			<button type="button" class="x" on:click={close}>✕</button>
 		</div>
 
 		<div class="meta">
@@ -95,6 +95,8 @@
 	.backdrop {
 		position: fixed;
 		inset: 0;
+		border: 0;
+		padding: 0;
 		background: rgba(0, 0, 0, 0.45);
 		z-index: 1000;
 	}
