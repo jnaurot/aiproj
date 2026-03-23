@@ -58,4 +58,28 @@ describe('portHandles', () => {
 		expect(inHandles[0].plane).toBe('work');
 		expect(outHandles[0].plane).toBe('work');
 	});
+
+	it('maps declaration default to implicit in/out handles for compatibility', () => {
+		const nodeData: any = {
+			kind: 'model',
+			label: 'Model',
+			params: {},
+			portDeclarations: {
+				in: {
+					default: { plane: 'param', label: 'Parameters' }
+				},
+				out: {
+					default: { plane: 'work', label: 'Result' }
+				}
+			}
+		};
+		const inputs = resolveNodeHandles(nodeData, 'in', null, { type: 'json' });
+		const outputs = resolveNodeHandles(nodeData, 'out', null, { type: 'json' });
+		expect(inputs.map((h) => h.id)).toEqual(['in']);
+		expect(outputs.map((h) => h.id)).toEqual(['out']);
+		expect(inputs[0].label).toBe('Parameters');
+		expect(inputs[0].plane).toBe('param');
+		expect(outputs[0].label).toBe('Result');
+		expect(outputs[0].plane).toBe('work');
+	});
 });
