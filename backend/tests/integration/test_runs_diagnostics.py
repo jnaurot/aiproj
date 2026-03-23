@@ -18,6 +18,12 @@ def test_runs_diagnostics_endpoint_available():
 		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS"] in {True, False}
 		assert body["featureFlags"]["STRICT_SCHEMA_EDGE_CHECKS_V2"] in {True, False}
 		assert body["featureFlags"]["STRICT_COERCION_POLICY"] in {True, False}
+		assert "sourceJsonItemExtraction" in body
+		semantics = body["sourceJsonItemExtraction"]
+		assert "pathSyntax" in semantics
+		assert "$.jobs[]" in semantics["pathSyntax"]
+		assert "strictErrors" in semantics
+		assert "JSON_ITEM_PATH_NOT_FOUND" in semantics["strictErrors"]
 		assert "LEGACY_COMPONENT_WRAPPER_FALLBACK" not in body["featureFlags"]
 		assert "rolloutMetrics" in body
 		metrics = body["rolloutMetrics"]

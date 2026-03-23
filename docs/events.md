@@ -154,6 +154,32 @@ Suggested auto-fixes are also mode-specific:
 - `param`: align `requiredKeys`/param shape with provided keys or enrich source param payload.
 - `control`: reconnect using control-affinity handles (`control_*`/`ctl_*`) and `mode=control`.
 
+## Source API JSON Item Extraction Semantics
+
+When a Source API node is configured with `output.mode=json` and `json_item_path`:
+
+- Path resolution supports a constrained JSON path subset:
+  - `jobs`
+  - `$.jobs`
+  - `$.jobs[]` (resolved value must be an array)
+  - `jobs[0].id`
+  - `$["jobs"][0]`
+- Resolution outcomes are deterministic:
+  - `ok`: extracted value is emitted.
+  - `not_found`: missing key/index (or index out of range).
+  - `type_mismatch`: object/array expectation mismatch.
+  - `invalid_path`: malformed selector syntax.
+
+Strict mode behavior (`json_item_strict=true`):
+
+- `not_found` -> runtime error code `JSON_ITEM_PATH_NOT_FOUND`
+- `type_mismatch` -> runtime error code `JSON_ITEM_PATH_TYPE_MISMATCH`
+- `invalid_path` -> runtime error code `JSON_ITEM_PATH_INVALID`
+
+Non-strict mode behavior (`json_item_strict=false`):
+
+- extraction failures fall back to full JSON payload emission for compatibility.
+
 ## Ordering Invariants
 
 For cache path nodes:

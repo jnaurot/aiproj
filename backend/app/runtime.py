@@ -459,6 +459,14 @@ class RuntimeManager:
             if hasattr(self, "get_global_cache_mode")
             else ("default_on" if bool(getattr(self, "global_cache_enabled", True)) else "force_off"),
             "activeRuns": runs,
+            "sourceJsonItemExtraction": {
+                "pathSyntax": ["jobs", "$.jobs", "$.jobs[]", "jobs[0].id", '$["jobs"][0]'],
+                "strictErrors": [
+                    "JSON_ITEM_PATH_NOT_FOUND",
+                    "JSON_ITEM_PATH_TYPE_MISMATCH",
+                    "JSON_ITEM_PATH_INVALID",
+                ],
+            },
             "featureFlags": {
                 "STRICT_SCHEMA_EDGE_CHECKS": bool(get_feature_flags().get("STRICT_SCHEMA_EDGE_CHECKS", True)),
                 "STRICT_SCHEMA_EDGE_CHECKS_V2": bool(get_feature_flags().get("STRICT_SCHEMA_EDGE_CHECKS_V2", True)),

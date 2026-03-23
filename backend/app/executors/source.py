@@ -1671,29 +1671,110 @@ def _merge_partition_results(output_mode: str, results: list[Dict[str, Any]]) ->
     return _canonical_table_rows(merged_rows)
 
 
-def _extract_json_item_path(payload: Any, raw_path: str) -> tuple[Any, bool]:
+def _extract_json_item_path(payload: Any, raw_path: str) -> tuple[Any, str, Optional[str]]:
+    """
+    Resolve a constrained JSON path subset:
+    - dot path: jobs.items
+    - jsonpath-ish root: $.jobs.items
+    - array index: jobs[0].id
+    - bracket key: $["jobs"][0]
+    - array expectation suffix: $.jobs[] (resolved value must be list)
+    """
+
+    def _parse_tokens(path_value: str) -> tuple[list[tuple[str, Any]], Optional[str]]:
+        path = str(path_value or "").strip()
+        if path.startswith("$"):
+            path = path[1:]
+        if path.startswith("."):
+            path = path[1:]
+        if not path:
+            return [], None
+        tokens: list[tuple[str, Any]] = []
+        i = 0
+        n = len(path)
+        while i < n:
+            while i < n and path[i].isspace():
+                i += 1
+            if i < n and path[i] == ".":
+                i += 1
+                continue
+            if i >= n:
+                break
+            if path[i] == "[":
+                i += 1
+                while i < n and path[i].isspace():
+                    i += 1
+                if i >= n:
+                    return [], "unterminated '['"
+                if path[i] in ("'", '"'):
+                    quote = path[i]
+                    i += 1
+                    start = i
+                    while i < n and path[i] != quote:
+                        if path[i] == "\\" and i + 1 < n:
+                            i += 2
+                            continue
+                        i += 1
+                    if i >= n:
+                        return [], "unterminated quoted key"
+                    key = path[start:i]
+                    i += 1
+                    while i < n and path[i].isspace():
+                        i += 1
+                    if i >= n or path[i] != "]":
+                        return [], "expected closing ']'"
+                    i += 1
+                    tokens.append(("key", key))
+                    continue
+                start = i
+                while i < n and path[i] not in "]":
+                    i += 1
+                if i >= n:
+                    return [], "unterminated index"
+                raw_idx = path[start:i].strip()
+                i += 1
+                if not raw_idx or not re.fullmatch(r"-?\d+", raw_idx):
+                    return [], f"invalid array index '{raw_idx}'"
+                tokens.append(("index", int(raw_idx)))
+                continue
+            start = i
+            while i < n and path[i] not in ".[":
+                i += 1
+            key = path[start:i].strip()
+            if not key:
+                return [], "empty key segment"
+            tokens.append(("key", key))
+        return tokens, None
+
     path = str(raw_path or "").strip()
     if not path:
-        return payload, True
+        return payload, "ok", None
     expect_array = path.endswith("[]")
     if expect_array:
         path = path[:-2].strip()
-    if path.startswith("$"):
-        path = path[1:]
-    if path.startswith("."):
-        path = path[1:]
-    if not path:
-        return payload, True
-    parts = [seg.strip() for seg in path.split(".") if seg.strip()]
+    tokens, parse_error = _parse_tokens(path)
+    if parse_error:
+        return None, "invalid_path", parse_error
     cur: Any = payload
-    for part in parts:
-        if isinstance(cur, dict) and part in cur:
-            cur = cur.get(part)
+    for token_kind, token_value in tokens:
+        if token_kind == "key":
+            if not isinstance(cur, dict):
+                return None, "type_mismatch", f"expected object for key '{token_value}' but got {type(cur).__name__}"
+            if token_value not in cur:
+                return None, "not_found", f"missing key '{token_value}'"
+            cur = cur.get(token_value)
             continue
-        return None, False
+        if not isinstance(cur, list):
+            return None, "type_mismatch", f"expected array for index [{token_value}] but got {type(cur).__name__}"
+        idx = int(token_value)
+        if idx < 0:
+            idx = len(cur) + idx
+        if idx < 0 or idx >= len(cur):
+            return None, "not_found", f"index [{token_value}] out of range"
+        cur = cur[idx]
     if expect_array and not isinstance(cur, list):
-        return None, False
-    return cur, True
+        return None, "type_mismatch", f"expected array for suffix [] but got {type(cur).__name__}"
+    return cur, "ok", None
 
 
 async def exec_source(
@@ -2730,11 +2811,18 @@ async def _handle_api_source(
             if json_payload is None:
                 part_data = {"text": text_payload}
             elif json_item_path:
-                extracted, ok = _extract_json_item_path(json_payload, json_item_path)
-                if not ok:
+                extracted, status, detail = _extract_json_item_path(json_payload, json_item_path)
+                if status != "ok":
                     if json_item_strict:
+                        code_map = {
+                            "not_found": "JSON_ITEM_PATH_NOT_FOUND",
+                            "type_mismatch": "JSON_ITEM_PATH_TYPE_MISMATCH",
+                            "invalid_path": "JSON_ITEM_PATH_INVALID",
+                        }
+                        code = code_map.get(status, "JSON_ITEM_PATH_ERROR")
+                        details = f" detail='{detail}'" if detail else ""
                         raise RuntimeError(
-                            f"JSON_ITEM_PATH_NOT_FOUND: path='{json_item_path}' partition_id={part_id}"
+                            f"{code}: path='{json_item_path}' partition_id={part_id}{details}"
                         )
                     part_data = json_payload
                 else:

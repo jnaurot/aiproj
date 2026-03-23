@@ -1314,6 +1314,142 @@ async def test_source_api_json_item_path_strict_fails_when_path_missing(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_source_api_json_item_path_strict_fails_with_type_mismatch(monkeypatch):
+	class _Resp:
+		headers = {"content-type": "application/json"}
+
+		def raise_for_status(self):
+			return None
+
+		def json(self):
+			return {"jobs": {"id": 1}}
+
+		@property
+		def text(self):
+			return '{"jobs":{"id":1}}'
+
+	class _Client:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		async def request(self, **kwargs):
+			return _Resp()
+
+	monkeypatch.setattr("app.executors.source.httpx.AsyncClient", _Client)
+	node = {
+		"id": "n_api_extract_type_mismatch",
+		"data": {
+			"sourceKind": "api",
+			"params": {
+				"source_type": "api",
+				"url": "https://example.com",
+				"method": "GET",
+				"output": {"mode": "json"},
+				"json_item_path": "$.jobs[]",
+				"json_item_strict": True,
+			},
+		},
+	}
+	result = await exec_source("run_api_extract_type_mismatch", node, _ctx())
+	assert result.status == "failed"
+	assert "JSON_ITEM_PATH_TYPE_MISMATCH" in str(result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_source_api_json_item_path_non_strict_fallbacks_to_full_payload(monkeypatch):
+	class _Resp:
+		headers = {"content-type": "application/json"}
+
+		def raise_for_status(self):
+			return None
+
+		def json(self):
+			return {"jobs": {"id": 1}, "other": True}
+
+		@property
+		def text(self):
+			return '{"jobs":{"id":1},"other":true}'
+
+	class _Client:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		async def request(self, **kwargs):
+			return _Resp()
+
+	monkeypatch.setattr("app.executors.source.httpx.AsyncClient", _Client)
+	node = {
+		"id": "n_api_extract_non_strict_fallback",
+		"data": {
+			"sourceKind": "api",
+			"params": {
+				"source_type": "api",
+				"url": "https://example.com",
+				"method": "GET",
+				"output": {"mode": "json"},
+				"json_item_path": "$.jobs[]",
+				"json_item_strict": False,
+			},
+		},
+	}
+	result = await exec_source("run_api_extract_non_strict_fallback", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, dict)
+	assert result.data.get("other") is True
+
+
+@pytest.mark.asyncio
+async def test_source_api_json_item_path_extracts_indexed_value(monkeypatch):
+	class _Resp:
+		headers = {"content-type": "application/json"}
+
+		def raise_for_status(self):
+			return None
+
+		def json(self):
+			return {"jobs": [{"title": "A"}, {"title": "B"}]}
+
+		@property
+		def text(self):
+			return '{"jobs":[{"title":"A"},{"title":"B"}]}'
+
+	class _Client:
+		async def __aenter__(self):
+			return self
+
+		async def __aexit__(self, exc_type, exc, tb):
+			return False
+
+		async def request(self, **kwargs):
+			return _Resp()
+
+	monkeypatch.setattr("app.executors.source.httpx.AsyncClient", _Client)
+	node = {
+		"id": "n_api_extract_indexed",
+		"data": {
+			"sourceKind": "api",
+			"params": {
+				"source_type": "api",
+				"url": "https://example.com",
+				"method": "GET",
+				"output": {"mode": "json"},
+				"json_item_path": "$.jobs[1].title",
+				"json_item_strict": True,
+			},
+		},
+	}
+	result = await exec_source("run_api_extract_indexed", node, _ctx())
+	assert result.status == "succeeded"
+	assert result.data == "B"
+
+
+@pytest.mark.asyncio
 async def test_source_invalid_type_returns_failed():
 	node = {"id": "n_bad", "data": {"params": {"source_type": "invalid"}}}
 	result = await exec_source("run_4", node, _ctx())
