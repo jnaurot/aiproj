@@ -63,28 +63,6 @@
 
 	<slot />
 
-	{#if effectiveTargetHandles.length > 0}
-		<div class="targetLabels">
-			{#each effectiveTargetHandles as h, i (`label-in:${h.id}`)}
-				<div class="targetLabel" style={`top:${handleTop(i, effectiveTargetHandles.length)};`}>
-					<span class={`planeBadge plane-${h.plane ?? 'work'}`}>{h.plane ?? 'work'}</span>
-					<span class="portText">{h.label ?? h.id}</span>
-				</div>
-			{/each}
-		</div>
-	{/if}
-
-	{#if effectiveSourceHandles.length > 0}
-		<div class="sourceLabels">
-			{#each effectiveSourceHandles as h, i (`label-out:${h.id}`)}
-				<div class="sourceLabel" style={`top:${handleTop(i, effectiveSourceHandles.length)};`}>
-					<span class="portText">{h.label ?? h.id}</span>
-					<span class={`planeBadge plane-${h.plane ?? 'work'}`}>{h.plane ?? 'work'}</span>
-				</div>
-			{/each}
-		</div>
-	{/if}
-
 	<div class="footer">
 		<span class="status">{status}</span>
 	</div>
@@ -134,89 +112,6 @@
 		margin-top: 8px;
 		font-size: 12px;
 		opacity: 0.85;
-	}
-
-	.sourceLabels {
-		position: absolute;
-		right: -132px;
-		top: 0;
-		bottom: 0;
-		width: 126px;
-		pointer-events: none;
-	}
-
-	.sourceLabel {
-		position: absolute;
-		transform: translateY(-50%);
-		left: 0;
-		max-width: 100%;
-		font-size: 10px;
-		line-height: 1;
-		opacity: 0.72;
-		text-align: left;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.targetLabels {
-		position: absolute;
-		left: -132px;
-		top: 0;
-		bottom: 0;
-		width: 126px;
-		pointer-events: none;
-	}
-
-	.targetLabel {
-		position: absolute;
-		transform: translateY(-50%);
-		right: 0;
-		max-width: 100%;
-		font-size: 10px;
-		line-height: 1;
-		opacity: 0.72;
-		text-align: right;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-	}
-
-	.portText {
-		max-width: 78px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.planeBadge {
-		border: 1px solid rgba(255, 255, 255, 0.2);
-		border-radius: 999px;
-		padding: 1px 6px;
-		font-size: 9px;
-		line-height: 1;
-		text-transform: lowercase;
-	}
-
-	.planeBadge.plane-work {
-		color: #8ab4ff;
-		border-color: rgba(138, 180, 255, 0.45);
-	}
-
-	.planeBadge.plane-param {
-		color: #f2cc60;
-		border-color: rgba(242, 204, 96, 0.45);
-	}
-
-	.planeBadge.plane-control {
-		color: #7ee787;
-		border-color: rgba(126, 231, 135, 0.45);
 	}
 
 	:global(.portHandle) {

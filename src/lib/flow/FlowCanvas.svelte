@@ -71,6 +71,8 @@ import {
 
 	let outputOpen = false;
 	let outputNodeId: string | null = null;
+	const PORT_TYPE_LEGEND_DISMISSED_KEY = 'flow.portTypeLegend.dismissed.v1';
+	let showPortTypeLegend = true;
 
 	// local bind state (SvelteFlow requires bind)
 	let nodes: Node<PipelineNodeData>[] = [];
@@ -2344,6 +2346,11 @@ async function scrollToBottom() {
 	onMount(async () => {
 		await refreshSchemaCapabilitiesFromBackend();
 		try {
+			showPortTypeLegend = localStorage.getItem(PORT_TYPE_LEGEND_DISMISSED_KEY) !== '1';
+		} catch {
+			showPortTypeLegend = true;
+		}
+		try {
 			const config = await getGlobalCacheConfig();
 			globalCacheMode = (config.mode ??
 				(Boolean(config.enabled) ? 'default_on' : 'force_off')) as GlobalCacheMode;
@@ -2382,6 +2389,15 @@ async function scrollToBottom() {
 		await tick();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
 	});
+
+	function dismissPortTypeLegend() {
+		showPortTypeLegend = false;
+		try {
+			localStorage.setItem(PORT_TYPE_LEGEND_DISMISSED_KEY, '1');
+		} catch {
+			/* noop */
+		}
+	}
 </script>
 
 <svelte:window
@@ -2563,6 +2579,29 @@ async function scrollToBottom() {
 			<Background />
 			<Controls />
 		</SvelteFlow>
+
+		{#if showPortTypeLegend}
+			<div class="portTypeLegend" role="note" aria-label="Port type key">
+				<div class="portTypeLegendHead">
+					<b>Port Type Key</b>
+					<button type="button" class="portTypeLegendClose" on:click={dismissPortTypeLegend} aria-label="Hide port type key">
+						x
+					</button>
+				</div>
+				<div class="portTypeLegendRow">
+					<span class="portTypeDot portTypeDot-work" aria-hidden="true"></span>
+					<span>Data / work</span>
+				</div>
+				<div class="portTypeLegendRow">
+					<span class="portTypeDot portTypeDot-param" aria-hidden="true"></span>
+					<span>Parameter / param</span>
+				</div>
+				<div class="portTypeLegendRow">
+					<span class="portTypeDot portTypeDot-control" aria-hidden="true"></span>
+					<span>Control</span>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	<aside class="inspector" bind:this={inspectorPane}>
@@ -3186,6 +3225,71 @@ async function scrollToBottom() {
 	.toast-error {
 		border-color: #7a2a2a;
 		background: #1f0f12;
+	}
+
+	.portTypeLegend {
+		position: absolute;
+		left: 12px;
+		bottom: 12px;
+		z-index: 8;
+		padding: 8px 10px;
+		border-radius: 10px;
+		border: 1px solid #283044;
+		background: rgba(11, 12, 16, 0.94);
+		color: #e6e6e6;
+		box-shadow: 0 8px 18px rgba(0, 0, 0, 0.34);
+		min-width: 178px;
+	}
+
+	.portTypeLegendHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		margin-bottom: 6px;
+		font-size: 12px;
+	}
+
+	.portTypeLegendClose {
+		padding: 2px 6px;
+		border-radius: 6px;
+		border: 1px solid #2b3854;
+		background: #10172a;
+		color: #dbeafe;
+		font-size: 11px;
+		line-height: 1;
+	}
+
+	.portTypeLegendRow {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 12px;
+		line-height: 1.2;
+	}
+
+	.portTypeLegendRow + .portTypeLegendRow {
+		margin-top: 4px;
+	}
+
+	.portTypeDot {
+		width: 10px;
+		height: 10px;
+		border-radius: 999px;
+		border: 1px solid rgba(255, 255, 255, 0.28);
+		display: inline-block;
+	}
+
+	.portTypeDot-work {
+		background: #4b8cff;
+	}
+
+	.portTypeDot-param {
+		background: #d8ac3f;
+	}
+
+	.portTypeDot-control {
+		background: #2fbf71;
 	}
 
 	.topbar {
