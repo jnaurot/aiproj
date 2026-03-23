@@ -8,7 +8,7 @@ import re
 import traceback
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.runner.nodes.transform import (
     normalize_transform_params,
@@ -516,6 +516,30 @@ def _edge_mode(edge: Dict[str, Any]) -> str:
     if mode not in {"work", "param", "control"}:
         return "work"
     return mode
+
+
+def _build_fair_dequeue_plan(handle_requests: List[Tuple[str, int]]) -> List[str]:
+    """Deterministic round-robin handle plan for mixed batch/single-item fan-in."""
+    remaining: Dict[str, int] = {}
+    order: List[str] = []
+    for handle, count in handle_requests:
+        key = str(handle or "in").strip() or "in"
+        if key not in remaining:
+            order.append(key)
+            remaining[key] = 0
+        remaining[key] = int(remaining.get(key, 0)) + max(0, int(count))
+    out: List[str] = []
+    while True:
+        progressed = False
+        for key in order:
+            if int(remaining.get(key, 0)) <= 0:
+                continue
+            out.append(key)
+            remaining[key] = int(remaining.get(key, 0)) - 1
+            progressed = True
+        if not progressed:
+            break
+    return out
 
 
 def _edge_work_max_items(edge: Dict[str, Any]) -> int:
@@ -6926,35 +6950,10 @@ async def run_graph(
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
                 return []
-            primary = incoming[0]
             out: List[Dict[str, Any]] = []
-            primary_handle = str(primary.get("inputHandle") or "in")
-            primary_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=primary_handle)
-            primary_mode = str(primary_policy.get("consume_mode") or "once")
-            primary_take = (
-                max(1, int(primary_policy.get("batch_size") or 1))
-                if primary_mode == "batch"
-                else 1
-            )
-            for _ in range(primary_take):
-                item = await queue_registry.dequeue(
-                    str(primary.get("edgeId") or ""),
-                    primary_handle,
-                    timeout_sec=0.0,
-                )
-                if item is None:
-                    break
-                runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
-                _inc_runtime_metric(
-                    plane=_edge_mode(edges.get(str(primary.get("edgeId") or "")) or {}),
-                    node_id=node_id,
-                    handle=primary_handle,
-                    field="itemsDequeued",
-                    amount=1,
-                )
-                out.append(item if isinstance(item, dict) else {"item": item})
-            # Additional handles can each apply their own policy.
-            for info in incoming[1:]:
+            per_handle_take: List[Tuple[str, int]] = []
+            incoming_by_handle: Dict[str, Dict[str, str]] = {}
+            for info in incoming:
                 handle = str(info.get("inputHandle") or "in")
                 handle_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
                 consume_mode = str(handle_policy.get("consume_mode") or "once")
@@ -6963,23 +6962,29 @@ async def run_graph(
                     if consume_mode == "batch"
                     else 1
                 )
-                for _ in range(handle_take):
-                    item = await queue_registry.dequeue(
-                        str(info.get("edgeId") or ""),
-                        handle,
-                        timeout_sec=0.0,
-                    )
-                    if item is None:
-                        break
-                    runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
-                    _inc_runtime_metric(
-                        plane=_edge_mode(edges.get(str(info.get("edgeId") or "")) or {}),
-                        node_id=node_id,
-                        handle=handle,
-                        field="itemsDequeued",
-                        amount=1,
-                    )
-                    out.append(item if isinstance(item, dict) else {"item": item})
+                per_handle_take.append((handle, handle_take))
+                incoming_by_handle[handle] = {
+                    "edgeId": str(info.get("edgeId") or ""),
+                    "inputHandle": handle,
+                }
+            for handle in _build_fair_dequeue_plan(per_handle_take):
+                incoming_info = incoming_by_handle.get(handle) or {}
+                item = await queue_registry.dequeue(
+                    str(incoming_info.get("edgeId") or ""),
+                    handle,
+                    timeout_sec=0.0,
+                )
+                if item is None:
+                    continue
+                runtime_item_metrics["itemsDequeued"] = int(runtime_item_metrics.get("itemsDequeued", 0)) + 1
+                _inc_runtime_metric(
+                    plane=_edge_mode(edges.get(str(incoming_info.get("edgeId") or "")) or {}),
+                    node_id=node_id,
+                    handle=handle,
+                    field="itemsDequeued",
+                    amount=1,
+                )
+                out.append(item if isinstance(item, dict) else {"item": item})
             return out
 
         def _enqueue_ready_if_possible(node_id: str) -> None:
