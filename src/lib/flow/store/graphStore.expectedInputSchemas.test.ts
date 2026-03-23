@@ -26,8 +26,7 @@ describe('graphStore expected input schemas by handle', () => {
 		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchemas?.param_config?.typedSchema?.type).toBe(
 			'json'
 		);
-		// Back-compat legacy singleton remains aligned to "in"
-		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchema?.typedSchema?.type).toBe('json');
+		expect((nodeAfterSave?.data as any)?.schema?.expectedInputSchema).toBeUndefined();
 
 		const clearParam = graphStore.setNodeExpectedInputSchemaForHandle(nodeId, 'param_config', null);
 		expect((clearParam as any)?.ok).toBe(true);
@@ -68,7 +67,7 @@ describe('graphStore expected input schemas by handle', () => {
 		);
 		expect(loaded.ok).toBe(true);
 		const node = get(graphStore).nodes.find((item) => item.id === 'n_model_migrate');
-		expect((node?.data as any)?.schema?.expectedInputSchema?.typedSchema?.type).toBe('json');
 		expect((node?.data as any)?.schema?.expectedInputSchemas?.in?.typedSchema?.type).toBe('json');
+		expect((node?.data as any)?.schema?.expectedInputSchema).toBeUndefined();
 	});
 });

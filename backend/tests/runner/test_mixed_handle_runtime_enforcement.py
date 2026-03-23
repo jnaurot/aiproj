@@ -62,13 +62,6 @@ async def test_runtime_enforces_declared_input_contract_per_handle(monkeypatch) 
 					"processingPolicy": {"consume_mode": "single_item", "batch_size": 1, "max_inflight": 1},
 					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
 					"schema": {
-						# Legacy singleton stays text for backward compatibility, while per-handle
-						# work input contract must be respected for targetHandle=in.
-						"expectedInputSchema": {
-							"typedSchema": {"type": "text", "fields": []},
-							"source": "declared",
-							"state": "fresh",
-						},
 						"expectedInputSchemas": {
 							"in": {
 								"typedSchema": {"type": "json", "fields": []},
@@ -117,4 +110,3 @@ async def test_runtime_enforces_declared_input_contract_per_handle(monkeypatch) 
 	assert sorted(seen_work_items) == [1, 2]
 	assert any(evt.get("type") == "run_finished" and evt.get("status") == "succeeded" for evt in events)
 	assert not any("CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH" in str(evt) for evt in events)
-

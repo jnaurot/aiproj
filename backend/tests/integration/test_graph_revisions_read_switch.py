@@ -349,5 +349,5 @@ def test_graph_read_migrates_legacy_expected_input_schema():
 		nodes = ((payload.get("graph") or {}).get("nodes") or [])
 		assert len(nodes) == 1
 		schema = (((nodes[0].get("data") or {}).get("schema") or {}))
-		assert ((schema.get("expectedInputSchema") or {}).get("typedSchema") or {}).get("type") == "json"
 		assert ((schema.get("expectedInputSchemas") or {}).get("in") or {}).get("typedSchema", {}).get("type") == "json"
+		assert "expectedInputSchema" not in schema

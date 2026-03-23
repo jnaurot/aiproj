@@ -399,7 +399,6 @@
 			schema?.expectedInputSchemas && typeof schema.expectedInputSchemas === 'object'
 				? (schema.expectedInputSchemas as Record<string, any>)
 				: {};
-		const legacyInTyped = schema?.expectedInputSchema?.typedSchema ?? null;
 		const incomingByHandle = new Map<string, Record<string, unknown>>();
 		for (const edge of (schemaContract?.edges ?? []) as NodeSchemaContractEdge[]) {
 			if (String(edge?.direction ?? '').trim().toLowerCase() !== 'incoming') continue;
@@ -412,9 +411,8 @@
 		for (const handleSummary of expectedInputHandles) {
 			const handle = handleSummary.handle;
 			const explicit = expectedInputSchemas?.[handle]?.typedSchema ?? null;
-			const fallback = handle === 'in' ? legacyInTyped : null;
 			const suggested = incomingByHandle.get(handle) ?? { type: handleSummary.classDefaultType };
-			const typed = explicit ?? fallback ?? suggested;
+			const typed = explicit ?? suggested;
 			nextDrafts[handle] = JSON.stringify(typed, null, 2);
 		}
 		expectedInputSchemaDraftByHandle = nextDrafts;

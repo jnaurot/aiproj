@@ -45,6 +45,11 @@ def _infer_edge_mode_from_handles(edge: Dict[str, Any]) -> str:
 def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
 	data = _node_data(node)
 	raw_schema = data.get("schema")
+	legacy_expected_input_schema = (
+		raw_schema.get("expectedInputSchema")
+		if isinstance(raw_schema, dict) and isinstance(raw_schema.get("expectedInputSchema"), dict)
+		else None
+	)
 	canonical_schema, changed = canonicalize_schema_envelope(raw_schema)
 	if raw_schema is None:
 		return
@@ -58,18 +63,13 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 			}
 		)
 		return
-	expected_input_schema = (
-		canonical_schema.get("expectedInputSchema")
-		if isinstance(canonical_schema.get("expectedInputSchema"), dict)
-		else None
-	)
 	expected_input_schemas = (
 		canonical_schema.get("expectedInputSchemas")
 		if isinstance(canonical_schema.get("expectedInputSchemas"), dict)
 		else None
 	)
-	if expected_input_schema is not None and expected_input_schemas is None:
-		canonical_schema["expectedInputSchemas"] = {"in": copy.deepcopy(expected_input_schema)}
+	if legacy_expected_input_schema is not None and expected_input_schemas is None:
+		canonical_schema["expectedInputSchemas"] = {"in": copy.deepcopy(legacy_expected_input_schema)}
 		changed = True
 		notes.append(
 			{
@@ -78,6 +78,9 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 				"message": "Migrated schema.expectedInputSchema to schema.expectedInputSchemas.in",
 			}
 		)
+	if "expectedInputSchema" in canonical_schema:
+		canonical_schema.pop("expectedInputSchema", None)
+		changed = True
 	data["schema"] = canonical_schema
 	if changed:
 		notes.append(

@@ -19,16 +19,3 @@ def test_declared_input_type_resolves_by_target_handle() -> None:
 	assert validator._node_schema_declared_input_type(node, "in") == "text"
 	assert validator._node_schema_declared_input_type(node, "param_config") == "json"
 	assert validator._node_schema_declared_input_type(node, "unknown_handle") == "text"
-
-
-def test_declared_input_type_uses_legacy_singleton_fallback() -> None:
-	validator = GraphValidator()
-	node = {
-		"data": {
-			"schema": {
-				"expectedInputSchema": {"typedSchema": {"type": "json", "fields": []}},
-			}
-		}
-	}
-
-	assert validator._node_schema_declared_input_type(node, "in") == "json"

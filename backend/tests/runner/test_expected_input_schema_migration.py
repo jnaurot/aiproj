@@ -30,7 +30,6 @@ def test_migrates_legacy_expected_input_schema_to_split_map():
 	canonical, notes = canonicalize_graph_payload(graph)
 	node = canonical["nodes"][0]
 	schema = node["data"]["schema"]
-	assert schema["expectedInputSchema"]["typedSchema"]["type"] == "json"
 	assert schema["expectedInputSchemas"]["in"]["typedSchema"]["type"] == "json"
+	assert "expectedInputSchema" not in schema
 	assert any(note.get("code") == "NODE_SCHEMA_EXPECTED_INPUTS_MIGRATED" for note in notes)
-

@@ -394,6 +394,7 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 		if (legacyExpectedInputSchema && !splitExpectedInputSchemas) {
 			migratedSchema.expectedInputSchemas = { in: legacyExpectedInputSchema };
 		}
+		delete (migratedSchema as any).expectedInputSchema;
 		const nextSchemaRaw = {
 			...migratedSchema,
 			...(inferredSchema ? { inferredSchema } : {})
@@ -2280,22 +2281,6 @@ function buildSavePreflightDiagnostics(
 				});
 			}
 		}
-		const expectedInputSchema = (node.data as any)?.schema?.expectedInputSchema;
-		if (expectedInputSchema != null) {
-			const expectedInputTypedRaw =
-				typeof (expectedInputSchema as any)?.typedSchema === 'object'
-					? ((expectedInputSchema as any).typedSchema as Record<string, unknown>)
-					: null;
-			const expectedInputTyped = payloadHintToTypedSchema(expectedInputTypedRaw);
-			if (!expectedInputTyped) {
-				diagnostics.push({
-					code: 'EXPECTED_INPUT_SCHEMA_INVALID',
-					path: `nodes.${String(node.id)}.data.schema.expectedInputSchema.typedSchema`,
-					message: 'Expected input schema must define a valid typedSchema.type.',
-					severity: 'error'
-				});
-			}
-		}
 		const expectedInputSchemas = (node.data as any)?.schema?.expectedInputSchemas;
 		if (expectedInputSchemas != null) {
 			if (typeof expectedInputSchemas !== 'object' || Array.isArray(expectedInputSchemas)) {
@@ -2926,7 +2911,6 @@ function hasSchemaEnvelopeContent(raw: unknown): boolean {
 	const env = raw as Record<string, unknown>;
 	return Boolean(
 		env.inferredSchema ||
-			env.expectedInputSchema ||
 			env.expectedInputSchemas ||
 			env.expectedSchema ||
 			env.observedSchema
@@ -3285,9 +3269,7 @@ function expectedInputTypedSchemaForHandle(
 	if (handleEnvelope && typeof handleEnvelope.typedSchema === 'object') {
 		return handleEnvelope.typedSchema as Record<string, unknown>;
 	}
-	return typeof schemaEnv?.expectedInputSchema?.typedSchema === 'object'
-		? (schemaEnv.expectedInputSchema.typedSchema as Record<string, unknown>)
-		: null;
+	return null;
 }
 
 function buildRequiredSchema(
@@ -4012,7 +3994,7 @@ export const graphStore = (() => {
 		return out;
 	}
 
-	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchema' | 'expectedInputSchemas';
+	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchemas';
 
 	function setNodeSchemaObservationImpl(
 		nodeId: string,
@@ -4076,7 +4058,6 @@ export const graphStore = (() => {
 							: {};
 					current[handle] = observation;
 					(existingSchema as any).expectedInputSchemas = current;
-					(existingSchema as any).expectedInputSchema = observation;
 				} else {
 					(existingSchema as any)[channel] = observation;
 				}
@@ -4115,7 +4096,7 @@ export const graphStore = (() => {
 					? 'Expected schema updated'
 					: channel === 'expectedInputSchemas'
 						? `Expected input schema updated for handle ${String(inputHandleRaw ?? 'in')}`
-						: 'Expected input schema updated',
+						: 'Expected schema updated',
 				nodeId
 			);
 			persist(next);

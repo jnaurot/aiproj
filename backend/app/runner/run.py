@@ -2241,12 +2241,6 @@ def _declared_in_port(kind: str, node: Dict[str, Any], input_port: Optional[str]
             typed_type = "text"
         if typed_type in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
             return typed_type
-    declared_input_typed = _node_typed_schema_type_from_node(
-        node,
-        channels=("expectedInputSchema",),
-    )
-    if declared_input_typed in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
-        return declared_input_typed
     if kind == "source":
         return None
     if kind == "transform":

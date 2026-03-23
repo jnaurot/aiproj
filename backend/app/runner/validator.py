@@ -164,7 +164,7 @@ class GraphValidator:
         schema_env = data.get("schema") if isinstance(data.get("schema"), dict) else {}
         if not isinstance(schema_env, dict):
             return None
-        # Input contract is modeled by expectedInputSchemas(handle) first, then expectedInputSchema legacy fallback.
+        # Input contract is modeled by expectedInputSchemas(handle).
         # expectedSchema is output-side and must not be reused for incoming edge checks.
         target_key = str(target_handle or "in").strip() or "in"
         obs = None
@@ -174,8 +174,6 @@ class GraphValidator:
                 obs = expected_by_handle.get(target_key)
             elif isinstance(expected_by_handle.get("in"), dict):
                 obs = expected_by_handle.get("in")
-        if not isinstance(obs, dict):
-            obs = schema_env.get("expectedInputSchema")
         if isinstance(obs, dict):
             typed = obs.get("typedSchema")
             if isinstance(typed, dict):
