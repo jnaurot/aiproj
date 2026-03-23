@@ -1027,6 +1027,19 @@ export type GraphState = {
 				updatedAt?: string;
 			}
 		>;
+		paramControlWarnings?: Record<
+			string,
+			{
+				nodeId: string;
+				handle: string;
+				edgeId: string;
+				plane: 'param' | 'control';
+				code: 'PARAM_CONTROL_EMPTY_INPUT';
+				reasonCode?: string;
+				upstreamNodeId?: string;
+				updatedAt?: string;
+			}
+		>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2083,6 +2096,50 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nodeId
 			);
 		}
+		case 'node_input_warning': {
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			const handle = String((evt as any)?.handle ?? '').trim();
+			const edgeId = String((evt as any)?.edgeId ?? '').trim();
+			const planeRaw = String((evt as any)?.plane ?? '').trim().toLowerCase();
+			const plane: 'param' | 'control' = planeRaw === 'control' ? 'control' : 'param';
+			if (!nodeId || !handle || !edgeId) return state;
+			const key = `${nodeId}:${handle}:${edgeId}:${plane}`;
+			const previous =
+				(state.queueRuntime?.paramControlWarnings &&
+				typeof state.queueRuntime.paramControlWarnings === 'object'
+					? state.queueRuntime.paramControlWarnings
+					: {}) ?? {};
+			const codeRaw = String((evt as any)?.code ?? '').trim();
+			const code: 'PARAM_CONTROL_EMPTY_INPUT' =
+				codeRaw === 'PARAM_CONTROL_EMPTY_INPUT' ? 'PARAM_CONTROL_EMPTY_INPUT' : 'PARAM_CONTROL_EMPTY_INPUT';
+			const reasonCode = String((evt as any)?.reasonCode ?? '').trim();
+			const upstreamNodeId = String((evt as any)?.upstreamNodeId ?? '').trim();
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					paramControlWarnings: {
+						...previous,
+						[key]: {
+							nodeId,
+							handle,
+							edgeId,
+							plane,
+							code,
+							reasonCode: reasonCode || undefined,
+							upstreamNodeId: upstreamNodeId || undefined,
+							updatedAt: String((evt as any)?.at ?? '')
+						}
+					}
+				}
+			};
+			return logPush(
+				nextState,
+				'warn',
+				`[input-warning] plane=${plane} handle=${handle} edge=${edgeId}${reasonCode ? ` reason=${reasonCode}` : ''}`,
+				nodeId
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
@@ -2131,6 +2188,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						(state.queueRuntime?.handleSatisfaction &&
 						typeof state.queueRuntime.handleSatisfaction === 'object'
 							? state.queueRuntime.handleSatisfaction
+							: {}) ?? {},
+					paramControlWarnings:
+						(state.queueRuntime?.paramControlWarnings &&
+						typeof state.queueRuntime.paramControlWarnings === 'object'
+							? state.queueRuntime.paramControlWarnings
 							: {}) ?? {}
 				}
 			};

@@ -6967,15 +6967,23 @@ async def run_graph(
         connected_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         provided_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         handle_satisfaction_state: Dict[str, Dict[str, str]] = {nid: {} for nid in sub}
+        connected_nonwork_edges_by_handle: Dict[str, Dict[str, Dict[str, set[str]]]] = {nid: {} for nid in sub}
+        provided_nonwork_edges_by_handle: Dict[str, Dict[str, Dict[str, set[str]]]] = {nid: {} for nid in sub}
+        nonwork_warning_emitted_keys: set[str] = set()
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):
                 incoming_edge = edges.get(incoming_edge_id) or {}
-                if _edge_mode(incoming_edge) != "work":
-                    continue
                 handle = str(incoming_edge.get("targetHandle") or "in").strip() or "in"
-                connected_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set()).add(str(incoming_edge_id))
-                provided_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set())
+                incoming_mode = _edge_mode(incoming_edge)
+                if incoming_mode == "work":
+                    connected_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set()).add(str(incoming_edge_id))
+                    provided_work_edges_by_handle.setdefault(nid, {}).setdefault(handle, set())
+                    continue
+                connected_nonwork_edges_by_handle.setdefault(nid, {}).setdefault(handle, {}).setdefault(incoming_mode, set()).add(
+                    str(incoming_edge_id)
+                )
+                provided_nonwork_edges_by_handle.setdefault(nid, {}).setdefault(handle, {}).setdefault(incoming_mode, set())
 
         def _handle_satisfaction_status(node_id: str, handle: str) -> Tuple[str, int, int]:
             connected = connected_work_edges_by_handle.get(node_id, {}).get(handle) or set()
@@ -7023,6 +7031,105 @@ async def run_graph(
                         f"provided={provided_count}/{connected_count}"
                     ),
                     "nodeId": node_id,
+                }
+            )
+
+        def _is_effectively_empty_payload(value: Any) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str):
+                return len(value.strip()) <= 0
+            if isinstance(value, (bytes, bytearray)):
+                return len(bytes(value).strip()) <= 0
+            if isinstance(value, (list, tuple, set)):
+                return len(value) <= 0
+            if isinstance(value, dict):
+                if not value:
+                    return True
+                payload_value = value.get("payload")
+                if "payload" in value and _is_effectively_empty_payload(payload_value):
+                    remaining = [k for k in value.keys() if str(k) not in {"payload", "meta", "kind"}]
+                    if not remaining:
+                        return True
+                return False
+            return False
+
+        async def _artifact_has_meaningful_payload(artifact_id: str) -> Tuple[bool, str]:
+            aid = str(artifact_id or "").strip()
+            if not aid:
+                return False, "NO_ARTIFACT"
+            try:
+                payload = await context.artifact_store.read(aid)
+            except Exception:
+                return False, "NO_ARTIFACT"
+            if not isinstance(payload, (bytes, bytearray)):
+                return False, "NO_ARTIFACT"
+            payload_bytes = bytes(payload)
+            if len(payload_bytes.strip()) <= 0:
+                return False, "EMPTY_BYTES"
+            try:
+                decoded = payload_bytes.decode("utf-8")
+                parsed = json.loads(decoded)
+            except Exception:
+                try:
+                    decoded_text = payload_bytes.decode("utf-8", errors="ignore")
+                except Exception:
+                    decoded_text = ""
+                if len(decoded_text.strip()) <= 0:
+                    return False, "EMPTY_TEXT"
+                return True, "NON_EMPTY_TEXT"
+            if _is_effectively_empty_payload(parsed):
+                return False, "EMPTY_JSON"
+            return True, "NON_EMPTY_JSON"
+
+        async def _emit_nonwork_empty_warning_once(
+            *,
+            target_node_id: str,
+            target_handle: str,
+            edge_id: str,
+            plane: str,
+            upstream_node_id: str,
+            reason_code: str,
+        ) -> None:
+            key = "|".join(
+                [
+                    str(run_id),
+                    str(target_node_id),
+                    str(target_handle),
+                    str(edge_id),
+                    str(plane),
+                    "PARAM_CONTROL_EMPTY_INPUT",
+                ]
+            )
+            if key in nonwork_warning_emitted_keys:
+                return
+            nonwork_warning_emitted_keys.add(key)
+            await _emit(
+                {
+                    "type": "node_input_warning",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "nodeId": target_node_id,
+                    "handle": target_handle,
+                    "edgeId": edge_id,
+                    "plane": plane,
+                    "code": "PARAM_CONTROL_EMPTY_INPUT",
+                    "reasonCode": reason_code,
+                    "upstreamNodeId": upstream_node_id,
+                }
+            )
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "warn",
+                    "message": (
+                        f"[input-warning] node={target_node_id} handle={target_handle} edge={edge_id} "
+                        f"plane={plane} code=PARAM_CONTROL_EMPTY_INPUT reason={reason_code} "
+                        f"upstream={upstream_node_id}"
+                    ),
+                    "nodeId": target_node_id,
                 }
             )
 
@@ -7490,6 +7597,21 @@ async def run_graph(
                     edge_obj = edges.get(edge_id) or {}
                     edge_mode = _edge_mode(edge_obj)
                     if edge_mode != "work":
+                        source_artifact_id = str(get_current_artifact(node_id) or "").strip()
+                        meaningful, empty_reason = await _artifact_has_meaningful_payload(source_artifact_id)
+                        if meaningful:
+                            provided_nonwork_edges_by_handle.setdefault(nb, {}).setdefault(target_handle, {}).setdefault(
+                                edge_mode, set()
+                            ).add(edge_id)
+                        else:
+                            await _emit_nonwork_empty_warning_once(
+                                target_node_id=nb,
+                                target_handle=target_handle,
+                                edge_id=edge_id,
+                                plane=edge_mode,
+                                upstream_node_id=node_id,
+                                reason_code=empty_reason,
+                            )
                         if not bool(edge_dependency_released.get(edge_id, False)):
                             edge_dependency_released[edge_id] = True
                             indeg[nb] = max(0, indeg.get(nb, 0) - 1)
@@ -7597,6 +7719,40 @@ async def run_graph(
                             }
                         )
                         break
+                    nonwork_handle_map = connected_nonwork_edges_by_handle.get(candidate, {}) or {}
+                    for handle, plane_map in nonwork_handle_map.items():
+                        for plane, edge_ids in plane_map.items():
+                            provided_ids = (
+                                provided_nonwork_edges_by_handle.get(candidate, {})
+                                .get(handle, {})
+                                .get(plane, set())
+                            ) or set()
+                            missing_ids = sorted(list(set(edge_ids).difference(set(provided_ids))))
+                            for missing_edge_id in missing_ids:
+                                edge_obj = edges.get(str(missing_edge_id)) or {}
+                                upstream_node = str(edge_obj.get("source") or "").strip()
+                                if not upstream_node:
+                                    continue
+                                if int(node_inflight_counts.get(upstream_node, 0)) > 0:
+                                    # Suppress warning while upstream is still running/busy.
+                                    continue
+                                source_artifact_id = str(get_current_artifact(upstream_node) or "").strip()
+                                meaningful, empty_reason = await _artifact_has_meaningful_payload(source_artifact_id)
+                                if meaningful:
+                                    provided_nonwork_edges_by_handle.setdefault(candidate, {}).setdefault(handle, {}).setdefault(
+                                        plane, set()
+                                    ).add(str(missing_edge_id))
+                                    continue
+                                if not bool(node_started_once.get(upstream_node, False)):
+                                    empty_reason = "UPSTREAM_NEVER_STARTED"
+                                await _emit_nonwork_empty_warning_once(
+                                    target_node_id=candidate,
+                                    target_handle=handle,
+                                    edge_id=str(missing_edge_id),
+                                    plane=str(plane),
+                                    upstream_node_id=upstream_node,
+                                    reason_code=empty_reason,
+                                )
 
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 

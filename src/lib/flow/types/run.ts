@@ -144,6 +144,18 @@ export type KnownRunEvent =
       status: "all" | "partial" | "none";
       connectedEdges: number;
       providedEdges: number;
+    }
+  | {
+      type: "node_input_warning";
+      runId: string;
+      at: string;
+      nodeId: string;
+      handle: string;
+      edgeId: string;
+      plane: "param" | "control";
+      code: "PARAM_CONTROL_EMPTY_INPUT";
+      reasonCode?: string;
+      upstreamNodeId?: string;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

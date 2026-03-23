@@ -65,6 +65,7 @@ Required fields:
 - `node_reject`
 - `branch_cascade`
 - `node_handle_satisfaction`
+- `node_input_warning`
 - `contract_drift`
 - `log`
 
@@ -144,6 +145,20 @@ Fields:
 - `status` (`all | partial | none`)
 - `connectedEdges`
 - `providedEdges`
+
+### `node_input_warning`
+
+Structured warning for empty/missing param/control inputs on connected edges.
+
+Fields:
+
+- `nodeId`
+- `handle`
+- `edgeId`
+- `plane` (`param | control`)
+- `code` (`PARAM_CONTROL_EMPTY_INPUT`)
+- optional `reasonCode` (for example `NO_ARTIFACT`, `EMPTY_JSON`, `UPSTREAM_NEVER_STARTED`)
+- optional `upstreamNodeId`
 
 ### `contract_drift`
 

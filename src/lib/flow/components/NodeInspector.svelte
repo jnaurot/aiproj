@@ -476,6 +476,59 @@
 		out.sort((a, b) => a.handle.localeCompare(b.handle));
 		return out;
 	})();
+	$: nodeParamControlWarnings = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId)
+			return [] as Array<{
+				handle: string;
+				edgeId: string;
+				plane: 'param' | 'control';
+				code: string;
+				reasonCode?: string;
+				upstreamNodeId?: string;
+				updatedAt?: string;
+			}>;
+		const map =
+			(($graphStore as any)?.queueRuntime?.paramControlWarnings &&
+			typeof ($graphStore as any).queueRuntime.paramControlWarnings === 'object'
+				? (($graphStore as any).queueRuntime.paramControlWarnings as Record<string, unknown>)
+				: null) ?? null;
+		if (!map)
+			return [] as Array<{
+				handle: string;
+				edgeId: string;
+				plane: 'param' | 'control';
+				code: string;
+				reasonCode?: string;
+				upstreamNodeId?: string;
+				updatedAt?: string;
+			}>;
+		const out: Array<{
+			handle: string;
+			edgeId: string;
+			plane: 'param' | 'control';
+			code: string;
+			reasonCode?: string;
+			upstreamNodeId?: string;
+			updatedAt?: string;
+		}> = [];
+		for (const [key, value] of Object.entries(map)) {
+			if (!String(key).startsWith(`${nodeId}:`)) continue;
+			const row = (value ?? {}) as Record<string, unknown>;
+			const planeRaw = String(row.plane ?? '').trim().toLowerCase();
+			out.push({
+				handle: String(row.handle ?? '').trim(),
+				edgeId: String(row.edgeId ?? '').trim(),
+				plane: planeRaw === 'control' ? 'control' : 'param',
+				code: String(row.code ?? '').trim(),
+				reasonCode: String(row.reasonCode ?? '').trim() || undefined,
+				upstreamNodeId: String(row.upstreamNodeId ?? '').trim() || undefined,
+				updatedAt: String(row.updatedAt ?? '').trim() || undefined
+			});
+		}
+		out.sort((a, b) => `${a.handle}:${a.edgeId}`.localeCompare(`${b.handle}:${b.edgeId}`));
+		return out;
+	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
@@ -1839,6 +1892,21 @@
 							<div class="guidedAssistLabel">{row.handle}</div>
 							<div class="guidedAssistDesc">
 								status {row.status} | provided {row.providedEdges}/{row.connectedEdges} | at {row.updatedAt || '-'}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+		{#if nodeParamControlWarnings.length > 0}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Param/Control Input Warnings</div>
+				<div class="guidedAssistList">
+					{#each nodeParamControlWarnings as row (`${row.handle}:${row.edgeId}:${row.code}:${row.updatedAt}`)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistLabel">{row.plane} {row.handle}</div>
+							<div class="guidedAssistDesc">
+								edge {row.edgeId} | code {row.code} | reason {row.reasonCode || '-'} | upstream {row.upstreamNodeId || '-'} | at {row.updatedAt || '-'}
 							</div>
 						</div>
 					{/each}
