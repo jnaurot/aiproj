@@ -547,6 +547,7 @@ class GraphValidator:
         errors = []
         edges = graph.get("edges", [])
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        work_handle_signatures: Dict[tuple[str, str], Dict[str, Any]] = {}
 
         for edge in edges:
             edge_id = edge.get("id", "unknown")
@@ -716,6 +717,24 @@ class GraphValidator:
                 "type": target_type,
                 "payload": normalized_tgt_payload,
             }
+            if edge_mode == "work":
+                handle_key = (str(target_id), str(target_handle or "in"))
+                signature = self._stable_json(provided_schema)
+                bucket = work_handle_signatures.get(handle_key)
+                if bucket is None:
+                    work_handle_signatures[handle_key] = {
+                        "targetNodeId": str(target_id),
+                        "targetHandle": str(target_handle or "in"),
+                        "signatures": {signature: [str(edge_id)]},
+                        "schemas": {signature: provided_schema},
+                    }
+                else:
+                    signatures = bucket.get("signatures", {})
+                    edge_ids = signatures.get(signature)
+                    if isinstance(edge_ids, list):
+                        edge_ids.append(str(edge_id))
+                    else:
+                        signatures[signature] = [str(edge_id)]
 
             src_cols = self._schema_columns(normalized_src_payload, fields_key="fields", columns_key="columns")
             req_cols = self._schema_columns(
@@ -831,7 +850,42 @@ class GraphValidator:
                     )
                 )
                 continue
-        
+        for bucket in work_handle_signatures.values():
+            signatures = bucket.get("signatures", {})
+            if not isinstance(signatures, dict):
+                continue
+            signature_keys = [k for k in signatures.keys() if str(k)]
+            if len(signature_keys) <= 1:
+                continue
+            edge_ids: List[str] = []
+            provided_schemas: List[Dict[str, Any]] = []
+            for signature_key in signature_keys:
+                ids = signatures.get(signature_key)
+                if isinstance(ids, list):
+                    edge_ids.extend([str(edge_id) for edge_id in ids if str(edge_id)])
+                schema = bucket.get("schemas", {}).get(signature_key)
+                if isinstance(schema, dict):
+                    provided_schemas.append(schema)
+            errors.append(
+                ValidationError(
+                    code=self._schema_code(TYPE_MISMATCH),
+                    message=(
+                        "Work payload mismatch: multiple inbound edges to the same target handle must provide "
+                        "identical schemas."
+                    ),
+                    edge_id=edge_ids[0] if edge_ids else None,
+                    details={
+                        "targetNodeId": bucket.get("targetNodeId"),
+                        "targetHandle": bucket.get("targetHandle"),
+                        "edgeIds": edge_ids,
+                        "providedSchemas": provided_schemas,
+                    },
+                    suggestions=[
+                        "Route heterogeneous payloads to different target handles.",
+                        "Or align upstream output contracts so provided schemas are identical for this handle.",
+                    ],
+                )
+            )
         return errors
 
     def _validate_llm_input_arity(self, graph: Dict[str, Any]) -> List[ValidationError]:

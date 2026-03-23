@@ -3584,6 +3584,57 @@ function normalizeEdgeMode(edge: Edge<PipelineEdgeData>): 'work' | 'param' | 'co
 	return inferEdgeModeFromHandles(edge);
 }
 
+function stableSchemaSignature(value: unknown): string {
+	const normalize = (input: unknown): unknown => {
+		if (Array.isArray(input)) return input.map((item) => normalize(item));
+		if (input && typeof input === 'object') {
+			const out: Record<string, unknown> = {};
+			for (const key of Object.keys(input as Record<string, unknown>).sort()) {
+				out[key] = normalize((input as Record<string, unknown>)[key]);
+			}
+			return out;
+		}
+		return input;
+	};
+	try {
+		return JSON.stringify(normalize(value ?? null));
+	} catch {
+		return '';
+	}
+}
+
+function sameHandleProvidedSchemaConflict(
+	nodes: Node<PipelineNodeData>[],
+	edges: Edge<PipelineEdgeData>[],
+	candidate: Edge<PipelineEdgeData>
+): { conflict: true; targetNodeId: string; targetHandle: string; edgeIds: string[] } | { conflict: false } {
+	const combined = [...edges, candidate];
+	const byNodeId = new Map(nodes.map((node) => [node.id, node]));
+	const signaturesByHandle = new Map<string, Map<string, string[]>>();
+	for (const edge of combined) {
+		if (normalizeEdgeMode(edge) !== 'work') continue;
+		const sourceNode = byNodeId.get(String(edge.source ?? ''));
+		const targetNode = byNodeId.get(String(edge.target ?? ''));
+		if (!sourceNode || !targetNode) continue;
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
+		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
+		const key = `${String(edge.target ?? '')}::${targetHandle}`;
+		const payload = buildProvidedSchema(sourceNode as any, sourceHandle);
+		const signature = stableSchemaSignature(payload);
+		if (!signaturesByHandle.has(key)) signaturesByHandle.set(key, new Map());
+		const bySignature = signaturesByHandle.get(key)!;
+		if (!bySignature.has(signature)) bySignature.set(signature, []);
+		bySignature.get(signature)!.push(String(edge.id ?? ''));
+	}
+	for (const [key, bySignature] of signaturesByHandle.entries()) {
+		if (bySignature.size <= 1) continue;
+		const [targetNodeId, targetHandle = 'in'] = key.split('::');
+		const edgeIds = Array.from(bySignature.values()).flat().filter((value) => value.length > 0);
+		return { conflict: true, targetNodeId, targetHandle, edgeIds };
+	}
+	return { conflict: false };
+}
+
 function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeData>): EdgeCheck {
 	const sourceNode = nodes.find((n) => n.id === e.source);
 	const targetNode = nodes.find((n) => n.id === e.target);
@@ -5074,6 +5125,26 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					error: 'Edge mode is incompatible with source/target port affinities'
 				};
 			}
+			const preflightEdgeId = '__preflight__';
+			const sameHandleConflict = sameHandleProvidedSchemaConflict(
+				state.nodes as any,
+				state.edges as any,
+				{
+					id: preflightEdgeId,
+					source,
+					target,
+					sourceHandle,
+					targetHandle: targetHandleRaw,
+					data: { exec: 'idle', mode }
+				} as any
+			);
+			if (sameHandleConflict.conflict) {
+				return {
+					ok: false as const,
+					error:
+						'Multiple inbound work edges on the same target handle must provide identical schemas'
+				};
+			}
 			return { ok: true as const, deferred: false as const };
 		},
 
@@ -5173,6 +5244,24 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						s,
 						'info',
 						`[schema-edge-checks-v2] decision=block edge=${id} reason=${chk.reason}`,
+						edge.source
+					);
+				}
+				const sameHandleConflict = sameHandleProvidedSchemaConflict(
+					s.nodes as any,
+					s.edges as any,
+					edgeForValidation
+				);
+				if (sameHandleConflict.conflict) {
+					out = {
+						ok: false,
+						error:
+							'Multiple inbound work edges on the same target handle must provide identical schemas'
+					};
+					return logPush(
+						s,
+						'info',
+						`[schema-edge-checks-v2] decision=block edge=${id} reason=multi_edge_same_handle_schema_mismatch target=${sameHandleConflict.targetNodeId}:${sameHandleConflict.targetHandle}`,
 						edge.source
 					);
 				}
