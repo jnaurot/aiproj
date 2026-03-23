@@ -371,6 +371,12 @@ export function deriveNodeIoForData(data: PipelineNodeData): { in: PayloadType |
 }
 
 function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<PipelineNodeData>[] {
+	const normalizeMode = (raw: unknown): 'once' | 'single_item' | 'batch' => {
+		const mode = String(raw ?? 'once').trim().toLowerCase();
+		if (mode === 'single_item' || mode === 'continuous') return 'single_item';
+		if (mode === 'batch') return 'batch';
+		return 'once';
+	};
 	return nodes.map((node) => {
 		const inferredSchema = deriveInferredSchemaObservationForNode({
 			...node,
@@ -402,10 +408,52 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 		const parsedSchema = NodeSchemaEnvelopeSchema.safeParse(nextSchemaRaw);
 		const nextSchema =
 			Object.keys(nextSchemaRaw).length > 0 && parsedSchema.success ? parsedSchema.data : node.data.schema;
+		const processingPolicyRaw =
+			(node.data as any)?.processingPolicy && typeof (node.data as any)?.processingPolicy === 'object'
+				? ((node.data as any).processingPolicy as Record<string, any>)
+				: {};
+		const inputHandlesRaw =
+			processingPolicyRaw?.input_handles && typeof processingPolicyRaw.input_handles === 'object'
+				? (processingPolicyRaw.input_handles as Record<string, any>)
+				: {};
+		const normalizedInputHandles = Object.fromEntries(
+			Object.entries(inputHandlesRaw)
+				.map(([handle, policy]) => {
+					if (!policy || typeof policy !== 'object') return null;
+					return [
+						String(handle ?? '').trim(),
+						{
+							consume_mode: normalizeMode((policy as any).consume_mode ?? (policy as any).consumeMode),
+							batch_size: Math.max(
+								1,
+								Number((policy as any).batch_size ?? (policy as any).batchSize ?? 1)
+							),
+							max_inflight: Math.max(
+								1,
+								Number((policy as any).max_inflight ?? (policy as any).maxInflight ?? 1)
+							)
+						}
+					];
+				})
+				.filter(
+					(entry): entry is [string, { consume_mode: 'once' | 'single_item' | 'batch'; batch_size: number; max_inflight: number }] =>
+						Array.isArray(entry) && String(entry[0] ?? '').trim().length > 0
+				)
+		);
+		const normalizedProcessingPolicy = {
+			consume_mode: normalizeMode(processingPolicyRaw.consume_mode ?? processingPolicyRaw.consumeMode),
+			batch_size: Math.max(1, Number(processingPolicyRaw.batch_size ?? processingPolicyRaw.batchSize ?? 1)),
+			max_inflight: Math.max(
+				1,
+				Number(processingPolicyRaw.max_inflight ?? processingPolicyRaw.maxInflight ?? 1)
+			),
+			input_handles: normalizedInputHandles
+		};
 		return {
 			...node,
 			data: {
 				...node.data,
+				processingPolicy: normalizedProcessingPolicy,
 				...(nextSchema ? { schema: nextSchema } : {})
 			}
 		};
