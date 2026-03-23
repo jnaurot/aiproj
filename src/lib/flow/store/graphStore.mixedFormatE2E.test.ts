@@ -143,7 +143,7 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			id: 'e_resume_to_select_param',
 			source: resumeId,
 			target: selectId,
-			targetHandle: 'param_resume',
+			targetHandle: 'param_filters',
 			data: { exec: 'idle', mode: 'param' }
 		} as any);
 		expect(paramEdge.ok).toBe(true);
@@ -185,7 +185,11 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			params: { file_format: 'txt', output: { mode: 'json' } }
 		});
 		graphStore.setNodeExpectedInputSchemaForHandle(dst, 'in', { type: 'json', fields: [] });
-		graphStore.setNodeExpectedInputSchemaForHandle(dst, 'param_profile', { type: 'json', fields: [] });
+		graphStore.setNodeExpectedInputSchemaForHandle(dst, 'param_filters', { type: 'json', fields: [] });
+		graphStore.updateNodePortDeclaration(srcControl, 'out', 'control_out', {
+			plane: 'control',
+			cardinality: 'one'
+		});
 
 		const edgeWork = graphStore.addEdge({
 			id: 'e_mixed_work',
@@ -198,7 +202,7 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			id: 'e_mixed_param',
 			source: srcParam,
 			target: dst,
-			targetHandle: 'param_profile',
+			targetHandle: 'param_filters',
 			data: { exec: 'idle', mode: 'param' }
 		} as any);
 		const edgeControl = graphStore.addEdge({
@@ -206,7 +210,7 @@ describe('schema-first mixed-format pipeline scenarios', () => {
 			source: srcControl,
 			sourceHandle: 'control_out',
 			target: dst,
-			targetHandle: 'control_gate',
+			targetHandle: 'control_in',
 			data: { exec: 'idle', mode: 'control' }
 		} as any);
 

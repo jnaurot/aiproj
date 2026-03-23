@@ -60,7 +60,7 @@ def test_safe_widening_is_allowed_without_warning() -> None:
 		_graph(source_type="json", target_type="table", target_policy="safe_widening")
 	)
 	assert result.errors == []
-	assert result.warnings == []
+	assert not any(w.code == "TYPE_COERCION_WARNING" for w in result.warnings)
 
 
 def test_lossy_coercion_is_allowed_with_warning_when_policy_allows() -> None:

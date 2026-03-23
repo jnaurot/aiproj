@@ -6255,6 +6255,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					String((edgeForValidation as any).sourceHandle ?? 'out')
 				);
 				const targetHint = targetPayloadHint(targetNode as any);
+				const constraintProvidedSchema = buildProvidedSchema(
+					sourceNode as any,
+					String((edgeForValidation as any).sourceHandle ?? 'out')
+				);
+				const constraintRequiredSchema = buildRequiredSchema(
+					targetNode as any,
+					String((edgeForValidation as any).targetHandle ?? 'in')
+				);
 				const providedType = normalizeHintType(sourceHint?.type ?? chk.out ?? 'unknown');
 				const requiredType = normalizeHintType(targetHint?.type ?? chk.in ?? 'unknown');
 				const coercion = evaluateSchemaCoercion(providedType, requiredType);
@@ -6295,12 +6303,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							out: chk.out,
 							in: chk.in,
 							payload: {
-								source: sourceHint,
-								target: targetHint
+								source: constraintProvidedSchema,
+								target: constraintRequiredSchema
 							},
 							snapshot: edgeContractSnapshotFromSchemas(
-								sourceHint as Record<string, any>,
-								targetHint as Record<string, any>,
+								constraintProvidedSchema as Record<string, any>,
+								constraintRequiredSchema as Record<string, any>,
 								{ ok: true },
 								normalizeEdgeMode(edgeForValidation as any)
 							)

@@ -35,7 +35,7 @@ describe('graphStore edge config', () => {
 			source: src,
 			sourceHandle: 'out',
 			target: dst,
-			targetHandle: 'param_prompt',
+			targetHandle: 'param_filters',
 			data: { exec: 'idle', mode: 'param' }
 		} as any);
 		expect(added.ok).toBe(true);
