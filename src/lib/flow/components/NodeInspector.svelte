@@ -547,6 +547,7 @@
 		queue: {
 			max: number;
 			overflow: 'block' | 'spill' | 'error';
+			policy: 'fifo' | 'round_robin';
 		};
 		work: {
 			item_mode: 'artifact' | 'json_items' | 'table_rows';
@@ -558,6 +559,7 @@
 		const edge = ($graphStore?.edges ?? []).find((candidate) => String(candidate.id ?? '') === edgeId);
 		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
 		const overflow = String((edge?.data as any)?.queue?.overflow ?? 'block').trim().toLowerCase();
+		const queuePolicy = String((edge?.data as any)?.queue?.policy ?? 'fifo').trim().toLowerCase();
 		const itemMode = String((edge?.data as any)?.work?.item_mode ?? (edge?.data as any)?.work?.itemMode ?? 'artifact')
 			.trim()
 			.toLowerCase();
@@ -568,7 +570,10 @@
 				max: Math.max(1, Number((edge?.data as any)?.queue?.max ?? 1000)),
 				overflow: (
 					overflow === 'spill' || overflow === 'error' ? overflow : 'block'
-				) as 'block' | 'spill' | 'error'
+				) as 'block' | 'spill' | 'error',
+				policy: (
+					queuePolicy === 'round_robin' ? 'round_robin' : 'fifo'
+				) as 'fifo' | 'round_robin'
 			},
 			work: {
 				item_mode: (
@@ -584,7 +589,7 @@
 		patch: {
 			mode?: 'work' | 'param' | 'control';
 			fatal?: boolean;
-			queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+			queue?: { max?: number; overflow?: 'block' | 'spill' | 'error'; policy?: 'fifo' | 'round_robin' };
 			work?: { item_mode?: 'artifact' | 'json_items' | 'table_rows'; max_items?: number };
 		}
 	): void {
@@ -2053,6 +2058,23 @@
 											<option value="block">block</option>
 											<option value="spill">spill</option>
 											<option value="error">error</option>
+										</select>
+									</label>
+									<label>
+										<span>arbitration</span>
+										<select
+											value={edgeRuntimeConfig.queue.policy}
+											on:change={(event) =>
+												patchEdgeRuntimeConfig(edge.edgeId, {
+													queue: {
+														policy: (event.currentTarget as HTMLSelectElement).value as
+															| 'fifo'
+															| 'round_robin'
+													}
+												})}
+										>
+											<option value="fifo">fifo (default)</option>
+											<option value="round_robin">round_robin (preview)</option>
 										</select>
 									</label>
 									<label>

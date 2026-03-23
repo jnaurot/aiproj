@@ -95,6 +95,7 @@ export interface PipelineEdgeData extends Record<string, any> {
   queue?: {
     max?: number;
     overflow?: "block" | "spill" | "error";
+    policy?: "fifo" | "round_robin";
   };
   work?: {
     item_mode?: "artifact" | "json_items" | "table_rows";

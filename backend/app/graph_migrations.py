@@ -529,11 +529,15 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		queue_overflow = str(queue_cfg.get("overflow") or "block").strip().lower() or "block"
 		if queue_overflow not in {"block", "spill", "error"}:
 			queue_overflow = "block"
+		queue_policy = str(queue_cfg.get("policy") or "fifo").strip().lower() or "fifo"
+		if queue_policy not in {"fifo", "round_robin"}:
+			queue_policy = "fifo"
 		try:
 			queue_max = int(queue_cfg.get("max", 1000))
 		except Exception:
 			queue_max = 1000
 		queue_cfg["overflow"] = queue_overflow
+		queue_cfg["policy"] = queue_policy
 		queue_cfg["max"] = max(1, queue_max)
 		edge_data["queue"] = queue_cfg
 		work_cfg = edge_data.get("work") if isinstance(edge_data.get("work"), dict) else {}

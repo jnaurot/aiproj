@@ -51,6 +51,11 @@ class InMemoryEdgeQueue:
 			return None
 		return max(0.0, monotonic() - float(self._items[0][0]))
 
+	def head_enqueued_at(self) -> Optional[float]:
+		if not self._items:
+			return None
+		return float(self._items[0][0])
+
 	async def enqueue(
 		self,
 		item: Any,
@@ -121,6 +126,10 @@ class QueueRegistry:
 	def depth(self, edge_id: str, input_handle: str = "in") -> int:
 		q = self.get_queue(edge_id, input_handle)
 		return int(q.depth)
+
+	def head_enqueued_at(self, edge_id: str, input_handle: str = "in") -> Optional[float]:
+		q = self.get_queue(edge_id, input_handle)
+		return q.head_enqueued_at()
 
 	async def enqueue(
 		self,

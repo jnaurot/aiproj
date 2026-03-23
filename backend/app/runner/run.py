@@ -542,6 +542,15 @@ def _build_fair_dequeue_plan(handle_requests: List[Tuple[str, int]]) -> List[str
     return out
 
 
+def _edge_queue_policy(edge: Dict[str, Any]) -> str:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    queue_cfg = data.get("queue") if isinstance(data.get("queue"), dict) else {}
+    policy = str(queue_cfg.get("policy") or "fifo").strip().lower() or "fifo"
+    if policy not in {"fifo", "round_robin"}:
+        policy = "fifo"
+    return policy
+
+
 def _edge_work_max_items(edge: Dict[str, Any]) -> int:
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     work = data.get("work") if isinstance(data.get("work"), dict) else {}
@@ -7235,6 +7244,7 @@ async def run_graph(
             per_handle_take_map: Dict[str, int] = {}
             incoming_by_handle: Dict[str, List[Dict[str, str]]] = {}
             handle_cursor: Dict[str, int] = {}
+            handle_queue_policy: Dict[str, str] = {}
             for info in incoming:
                 handle = str(info.get("inputHandle") or "in")
                 handle_policy = _node_processing_policy(nodes.get(node_id, {}), input_handle=handle)
@@ -7251,6 +7261,13 @@ async def run_graph(
                     "inputHandle": handle,
                     }
                 )
+                policy = _edge_queue_policy(edges.get(str(info.get("edgeId") or "")) or {})
+                existing_policy = str(handle_queue_policy.get(handle) or "")
+                if not existing_policy:
+                    handle_queue_policy[handle] = policy
+                elif existing_policy != policy:
+                    # Mixed policies on same handle fall back to deterministic default.
+                    handle_queue_policy[handle] = "fifo"
             for handle in incoming_by_handle.keys():
                 handle_cursor[handle] = 0
             per_handle_take: List[Tuple[str, int]] = [
@@ -7260,12 +7277,26 @@ async def run_graph(
             for handle in _build_fair_dequeue_plan(per_handle_take):
                 handle_edges = incoming_by_handle.get(handle) or []
                 edge_keys = [str((item or {}).get("edgeId") or "") for item in handle_edges if str((item or {}).get("edgeId") or "")]
-                selected_edge_id, next_cursor = next_nonempty_key(
-                    edge_keys,
-                    start_index=int(handle_cursor.get(handle, 0)),
-                    has_items=lambda edge_id: queue_registry.depth(str(edge_id), handle) > 0,
-                )
-                handle_cursor[handle] = next_cursor
+                arbitration_policy = str(handle_queue_policy.get(handle) or "fifo")
+                selected_edge_id: Optional[str] = None
+                next_cursor = int(handle_cursor.get(handle, 0))
+                if arbitration_policy == "round_robin":
+                    selected_edge_id, next_cursor = next_nonempty_key(
+                        edge_keys,
+                        start_index=next_cursor,
+                        has_items=lambda edge_id: queue_registry.depth(str(edge_id), handle) > 0,
+                    )
+                    handle_cursor[handle] = next_cursor
+                else:
+                    fifo_candidates: List[Tuple[float, str]] = []
+                    for edge_id in edge_keys:
+                        ts = queue_registry.head_enqueued_at(str(edge_id), handle)
+                        if ts is None:
+                            continue
+                        fifo_candidates.append((float(ts), str(edge_id)))
+                    if fifo_candidates:
+                        fifo_candidates.sort(key=lambda item: (item[0], item[1]))
+                        selected_edge_id = str(fifo_candidates[0][1])
                 if not selected_edge_id:
                     continue
                 incoming_info = {"edgeId": selected_edge_id, "inputHandle": handle}

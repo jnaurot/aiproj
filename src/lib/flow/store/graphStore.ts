@@ -5817,7 +5817,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			patch: {
 				mode?: 'work' | 'param' | 'control';
 				fatal?: boolean;
-				queue?: { max?: number; overflow?: 'block' | 'spill' | 'error' };
+				queue?: { max?: number; overflow?: 'block' | 'spill' | 'error'; policy?: 'fifo' | 'round_robin' };
 				work?: { item_mode?: 'artifact' | 'json_items' | 'table_rows'; max_items?: number };
 			}
 		) {
@@ -5838,10 +5838,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					max: Math.max(1, Number(patch.queue?.max ?? (edge.data as any)?.queue?.max ?? 1000)),
 					overflow: String(
 						patch.queue?.overflow ?? (edge.data as any)?.queue?.overflow ?? 'block'
-					).toLowerCase() as 'block' | 'spill' | 'error'
+					).toLowerCase() as 'block' | 'spill' | 'error',
+					policy: String(
+						patch.queue?.policy ?? (edge.data as any)?.queue?.policy ?? 'fifo'
+					).toLowerCase() as 'fifo' | 'round_robin'
 				};
 				if (!['block', 'spill', 'error'].includes(nextQueue.overflow)) {
 					out = { ok: false, error: 'Invalid queue overflow policy' };
+					return s;
+				}
+				if (!['fifo', 'round_robin'].includes(nextQueue.policy)) {
+					out = { ok: false, error: 'Invalid queue arbitration policy' };
 					return s;
 				}
 				const nextWork = {
@@ -6226,7 +6233,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							overflow: String((edge.data as any)?.queue?.overflow ?? 'block').trim().toLowerCase() as
 								| 'block'
 								| 'spill'
-								| 'error'
+								| 'error',
+							policy: (
+								(() => {
+									const raw = String((edge.data as any)?.queue?.policy ?? 'fifo').trim().toLowerCase();
+									return raw === 'round_robin' ? 'round_robin' : 'fifo';
+								})()
+							) as 'fifo' | 'round_robin'
 						},
 						work: {
 							item_mode: String((edge.data as any)?.work?.item_mode ?? (edge.data as any)?.work?.itemMode ?? 'artifact')
