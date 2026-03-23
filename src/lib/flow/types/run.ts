@@ -156,6 +156,22 @@ export type KnownRunEvent =
       code: "PARAM_CONTROL_EMPTY_INPUT";
       reasonCode?: string;
       upstreamNodeId?: string;
+      warningKey?: string;
+    }
+  | {
+      type: "node_warning_summary";
+      runId: string;
+      at: string;
+      warningKey: string;
+      nodeId: string;
+      handle: string;
+      code: "PARAM_CONTROL_EMPTY_INPUT" | string;
+      plane?: "param" | "control" | string;
+      edgeId?: string;
+      reasonCode?: string;
+      upstreamNodeId?: string;
+      count: number;
+      firstAt?: string;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

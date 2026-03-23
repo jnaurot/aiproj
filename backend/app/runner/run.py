@@ -6969,7 +6969,8 @@ async def run_graph(
         handle_satisfaction_state: Dict[str, Dict[str, str]] = {nid: {} for nid in sub}
         connected_nonwork_edges_by_handle: Dict[str, Dict[str, Dict[str, set[str]]]] = {nid: {} for nid in sub}
         provided_nonwork_edges_by_handle: Dict[str, Dict[str, Dict[str, set[str]]]] = {nid: {} for nid in sub}
-        nonwork_warning_emitted_keys: set[str] = set()
+        warning_first_emitted_keys: set[str] = set()
+        warning_counters: Dict[str, Dict[str, Any]] = {}
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):
@@ -7082,7 +7083,7 @@ async def run_graph(
                 return False, "EMPTY_JSON"
             return True, "NON_EMPTY_JSON"
 
-        async def _emit_nonwork_empty_warning_once(
+        async def _emit_nonwork_empty_warning(
             *,
             target_node_id: str,
             target_handle: str,
@@ -7091,42 +7092,73 @@ async def run_graph(
             upstream_node_id: str,
             reason_code: str,
         ) -> None:
-            key = "|".join(
+            warning_code = "PARAM_CONTROL_EMPTY_INPUT"
+            warning_key = "|".join(
                 [
                     str(run_id),
                     str(target_node_id),
                     str(target_handle),
-                    str(edge_id),
-                    str(plane),
-                    "PARAM_CONTROL_EMPTY_INPUT",
+                    str(warning_code),
                 ]
             )
-            if key in nonwork_warning_emitted_keys:
+            now = iso_now()
+            counter = warning_counters.get(warning_key)
+            if not isinstance(counter, dict):
+                counter = {
+                    "count": 0,
+                    "firstAt": now,
+                    "nodeId": target_node_id,
+                    "handle": target_handle,
+                    "code": warning_code,
+                }
+            counter["count"] = int(counter.get("count") or 0) + 1
+            warning_counters[warning_key] = counter
+
+            await _emit(
+                {
+                    "type": "node_warning_summary",
+                    "runId": run_id,
+                    "at": now,
+                    "warningKey": warning_key,
+                    "nodeId": target_node_id,
+                    "handle": target_handle,
+                    "code": warning_code,
+                    "plane": plane,
+                    "edgeId": edge_id,
+                    "reasonCode": reason_code,
+                    "upstreamNodeId": upstream_node_id,
+                    "count": int(counter.get("count") or 0),
+                    "firstAt": str(counter.get("firstAt") or now),
+                }
+            )
+
+            if warning_key in warning_first_emitted_keys:
                 return
-            nonwork_warning_emitted_keys.add(key)
+            warning_first_emitted_keys.add(warning_key)
             await _emit(
                 {
                     "type": "node_input_warning",
                     "runId": run_id,
-                    "at": iso_now(),
+                    "at": now,
                     "nodeId": target_node_id,
                     "handle": target_handle,
                     "edgeId": edge_id,
                     "plane": plane,
-                    "code": "PARAM_CONTROL_EMPTY_INPUT",
+                    "code": warning_code,
                     "reasonCode": reason_code,
                     "upstreamNodeId": upstream_node_id,
+                    "warningKey": warning_key,
                 }
             )
             await _emit(
                 {
                     "type": "log",
                     "runId": run_id,
-                    "at": iso_now(),
+                    "at": now,
                     "level": "warn",
                     "message": (
                         f"[input-warning] node={target_node_id} handle={target_handle} edge={edge_id} "
-                        f"plane={plane} code=PARAM_CONTROL_EMPTY_INPUT reason={reason_code} "
+                        f"plane={plane} code={warning_code} reason={reason_code} "
                         f"upstream={upstream_node_id}"
                     ),
                     "nodeId": target_node_id,
@@ -7604,7 +7636,7 @@ async def run_graph(
                                 edge_mode, set()
                             ).add(edge_id)
                         else:
-                            await _emit_nonwork_empty_warning_once(
+                            await _emit_nonwork_empty_warning(
                                 target_node_id=nb,
                                 target_handle=target_handle,
                                 edge_id=edge_id,
@@ -7745,7 +7777,7 @@ async def run_graph(
                                     continue
                                 if not bool(node_started_once.get(upstream_node, False)):
                                     empty_reason = "UPSTREAM_NEVER_STARTED"
-                                await _emit_nonwork_empty_warning_once(
+                                await _emit_nonwork_empty_warning(
                                     target_node_id=candidate,
                                     target_handle=handle,
                                     edge_id=str(missing_edge_id),

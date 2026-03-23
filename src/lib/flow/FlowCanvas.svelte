@@ -437,6 +437,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		];
 		return parts.join(' ').toLowerCase().includes(q);
 	});
+	$: warningSummaryRows = Object.values(($graphStore.queueRuntime?.warningSummary ?? {}) as Record<string, any>)
+		.filter((row) => Number((row as any)?.count ?? 0) > 1)
+		.sort(
+			(a, b) =>
+				String((b as any)?.updatedAt ?? '').localeCompare(String((a as any)?.updatedAt ?? '')) ||
+				String((a as any)?.warningKey ?? '').localeCompare(String((b as any)?.warningKey ?? ''))
+		);
+	$: warningSummaryTotalCount = warningSummaryRows.reduce(
+		(total, row) => total + Math.max(0, Number((row as any)?.count ?? 0)),
+		0
+	);
 	$: if (previousEditingContext !== $graphStore.editingContext) {
 		if (previousEditingContext === 'graph' && $graphStore.editingContext === 'component') {
 			const vp = getViewport();
@@ -3213,6 +3224,21 @@ async function scrollToBottom() {
 					aria-label="Filter run logs"
 					bind:value={runLogFilter}
 				/>
+				{#if warningSummaryRows.length > 0}
+					<div class="runWarningSummary" aria-live="polite">
+						<div class="runWarningSummaryHead">
+							Warnings (deduped): {warningSummaryRows.length} keys / {warningSummaryTotalCount} events
+						</div>
+						{#each warningSummaryRows.slice(0, 5) as row (`${String((row as any)?.warningKey ?? '')}`)}
+							<div class="runWarningSummaryRow">
+								<span class="mono">{String((row as any)?.code ?? '')}</span>
+								<span>node={String((row as any)?.nodeId ?? '')}</span>
+								<span>handle={String((row as any)?.handle ?? '')}</span>
+								<span>count={Number((row as any)?.count ?? 0)}</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
 				<div class="logs" bind:this={scrollElement}>
 					{#each filteredLogs as l (l.id)}
 						<div class={`log ${l.level}`}>
@@ -3940,6 +3966,28 @@ async function scrollToBottom() {
 		border-radius: 8px;
 		font-size: 12px;
 		margin-top: 8px;
+	}
+
+	.runWarningSummary {
+		margin: 8px 0;
+		padding: 8px;
+		border: 1px solid rgba(255, 204, 102, 0.35);
+		border-radius: 8px;
+		background: rgba(255, 204, 102, 0.08);
+		font-size: 12px;
+	}
+
+	.runWarningSummaryHead {
+		color: #ffcc66;
+		font-weight: 600;
+		margin-bottom: 4px;
+	}
+
+	.runWarningSummaryRow {
+		display: flex;
+		gap: 8px;
+		flex-wrap: wrap;
+		color: #dbe2f2;
 	}
 
 	.logs {

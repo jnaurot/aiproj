@@ -1040,6 +1040,22 @@ export type GraphState = {
 				updatedAt?: string;
 			}
 		>;
+		warningSummary?: Record<
+			string,
+			{
+				warningKey: string;
+				nodeId: string;
+				handle: string;
+				code: string;
+				plane?: string;
+				edgeId?: string;
+				reasonCode?: string;
+				upstreamNodeId?: string;
+				count: number;
+				firstAt?: string;
+				updatedAt?: string;
+			}
+		>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2140,6 +2156,52 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nodeId
 			);
 		}
+		case 'node_warning_summary': {
+			const warningKey = String((evt as any)?.warningKey ?? '').trim();
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			const handle = String((evt as any)?.handle ?? '').trim();
+			const code = String((evt as any)?.code ?? '').trim();
+			const count = Math.max(0, Number((evt as any)?.count ?? 0));
+			if (!warningKey || !nodeId || !handle || !code || count <= 0) return state;
+			const previous =
+				(state.queueRuntime?.warningSummary &&
+				typeof state.queueRuntime.warningSummary === 'object'
+					? state.queueRuntime.warningSummary
+					: {}) ?? {};
+			const plane = String((evt as any)?.plane ?? '').trim();
+			const edgeId = String((evt as any)?.edgeId ?? '').trim();
+			const reasonCode = String((evt as any)?.reasonCode ?? '').trim();
+			const upstreamNodeId = String((evt as any)?.upstreamNodeId ?? '').trim();
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					warningSummary: {
+						...previous,
+						[warningKey]: {
+							warningKey,
+							nodeId,
+							handle,
+							code,
+							plane: plane || undefined,
+							edgeId: edgeId || undefined,
+							reasonCode: reasonCode || undefined,
+							upstreamNodeId: upstreamNodeId || undefined,
+							count,
+							firstAt: String((evt as any)?.firstAt ?? '').trim() || undefined,
+							updatedAt: String((evt as any)?.at ?? '')
+						}
+					}
+				}
+			};
+			if (count <= 1) return nextState;
+			return logPush(
+				nextState,
+				'info',
+				`[warning-summary] code=${code} handle=${handle} count=${count}${reasonCode ? ` reason=${reasonCode}` : ''}`,
+				nodeId
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
@@ -2193,6 +2255,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						(state.queueRuntime?.paramControlWarnings &&
 						typeof state.queueRuntime.paramControlWarnings === 'object'
 							? state.queueRuntime.paramControlWarnings
+							: {}) ?? {},
+					warningSummary:
+						(state.queueRuntime?.warningSummary &&
+						typeof state.queueRuntime.warningSummary === 'object'
+							? state.queueRuntime.warningSummary
 							: {}) ?? {}
 				}
 			};
