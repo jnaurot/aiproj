@@ -123,3 +123,77 @@ async def test_job_stream_is_gated_single_item_with_rejects(monkeypatch) -> None
 	assert len(decision_events) == 3
 	decision_values = [str(evt.get("decision") or "") for evt in decision_events]
 	assert decision_values.count("reject") == 1
+
+
+@pytest.mark.asyncio
+async def test_job_stream_source_api_extraction_respects_max_items(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+	select_seen: list[dict] = []
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		if node_id == "jobs_api":
+			# Equivalent payload after Source API extraction with json_item_path='$.jobs[]'.
+			return NodeOutput(
+				status="succeeded",
+				metadata=None,
+				execution_time_ms=1.0,
+				data={
+					"kind": "json",
+					"payload": [{"job_id": "j1"}, {"job_id": "j2"}, {"job_id": "j3"}],
+					"meta": {"json_item_path": "$.jobs[]"},
+				},
+			)
+		if node_id == "select":
+			params = dict((node.get("data") or {}).get("params") or {})
+			select_seen.append(dict(params.get("_work_item") or {}))
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{
+				"id": "jobs_api",
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"processingPolicy": {"consume_mode": "once", "batch_size": 1, "max_inflight": 1},
+				},
+			},
+			{
+				"id": "select",
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"processingPolicy": {"consume_mode": "single_item", "batch_size": 1, "max_inflight": 1},
+				},
+			},
+		],
+		"edges": [
+			{
+				"id": "e_jobs_select",
+				"source": "jobs_api",
+				"target": "select",
+				"targetHandle": "in",
+				"data": {"mode": "work", "work": {"item_mode": "json_items", "max_items": 1}},
+			}
+		],
+	}
+	await run_mod.run_graph(
+		run_id="run-job-gating-max-items",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-job-gating-max-items", on_emit=lambda _evt: None),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-job-gating-max-items",
+	)
+	assert len(select_seen) == 1
+	assert select_seen[0].get("itemPreview") == {"job_id": "j1"}
+	assert select_seen[0].get("itemIndex") == 0

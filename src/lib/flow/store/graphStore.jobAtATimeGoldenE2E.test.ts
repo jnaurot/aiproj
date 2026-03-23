@@ -68,4 +68,42 @@ describe('graphStore job-at-a-time golden e2e projection', () => {
 		const lastLog = (next as any)?.logs?.[(next as any)?.logs?.length - 1];
 		expect(String(lastLog?.message ?? '')).toContain('[reject]');
 	});
+
+	it('keeps run-scoped queue limits and per-item counters deterministic', () => {
+		graphStore.hardResetGraph();
+		const state = get(graphStore as any);
+		const edgeId = 'e_jobs_to_select';
+		const next = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'queue_metrics',
+				runId: 'run_job_golden_limits',
+				at: '2026-03-23T13:15:00.000Z',
+				scope: 'run',
+				metrics: {
+					globalDepth: 1,
+					globalMax: 100,
+					perEdgeMax: 2,
+					edges: {
+						[edgeId]: { depth: 1, enqueueRate: 1, dequeueRate: 0, oldestAgeMs: 25, blocked: false, full: false }
+					}
+				},
+				nodeMetrics: {},
+				runtimeItemMetrics: {
+					itemsEnqueued: 2,
+					itemsDequeued: 1,
+					itemsAccepted: 1,
+					itemsRejected: 0,
+					byPlane: {
+						work: { itemsEnqueued: 2, itemsDequeued: 1, itemsAccepted: 1, itemsRejected: 0 }
+					}
+				}
+			} as any,
+			'run_job_golden_limits'
+		);
+		expect((next as any)?.queueRuntime?.runScoped?.metrics?.perEdgeMax).toBe(2);
+		expect((next as any)?.queueRuntime?.runScoped?.metrics?.edges?.[edgeId]?.depth).toBe(1);
+		expect((next as any)?.queueRuntime?.runScoped?.runtimeItemMetrics?.itemsEnqueued).toBe(2);
+		expect((next as any)?.queueRuntime?.runScoped?.runtimeItemMetrics?.byPlane?.work?.itemsEnqueued).toBe(2);
+	});
 });
