@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { get } from 'svelte/store';
 
 import {
+	__applyRunEventForTest,
 	__computeEdgeSchemaConstraintsForTest,
-	__computeEdgeSchemaDiagnosticsForTest
+	__computeEdgeSchemaDiagnosticsForTest,
+	graphStore
 } from './graphStore';
 
 describe('graphStore mixed-plane golden contract e2e', () => {
@@ -87,5 +90,60 @@ describe('graphStore mixed-plane golden contract e2e', () => {
 		expect(diagnostics.e_work).toBeNull();
 		expect(diagnostics.e_param).toBeNull();
 		expect(diagnostics.e_control).toBeNull();
+	});
+
+	it('captures mixed-plane runtime/reject telemetry into queueRuntime and logs', () => {
+		graphStore.hardResetGraph();
+		const sink = graphStore.addNode('tool', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		let next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'queue_metrics',
+				runId: 'run_mixed_plane',
+				at: new Date().toISOString(),
+				metrics: { globalDepth: 1, globalMax: 10, perEdgeMax: 5, edges: {} },
+				nodeMetrics: {},
+				runtimeItemMetrics: {
+					itemsEnqueued: 1,
+					itemsDequeued: 1,
+					itemsRejected: 0,
+					itemsAccepted: 1,
+					byPlane: {
+						work: { itemsEnqueued: 1, itemsDequeued: 1, itemsAccepted: 1, itemsRejected: 0 },
+						param: { itemsEnqueued: 0, itemsDequeued: 0, itemsAccepted: 0, itemsRejected: 0 },
+						control: { itemsEnqueued: 0, itemsDequeued: 0, itemsAccepted: 0, itemsRejected: 0 }
+					},
+					byHandle: {
+						[`${sink}:in`]: {
+							nodeId: sink,
+							handle: 'in',
+							plane: 'work',
+							itemsEnqueued: 1,
+							itemsDequeued: 1,
+							itemsAccepted: 1,
+							itemsRejected: 0
+						}
+					}
+				}
+			} as any,
+			'run_mixed_plane'
+		);
+		next = __applyRunEventForTest(
+			next as any,
+			{
+				type: 'node_reject',
+				runId: 'run_mixed_plane',
+				at: new Date().toISOString(),
+				nodeId: sink,
+				plane: 'work',
+				reasonCode: 'FILTERED_OUT',
+				count: 1
+			} as any,
+			'run_mixed_plane'
+		);
+		expect((next as any)?.queueRuntime?.runtimeItemMetrics?.byPlane?.work?.itemsAccepted).toBe(1);
+		const lastLog = (next as any)?.logs?.[(next as any)?.logs?.length - 1];
+		expect(String(lastLog?.message ?? '')).toContain('[reject]');
 	});
 });

@@ -78,3 +78,7 @@ async def test_queue_metrics_include_runtime_item_metrics(monkeypatch) -> None:
 	rt = last_evt.get("runtimeItemMetrics") or {}
 	assert int(rt.get("itemsEnqueued") or 0) >= 2
 	assert int(rt.get("itemsDequeued") or 0) >= 2
+	by_plane = rt.get("byPlane") or {}
+	assert int(((by_plane.get("work") or {}).get("itemsEnqueued") or 0)) >= 2
+	by_handle = rt.get("byHandle") or {}
+	assert any(str(key).endswith(":in") for key in by_handle.keys())
