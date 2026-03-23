@@ -60,7 +60,18 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 		if isinstance(raw_schema, dict) and isinstance(raw_schema.get("expectedInputSchema"), dict)
 		else None
 	)
-	canonical_schema, changed = canonicalize_schema_envelope(raw_schema)
+	try:
+		canonical_schema, changed = canonicalize_schema_envelope(raw_schema)
+	except Exception:
+		canonical_schema = copy.deepcopy(raw_schema) if isinstance(raw_schema, dict) else {}
+		changed = True
+		notes.append(
+			{
+				"code": "NODE_SCHEMA_CONTRACT_PARTIAL_REPAIR",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Recovered malformed node.data.schema for targeted repair pass.",
+			}
+		)
 	if raw_schema is None:
 		return
 	if canonical_schema is None:
@@ -98,6 +109,63 @@ def _canonicalize_node_schema_contract(node: Dict[str, Any], notes: List[Dict[st
 				"code": "NODE_SCHEMA_CONTRACT_CANONICALIZED",
 				"nodeId": str(node.get("id") or ""),
 				"message": "Canonicalized node.data.schema payload.",
+			}
+		)
+
+
+def _repair_expected_input_schemas(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	schema = data.get("schema") if isinstance(data.get("schema"), dict) else None
+	if not isinstance(schema, dict):
+		return
+	expected = schema.get("expectedInputSchemas")
+	if expected is None:
+		return
+	if not isinstance(expected, dict):
+		schema.pop("expectedInputSchemas", None)
+		notes.append(
+			{
+				"code": "NODE_EXPECTED_INPUT_SCHEMAS_REPAIRED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Dropped malformed expectedInputSchemas (must be an object keyed by input handle).",
+			}
+		)
+		return
+	repaired: Dict[str, Dict[str, Any]] = {}
+	changed = False
+	for raw_handle, raw_envelope in expected.items():
+		handle = str(raw_handle or "").strip()
+		if not handle:
+			changed = True
+			continue
+		if not isinstance(raw_envelope, dict):
+			changed = True
+			continue
+		next_env = copy.deepcopy(raw_envelope)
+		typed_schema = next_env.get("typedSchema")
+		if not isinstance(typed_schema, dict):
+			next_env["typedSchema"] = {"type": "text", "fields": []}
+			changed = True
+		else:
+			t_norm = _normalize_payload_type(typed_schema.get("type")) or "text"
+			fields = typed_schema.get("fields") if isinstance(typed_schema.get("fields"), list) else []
+			if typed_schema.get("type") != t_norm or typed_schema.get("fields") != fields:
+				changed = True
+			next_env["typedSchema"] = {"type": t_norm, "fields": fields}
+		if not str(next_env.get("source") or "").strip():
+			next_env["source"] = "declared"
+			changed = True
+		if not str(next_env.get("state") or "").strip():
+			next_env["state"] = "fresh"
+			changed = True
+		repaired[handle] = next_env
+	if changed or repaired != expected:
+		schema["expectedInputSchemas"] = repaired
+		notes.append(
+			{
+				"code": "NODE_EXPECTED_INPUT_SCHEMAS_REPAIRED",
+				"nodeId": str(node.get("id") or ""),
+				"message": "Repaired malformed expectedInputSchemas handles and typedSchema entries.",
 			}
 		)
 
@@ -386,6 +454,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			node_map[nid] = next_node
 		_canonicalize_builtin_tool_params(next_node, notes)
 		_canonicalize_node_schema_contract(next_node, notes)
+		_repair_expected_input_schemas(next_node, notes)
 		canonical_nodes.append(next_node)
 	graph["nodes"] = canonical_nodes
 
@@ -483,18 +552,25 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		source_payload = payload.get("source") if isinstance(payload.get("source"), dict) else {}
 		target_payload = payload.get("target") if isinstance(payload.get("target"), dict) else {}
 		snapshot = contract.get("snapshot") if isinstance(contract.get("snapshot"), dict) else {}
+		snapshot_repaired = not isinstance(contract.get("snapshot"), dict)
 		compatible = bool(snapshot.get("compatible", True))
 		decision = str(snapshot.get("decision") or ("native" if compatible else "incompatible")).strip().lower()
 		if decision not in {"native", "coerced", "adapter", "incompatible"}:
 			decision = "native" if compatible else "incompatible"
+			snapshot_repaired = True
 		coercion = snapshot.get("coercion") if isinstance(snapshot.get("coercion"), dict) else {}
 		coercion_mode = str(coercion.get("mode") or ("native" if decision == "native" else "coerced")).strip().lower()
 		if coercion_mode not in {"native", "widened", "coerced"}:
 			coercion_mode = "native"
+			snapshot_repaired = True
+		source_fp = str(snapshot.get("sourceSchemaFingerprint") or "").strip()
+		target_fp = str(snapshot.get("targetSchemaFingerprint") or "").strip()
+		if not source_fp or not target_fp:
+			snapshot_repaired = True
 		contract["payload"] = {"source": source_payload, "target": target_payload}
 		contract["snapshot"] = {
-			"sourceSchemaFingerprint": str(snapshot.get("sourceSchemaFingerprint") or _stable_schema_fingerprint(source_payload)),
-			"targetSchemaFingerprint": str(snapshot.get("targetSchemaFingerprint") or _stable_schema_fingerprint(target_payload)),
+			"sourceSchemaFingerprint": source_fp or _stable_schema_fingerprint(source_payload),
+			"targetSchemaFingerprint": target_fp or _stable_schema_fingerprint(target_payload),
 			"compatible": compatible,
 			"decision": decision,
 			"coercion": {
@@ -504,6 +580,14 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			},
 			"updatedAt": str(snapshot.get("updatedAt") or datetime.now(timezone.utc).isoformat()),
 		}
+		if snapshot_repaired:
+			notes.append(
+				{
+					"code": "EDGE_CONTRACT_SNAPSHOT_REPAIRED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": "Repaired missing or malformed edge contract snapshot fields.",
+				}
+			)
 		edge_data["contract"] = contract
 		next_edge["data"] = edge_data
 

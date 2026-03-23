@@ -21,6 +21,7 @@ import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
 import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 import {
 	NodeSchemaEnvelopeSchema,
+	NodeSchemaObservationSchema,
 	type NodeSchemaObservation
 } from '$lib/flow/schema/schemaContract';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
@@ -513,6 +514,34 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 				: null;
 		if (legacyExpectedInputSchema && !splitExpectedInputSchemas) {
 			migratedSchema.expectedInputSchemas = { in: legacyExpectedInputSchema };
+		}
+		if (splitExpectedInputSchemas) {
+			const repairedExpectedInputSchemas: Record<string, Record<string, unknown>> = {};
+			for (const [rawHandle, rawEnvelope] of Object.entries(splitExpectedInputSchemas)) {
+				const handle = String(rawHandle ?? '').trim();
+				if (!handle || !rawEnvelope || typeof rawEnvelope !== 'object') continue;
+				const parsed = NodeSchemaObservationSchema.safeParse(rawEnvelope);
+				if (parsed.success) {
+					repairedExpectedInputSchemas[handle] = parsed.data as unknown as Record<string, unknown>;
+					continue;
+				}
+				const typed = (rawEnvelope as any)?.typedSchema;
+				const typedType = String((typed as any)?.type ?? '').trim().toLowerCase();
+				const repairedType: PayloadType =
+					typedType === 'json' || typedType === 'table' || typedType === 'binary' || typedType === 'embeddings' || typedType === 'image' || typedType === 'audio' || typedType === 'video'
+						? (typedType as PayloadType)
+						: 'text';
+				const typedFields = Array.isArray((typed as any)?.fields) ? (typed as any).fields : [];
+				repairedExpectedInputSchemas[handle] = {
+					typedSchema: {
+						type: repairedType,
+						fields: typedFields
+					},
+					source: String((rawEnvelope as any)?.source ?? 'declared'),
+					state: String((rawEnvelope as any)?.state ?? 'fresh')
+				};
+			}
+			migratedSchema.expectedInputSchemas = repairedExpectedInputSchemas;
 		}
 		delete (migratedSchema as any).expectedInputSchema;
 		const nextSchemaRaw = {
