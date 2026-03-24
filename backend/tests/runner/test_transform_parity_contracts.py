@@ -283,13 +283,13 @@ def test_derive_legacy_expr_defaults_to_sql_mode() -> None:
 	norm = normalize_transform_params(
 		{"op": "derive", "derive": {"columns": [{"name": "value_x2", "expr": "value * 2"}]}}
 	)
+	assert norm["derive"]["mode"] == "sql"
+	assert norm["derive"]["columns"] == [{"name": "value_x2", "expr": "value * 2"}]
 
 
 def _require_duckdb() -> None:
 	if duckdb is None:
 		pytest.skip("duckdb not installed in test environment")
-	assert norm["derive"]["mode"] == "sql"
-	assert norm["derive"]["columns"] == [{"name": "value_x2", "expr": "value * 2"}]
 
 
 @pytest.mark.parametrize(
