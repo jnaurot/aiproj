@@ -42,9 +42,118 @@ const TransformKindSchema = z.enum(["filter",
 // Each is standalone, strict, and uses .strip() to reject unknown keys
 // ─────────────────────────────────────────────
 
-export const TransformFilterParamsSchema = z.object({
-  expr: z.string().default(""),
+const TransformFilterModeSchema = z.enum(["rules", "sql"]);
+const TransformFilterOperatorSchema = z.enum([
+	"eq",
+	"ne",
+	"gt",
+	"gte",
+	"lt",
+	"lte",
+	"contains",
+	"in",
+	"not_in",
+	"regex",
+	"is_null",
+	"not_null"
+]);
+const TransformFilterGroupOperatorSchema = z.enum(["all", "any"]);
+
+const TransformFilterLiteralValueSchema = z.union([
+	z.string(),
+	z.number(),
+	z.boolean(),
+	z.null(),
+	z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+]);
+
+const TransformFilterValueFromSchema = z.object({
+	handle: z.literal("param_config").default("param_config"),
+	path: z.string().regex(
+		/^([A-Za-z_][A-Za-z0-9_]*)(\.[A-Za-z_][A-Za-z0-9_]*)*$/,
+		"Path must use dot notation, for example: location.country"
+	)
 }).strip();
+
+const TransformFilterValueSchema = z.union([
+	TransformFilterLiteralValueSchema,
+	z.object({
+		valueFrom: TransformFilterValueFromSchema
+	}).strip()
+]);
+
+const TransformFilterConditionSchema = z.object({
+	kind: z.literal("condition").default("condition"),
+	column: z.string().min(1, "Filter condition column cannot be empty"),
+	op: TransformFilterOperatorSchema,
+	value: TransformFilterValueSchema.optional()
+}).superRefine((val, ctx) => {
+	const opsRequiringValue = new Set([
+		"eq",
+		"ne",
+		"gt",
+		"gte",
+		"lt",
+		"lte",
+		"contains",
+		"in",
+		"not_in",
+		"regex"
+	]);
+	const opsNoValue = new Set(["is_null", "not_null"]);
+	if (opsRequiringValue.has(val.op) && val.value === undefined) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["value"],
+			message: `Operator '${val.op}' requires a value`
+		});
+	}
+	if (opsNoValue.has(val.op) && val.value !== undefined) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["value"],
+			message: `Operator '${val.op}' must not provide a value`
+		});
+	}
+}).strip();
+
+type TransformFilterRuleNode = z.infer<typeof TransformFilterConditionSchema> | {
+	kind: "group";
+	op: z.infer<typeof TransformFilterGroupOperatorSchema>;
+	conditions: TransformFilterRuleNode[];
+};
+
+const TransformFilterRuleNodeSchema: z.ZodType<TransformFilterRuleNode> = z.lazy(() => z.union([
+	TransformFilterConditionSchema,
+	z.object({
+		kind: z.literal("group").default("group"),
+		op: TransformFilterGroupOperatorSchema.default("all"),
+		conditions: z.array(TransformFilterRuleNodeSchema).default([])
+	}).strip()
+]));
+
+export const TransformFilterRuleGroupSchema = z.object({
+	kind: z.literal("group").default("group"),
+	op: TransformFilterGroupOperatorSchema.default("all"),
+	conditions: z.array(TransformFilterRuleNodeSchema).default([])
+}).strip();
+
+const TransformFilterParamsSchemaBase = z.object({
+	mode: TransformFilterModeSchema.default("rules"),
+	expr: z.string().default(""),
+	rules: TransformFilterRuleGroupSchema.optional()
+}).strip();
+
+export const TransformFilterParamsSchema = z.preprocess((raw) => {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const record = raw as Record<string, unknown>;
+	const hasMode = typeof record.mode === "string" && String(record.mode).trim().length > 0;
+	const expr = typeof record.expr === "string" ? record.expr.trim() : "";
+	if (!hasMode && expr.length > 0) {
+		return { ...record, mode: "sql" };
+	}
+	return raw;
+}, TransformFilterParamsSchemaBase);
 
 export const TransformSelectParamsSchema = z.object({
 	mode: z.enum(["include", "exclude"]).default("include"),

@@ -37,6 +37,12 @@ import type {
 } from '$lib/flow/schema/transform';
 
 export const defaultTransformFilterParams: TransformFilterParams = {
+	mode: 'rules',
+	rules: {
+		kind: 'group',
+		op: 'all',
+		conditions: []
+	},
 	expr: ''
 };
 
@@ -552,7 +558,15 @@ export const defaultTransformParams: TransformParams = {
 	enabled: true,
 	notes: '',
 	cache: { enabled: false },
-	filter: { expr: 'length(text) > 10' }
+	filter: {
+		mode: 'rules',
+		rules: {
+			kind: 'group',
+			op: 'all',
+			conditions: []
+		},
+		expr: ''
+	}
 };
 
 export const defaultTransformNodeData = {

@@ -913,6 +913,127 @@ class TestTransformPythonRemoval:
             TransformParamsCurrent.model_validate({"op": "python"})
 
 
+class TestTransformFilterDualModeValidation:
+    def test_filter_rules_accepts_nested_groups_and_value_from(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "filter",
+                    "filter": {
+                        "mode": "rules",
+                        "rules": {
+                            "kind": "group",
+                            "op": "all",
+                            "conditions": [
+                                {"kind": "condition", "column": "salary", "op": "gte", "value": 70000},
+                                {
+                                    "kind": "group",
+                                    "op": "any",
+                                    "conditions": [
+                                        {
+                                            "kind": "condition",
+                                            "column": "job_type",
+                                            "op": "eq",
+                                            "value": {
+                                                "valueFrom": {
+                                                    "handle": "param_config",
+                                                    "path": "preferences.job_type",
+                                                }
+                                            },
+                                        }
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert errors == []
+
+    def test_filter_rules_rejects_invalid_operator(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "filter",
+                    "filter": {
+                        "mode": "rules",
+                        "rules": {
+                            "kind": "group",
+                            "op": "all",
+                            "conditions": [
+                                {"kind": "condition", "column": "salary", "op": "between", "value": 1000}
+                            ],
+                        },
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("filter.rules.conditions[0].op" in err for err in errors)
+
+    def test_filter_rules_rejects_missing_value_for_comparison_op(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "filter",
+                    "filter": {
+                        "mode": "rules",
+                        "rules": {
+                            "kind": "group",
+                            "op": "all",
+                            "conditions": [
+                                {"kind": "condition", "column": "salary", "op": "gte"}
+                            ],
+                        },
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("value is required" in err for err in errors)
+
+    def test_filter_rules_rejects_malformed_value_from_path(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "filter",
+                    "filter": {
+                        "mode": "rules",
+                        "rules": {
+                            "kind": "group",
+                            "op": "all",
+                            "conditions": [
+                                {
+                                    "kind": "condition",
+                                    "column": "job_type",
+                                    "op": "eq",
+                                    "value": {
+                                        "valueFrom": {
+                                            "handle": "param_config",
+                                            "path": "$.bad.path",
+                                        }
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("valueFrom.path must use dot notation" in err for err in errors)
+
+
 class TestTransformSplitValidation:
     def test_split_requires_pattern_for_regex_mode(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))

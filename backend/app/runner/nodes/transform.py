@@ -156,6 +156,25 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
         if k != keep_key:
             p.pop(k, None)
 
+    if op == "filter":
+        raw = p.get("filter") if isinstance(p.get("filter"), dict) else {}
+        expr = str(raw.get("expr") or "")
+        mode_raw = str(raw.get("mode") or "").strip().lower()
+        if mode_raw not in {"rules", "sql"}:
+            mode = "sql" if expr.strip() else "rules"
+        else:
+            mode = mode_raw
+        rules_raw = raw.get("rules")
+        if isinstance(rules_raw, dict):
+            rules = rules_raw
+        else:
+            rules = {"kind": "group", "op": "all", "conditions": []}
+        p["filter"] = {
+            "mode": mode,
+            "expr": expr,
+            "rules": rules,
+        }
+
     if op == "select":
         raw = p.get("select") if isinstance(p.get("select"), dict) else {}
         mode = str(raw.get("mode") or "include").strip().lower()

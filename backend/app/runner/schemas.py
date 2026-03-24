@@ -1425,6 +1425,105 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     expr = payload.get("expr")
                     if expr is not None and not isinstance(expr, str):
                         errors.append("filter.expr must be a string")
+                    mode = str(payload.get("mode") or "").strip().lower()
+                    if mode and mode not in {"rules", "sql"}:
+                        errors.append("filter.mode must be one of: rules, sql")
+                    rules = payload.get("rules")
+                    if rules is not None and not isinstance(rules, dict):
+                        errors.append("filter.rules must be an object")
+                    elif isinstance(rules, dict):
+                        allowed_ops = {
+                            "eq",
+                            "ne",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "contains",
+                            "in",
+                            "not_in",
+                            "regex",
+                            "is_null",
+                            "not_null",
+                        }
+                        ops_require_value = {
+                            "eq",
+                            "ne",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "contains",
+                            "in",
+                            "not_in",
+                            "regex",
+                        }
+                        ops_forbid_value = {"is_null", "not_null"}
+
+                        def _is_filter_literal(value: Any) -> bool:
+                            if value is None or isinstance(value, (str, int, float, bool)):
+                                return True
+                            if isinstance(value, list):
+                                return all(_is_filter_literal(item) for item in value)
+                            return False
+
+                        def _validate_value_from(value_from: Any, path: str) -> None:
+                            if not isinstance(value_from, dict):
+                                errors.append(f"{path} must be an object")
+                                return
+                            handle = str(value_from.get("handle") or "param_config").strip()
+                            if handle != "param_config":
+                                errors.append(f"{path}.handle must equal 'param_config'")
+                            value_path = str(value_from.get("path") or "").strip()
+                            if not value_path:
+                                errors.append(f"{path}.path is required")
+                                return
+                            import re as _re
+                            if _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", value_path) is None:
+                                errors.append(
+                                    f"{path}.path must use dot notation (example: preferences.location)"
+                                )
+
+                        def _validate_rule_node(node: Any, path: str) -> None:
+                            if not isinstance(node, dict):
+                                errors.append(f"{path} must be an object")
+                                return
+                            kind = str(node.get("kind") or "").strip().lower()
+                            if kind == "group":
+                                group_op = str(node.get("op") or "").strip().lower()
+                                if group_op not in {"all", "any"}:
+                                    errors.append(f"{path}.op must be one of: all, any")
+                                conditions = node.get("conditions")
+                                if not isinstance(conditions, list):
+                                    errors.append(f"{path}.conditions must be an array")
+                                    return
+                                for idx, child in enumerate(conditions):
+                                    _validate_rule_node(child, f"{path}.conditions[{idx}]")
+                                return
+                            if kind != "condition":
+                                errors.append(f"{path}.kind must be one of: group, condition")
+                                return
+                            column = str(node.get("column") or "").strip()
+                            if not column:
+                                errors.append(f"{path}.column is required")
+                            op_name = str(node.get("op") or "").strip().lower()
+                            if op_name not in allowed_ops:
+                                errors.append(
+                                    f"{path}.op must be one of: eq, ne, gt, gte, lt, lte, contains, in, not_in, regex, is_null, not_null"
+                                )
+                            has_value = "value" in node
+                            if op_name in ops_require_value and not has_value:
+                                errors.append(f"{path}.value is required for op='{op_name}'")
+                            if op_name in ops_forbid_value and has_value:
+                                errors.append(f"{path}.value must not be provided for op='{op_name}'")
+                            if has_value:
+                                value = node.get("value")
+                                if isinstance(value, dict) and "valueFrom" in value:
+                                    _validate_value_from(value.get("valueFrom"), f"{path}.value.valueFrom")
+                                elif not _is_filter_literal(value):
+                                    errors.append(f"{path}.value must be a literal or valueFrom reference")
+
+                        _validate_rule_node(rules, "filter.rules")
                 elif op == "select":
                     cols = payload.get("columns")
                     if not isinstance(cols, list):

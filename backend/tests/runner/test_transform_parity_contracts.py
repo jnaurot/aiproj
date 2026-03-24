@@ -273,6 +273,12 @@ def test_transform_normalization_and_schema_contract_per_op(raw: dict, expected_
 	assert model.validate_required() == []
 
 
+def test_filter_legacy_expr_defaults_to_sql_mode() -> None:
+	norm = normalize_transform_params({"op": "filter", "filter": {"expr": "value >= 20"}})
+	assert norm["filter"]["mode"] == "sql"
+	assert norm["filter"]["expr"] == "value >= 20"
+
+
 @pytest.mark.parametrize(
 	("params", "payload_type"),
 	[
