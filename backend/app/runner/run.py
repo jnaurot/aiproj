@@ -4226,6 +4226,7 @@ async def run_graph(
                             context.artifact_store,
                         )  # [(inputHandle, artifactId), ...]
                         input_tables = {}  # inputHandle -> DataFrame
+                        param_inputs: Dict[str, Any] = {}
                         input_columns: dict[str, list[str]] = {}
                         input_schema_cols_by_handle: dict[str, list[Dict[str, Any]]] = {}
                         input_provenance_by_handle: dict[str, Dict[str, Any]] = {}
@@ -4260,6 +4261,17 @@ async def run_graph(
 
                         for input_handle, upstream_artifact_id in input_refs:
                             art = await context.artifact_store.get(upstream_artifact_id)
+                            b = await context.artifact_store.read(upstream_artifact_id)
+                            if str(input_handle).startswith("param_"):
+                                parsed_param: Any = {}
+                                try:
+                                    parsed_param = json.loads(bytes(b).decode("utf-8"))
+                                except Exception:
+                                    parsed_param = {}
+                                if isinstance(parsed_param, dict) and isinstance(parsed_param.get("payload"), dict):
+                                    parsed_param = parsed_param.get("payload")
+                                param_inputs[str(input_handle)] = parsed_param
+                                continue
                             ps = getattr(art, "payload_schema", None) or {}
                             ps_type_raw = ps.get("type") if isinstance(ps, dict) else None
                             ps_type = str(ps_type_raw or "").lower()
@@ -4302,7 +4314,6 @@ async def run_graph(
                                                 },
                                             ),
                                         )
-                            b = await context.artifact_store.read(upstream_artifact_id)
                             if op == "json_to_table":
                                 json_spec = norm.get("json_to_table") if isinstance(norm.get("json_to_table"), dict) else {}
                                 json_orient = str(json_spec.get("orient") or "records").strip().lower() or "records"
@@ -5307,7 +5318,12 @@ async def run_graph(
                                     )
 
                         try:
-                            res = run_transform(params=norm, input_tables=input_tables, join_lookup=join_lookup)
+                            res = run_transform(
+                                params=norm,
+                                input_tables=input_tables,
+                                join_lookup=join_lookup,
+                                param_inputs=param_inputs,
+                            )
                         except Exception as transform_ex:
                             if op == "derive":
                                 # Best-effort precheck can miss complex SQL semantics.
@@ -5329,6 +5345,25 @@ async def run_graph(
                             "message": f"transform: produced {len(res.payload_bytes)} bytes, content_hash={res.meta.get('content_hash')}",
                             "nodeId": node_id,
                         })
+                        filter_compile_meta = (
+                            res.meta.get("filter_compile")
+                            if isinstance(res.meta, dict) and isinstance(res.meta.get("filter_compile"), dict)
+                            else None
+                        )
+                        if isinstance(filter_compile_meta, dict):
+                            await _emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": (
+                                        "transform: filter-compile "
+                                        + json.dumps(filter_compile_meta, ensure_ascii=False, separators=(",", ":"))
+                                    ),
+                                    "nodeId": node_id,
+                                }
+                            )
                         quality_gate_meta = (res.meta.get("quality_gate") if isinstance(res.meta, dict) else None)
                         warn_violations = (
                             quality_gate_meta.get("warnViolations")

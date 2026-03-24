@@ -2657,13 +2657,189 @@ def _execute_inference_parity_op(primary_df: pd.DataFrame, spec: Dict[str, Any])
     }
     return primary_df.copy(), report
 
+
+def _resolve_dot_path(value: Any, path: str) -> Any:
+    current = value
+    for raw_part in str(path or "").split("."):
+        part = str(raw_part or "").strip()
+        if not part:
+            raise ValueError(f"Invalid empty path segment in '{path}'")
+        if isinstance(current, dict):
+            if part not in current:
+                raise KeyError(part)
+            current = current.get(part)
+            continue
+        raise KeyError(part)
+    return current
+
+
+def _resolve_filter_value(raw_value: Any, param_config: Dict[str, Any]) -> Any:
+    if not isinstance(raw_value, dict) or "valueFrom" not in raw_value:
+        return raw_value
+    value_from = raw_value.get("valueFrom")
+    if not isinstance(value_from, dict):
+        raise ValueError("filter valueFrom must be an object")
+    handle = str(value_from.get("handle") or "param_config").strip()
+    if handle != "param_config":
+        raise ValueError("filter valueFrom.handle must equal 'param_config'")
+    path = str(value_from.get("path") or "").strip()
+    if not path:
+        raise ValueError("filter valueFrom.path is required")
+    try:
+        return _resolve_dot_path(param_config, path)
+    except KeyError as ex:
+        raise ValueError(f"filter valueFrom.path not found: {path}") from ex
+
+
+def _compile_filter_condition_sql(
+    *,
+    condition: Dict[str, Any],
+    param_config: Dict[str, Any],
+) -> Tuple[str, List[Any], List[str]]:
+    col = quote_ident(str(condition.get("column") or "").strip())
+    op = str(condition.get("op") or "").strip().lower()
+    raw_value = condition.get("value")
+    value = _resolve_filter_value(raw_value, param_config) if "value" in condition else None
+    used_paths: List[str] = []
+    if isinstance(raw_value, dict) and isinstance(raw_value.get("valueFrom"), dict):
+        used_paths.append(str((raw_value.get("valueFrom") or {}).get("path") or "").strip())
+
+    if op == "is_null":
+        return (f"({col} IS NULL)", [], used_paths)
+    if op == "not_null":
+        return (f"({col} IS NOT NULL)", [], used_paths)
+
+    if op in {"gt", "gte", "lt", "lte"}:
+        cmp_op = {"gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[op]
+        sql = (
+            f"COALESCE(TRY_CAST({col} AS DOUBLE) {cmp_op} TRY_CAST(? AS DOUBLE), FALSE)"
+        )
+        return sql, [value], used_paths
+
+    if op in {"eq", "ne"}:
+        cmp_op = "=" if op == "eq" else "<>"
+        if value is None:
+            return (f"({col} IS {'NULL' if op == 'eq' else 'NOT NULL'})", [], used_paths)
+        if isinstance(value, bool):
+            sql = (
+                f"COALESCE(TRY_CAST({col} AS BOOLEAN) {cmp_op} TRY_CAST(? AS BOOLEAN), FALSE)"
+            )
+            return sql, [value], used_paths
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            sql = (
+                f"COALESCE(TRY_CAST({col} AS DOUBLE) {cmp_op} TRY_CAST(? AS DOUBLE), FALSE)"
+            )
+            return sql, [value], used_paths
+        sql = f"COALESCE(CAST({col} AS VARCHAR) {cmp_op} CAST(? AS VARCHAR), FALSE)"
+        return sql, [str(value)], used_paths
+
+    if op == "contains":
+        sql = f"COALESCE(POSITION(CAST(? AS VARCHAR) IN CAST({col} AS VARCHAR)) > 0, FALSE)"
+        return sql, [str(value)], used_paths
+
+    if op == "regex":
+        sql = f"COALESCE(REGEXP_MATCHES(CAST({col} AS VARCHAR), CAST(? AS VARCHAR)), FALSE)"
+        return sql, [str(value)], used_paths
+
+    if op in {"in", "not_in"}:
+        if not isinstance(value, list):
+            raise ValueError(f"filter op '{op}' requires array value")
+        if len(value) == 0:
+            return ("FALSE" if op == "in" else "TRUE"), [], used_paths
+        placeholders = ", ".join(["CAST(? AS VARCHAR)"] * len(value))
+        cmp_keyword = "IN" if op == "in" else "NOT IN"
+        sql = f"COALESCE(CAST({col} AS VARCHAR) {cmp_keyword} ({placeholders}), FALSE)"
+        return sql, [str(v) for v in value], used_paths
+
+    raise ValueError(f"Unsupported filter op: {op}")
+
+
+def _compile_filter_rules_to_sql(
+    *,
+    root: Dict[str, Any],
+    param_config: Dict[str, Any],
+) -> Tuple[str, List[Any], Dict[str, Any]]:
+    used_paths: List[str] = []
+
+    def _compile_node(node: Dict[str, Any]) -> Tuple[str, List[Any]]:
+        kind = str(node.get("kind") or "").strip().lower()
+        if kind == "group":
+            group_op = str(node.get("op") or "all").strip().lower()
+            joiner = " AND " if group_op == "all" else " OR "
+            conditions = node.get("conditions")
+            if not isinstance(conditions, list):
+                raise ValueError("filter.rules.conditions must be an array")
+            parts: List[str] = []
+            bindings: List[Any] = []
+            for child in conditions:
+                if not isinstance(child, dict):
+                    continue
+                child_sql, child_bindings = _compile_node(child)
+                parts.append(f"({child_sql})")
+                bindings.extend(child_bindings)
+            if not parts:
+                return "TRUE", []
+            return joiner.join(parts), bindings
+        if kind != "condition":
+            raise ValueError("filter.rules node kind must be 'group' or 'condition'")
+        sql, bindings, condition_paths = _compile_filter_condition_sql(
+            condition=node,
+            param_config=param_config,
+        )
+        for path in condition_paths:
+            if path and path not in used_paths:
+                used_paths.append(path)
+        return sql, bindings
+
+    sql, bindings = _compile_node(root)
+    diagnostics = {
+        "mode": "rules",
+        "whereSql": sql,
+        "bindingsCount": len(bindings),
+        "paramPaths": used_paths,
+    }
+    return sql, bindings, diagnostics
+
+
+def _execute_filter_op(
+    primary_df: pd.DataFrame,
+    spec: Dict[str, Any],
+    *,
+    param_config: Optional[Dict[str, Any]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    mode = str(spec.get("mode") or "").strip().lower()
+    expr = str(spec.get("expr") or "")
+    if mode not in {"rules", "sql"}:
+        mode = "sql" if expr.strip() else "rules"
+    rules = spec.get("rules") if isinstance(spec.get("rules"), dict) else {"kind": "group", "op": "all", "conditions": []}
+    param_obj = param_config if isinstance(param_config, dict) else {}
+
+    if duckdb is None:
+        raise ModuleNotFoundError("duckdb is required for filter transform operations")
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("input", primary_df)
+        if mode == "sql":
+            if not expr.strip():
+                return primary_df, {"mode": "sql", "whereSql": "", "bindingsCount": 0, "paramPaths": []}
+            out_df = con.execute(f"select * from input where {expr}").df()
+            return out_df, {"mode": "sql", "whereSql": expr, "bindingsCount": 0, "paramPaths": []}
+
+        where_sql, bindings, diagnostics = _compile_filter_rules_to_sql(root=rules, param_config=param_obj)
+        out_df = con.execute(f"select * from input where ({where_sql})", bindings).df()
+        return out_df, diagnostics
+    finally:
+        con.close()
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
     op: str,
     params: Dict[str, Any],
     inputs: Dict[str, pd.DataFrame],
-    join_lookup: Optional[Dict[str, pd.DataFrame]] = None
+    join_lookup: Optional[Dict[str, pd.DataFrame]] = None,
+    param_inputs: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """
     Execute via DuckDB to keep semantics consistent.
@@ -2792,10 +2968,13 @@ def execute_transform_op(
         con.register(primary_name, primary_df)
 
         if op == "filter":
-            expr = params["filter"]["expr"]
-            if not str(expr or "").strip():
-                return primary_df
-            return con.execute(f"select * from {primary_name} where {expr}").df()
+            spec = params["filter"] if isinstance(params.get("filter"), dict) else {}
+            out_df, _ = _execute_filter_op(
+                primary_df,
+                spec,
+                param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+            )
+            return out_df
 
         elif op == "select":
             spec = params["select"]
@@ -2963,6 +3142,7 @@ def run_transform(
     params: Dict[str, Any],
     input_tables: Dict[str, pd.DataFrame],
     join_lookup: Optional[Dict[str, pd.DataFrame]],
+    param_inputs: Optional[Dict[str, Any]] = None,
 ) -> TransformResult:
     t0 = time.perf_counter()
     op = params["op"]
@@ -2981,6 +3161,7 @@ def run_transform(
     numeric_scale_report: Optional[Dict[str, Any]] = None
     embedding_report: Optional[Dict[str, Any]] = None
     feature_selection_report: Optional[Dict[str, Any]] = None
+    filter_compile_report: Optional[Dict[str, Any]] = None
     leakage_detect_report: Optional[Dict[str, Any]] = None
     quality_profile_report: Optional[Dict[str, Any]] = None
     drift_compare_report: Optional[Dict[str, Any]] = None
@@ -2988,7 +3169,14 @@ def run_transform(
     fit_state_registry_report: Optional[Dict[str, Any]] = None
     pii_guard_report: Optional[Dict[str, Any]] = None
     inference_parity_report: Optional[Dict[str, Any]] = None
-    if op == "quality_gate":
+    if op == "filter":
+        spec = params["filter"] if isinstance(params.get("filter"), dict) else {}
+        out_df, filter_compile_report = _execute_filter_op(
+            primary_input,
+            spec,
+            param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+        )
+    elif op == "quality_gate":
         spec = params["quality_gate"]
         primary_df = input_tables.get("in")
         if primary_df is None:
@@ -3062,7 +3250,13 @@ def run_transform(
         if bool((inference_parity_report or {}).get("failed")):
             raise ValueError("inference_parity failed: train/inference signatures mismatch")
     else:
-        out_df = execute_transform_op(op, params, input_tables, join_lookup=join_lookup)
+        out_df = execute_transform_op(
+            op,
+            params,
+            input_tables,
+            join_lookup=join_lookup,
+            param_inputs=param_inputs,
+        )
 
     elapsed_ms = (time.perf_counter() - t0) * 1000.0
     execution_meta = _build_execution_metadata(
@@ -3137,6 +3331,8 @@ def run_transform(
         meta["pii_guard"] = pii_guard_report
     if inference_parity_report is not None:
         meta["inference_parity"] = inference_parity_report
+    if filter_compile_report is not None:
+        meta["filter_compile"] = filter_compile_report
     if op == "ml_contract":
         contract_spec = params.get("ml_contract") if isinstance(params.get("ml_contract"), dict) else {}
         meta["ml_contract"] = {

@@ -283,8 +283,206 @@ def test_derive_legacy_expr_defaults_to_sql_mode() -> None:
 	norm = normalize_transform_params(
 		{"op": "derive", "derive": {"columns": [{"name": "value_x2", "expr": "value * 2"}]}}
 	)
+
+
+def _require_duckdb() -> None:
+	if duckdb is None:
+		pytest.skip("duckdb not installed in test environment")
 	assert norm["derive"]["mode"] == "sql"
 	assert norm["derive"]["columns"] == [{"name": "value_x2", "expr": "value * 2"}]
+
+
+@pytest.mark.parametrize(
+	("condition", "expected_ids"),
+	[
+		({"kind": "condition", "column": "value", "op": "eq", "value": 20}, [2]),
+		({"kind": "condition", "column": "value", "op": "ne", "value": 20}, [1, 3]),
+		({"kind": "condition", "column": "value", "op": "gt", "value": 20}, [3]),
+		({"kind": "condition", "column": "value", "op": "gte", "value": 20}, [2, 3]),
+		({"kind": "condition", "column": "value", "op": "lt", "value": 20}, [1]),
+		({"kind": "condition", "column": "value", "op": "lte", "value": 20}, [1, 2]),
+		({"kind": "condition", "column": "text", "op": "contains", "value": "beta"}, [2]),
+		({"kind": "condition", "column": "group", "op": "in", "value": ["a"]}, [1, 2]),
+		({"kind": "condition", "column": "group", "op": "not_in", "value": ["a"]}, [3]),
+		({"kind": "condition", "column": "text", "op": "regex", "value": "^g"}, [3]),
+	],
+)
+def test_filter_rules_operator_matrix(condition: dict, expected_ids: list[int]) -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {"kind": "group", "op": "all", "conditions": [condition]},
+				"expr": "",
+			},
+		}
+	)
+	res = run_transform(params=norm, input_tables={"in": _base_table()}, join_lookup=None)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert out_df["id"].tolist() == expected_ids
+
+
+def test_filter_rules_supports_nested_group_precedence() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [
+						{"kind": "condition", "column": "group", "op": "eq", "value": "a"},
+						{
+							"kind": "group",
+							"op": "any",
+							"conditions": [
+								{"kind": "condition", "column": "value", "op": "eq", "value": 20},
+								{"kind": "condition", "column": "text", "op": "eq", "value": "no-match"},
+							],
+						},
+					],
+				},
+				"expr": "",
+			},
+		}
+	)
+	res = run_transform(params=norm, input_tables={"in": _base_table()}, join_lookup=None)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert out_df["id"].tolist() == [2]
+
+
+def test_filter_rules_resolves_param_config_value_from() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [
+						{
+							"kind": "condition",
+							"column": "value",
+							"op": "gte",
+							"value": {"valueFrom": {"handle": "param_config", "path": "prefs.min_value"}},
+						}
+					],
+				},
+				"expr": "",
+			},
+		}
+	)
+	res = run_transform(
+		params=norm,
+		input_tables={"in": _base_table()},
+		join_lookup=None,
+		param_inputs={"param_config": {"prefs": {"min_value": 20}}},
+	)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert out_df["id"].tolist() == [2, 3]
+
+
+def test_filter_rules_missing_param_path_raises_deterministic_error() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [
+						{
+							"kind": "condition",
+							"column": "value",
+							"op": "gte",
+							"value": {"valueFrom": {"handle": "param_config", "path": "prefs.missing"}},
+						}
+					],
+				},
+				"expr": "",
+			},
+		}
+	)
+	with pytest.raises(ValueError, match="valueFrom.path not found"):
+		run_transform(
+			params=norm,
+			input_tables={"in": _base_table()},
+			join_lookup=None,
+			param_inputs={"param_config": {"prefs": {"min_value": 20}}},
+		)
+
+
+def test_filter_rules_type_mismatch_evaluates_false() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [
+						{"kind": "condition", "column": "value", "op": "gt", "value": 1}
+					],
+				},
+				"expr": "",
+			},
+		}
+	)
+	df = pd.DataFrame([{"value": "abc"}])
+	res = run_transform(params=norm, input_tables={"in": df}, join_lookup=None)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert out_df.empty
+
+
+def test_filter_rules_null_operators() -> None:
+	_require_duckdb()
+	df = pd.DataFrame([{"id": 1, "value": None}, {"id": 2, "value": 1}])
+	is_null_norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [{"kind": "condition", "column": "value", "op": "is_null"}],
+				},
+				"expr": "",
+			},
+		}
+	)
+	not_null_norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [{"kind": "condition", "column": "value", "op": "not_null"}],
+				},
+				"expr": "",
+			},
+		}
+	)
+	is_null_out = pd.read_csv(
+		pd.io.common.BytesIO(run_transform(params=is_null_norm, input_tables={"in": df}, join_lookup=None).payload_bytes)
+	)
+	not_null_out = pd.read_csv(
+		pd.io.common.BytesIO(run_transform(params=not_null_norm, input_tables={"in": df}, join_lookup=None).payload_bytes)
+	)
+	assert is_null_out["id"].tolist() == [1]
+	assert not_null_out["id"].tolist() == [2]
 
 
 @pytest.mark.parametrize(
