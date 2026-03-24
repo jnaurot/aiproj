@@ -6,8 +6,24 @@
 	export let id: string;
 	export let selected: boolean = false;
 
+	function countFilterConditions(node: unknown): number {
+		if (!node || typeof node !== 'object') return 0;
+		const record = node as Record<string, unknown>;
+		if (record.kind === 'condition') return 1;
+		if (record.kind !== 'group') return 0;
+		const children = Array.isArray(record.conditions) ? record.conditions : [];
+		return children.reduce((sum, child) => sum + countFilterConditions(child), 0);
+	}
+
 	function summary(op: TransformNodeData['params']['op'], params: Record<string, any>): string {
-		if (op === 'filter') return params.filter?.expr ?? '-';
+		if (op === 'filter') {
+			const mode = String(params.filter?.mode ?? '').trim();
+			if (mode === 'rules') {
+				const count = countFilterConditions(params.filter?.rules);
+				return count > 0 ? `Rules (${count} condition${count === 1 ? '' : 's'})` : 'Rules';
+			}
+			return params.filter?.expr ?? '-';
+		}
 		if (op === 'select') return (params.select?.columns || []).join(', ') || '-';
 		if (op === 'rename') return Object.keys(params.rename?.map || {}).length > 0 ? 'Rename columns' : '-';
 		if (op === 'derive') return (params.derive?.columns || []).length > 0 ? 'Derive columns' : '-';
