@@ -48,12 +48,14 @@
 			>{meta.outputMode}</span
 		>
 	</div>
-	{#if workHandleStats.total > 0}
-		<div style="font-size:12px; opacity:0.82; margin-top:8px;">
-			ok: {workHandleStats.accepted}/{workHandleStats.total}
-			{#if workHandleStats.rejected > 0}
-				<span style="opacity:0.75;"> (skipped {workHandleStats.rejected})</span>
-			{/if}
-		</div>
-	{/if}
+	<svelte:fragment slot="footer-right">
+		{#if workHandleStats.total > 0}
+			<span style="font-size:12px;">
+				ok: {workHandleStats.accepted}/{workHandleStats.total}
+				{#if workHandleStats.rejected > 0}
+					<span style="opacity:0.75;"> (skipped {workHandleStats.rejected})</span>
+				{/if}
+			</span>
+		{/if}
+	</svelte:fragment>
 </BaseNode>

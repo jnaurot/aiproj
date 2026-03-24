@@ -104,6 +104,9 @@
 
 	<div class="footer">
 		<span class="status">{status}</span>
+		<div class="footerRight">
+			<slot name="footer-right" />
+		</div>
 	</div>
 </div>
 
@@ -150,6 +153,16 @@
 	.footer {
 		margin-top: 8px;
 		font-size: 12px;
+		opacity: 0.85;
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.footerRight {
+		min-width: 0;
+		text-align: right;
 		opacity: 0.85;
 	}
 
