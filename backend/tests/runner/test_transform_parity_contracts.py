@@ -287,6 +287,47 @@ def test_derive_legacy_expr_defaults_to_sql_mode() -> None:
 	assert norm["derive"]["columns"] == [{"name": "value_x2", "expr": "value * 2"}]
 
 
+def test_filter_mode_conflict_prefers_explicit_mode() -> None:
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"expr": '"value" > 20',
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [{"kind": "condition", "column": "group", "op": "eq", "value": "a"}],
+				},
+			},
+		}
+	)
+	assert norm["filter"]["mode"] == "rules"
+	assert norm["filter"]["expr"] == '"value" > 20'
+	assert norm["filter"]["rules"]["op"] == "all"
+
+
+def test_derive_mode_conflict_prefers_explicit_mode() -> None:
+	norm = normalize_transform_params(
+		{
+			"op": "derive",
+			"derive": {
+				"mode": "rules",
+				"columns": [{"name": "legacy_sql", "expr": '"value" * 2'}],
+				"rules": [
+					{
+						"name": "value_plus_bonus",
+						"formula": {"op": "add", "args": [{"column": "value"}, 2]},
+					}
+				],
+			},
+		}
+	)
+	assert norm["derive"]["mode"] == "rules"
+	assert norm["derive"]["columns"] == [{"name": "legacy_sql", "expr": '"value" * 2'}]
+	assert norm["derive"]["rules"][0]["name"] == "value_plus_bonus"
+
+
 def _require_duckdb() -> None:
 	if duckdb is None:
 		pytest.skip("duckdb not installed in test environment")
@@ -576,6 +617,99 @@ def test_derive_rules_missing_param_path_raises_error() -> None:
 			join_lookup=None,
 			param_inputs={"param_config": {"prefs": {"bump": 5}}},
 		)
+
+
+def test_filter_compile_diagnostics_include_mode_and_param_paths() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "filter",
+			"filter": {
+				"mode": "rules",
+				"expr": "",
+				"rules": {
+					"kind": "group",
+					"op": "all",
+					"conditions": [
+						{
+							"kind": "condition",
+							"column": "value",
+							"op": "gte",
+							"value": {"valueFrom": {"handle": "param_config", "path": "prefs.min_value"}},
+						}
+					],
+				},
+			},
+		}
+	)
+	res = run_transform(
+		params=norm,
+		input_tables={"in": _base_table()},
+		join_lookup=None,
+		param_inputs={"param_config": {"prefs": {"min_value": 20}}},
+	)
+	compile_meta = res.meta.get("filter_compile")
+	assert isinstance(compile_meta, dict)
+	assert compile_meta.get("mode") == "rules"
+	assert isinstance(compile_meta.get("whereSql"), str)
+	assert compile_meta.get("bindingsCount") == 1
+	assert compile_meta.get("paramPaths") == ["prefs.min_value"]
+
+
+def test_derive_compile_diagnostics_include_mode_and_param_paths() -> None:
+	_require_duckdb()
+	norm = normalize_transform_params(
+		{
+			"op": "derive",
+			"derive": {
+				"mode": "rules",
+				"columns": [],
+				"rules": [
+					{
+						"name": "target_plus",
+						"formula": {
+							"op": "add",
+							"args": [
+								{"column": "value"},
+								{"valueFrom": {"handle": "param_config", "path": "prefs.bump"}},
+							],
+						},
+					}
+				],
+			},
+		}
+	)
+	res = run_transform(
+		params=norm,
+		input_tables={"in": pd.DataFrame([{"value": 10}])},
+		join_lookup=None,
+		param_inputs={"param_config": {"prefs": {"bump": 5}}},
+	)
+	compile_meta = res.meta.get("derive_compile")
+	assert isinstance(compile_meta, dict)
+	assert compile_meta.get("mode") == "rules"
+	assert isinstance(compile_meta.get("selectSql"), str)
+	assert compile_meta.get("bindingsCount") == 1
+	assert compile_meta.get("paramPaths") == ["prefs.bump"]
+
+
+def test_legacy_sql_modes_still_emit_sql_compile_diagnostics() -> None:
+	_require_duckdb()
+	filter_norm = normalize_transform_params({"op": "filter", "filter": {"expr": "value >= 20"}})
+	filter_res = run_transform(params=filter_norm, input_tables={"in": _base_table()}, join_lookup=None)
+	filter_meta = filter_res.meta.get("filter_compile")
+	assert isinstance(filter_meta, dict)
+	assert filter_meta.get("mode") == "sql"
+	assert filter_meta.get("paramPaths") == []
+
+	derive_norm = normalize_transform_params(
+		{"op": "derive", "derive": {"columns": [{"name": "value_x2", "expr": '"value" * 2'}]}}
+	)
+	derive_res = run_transform(params=derive_norm, input_tables={"in": _base_table()}, join_lookup=None)
+	derive_meta = derive_res.meta.get("derive_compile")
+	assert isinstance(derive_meta, dict)
+	assert derive_meta.get("mode") == "sql"
+	assert derive_meta.get("paramPaths") == []
 
 
 @pytest.mark.parametrize(

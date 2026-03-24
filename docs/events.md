@@ -177,6 +177,32 @@ Fields:
 - `currentTargetSchemaFingerprint`
 - optional `suggestions` (string[])
 
+## Transform Dual-Mode Diagnostics
+
+Transform `filter` and `derive` emit compile diagnostics in node output metadata:
+
+- `meta.filter_compile`
+- `meta.derive_compile`
+
+Both include:
+
+- `mode` (`rules | sql`)
+- compiled SQL preview (`whereSql` for filter, `selectSql` for derive)
+- `bindingsCount` (number of bound values injected at execution)
+- `paramPaths` (resolved `param_config` dot-paths used in rules mode)
+
+Legacy SQL behavior is preserved:
+
+- `mode=sql` when legacy `filter.expr`/`derive.columns[].expr` is used.
+- `paramPaths` is empty for SQL mode.
+
+Migration conflict notes (graph canonicalization):
+
+- `TRANSFORM_FILTER_MODE_AMBIGUOUS_RESOLVED`
+- `TRANSFORM_DERIVE_MODE_AMBIGUOUS_RESOLVED`
+
+These are emitted when both legacy SQL and rules payloads are present but mode is missing; resolver chooses `mode=sql` deterministically.
+
 ### Deprecation Diagnostics (Validation Warnings)
 
 Port-runtime deprecation diagnostics are emitted as `log` events with `level=warn` during
