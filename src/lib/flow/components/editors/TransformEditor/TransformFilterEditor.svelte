@@ -33,9 +33,16 @@
 	let lastParamsSignature = '';
 	let suppressParamSync = false;
 	$: isWrappedParams = isObject(params) && ('op' in (params as Record<string, unknown>) || 'filter' in (params as Record<string, unknown>));
+	$: effectiveParams = (() => {
+		if (!isObject(params)) return {};
+		const record = params as Record<string, unknown>;
+		const nested = record.filter;
+		if (isObject(nested)) return nested as Record<string, unknown>;
+		return record;
+	})();
 
 	$: void selectedNode?.id;
-	$: normalized = normalizeFilterParams(isObject(params) ? (params as Record<string, unknown>) : {});
+	$: normalized = normalizeFilterParams(effectiveParams);
 	$: paramsSignature = JSON.stringify({ mode: normalized.mode, expr: normalized.expr, rules: normalized.rules });
 	$: if ((selectedNode?.id ?? '') !== lastNodeId) {
 		lastNodeId = selectedNode?.id ?? '';
