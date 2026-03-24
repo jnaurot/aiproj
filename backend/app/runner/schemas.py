@@ -1552,9 +1552,112 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                     if not isinstance(mp, dict) or len(mp) == 0:
                         errors.append("rename.map must be a non-empty object")
                 elif op == "derive":
+                    mode = str(payload.get("mode") or "").strip().lower()
+                    if mode and mode not in {"rules", "sql"}:
+                        errors.append("derive.mode must be one of: rules, sql")
                     cols = payload.get("columns")
-                    if not isinstance(cols, list) or len(cols) == 0:
-                        errors.append("derive.columns must be a non-empty array")
+                    if cols is not None and not isinstance(cols, list):
+                        errors.append("derive.columns must be an array")
+                    rules = payload.get("rules")
+                    if rules is not None and not isinstance(rules, list):
+                        errors.append("derive.rules must be an array")
+                    effective_mode = mode
+                    if not effective_mode:
+                        has_sql_expr = isinstance(cols, list) and any(
+                            isinstance(c, dict) and str(c.get("expr") or "").strip()
+                            for c in cols
+                        )
+                        effective_mode = "sql" if has_sql_expr else "rules"
+                    if effective_mode == "sql":
+                        if not isinstance(cols, list) or len(cols) == 0:
+                            errors.append("derive.columns must be a non-empty array")
+                        elif isinstance(cols, list):
+                            for i, col in enumerate(cols):
+                                if not isinstance(col, dict):
+                                    errors.append(f"derive.columns[{i}] must be an object")
+                                    continue
+                                if not str(col.get("name") or "").strip():
+                                    errors.append(f"derive.columns[{i}].name is required")
+                                if not str(col.get("expr") or "").strip():
+                                    errors.append(f"derive.columns[{i}].expr is required")
+                    else:
+                        allowed_ops = {
+                            "add": (2, 2),
+                            "sub": (2, 2),
+                            "mul": (2, 2),
+                            "div": (2, 2),
+                            "concat": (2, None),
+                            "lower": (1, 1),
+                            "upper": (1, 1),
+                            "trim": (1, 1),
+                            "length": (1, 1),
+                            "coalesce": (1, None),
+                        }
+
+                        def _is_literal_arg(v: Any) -> bool:
+                            return v is None or isinstance(v, (str, int, float, bool))
+
+                        def _is_dot_path(value: str) -> bool:
+                            import re as _re
+                            return _re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", value) is not None
+
+                        if not isinstance(rules, list) or len(rules) == 0:
+                            errors.append("derive.rules must be a non-empty array when mode=rules")
+                        elif isinstance(rules, list):
+                            for i, rule in enumerate(rules):
+                                if not isinstance(rule, dict):
+                                    errors.append(f"derive.rules[{i}] must be an object")
+                                    continue
+                                if not str(rule.get("name") or "").strip():
+                                    errors.append(f"derive.rules[{i}].name is required")
+                                formula = rule.get("formula")
+                                if not isinstance(formula, dict):
+                                    errors.append(f"derive.rules[{i}].formula must be an object")
+                                    continue
+                                op_name = str(formula.get("op") or "").strip().lower()
+                                if op_name not in allowed_ops:
+                                    errors.append(
+                                        f"derive.rules[{i}].formula.op must be one of: add, sub, mul, div, concat, lower, upper, trim, length, coalesce"
+                                    )
+                                    continue
+                                args = formula.get("args")
+                                if not isinstance(args, list):
+                                    errors.append(f"derive.rules[{i}].formula.args must be an array")
+                                    continue
+                                min_arity, max_arity = allowed_ops[op_name]
+                                if len(args) < min_arity:
+                                    errors.append(
+                                        f"derive.rules[{i}].formula.args requires at least {min_arity} argument(s) for op='{op_name}'"
+                                    )
+                                if max_arity is not None and len(args) > max_arity:
+                                    errors.append(
+                                        f"derive.rules[{i}].formula.args allows at most {max_arity} argument(s) for op='{op_name}'"
+                                    )
+                                for j, arg in enumerate(args):
+                                    if _is_literal_arg(arg):
+                                        continue
+                                    if isinstance(arg, dict) and isinstance(arg.get("column"), str) and str(arg.get("column")).strip():
+                                        continue
+                                    if isinstance(arg, dict) and isinstance(arg.get("valueFrom"), dict):
+                                        value_from = arg.get("valueFrom")
+                                        handle = str(value_from.get("handle") or "param_config").strip()
+                                        if handle != "param_config":
+                                            errors.append(
+                                                f"derive.rules[{i}].formula.args[{j}].valueFrom.handle must equal 'param_config'"
+                                            )
+                                        path = str(value_from.get("path") or "").strip()
+                                        if not path:
+                                            errors.append(
+                                                f"derive.rules[{i}].formula.args[{j}].valueFrom.path is required"
+                                            )
+                                        elif not _is_dot_path(path):
+                                            errors.append(
+                                                f"derive.rules[{i}].formula.args[{j}].valueFrom.path must use dot notation"
+                                            )
+                                        continue
+                                    errors.append(
+                                        f"derive.rules[{i}].formula.args[{j}] must be a literal, column ref, or valueFrom reference"
+                                    )
                 elif op == "aggregate":
                     group_by = payload.get("groupBy")
                     if group_by is not None and (

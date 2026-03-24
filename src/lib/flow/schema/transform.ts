@@ -194,14 +194,123 @@ export const TransformRenameParamsSchema = z.object({
   ),
 }).strip();
 
-export const TransformDeriveParamsSchema = z.object({
-  columns: z.array(
-    z.object({
-      name: z.string().min(1, "Derived column name cannot be empty"),
-      expr: z.string().min(1, "Derived expression cannot be empty"),
-    })
-  ).min(1, "Derive must specify at least one new column"),
+const TransformDeriveModeSchema = z.enum(["rules", "sql"]);
+const TransformDeriveFormulaOpSchema = z.enum([
+	"add",
+	"sub",
+	"mul",
+	"div",
+	"concat",
+	"lower",
+	"upper",
+	"trim",
+	"length",
+	"coalesce"
+]);
+
+const TransformDeriveValueFromSchema = z.object({
+	handle: z.literal("param_config").default("param_config"),
+	path: z.string().regex(
+		/^([A-Za-z_][A-Za-z0-9_]*)(\.[A-Za-z_][A-Za-z0-9_]*)*$/,
+		"Path must use dot notation, for example: preferences.salary_min"
+	)
 }).strip();
+
+const TransformDeriveLiteralArgSchema = z.union([
+	z.string(),
+	z.number(),
+	z.boolean(),
+	z.null()
+]);
+
+const TransformDeriveFormulaArgSchema = z.union([
+	TransformDeriveLiteralArgSchema,
+	z.object({
+		column: z.string().min(1, "Formula column reference cannot be empty")
+	}).strip(),
+	z.object({
+		valueFrom: TransformDeriveValueFromSchema
+	}).strip()
+]);
+
+const TransformDeriveFormulaSchema = z.object({
+	op: TransformDeriveFormulaOpSchema,
+	args: z.array(TransformDeriveFormulaArgSchema).default([])
+}).superRefine((val, ctx) => {
+	const arity: Record<z.infer<typeof TransformDeriveFormulaOpSchema>, { min: number; max: number }> = {
+		add: { min: 2, max: 2 },
+		sub: { min: 2, max: 2 },
+		mul: { min: 2, max: 2 },
+		div: { min: 2, max: 2 },
+		concat: { min: 2, max: Number.POSITIVE_INFINITY },
+		lower: { min: 1, max: 1 },
+		upper: { min: 1, max: 1 },
+		trim: { min: 1, max: 1 },
+		length: { min: 1, max: 1 },
+		coalesce: { min: 1, max: Number.POSITIVE_INFINITY }
+	};
+	const bounds = arity[val.op];
+	if (val.args.length < bounds.min) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["args"],
+			message: `Formula op '${val.op}' requires at least ${bounds.min} argument(s)`
+		});
+	}
+	if (val.args.length > bounds.max) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["args"],
+			message: `Formula op '${val.op}' allows at most ${bounds.max} argument(s)`
+		});
+	}
+}).strip();
+
+const TransformDeriveSqlColumnSchema = z.object({
+	name: z.string().min(1, "Derived column name cannot be empty"),
+	expr: z.string().min(1, "Derived expression cannot be empty")
+}).strip();
+
+const TransformDeriveRuleColumnSchema = z.object({
+	name: z.string().min(1, "Derived column name cannot be empty"),
+	formula: TransformDeriveFormulaSchema
+}).strip();
+
+const TransformDeriveParamsSchemaBase = z.object({
+	mode: TransformDeriveModeSchema.default("rules"),
+	columns: z.array(TransformDeriveSqlColumnSchema).default([]),
+	rules: z.array(TransformDeriveRuleColumnSchema).default([])
+}).superRefine((val, ctx) => {
+	if (val.mode === "sql" && val.columns.length === 0) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["columns"],
+			message: "Derive SQL mode requires at least one derived column expression"
+		});
+	}
+	if (val.mode === "rules" && val.rules.length === 0) {
+		ctx.addIssue({
+			code: "custom",
+			path: ["rules"],
+			message: "Derive rules mode requires at least one formula rule"
+		});
+	}
+}).strip();
+
+export const TransformDeriveParamsSchema = z.preprocess((raw) => {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+	const record = raw as Record<string, unknown>;
+	const hasMode = typeof record.mode === "string" && String(record.mode).trim().length > 0;
+	const hasSqlColumns = Array.isArray(record.columns) && record.columns.some((entry) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+		const expr = (entry as Record<string, unknown>).expr;
+		return typeof expr === "string" && expr.trim().length > 0;
+	});
+	if (!hasMode && hasSqlColumns) {
+		return { ...record, mode: "sql" };
+	}
+	return raw;
+}, TransformDeriveParamsSchemaBase);
 
 export const TransformAggregateParamsSchema = z.object({
   groupBy: z.array(z.string().min(1)).optional().default([]),

@@ -279,6 +279,14 @@ def test_filter_legacy_expr_defaults_to_sql_mode() -> None:
 	assert norm["filter"]["expr"] == "value >= 20"
 
 
+def test_derive_legacy_expr_defaults_to_sql_mode() -> None:
+	norm = normalize_transform_params(
+		{"op": "derive", "derive": {"columns": [{"name": "value_x2", "expr": "value * 2"}]}}
+	)
+	assert norm["derive"]["mode"] == "sql"
+	assert norm["derive"]["columns"] == [{"name": "value_x2", "expr": "value * 2"}]
+
+
 @pytest.mark.parametrize(
 	("params", "payload_type"),
 	[

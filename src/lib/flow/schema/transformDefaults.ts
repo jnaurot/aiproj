@@ -58,16 +58,24 @@ export const defaultTransformRenameParams: TransformRenameParams = {
 };
 
 export const defaultTransformDeriveParams: TransformDeriveParams = {
-	columns: [
+	mode: 'rules',
+	rules: [
 		{
 			name: 'length_text',
-			expr: 'length(text)'
+			formula: {
+				op: 'length',
+				args: [{ column: 'text' }]
+			}
 		},
 		{
-			name: 'is_long',
-			expr: 'length(text) > 50'
+			name: 'title_trimmed',
+			formula: {
+				op: 'trim',
+				args: [{ column: 'title' }]
+			}
 		}
-	]
+	],
+	columns: []
 };
 
 export const defaultTransformAggregateParams: TransformAggregateParams = {

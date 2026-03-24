@@ -78,7 +78,9 @@
 		const local = normalizeLocalColumns(Array.isArray(raw?.columns) ? raw.columns : defaults);
 		const committed = normalizeCommitColumns(local);
 		return {
-			columns: committed.length > 0 ? committed : defaults.map((item) => ({ ...item }))
+			mode: 'sql',
+			columns: committed.length > 0 ? committed : defaults.map((item) => ({ ...item })),
+			rules: []
 		};
 	}
 
@@ -99,8 +101,8 @@
 		const safeCommitted = committed.length > 0 ? committed : defaults.map((item) => ({ ...item }));
 		markLocalEdit();
 		columns = local;
-		onDraft({ columns: safeCommitted });
-		onCommit({ columns: safeCommitted });
+		onDraft({ mode: 'sql', columns: safeCommitted, rules: [] });
+		onCommit({ mode: 'sql', columns: safeCommitted, rules: [] });
 	}
 
 	function updateColumn(index: number, key: keyof DeriveColumn, value: string): void {

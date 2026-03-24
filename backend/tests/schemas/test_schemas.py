@@ -1034,6 +1034,111 @@ class TestTransformFilterDualModeValidation:
         assert any("valueFrom.path must use dot notation" in err for err in errors)
 
 
+class TestTransformDeriveDualModeValidation:
+    def test_derive_rules_accepts_formula_with_param_value(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "derive",
+                    "derive": {
+                        "mode": "rules",
+                        "rules": [
+                            {
+                                "name": "salary_plus_target",
+                                "formula": {
+                                    "op": "add",
+                                    "args": [
+                                        {"column": "salary"},
+                                        {
+                                            "valueFrom": {
+                                                "handle": "param_config",
+                                                "path": "preferences.salary_target",
+                                            }
+                                        },
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert errors == []
+
+    def test_derive_rules_rejects_invalid_op(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "derive",
+                    "derive": {
+                        "mode": "rules",
+                        "rules": [
+                            {"name": "x", "formula": {"op": "pow", "args": [1, 2]}}
+                        ],
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("derive.rules[0].formula.op" in err for err in errors)
+
+    def test_derive_rules_rejects_invalid_arity(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "derive",
+                    "derive": {
+                        "mode": "rules",
+                        "rules": [
+                            {"name": "x", "formula": {"op": "add", "args": [1]}}
+                        ],
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("requires at least 2 argument" in err for err in errors)
+
+    def test_derive_rules_rejects_invalid_value_from(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "derive",
+                    "derive": {
+                        "mode": "rules",
+                        "rules": [
+                            {
+                                "name": "x",
+                                "formula": {
+                                    "op": "coalesce",
+                                    "args": [
+                                        {
+                                            "valueFrom": {
+                                                "handle": "param_config",
+                                                "path": "$.bad.path",
+                                            }
+                                        }
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("derive.rules[0].formula.args[0].valueFrom.path" in err for err in errors)
+
+
 class TestTransformSplitValidation:
     def test_split_requires_pattern_for_regex_mode(self, monkeypatch):
         monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))

@@ -175,6 +175,43 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
             "rules": rules,
         }
 
+    if op == "derive":
+        raw = p.get("derive") if isinstance(p.get("derive"), dict) else {}
+        mode_raw = str(raw.get("mode") or "").strip().lower()
+        columns_raw = raw.get("columns")
+        columns: List[Dict[str, Any]] = []
+        has_sql_expr = False
+        if isinstance(columns_raw, list):
+            for item in columns_raw:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                expr = str(item.get("expr") or "").strip()
+                if not name or not expr:
+                    continue
+                has_sql_expr = True
+                columns.append({"name": name, "expr": expr})
+        if mode_raw not in {"rules", "sql"}:
+            mode = "sql" if has_sql_expr else "rules"
+        else:
+            mode = mode_raw
+        rules_raw = raw.get("rules")
+        rules: List[Dict[str, Any]] = []
+        if isinstance(rules_raw, list):
+            for item in rules_raw:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                formula = item.get("formula")
+                if not name or not isinstance(formula, dict):
+                    continue
+                rules.append({"name": name, "formula": formula})
+        p["derive"] = {
+            "mode": mode,
+            "columns": columns,
+            "rules": rules,
+        }
+
     if op == "select":
         raw = p.get("select") if isinstance(p.get("select"), dict) else {}
         mode = str(raw.get("mode") or "include").strip().lower()
