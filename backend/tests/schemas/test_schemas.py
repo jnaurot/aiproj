@@ -87,6 +87,7 @@ class TestLLMParams:
             "stop": ["A", "B"],
             "inputEncoding": "json_canonical",
             "inputEnvelope": [{"type": "text", "text": "hello"}],
+            "onError": "skip_failed",
             "requestPolicy": {"retries": 2, "timeout_seconds": 15},
             "promptRevisionId": "pr_001",
             "presencePenalty": 0.2,
@@ -99,6 +100,7 @@ class TestLLMParams:
         assert result["stop_sequences"] == ["A", "B"]
         assert result["input_encoding"] == "json_canonical"
         assert result["input_envelope"] == [{"type": "text", "text": "hello"}]
+        assert result["on_error"] == "skip_failed"
         assert result["request_policy"] == {"retries": 2, "timeout_seconds": 15}
         assert result["prompt_revision_id"] == "pr_001"
         assert result["presence_penalty"] == 0.2

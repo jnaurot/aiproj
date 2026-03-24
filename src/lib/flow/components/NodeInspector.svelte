@@ -817,9 +817,54 @@
 		clearExpectedInputError(handle);
 	}
 
+	function inferredInputSchemaForHandle(handle: string): Record<string, unknown> {
+		const incoming = (schemaContract.edges ?? []) as NodeSchemaContractEdge[];
+		const match = incoming.find(
+			(edge) =>
+				String(edge?.direction ?? '').trim().toLowerCase() === 'incoming' &&
+				(String(edge?.targetHandle ?? 'in').trim() || 'in') === handle &&
+				edge?.providedSchema &&
+				typeof edge.providedSchema === 'object'
+		);
+		if (match?.providedSchema && typeof match.providedSchema === 'object') {
+			const provided = match.providedSchema as Record<string, unknown>;
+			const inferredType = String(provided.type ?? '').trim().toLowerCase();
+			const fields = Array.isArray(provided.fields) ? (provided.fields as unknown[]) : [];
+			const columns = Array.isArray(provided.columns) ? (provided.columns as unknown[]) : [];
+			if (inferredType.length > 0 && inferredType !== 'unknown') {
+				if (fields.length > 0) {
+					return { type: inferredType, fields };
+				}
+				if (columns.length > 0) {
+					const normalizedFields = columns
+						.map((col) => {
+							const rawName =
+								typeof col === 'string'
+									? col
+									: typeof (col as Record<string, unknown>)?.name === 'string'
+										? String((col as Record<string, unknown>).name)
+										: '';
+							const name = String(rawName).trim();
+							if (!name) return null;
+							const rawType =
+								typeof col === 'object' && col != null
+									? String((col as Record<string, unknown>).type ?? 'unknown')
+									: 'unknown';
+							return { name, type: rawType || 'unknown' };
+						})
+						.filter((f): f is { name: string; type: string } => Boolean(f));
+					if (normalizedFields.length > 0) {
+						return { type: inferredType, fields: normalizedFields };
+					}
+				}
+				return { type: inferredType };
+			}
+		}
+		return suggestedInputSchemaForHandle(handle);
+	}
+
 	function useInferredInputSchema(handle: string): void {
-		if (!selectedNode) return;
-		const typed = (selectedNode.data as any)?.schema?.inferredSchema?.typedSchema ?? { type: 'unknown', fields: [] };
+		const typed = inferredInputSchemaForHandle(handle);
 		setExpectedInputDraft(handle, JSON.stringify(typed, null, 2));
 		clearExpectedInputError(handle);
 	}

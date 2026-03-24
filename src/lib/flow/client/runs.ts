@@ -138,6 +138,47 @@ export async function getRun(runId: string) {
   };
 }
 
+export async function cancelRun(
+	runId: string,
+	options?: { hard?: boolean }
+): Promise<{ runId: string; status: string; cancelRequested: boolean }> {
+	const res = await fetch(backendUrl(`/api/runs/${encodeURIComponent(runId)}/cancel`), {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ hard: Boolean(options?.hard ?? true) })
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`cancelRun failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as { runId: string; status: string; cancelRequested: boolean };
+}
+
+export async function cancelAllRuns(req?: { graphId?: string; hard?: boolean }) {
+	const res = await fetch(backendUrl('/api/runs/cancel-all'), {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			graphId: req?.graphId,
+			hard: Boolean(req?.hard ?? true)
+		})
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`cancelAllRuns failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		hard: boolean;
+		matchedRunIds: string[];
+		cancelRequestedRunIds: string[];
+		alreadyRequestedRunIds: string[];
+		alreadyTerminalRunIds: string[];
+		hardCancelledRunIds: string[];
+	};
+}
+
 export async function acceptNodeParams(req: {
   runId: string;
   nodeId: string;

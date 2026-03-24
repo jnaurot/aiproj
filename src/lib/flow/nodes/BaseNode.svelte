@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Handle, Position } from '@xyflow/svelte';
+	import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
@@ -51,6 +51,17 @@
 	$: mergedSourceHandles = [...(Array.isArray(sourceHandles) ? sourceHandles : []), ...connectedSourceHandles];
 	$: effectiveTargetHandles = resolveNodeHandles(data, 'in', mergedTargetHandles, inputType);
 	$: effectiveSourceHandles = resolveNodeHandles(data, 'out', mergedSourceHandles, outputType);
+	const updateNodeInternals = useUpdateNodeInternals();
+	let lastLayoutSignature = '';
+	$: {
+		const nextLayoutSignature = `${String(id)}::in=${effectiveTargetHandles.map((h) => h.id).join('|')}::out=${effectiveSourceHandles.map((h) => h.id).join('|')}`;
+		if (nextLayoutSignature !== lastLayoutSignature) {
+			lastLayoutSignature = nextLayoutSignature;
+			queueMicrotask(() => {
+				updateNodeInternals(String(id));
+			});
+		}
+	}
 
 	function handleTop(index: number, total: number): string {
 		if (total <= 1) return '50%';

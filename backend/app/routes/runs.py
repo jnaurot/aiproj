@@ -305,6 +305,12 @@ class CacheConfigRequest(BaseModel):
             raise ValueError("mode must be one of: default_on, force_off, force_on")
         return m
 
+
+class CancelRunsRequest(BaseModel):
+    graphId: Optional[str] = None
+    hard: bool = True
+
+
 class ResolveSourceRequest(BaseModel):
     graphId: str
     graph: Dict[str, Any]
@@ -440,6 +446,13 @@ async def cancel_run(run_id: str, request: Request):
             "cancelRequested": False,
         },
     )
+
+
+@router.post("/cancel-all")
+async def cancel_all_runs(req: CancelRunsRequest, request: Request):
+    rt = request.app.state.runtime
+    result = await rt.request_cancel_many(graph_id=req.graphId, hard=bool(req.hard))
+    return {"schemaVersion": 1, **result}
 
 
 @router.post("/{run_id}/nodes/{node_id}/accept-params")

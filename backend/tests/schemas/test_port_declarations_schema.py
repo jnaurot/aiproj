@@ -52,3 +52,38 @@ def test_graph_migration_canonicalizes_port_declarations_and_port_contracts() ->
 	assert port_contracts["in"]["in"]["affinity"] == "work"
 	assert any(str(note.get("code") or "") == "NODE_PORT_DECLARATIONS_CANONICALIZED" for note in notes)
 
+
+def test_normalize_port_declarations_respects_explicit_empty_direction_maps() -> None:
+	decls = normalize_node_port_declarations(
+		"transform",
+		{
+			"in": {},
+			"out": {},
+		},
+	)
+	assert decls["in"] == {}
+	assert decls["out"] == {}
+
+
+def test_graph_migration_preserves_explicit_empty_port_declarations() -> None:
+	graph, _notes = canonicalize_graph_payload(
+		{
+			"nodes": [
+				{
+					"id": "n_transform",
+					"data": {
+						"kind": "transform",
+						"params": {},
+						"portDeclarations": {"in": {}, "out": {}},
+					},
+				}
+			],
+			"edges": [],
+		}
+	)
+	node = graph["nodes"][0]
+	data = node.get("data") or {}
+	port_decls = data.get("portDeclarations") or {}
+	assert port_decls.get("in") == {}
+	assert port_decls.get("out") == {}
+

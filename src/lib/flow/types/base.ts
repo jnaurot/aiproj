@@ -62,6 +62,7 @@ export type BaseNodeData<K extends NodeKind, P> = {
     consume_mode?: "once" | "single_item" | "batch";
     batch_size?: number;
     max_inflight?: number;
+    on_error?: "fail_fast" | "skip_failed";
     input_handles?: Record<
       string,
       {

@@ -2,12 +2,34 @@
 	import type { LlmNodeData, ModelNodeData } from '$lib/flow/types';
 	import BaseNode from './BaseNode.svelte';
 	import { modelNodeMeta } from './modelNodeMeta';
+	import { graphStore } from '$lib/flow/store/graphStore';
 
 	export let id: string;
 	export let selected: boolean = false;
 	export let data: LlmNodeData | ModelNodeData;
 
 	$: meta = modelNodeMeta(data);
+	$: workHandleStats = (() => {
+		const byHandle =
+			(($graphStore as any)?.queueRuntime?.runScoped?.runtimeItemMetrics?.byHandle ??
+				($graphStore as any)?.queueRuntime?.runtimeItemMetrics?.byHandle ??
+				{}) as Record<string, any>;
+		let accepted = 0;
+		let rejected = 0;
+		for (const metric of Object.values(byHandle)) {
+			if (!metric || typeof metric !== 'object') continue;
+			if (String((metric as any).nodeId ?? '') !== String(id)) continue;
+			const plane = String((metric as any).plane ?? 'work').trim().toLowerCase();
+			if (plane !== 'work') continue;
+			accepted += Number((metric as any).itemsAccepted ?? 0);
+			rejected += Number((metric as any).itemsRejected ?? 0);
+		}
+		return {
+			accepted: Math.max(0, accepted),
+			rejected: Math.max(0, rejected),
+			total: Math.max(0, accepted + rejected)
+		};
+	})();
 </script>
 
 <BaseNode {id} {data} {selected}>
@@ -26,4 +48,12 @@
 			>{meta.outputMode}</span
 		>
 	</div>
+	{#if workHandleStats.total > 0}
+		<div style="font-size:12px; opacity:0.82; margin-top:8px;">
+			ok: {workHandleStats.accepted}/{workHandleStats.total}
+			{#if workHandleStats.rejected > 0}
+				<span style="opacity:0.75;"> (skipped {workHandleStats.rejected})</span>
+			{/if}
+		</div>
+	{/if}
 </BaseNode>

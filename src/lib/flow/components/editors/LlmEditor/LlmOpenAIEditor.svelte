@@ -48,6 +48,11 @@
 	$: thinkingMode = asString(params?.thinking?.mode, 'none');
 	$: thinkingBudget = asNumberOrEmpty(params?.thinking?.budget_tokens);
 	$: inputEncoding = asString(params?.inputEncoding, 'text');
+	$: requestRetries = asNumberOrEmpty(params?.requestPolicy?.retries ?? params?.max_retries ?? 3);
+	$: requestTimeoutSeconds = asNumberOrEmpty(
+		params?.requestPolicy?.timeout_seconds ?? params?.timeout_seconds ?? 60
+	);
+	$: onErrorBehavior = asString(params?.on_error, 'fail_fast');
 	$: outputMode = (asString(params?.output?.mode, 'text') as LlmOutputMode) ?? 'text';
 	$: outputStrict = params?.output?.strict ?? true;
 	$: stopText = Array.isArray(params?.stop) ? params.stop.join('\n') : '';
@@ -73,6 +78,15 @@
 		return {
 			thinking: {
 				...(params?.thinking ?? {}),
+				...patch
+			}
+		};
+	}
+
+	function requestPolicyPatch(patch: Partial<NonNullable<LlmParams['requestPolicy']>>): LlmPatch {
+		return {
+			requestPolicy: {
+				...(params?.requestPolicy ?? {}),
 				...patch
 			}
 		};
@@ -378,6 +392,54 @@
 			{#each inputEncodings as encoding}
 				<option value={encoding}>{encoding}</option>
 			{/each}
+		</select>
+	</Field>
+
+	<Field label="requestPolicy.retries">
+		<Input
+			type="number"
+			min="0"
+			step="1"
+			value={requestRetries}
+			onInput={(event) =>
+				draft(requestPolicyPatch({ retries: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) }))}
+			onBlur={(event) =>
+				commit(requestPolicyPatch({ retries: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) }))}
+		/>
+	</Field>
+
+	<Field label="requestPolicy.timeout_seconds">
+		<Input
+			type="number"
+			min="1"
+			step="1"
+			value={requestTimeoutSeconds}
+			onInput={(event) =>
+				draft(
+					requestPolicyPatch({
+						timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})
+				)}
+			onBlur={(event) =>
+				commit(
+					requestPolicyPatch({
+						timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
+					})
+				)}
+		/>
+	</Field>
+
+	<Field label="on_error">
+		<select
+			value={onErrorBehavior}
+			on:change={(event) => {
+				const value = (event.currentTarget as HTMLSelectElement).value as 'fail_fast' | 'skip_failed';
+				draft({ on_error: value });
+				commit({ on_error: value });
+			}}
+		>
+			<option value="fail_fast">fail_fast</option>
+			<option value="skip_failed">skip_failed</option>
 		</select>
 	</Field>
 

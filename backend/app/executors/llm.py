@@ -94,6 +94,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_encoding"] = p.pop("inputEncoding")
     if "inputEnvelope" in p and "input_envelope" not in p:
         p["input_envelope"] = p.pop("inputEnvelope")
+    if "onError" in p and "on_error" not in p:
+        p["on_error"] = p.pop("onError")
     if "requestPolicy" in p and "request_policy" not in p:
         p["request_policy"] = p.pop("requestPolicy")
     if "presencePenalty" in p and "presence_penalty" not in p:

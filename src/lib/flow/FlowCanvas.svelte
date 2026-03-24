@@ -1543,7 +1543,8 @@ async function scrollToBottom() {
 		setCenter(n.position.x + 120, n.position.y + 40, { zoom: vp.zoom, duration: 250 });
 	}
 
-	function resetRunUi() {
+	async function resetRunUi() {
+		await graphStore.hardCancelActiveRuns();
 		graphStore.resetRunUi();
 	}
 
@@ -1589,7 +1590,7 @@ async function scrollToBottom() {
 			importGraph: triggerImportGraphPackageV2,
 			exportGraph: () => void exportGraphPackageV2(),
 			deleteGraph: () => void deleteGraphAction(),
-			reset: resetRunUi
+			reset: () => void resetRunUi()
 		});
 	}
 

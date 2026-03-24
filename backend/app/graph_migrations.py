@@ -410,6 +410,13 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			)
 		except Exception:
 			max_inflight = 1
+		on_error = str(
+			processing_policy.get("on_error")
+			or processing_policy.get("onError")
+			or ""
+		).strip().lower()
+		if on_error not in {"fail_fast", "skip_failed"}:
+			on_error = ""
 		input_handles: Dict[str, Dict[str, Any]] = {}
 		input_handles_raw = (
 			processing_policy.get("input_handles")
@@ -468,6 +475,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 			"max_inflight": max(1, max_inflight),
 			"read_once": bool(read_once),
 			"input_handles": input_handles,
+			**({"on_error": on_error} if on_error else {}),
 		}
 		_canonicalize_node_port_declarations(next_node, notes)
 		nid = str(next_node.get("id") or "").strip()

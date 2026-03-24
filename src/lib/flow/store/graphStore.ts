@@ -48,6 +48,7 @@ import {
 } from '$lib/flow/client/components';
 import {
 	acceptNodeParams,
+	cancelAllRuns,
 	createEventBatcher,
 	createRun,
 	getRun,
@@ -608,6 +609,15 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 							.toLowerCase()
 					)
 			),
+			...(String(processingPolicyRaw.on_error ?? processingPolicyRaw.onError ?? '')
+				.trim()
+				.toLowerCase() === 'skip_failed'
+				? { on_error: 'skip_failed' as const }
+				: String(processingPolicyRaw.on_error ?? processingPolicyRaw.onError ?? '')
+						.trim()
+						.toLowerCase() === 'fail_fast'
+					? { on_error: 'fail_fast' as const }
+					: {}),
 			input_handles: normalizedInputHandles
 		};
 		const rawPortDeclarations =
@@ -1054,6 +1064,14 @@ export type GraphState = {
 				count: number;
 				firstAt?: string;
 				updatedAt?: string;
+			}
+		>;
+		softFailByNode?: Record<
+			string,
+			{
+				count: number;
+				itemsRejected: number;
+				lastAt?: string;
 			}
 		>;
 	};
@@ -1906,7 +1924,15 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						activeRunFrom: evt.runFrom ?? state.activeRunFrom,
 						activeRunNodeSet: evtPlanned,
 						nodeBindings,
-						nodeOutputs
+						nodeOutputs,
+						queueRuntime: {
+							...(state.queueRuntime ?? {}),
+							metrics: {},
+							nodeMetrics: {},
+							runtimeItemMetrics: {},
+							runScoped: undefined,
+							softFailByNode: {}
+						}
 					},
 					'info',
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
@@ -2298,12 +2324,49 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				(evt as any)?.nodeId
 			);
 		}
-		case 'log':
-			return logPush(state, evt.level, evt.message, evt.nodeId, (evt as any).componentPath);
+		case 'log': {
+			const message = String(evt.message ?? '');
+			const softFailMatch = message.match(/\[scheduler\]\s+soft-fail skip node=([^\s]+).*items=(\d+)/i);
+			if (softFailMatch) {
+				const nodeId = String(evt.nodeId ?? softFailMatch[1] ?? '').trim();
+				const itemsRejected = Math.max(1, Number(softFailMatch[2] ?? 1));
+				const previous =
+					(state.queueRuntime?.softFailByNode &&
+					typeof state.queueRuntime.softFailByNode === 'object'
+						? state.queueRuntime.softFailByNode
+						: {}) ?? {};
+				const prevNode = previous[nodeId] ?? { count: 0, itemsRejected: 0 };
+				const nextState = {
+					...state,
+					queueRuntime: {
+						...(state.queueRuntime ?? {}),
+						softFailByNode: {
+							...previous,
+							[nodeId]: {
+								count: Number(prevNode.count ?? 0) + 1,
+								itemsRejected: Number(prevNode.itemsRejected ?? 0) + itemsRejected,
+								lastAt: String((evt as any)?.at ?? '')
+							}
+						}
+					}
+				};
+				return logPush(nextState, evt.level, message, evt.nodeId, (evt as any).componentPath);
+			}
+			return logPush(state, evt.level, message, evt.nodeId, (evt as any).componentPath);
+		}
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
-			const succeeded = evt.status === 'succeeded';
+			const softFailByNode =
+				(state.queueRuntime?.softFailByNode &&
+				typeof state.queueRuntime.softFailByNode === 'object'
+					? state.queueRuntime.softFailByNode
+					: {}) ?? {};
+			const softFailNode = softFailByNode[String(evt.nodeId ?? '')] ?? null;
+			const softFailSucceeded =
+				evt.status === 'stale' &&
+				Boolean(softFailNode && Number((softFailNode as any)?.count ?? 0) > 0);
+			const succeeded = evt.status === 'succeeded' || softFailSucceeded;
 			const errorDetails = (evt as any).errorDetails as Record<string, unknown> | undefined;
 			const errorPayload: NodeExecutionError | null = succeeded
 				? null
@@ -2361,8 +2424,19 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			);
 		}
 		case 'run_finished': {
+			const nextEdges = (state.edges ?? []).map((edge) => {
+				const exec = String((edge.data as any)?.exec ?? 'idle').trim().toLowerCase();
+				if (exec !== 'active') return edge;
+				return {
+					...edge,
+					data: {
+						...(edge.data ?? {}),
+						exec: evt.status === 'succeeded' ? 'done' : 'idle'
+					}
+				};
+			});
 			return withGraphMeta(
-				logPush({ ...state, runStatus: evt.status }, 'info', `Run finished (${evt.status})`)
+				logPush({ ...state, runStatus: evt.status, edges: nextEdges }, 'info', `Run finished (${evt.status})`)
 			);
 		}
 		default:
@@ -4461,9 +4535,7 @@ function isEdgeStillValid(nodes: Node<PipelineNodeData>[], e: Edge<PipelineEdgeD
 	if (!edgeModeCompatible(mode, sourceAffinity, targetAffinity)) {
 		return { ok: false, reason: 'mode_mismatch' };
 	}
-	const sourcePayload = sourceNode
-		? sourcePayloadHint(sourceNode as any, 'out', sourceHandle)
-		: undefined;
+	const sourcePayload = sourceNode ? buildProvidedSchema(sourceNode as any, sourceHandle) : undefined;
 	const targetPayload = targetNode ? buildRequiredSchema(targetNode as any, targetHandle) : undefined;
 	if (!sourcePayload || !targetPayload) {
 		return { ok: false, reason: 'typed_schema_missing' };
@@ -4566,7 +4638,7 @@ function pruneAndRecontractEdgesStrict(
 					const targetHandle = String((e as any).targetHandle ?? 'in').trim() || 'in';
 					const sourceNode = nodes.find((n) => n.id === e.source)!;
 					const targetNode = nodes.find((n) => n.id === e.target)!;
-					const payloadSource = sourcePayloadHint(sourceNode as any, 'out', sourceHandle) as Record<string, any>;
+					const payloadSource = buildProvidedSchema(sourceNode as any, sourceHandle) as Record<string, any>;
 					const payloadTarget = buildRequiredSchema(targetNode as any, targetHandle) as Record<string, any>;
 					const compatibility = isSchemaCompatible(
 						payloadSource ?? { type: 'unknown' },
@@ -4640,10 +4712,11 @@ function recomputeEdgeContractsBestEffort(
 		if (!sourceNode || !targetNode) return edge;
 		const chk = isEdgeStillValid(nodes, edge);
 		const existingContract = ((edge.data ?? {}) as any).contract ?? {};
-		const sourceHandle = String((edge as any).sourceHandle ?? 'out');
+		const sourceHandle = String((edge as any).sourceHandle ?? 'out').trim() || 'out';
+		const targetHandle = String((edge as any).targetHandle ?? 'in').trim() || 'in';
 		const payload = {
-			source: sourcePayloadHint(sourceNode as any, 'out', sourceHandle),
-			target: targetPayloadHint(targetNode as any)
+			source: buildProvidedSchema(sourceNode as any, sourceHandle),
+			target: buildRequiredSchema(targetNode as any, targetHandle)
 		};
 		const edgeMode = normalizeEdgeMode(edge);
 		const snapshotCompatibility: SchemaCompatibility = chk.ok
@@ -4801,6 +4874,7 @@ export const graphStore = (() => {
 			auditStateTransition(state, next, ctx);
 			return next;
 		});
+	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
 
 	function updateNodeConfigImpl(
 		nodeId: string,
@@ -6271,6 +6345,26 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					out.adapterKind = adapterKind;
 					out.suggestion = adapterSuggestionForTypes(providedType, requiredType);
 				}
+				const edgeMode = normalizeEdgeMode(edgeForValidation as any);
+				const explicitItemModeRaw = String(
+					(edge.data as any)?.work?.item_mode ?? (edge.data as any)?.work?.itemMode ?? ''
+				)
+					.trim()
+					.toLowerCase();
+				const explicitItemMode =
+					explicitItemModeRaw === 'artifact' ||
+					explicitItemModeRaw === 'json_items' ||
+					explicitItemModeRaw === 'table_rows'
+						? (explicitItemModeRaw as 'artifact' | 'json_items' | 'table_rows')
+						: null;
+				const inferredDefaultItemMode: 'artifact' | 'json_items' | 'table_rows' =
+					providedType === 'table'
+						? 'table_rows'
+						: providedType === 'json'
+							? 'json_items'
+							: 'artifact';
+				const nextItemMode: 'artifact' | 'json_items' | 'table_rows' =
+					explicitItemMode ?? (edgeMode === 'work' ? inferredDefaultItemMode : 'artifact');
 
 				const nextEdge: Edge<PipelineEdgeData> = {
 					...edgeForValidation,
@@ -6278,7 +6372,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					data: {
 						...(edge.data ?? {}),
 						exec: edge.data?.exec ?? 'idle',
-						mode: normalizeEdgeMode(edge),
+						mode: edgeMode,
 						fatal: Boolean((edge.data as any)?.fatal ?? false),
 						queue: {
 							max: Math.max(1, Number((edge.data as any)?.queue?.max ?? 1000)),
@@ -6294,9 +6388,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							) as 'fifo' | 'round_robin'
 						},
 						work: {
-							item_mode: String((edge.data as any)?.work?.item_mode ?? (edge.data as any)?.work?.itemMode ?? 'artifact')
-								.trim()
-								.toLowerCase() as 'artifact' | 'json_items' | 'table_rows',
+							item_mode: nextItemMode,
 							max_items: Math.max(1, Number((edge.data as any)?.work?.max_items ?? (edge.data as any)?.work?.maxItems ?? 256))
 						},
 						contract: {
@@ -6442,6 +6534,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				batch_size?: number;
 				max_inflight?: number;
 				read_once?: boolean;
+				on_error?: 'fail_fast' | 'skip_failed';
 			}
 		) {
 			let out: { ok: boolean; error?: string } = { ok: true };
@@ -6458,10 +6551,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					return s;
 				}
 				const nextPolicy = {
+					...(existing as Record<string, any>),
 					consume_mode: nextMode as 'once' | 'single_item' | 'batch',
 					batch_size: Math.max(1, Number(patch.batch_size ?? existing.batch_size ?? 1)),
 					max_inflight: Math.max(1, Number(patch.max_inflight ?? existing.max_inflight ?? 1)),
-					read_once: Boolean(patch.read_once ?? existing.read_once ?? existing.readOnce ?? false)
+					read_once: Boolean(patch.read_once ?? existing.read_once ?? existing.readOnce ?? false),
+					...(patch.on_error ? { on_error: patch.on_error } : {})
 				};
 				const nodes = s.nodes.map((n) =>
 					n.id === nodeId
@@ -6682,6 +6777,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (!Object.prototype.hasOwnProperty.call(byDir, key)) {
 					return s;
 				}
+				const previousHandles = declaredPortHandles(node as Node<PipelineNodeData>, dir);
+				const previousIndex = previousHandles.indexOf(key);
 				delete byDir[key];
 				const nextPortDeclarations = {
 					...existingDecls,
@@ -6709,10 +6806,40 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							}
 						: n
 				);
+				const updatedNode = nodes.find((n) => n.id === nodeId) as Node<PipelineNodeData> | undefined;
+				const remainingHandles = updatedNode ? declaredPortHandles(updatedNode, dir) : [];
+				const nextHandleForRemoved = (() => {
+					if (remainingHandles.length === 0) return null;
+					if (previousIndex < 0) return remainingHandles[0];
+					const idx = Math.max(0, Math.min(previousIndex, remainingHandles.length - 1));
+					return remainingHandles[idx];
+				})();
+				let droppedEdges = 0;
+				const edges = s.edges.flatMap((edge) => {
+					const touchesNode =
+						dir === 'in' ? String(edge.target ?? '') === nodeId : String(edge.source ?? '') === nodeId;
+					if (!touchesNode) return [edge];
+					const edgeHandle =
+						dir === 'in'
+							? String((edge as any).targetHandle ?? 'in').trim() || 'in'
+							: String((edge as any).sourceHandle ?? 'out').trim() || 'out';
+					if (edgeHandle !== key) {
+						// Re-clone to force edge anchor refresh when handle layout changes.
+						return [{ ...edge }];
+					}
+					if (!nextHandleForRemoved) {
+						droppedEdges += 1;
+						return [];
+					}
+					if (dir === 'in') {
+						return [{ ...edge, targetHandle: nextHandleForRemoved }];
+					}
+					return [{ ...edge, sourceHandle: nextHandleForRemoved }];
+				});
 				const next = logPush(
-					{ ...s, nodes },
+					{ ...s, nodes, edges },
 					'info',
-					`Removed node ${nodeId} ${dir} port declaration ${key}`
+					`Removed node ${nodeId} ${dir} port declaration ${key}${droppedEdges > 0 ? ` (dropped ${droppedEdges} edge${droppedEdges === 1 ? '' : 's'})` : ''}`
 				);
 				persist(next);
 				return next;
@@ -6747,11 +6874,36 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		//before extensive renovations
 
+		async hardCancelActiveRuns() {
+			try {
+				await cancelAllRuns({ hard: true });
+			} catch (error) {
+				update((s) => logPush(s, 'warn', `Cancel runs failed: ${String(error)}`));
+			}
+			if (activeRunStreamHandle) {
+				try {
+					activeRunStreamHandle.close();
+				} catch {
+					// no-op
+				}
+				activeRunStreamHandle = null;
+			}
+		},
+
 		// ----- clear edges of prior run's status (uses edge highlighting) -----
 		resetRunUi() {
 			update((s) => {
 				const edges = resetEdgesExec(s.edges);
-				const next = withGraphMeta({ ...s, edges, logs: [], runStatus: IDLE });
+				const next = withGraphMeta({
+					...s,
+					edges,
+					logs: [],
+					runStatus: IDLE,
+					activeRunId: null,
+					activeRunMode: 'from_start',
+					activeRunFrom: null,
+					activeRunNodeSet: new Set<string>()
+				});
 				persist(next);
 				return next;
 			});
@@ -7637,6 +7789,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const settle = () => {
 					if (settled) return;
 					settled = true;
+					if (activeRunStreamHandle?.runId === runId) {
+						activeRunStreamHandle = null;
+					}
 					resolve();
 				};
 				const applyEventBatch = (events: KnownRunEvent[]) => {
@@ -7718,6 +7873,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						settle();
 					}
 				);
+				activeRunStreamHandle = { runId, close: () => subHandle?.close() };
 			});
 		}
 	};

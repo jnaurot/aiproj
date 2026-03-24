@@ -33,4 +33,32 @@ describe('graphStore edge runtime policy defaults', () => {
 		expect(patchInvalid.ok).toBe(false);
 		expect(String((patchInvalid as any)?.error ?? '')).toContain('arbitration policy');
 	});
+
+	it('auto-defaults work item_mode by source payload type for new edges', () => {
+		graphStore.hardResetGraph();
+
+		const addAndReadItemMode = (sourceType: 'table' | 'json' | 'text') => {
+			const srcId = graphStore.addNode('transform', { x: 0, y: 0 });
+			const dstId = graphStore.addNode('transform', { x: 220, y: 0 });
+			expect(graphStore.setNodeExpectedSchema(srcId, { type: sourceType, fields: [] }).ok).toBe(true);
+			expect(graphStore.setNodeExpectedInputSchemaForHandle(dstId, 'in', { type: sourceType, fields: [] }).ok).toBe(true);
+			const edgeId = `e_${sourceType}`;
+			const added = graphStore.addEdge({
+				id: edgeId,
+				source: srcId,
+				target: dstId,
+				sourceHandle: 'out',
+				targetHandle: 'in',
+				data: { exec: 'idle', mode: 'work' }
+			} as any);
+			expect(added.ok).toBe(true);
+			const state = get(graphStore as any) as any;
+			const edge = (state.edges ?? []).find((candidate: any) => String(candidate.id ?? '') === edgeId);
+			return String(edge?.data?.work?.item_mode ?? '');
+		};
+
+		expect(addAndReadItemMode('table')).toBe('table_rows');
+		expect(addAndReadItemMode('json')).toBe('json_items');
+		expect(addAndReadItemMode('text')).toBe('artifact');
+	});
 });

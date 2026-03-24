@@ -499,6 +499,52 @@ class RuntimeManager:
         )
         return {"runId": run_id, "found": True, "cancelRequested": True, "status": "cancel_requested"}
 
+    async def request_cancel_many(self, *, graph_id: Optional[str] = None, hard: bool = False) -> Dict[str, Any]:
+        target_graph_id = str(graph_id or "").strip()
+        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        matched: list[str] = []
+        requested: list[str] = []
+        hard_cancelled: list[str] = []
+        already_terminal: list[str] = []
+        already_requested: list[str] = []
+        for run_id, handle in self.runs.items():
+            if not handle:
+                continue
+            if target_graph_id and str(handle.graph_id or "").strip() != target_graph_id:
+                continue
+            matched.append(run_id)
+            if handle.status in terminal:
+                already_terminal.append(run_id)
+                continue
+            if handle.cancel_event.is_set() or handle.status == "cancel_requested":
+                already_requested.append(run_id)
+            else:
+                handle.cancel_requested_at = time.time()
+                handle.status = "cancel_requested"
+                handle.cancel_event.set()
+                await handle.bus.emit(
+                    {
+                        "type": "run_cancel_requested",
+                        "runId": run_id,
+                        "at": datetime_from_ts(handle.cancel_requested_at),
+                    }
+                )
+                requested.append(run_id)
+            if hard:
+                task = handle.task
+                if task is not None and not task.done():
+                    task.cancel()
+                    hard_cancelled.append(run_id)
+        return {
+            "graphId": target_graph_id or None,
+            "hard": bool(hard),
+            "matchedRunIds": matched,
+            "cancelRequestedRunIds": requested,
+            "alreadyRequestedRunIds": already_requested,
+            "alreadyTerminalRunIds": already_terminal,
+            "hardCancelledRunIds": hard_cancelled,
+        }
+
     async def accept_node_params(
         self,
         *,

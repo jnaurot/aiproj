@@ -254,8 +254,11 @@ def normalize_node_port_declarations(
         return defaults
     out: Dict[str, Dict[str, Dict[str, Any]]] = {"in": {}, "out": {}}
     for direction in ("in", "out"):
+        raw_dir_present = direction in raw
         raw_dir = raw.get(direction)
-        if not isinstance(raw_dir, dict):
+        # Respect explicitly provided empty declaration maps. Only backfill defaults when
+        # the whole direction is omitted or malformed.
+        if not raw_dir_present or not isinstance(raw_dir, dict):
             out[direction] = dict(defaults.get(direction, {}))
             continue
         for raw_handle, raw_decl in raw_dir.items():
@@ -273,8 +276,7 @@ def normalize_node_port_declarations(
                 direction=direction,  # type: ignore[arg-type]
                 fallback_plane=fallback_plane,
             )
-        for handle, decl in defaults.get(direction, {}).items():
-            out[direction].setdefault(handle, dict(decl))
+        # Do not inject missing default handles when this direction was explicitly declared.
     return out
 
 

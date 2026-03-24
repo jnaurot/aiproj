@@ -467,6 +467,16 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
         max_inflight = max(1, int(policy.get("max_inflight") or policy.get("maxInflight") or 1))
     except Exception:
         max_inflight = 1
+    on_error_raw = (
+        policy.get("on_error")
+        or policy.get("onError")
+        or params.get("on_error")
+        or params.get("onError")
+        or "fail_fast"
+    )
+    on_error = str(on_error_raw or "fail_fast").strip().lower()
+    if on_error not in {"fail_fast", "skip_failed"}:
+        on_error = "fail_fast"
     if input_handle:
         by_handle = policy.get("input_handles") if isinstance(policy.get("input_handles"), dict) else {}
         handle_policy = by_handle.get(str(input_handle)) if isinstance(by_handle, dict) else {}
@@ -498,6 +508,7 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
         "batch_size": batch_size,
         "max_inflight": max_inflight,
         "read_once": read_once,
+        "on_error": on_error,
     }
 
 
@@ -7004,6 +7015,7 @@ async def run_graph(
         inflight: Dict[asyncio.Task, Dict[str, Any]] = {}
         completed_count = 0
         run_failed = False
+        total_soft_failed = 0
         connected_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         provided_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         handle_satisfaction_state: Dict[str, Dict[str, str]] = {nid: {} for nid in sub}
@@ -7476,20 +7488,29 @@ async def run_graph(
                 ok = bool(result.get("ok"))
                 cached = bool(result.get("cached"))
                 cancelled = bool(result.get("cancelled"))
-                if cached:
+                if cancelled:
+                    total_failed += 1
+                    run_failed = True
+                elif cached:
                     total_cached += 1
                 elif ok:
                     total_succeeded += 1
-                else:
-                    total_failed += 1
-                if cancelled:
-                    run_failed = True
                 if not ok:
                     node_fatal = _is_node_or_edge_fatal(
                         node=nodes.get(node_id, {}),
                         incoming_edge_ids=plan.incoming_edges.get(node_id, []),
                         edges=edges,
                     )
+                    node_policy = _node_processing_policy(nodes.get(node_id, {}))
+                    soft_fail_skip = bool(
+                        not node_fatal
+                        and str(node_policy.get("on_error") or "fail_fast") == "skip_failed"
+                        and bool(work_batch)
+                    )
+                    if soft_fail_skip:
+                        total_soft_failed += 1
+                    else:
+                        total_failed += 1
                     await _emit(
                         {
                             "type": "log",
@@ -7505,6 +7526,58 @@ async def run_graph(
                             "nodeId": node_id,
                         }
                     )
+                    if soft_fail_skip:
+                        failed_count = max(1, len(work_batch or []))
+                        runtime_item_metrics["itemsRejected"] = int(runtime_item_metrics.get("itemsRejected", 0)) + failed_count
+                        node_accept_reject_counters.setdefault(node_id, {"accepted": 0, "rejected": 0})
+                        node_accept_reject_counters[node_id]["rejected"] = int(
+                            node_accept_reject_counters[node_id].get("rejected", 0)
+                        ) + failed_count
+                        if work_batch:
+                            for item in work_batch:
+                                handle = str((item or {}).get("targetHandle") or "in").strip() or "in"
+                                _inc_runtime_metric(
+                                    plane="work",
+                                    node_id=node_id,
+                                    handle=handle,
+                                    field="itemsRejected",
+                                    amount=1,
+                                )
+                        else:
+                            _inc_runtime_metric(
+                                plane="work",
+                                node_id=node_id,
+                                handle="in",
+                                field="itemsRejected",
+                                amount=1,
+                            )
+                        await _emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "level": "warn",
+                                "message": (
+                                    f"[scheduler] soft-fail skip node={node_id} on_error=skip_failed "
+                                    f"errorCode={str(result.get('errorCode') or '') or 'UNKNOWN'} "
+                                    f"items={failed_count}"
+                                ),
+                                "nodeId": node_id,
+                            }
+                        )
+                        _enqueue_ready_if_possible(node_id)
+                        await _emit(
+                            {
+                                "type": "queue_metrics",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "scope": "run",
+                                "metrics": queue_registry.metrics(),
+                                "nodeMetrics": node_runtime_metrics,
+                                "runtimeItemMetrics": runtime_item_metrics,
+                            }
+                        )
+                        continue
                     if node_fatal:
                         run_failed = True
                         break
@@ -7857,8 +7930,9 @@ async def run_graph(
             "at": iso_now(),
             "level": "info",
             "message": (
-                f"[scheduler] summary executed={total_succeeded + total_failed} "
+                f"[scheduler] summary executed={total_succeeded + total_failed + total_soft_failed} "
                 f"cached={total_cached} failed={total_failed} "
+                f"soft_failed={total_soft_failed} "
                 f"peak_concurrency={peak_concurrency} runtime_ms={total_runtime_ms}"
             ),
         })
