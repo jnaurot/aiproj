@@ -103,80 +103,84 @@
 			{#each group.conditions as node, index}
 				{#if node.kind === 'condition'}
 					<div class="conditionRow">
-						<select
-							class="select"
-							value={node.column}
-							on:change={(event) =>
-								updateChild(
-									index,
-									updateCondition(node, { column: (event.currentTarget as HTMLSelectElement).value })
-								)}
-						>
-							<option value="" disabled selected={node.column.length === 0}>Select column</option>
-							{#each columns as col}
-								<option value={col.name}>{col.name}</option>
-							{/each}
-						</select>
-						<select
-							class="select"
-							value={node.op}
-							on:change={(event) =>
-								updateChild(
-									index,
-									updateCondition(node, {
-										op: (event.currentTarget as HTMLSelectElement).value as FilterOperator
-									})
-								)}
-						>
-							{#each FILTER_OPERATORS as op}
-								<option value={op.value}>{op.label}</option>
-							{/each}
-						</select>
-						{#if needsValue(node.op)}
+						<div class="conditionHead">
 							<select
 								class="select"
-								value={node.valueSource ?? 'literal'}
+								value={node.column}
+								on:change={(event) =>
+									updateChild(
+										index,
+										updateCondition(node, { column: (event.currentTarget as HTMLSelectElement).value })
+									)}
+							>
+								<option value="" disabled selected={node.column.length === 0}>Select column</option>
+								{#each columns as col}
+									<option value={col.name}>{col.name}</option>
+								{/each}
+							</select>
+							<button class="small danger" type="button" on:click={() => removeChild(index)}>Remove</button>
+						</div>
+						<div class="conditionDetail">
+							<select
+								class="select opSelect"
+								value={node.op}
 								on:change={(event) =>
 									updateChild(
 										index,
 										updateCondition(node, {
-											valueSource:
-												((event.currentTarget as HTMLSelectElement).value as FilterValueSource) === 'param_config'
-													? 'param_config'
-													: 'literal'
+											op: (event.currentTarget as HTMLSelectElement).value as FilterOperator
 										})
 									)}
 							>
-								<option value="literal">literal</option>
-								<option value="param_config">param_config.path</option>
+								{#each FILTER_OPERATORS as op}
+									<option value={op.value}>{op.label}</option>
+								{/each}
 							</select>
-							{#if (node.valueSource ?? 'literal') === 'literal'}
-								<input
-									class="input"
-									value={node.literalValue ?? ''}
-									placeholder={getValuePlaceholder(node.op)}
-									on:input={(event) =>
+							{#if needsValue(node.op)}
+								<select
+									class="select sourceSelect"
+									value={node.valueSource ?? 'literal'}
+									on:change={(event) =>
 										updateChild(
 											index,
-											updateCondition(node, { literalValue: (event.currentTarget as HTMLInputElement).value })
+											updateCondition(node, {
+												valueSource:
+													((event.currentTarget as HTMLSelectElement).value as FilterValueSource) === 'param_config'
+														? 'param_config'
+														: 'literal'
+											})
 										)}
-								/>
+								>
+									<option value="literal">literal</option>
+									<option value="param_config">param_config.path</option>
+								</select>
+								{#if (node.valueSource ?? 'literal') === 'literal'}
+									<input
+										class="input valueInput"
+										value={node.literalValue ?? ''}
+										placeholder={getValuePlaceholder(node.op)}
+										on:input={(event) =>
+											updateChild(
+												index,
+												updateCondition(node, { literalValue: (event.currentTarget as HTMLInputElement).value })
+											)}
+									/>
+								{:else}
+									<input
+										class="input valueInput"
+										value={node.paramPath ?? ''}
+										placeholder="preferences.salary_min"
+										on:input={(event) =>
+											updateChild(
+												index,
+												updateCondition(node, { paramPath: (event.currentTarget as HTMLInputElement).value })
+											)}
+									/>
+								{/if}
 							{:else}
-								<input
-									class="input"
-									value={node.paramPath ?? ''}
-									placeholder="preferences.salary_min"
-									on:input={(event) =>
-										updateChild(
-											index,
-											updateCondition(node, { paramPath: (event.currentTarget as HTMLInputElement).value })
-										)}
-								/>
+								<div class="noValue">{opLabel(node.op)}</div>
 							{/if}
-						{:else}
-							<div class="noValue">{opLabel(node.op)}</div>
-						{/if}
-						<button class="small danger" type="button" on:click={() => removeChild(index)}>Remove</button>
+						</div>
 					</div>
 				{:else}
 					<div class="nested">
@@ -220,9 +224,20 @@
 	}
 	.conditionRow {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+		gap: 6px;
+	}
+	.conditionHead {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 6px;
 		align-items: center;
+	}
+	.conditionDetail {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		align-items: center;
+		margin-left: 12px;
 	}
 	.select,
 	.input {
@@ -233,6 +248,18 @@
 		border-radius: 8px;
 		padding: 6px 8px;
 		font-size: 12px;
+	}
+	.opSelect {
+		min-width: 96px;
+		width: auto;
+	}
+	.sourceSelect {
+		min-width: 132px;
+		width: auto;
+	}
+	.valueInput {
+		min-width: 170px;
+		flex: 1 1 220px;
 	}
 	.tiny,
 	.empty,
