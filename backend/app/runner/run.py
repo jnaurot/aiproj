@@ -5550,7 +5550,9 @@ async def run_graph(
                                 "type": "json",
                                 "schema": json_schema,
                             }
-                            schema_for_metadata = base_payload_schema
+                            # Keep metadata schema acyclic. Pointing this at base_payload_schema would
+                            # later create payload_schema -> artifactMetadataV1 -> schema -> payload_schema.
+                            schema_for_metadata = json_schema if isinstance(json_schema, dict) else None
                             await _emit({
                                 "type": "log",
                                 "runId": run_id,
@@ -5678,6 +5680,10 @@ async def run_graph(
                         else [("in", aid) for aid in llm_upstream_ids]
                     )
                     for input_port_name, upstream_id in llm_input_pairs:
+                        if input_port_name.startswith("param") or input_port_name.startswith("control") or input_port_name.startswith("ctl"):
+                            # Param/control links are validated through affinity + param-shape contracts.
+                            # Do not enforce work payload contracts on these handles.
+                            continue
                         upstream_art = await context.artifact_store.get(upstream_id)
                         upstream_pt = _infer_artifact_payload_type(upstream_art)
                         llm_in_contract = str((_declared_in_port(kind, n, input_port=input_port_name) or "text"))
@@ -6691,8 +6697,13 @@ async def run_graph(
                     return []
             elif item_mode == "table_rows":
                 try:
-                    df = load_table_from_artifact_bytes(upstream_art, payload)
-                    rows = df.to_dicts() if hasattr(df, "to_dicts") else []
+                    df = load_table_from_artifact_bytes(str(getattr(upstream_art, "mime_type", "") or ""), payload)
+                    if hasattr(df, "to_dict"):
+                        rows = df.to_dict(orient="records")  # pandas DataFrame
+                    elif hasattr(df, "to_dicts"):
+                        rows = df.to_dicts()  # polars DataFrame (defensive)
+                    else:
+                        rows = []
                 except Exception:
                     rows = []
                 for idx, row in enumerate(rows):

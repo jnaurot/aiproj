@@ -210,6 +210,43 @@ async def _serialize_artifact_input(context: GraphContext, artifact_id: str, inp
     raise ValueError(f"Unsupported input_encoding: {input_encoding}")
 
 
+def _serialize_runtime_work_item_input(work_item: Dict[str, Any], input_encoding: str) -> Optional[str]:
+    preview = work_item.get("itemPreview")
+    if preview is None:
+        return None
+
+    if input_encoding == "json_canonical":
+        return _canon_json(preview)
+
+    if input_encoding == "table_canonical":
+        if isinstance(preview, dict):
+            cols = sorted(str(k) for k in preview.keys())
+            row = {k: preview.get(k) for k in cols}
+            return _canon_json({"format": "table_canonical_v1", "columns": cols, "rows": [row]})
+        return _canon_json({"format": "table_canonical_v1", "columns": ["value"], "rows": [{"value": preview}]})
+
+    # text (default): keep scalar text as-is; object/list become compact canonical JSON.
+    if isinstance(preview, str):
+        return preview
+    return _canon_json(preview)
+
+
+def _runtime_work_item_preview(work_item: Dict[str, Any], max_chars: int = 220) -> str:
+    preview = work_item.get("itemPreview")
+    if isinstance(preview, dict):
+        if isinstance(preview.get("title"), str) and preview.get("title", "").strip():
+            return f"title={str(preview.get('title')).strip()[:max_chars]}"
+        if isinstance(preview.get("id"), (str, int, float)):
+            return f"id={str(preview.get('id'))[:80]}"
+    if isinstance(preview, str):
+        s = preview.strip()
+        return s[:max_chars]
+    try:
+        return _canon_json(preview)[:max_chars]
+    except Exception:
+        return str(preview)[:max_chars]
+
+
 async def _serialize_image_media(context: GraphContext, artifact_id: str) -> Optional[Dict[str, Any]]:
     art = await context.artifact_store.get(artifact_id)
     mime = str(getattr(art, "mime_type", "") or "").strip().lower()
@@ -336,9 +373,18 @@ async def exec_llm(
     model_kind = str(node.get("data", {}).get("modelKind") or "llm").strip().lower()
 
     input_encoding = llm_params.input_encoding or "text"
+    runtime_work_item = raw_params.get("_work_item") if isinstance(raw_params.get("_work_item"), dict) else None
     serialized_inputs: List[str] = []
     serialized_media: List[Dict[str, Any]] = []
-    if not upstream_artifact_ids:
+    runtime_item_text = (
+        _serialize_runtime_work_item_input(runtime_work_item, input_encoding)
+        if isinstance(runtime_work_item, dict)
+        else None
+    )
+    if runtime_item_text is not None:
+        text = runtime_item_text
+        serialized_inputs = [text] if text else []
+    elif not upstream_artifact_ids:
         text = ""
     elif len(upstream_artifact_ids) == 1:
         aid = upstream_artifact_ids[0]
@@ -378,6 +424,23 @@ async def exec_llm(
         "Model input prepared",
         extra={"nodeId": node_id, "upstreamCount": len(upstream_artifact_ids), "inputChars": len(text), "inputEncoding": input_encoding},
     )
+    if isinstance(runtime_work_item, dict):
+        await context.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    "LLM work-item input: "
+                    f"mode={str(runtime_work_item.get('itemMode') or 'artifact')} "
+                    f"index={int(runtime_work_item.get('itemIndex') or 0)} "
+                    f"artifact={str(runtime_work_item.get('artifactId') or '')[:12]} "
+                    f"preview={_runtime_work_item_preview(runtime_work_item)}"
+                ),
+                "nodeId": node["id"],
+            }
+        )
 
 
     await context.bus.emit(
