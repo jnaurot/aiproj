@@ -164,10 +164,6 @@
 		commitPatch({ expr: normalizedExpr }, false);
 	}
 
-	function commitExpr(): void {
-		commitPatch({}, true);
-	}
-
 	function insertColumnName(col: string): void {
 		const name = String(col ?? '').trim();
 		if (!name) return;
@@ -210,7 +206,7 @@
 		<FilterRulesBuilder
 			group={rulesDraft}
 			columns={columns}
-			onChange={(next) => commitPatch({ rules: next }, true)}
+			onChange={(next) => commitPatch({ rules: next }, false)}
 		/>
 	{:else}
 		<div class="exprWrap">
@@ -220,7 +216,6 @@
 				value={exprDraft}
 				placeholder={'type boolean WHERE expression\nexample: "qty" > 0 AND "price" IS NOT NULL'}
 				onInput={(event) => draftExpr((event.currentTarget as HTMLTextAreaElement).value)}
-				onBlur={commitExpr}
 			/>
 		</div>
 	{/if}
