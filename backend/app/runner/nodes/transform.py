@@ -2832,6 +2832,161 @@ def _execute_filter_op(
     finally:
         con.close()
 
+
+def _resolve_derive_arg_value(raw_arg: Any, param_config: Dict[str, Any]) -> Tuple[str, List[Any], List[str]]:
+    if isinstance(raw_arg, dict):
+        if isinstance(raw_arg.get("column"), str) and str(raw_arg.get("column")).strip():
+            return quote_ident(str(raw_arg.get("column")).strip()), [], []
+        if isinstance(raw_arg.get("valueFrom"), dict):
+            value_from = raw_arg.get("valueFrom")
+            handle = str(value_from.get("handle") or "param_config").strip()
+            if handle != "param_config":
+                raise ValueError("derive formula valueFrom.handle must equal 'param_config'")
+            path = str(value_from.get("path") or "").strip()
+            if not path:
+                raise ValueError("derive formula valueFrom.path is required")
+            try:
+                resolved = _resolve_dot_path(param_config, path)
+            except KeyError as ex:
+                raise ValueError(f"derive formula valueFrom.path not found: {path}") from ex
+            return "?", [resolved], [path]
+    return "?", [raw_arg], []
+
+
+def _compile_derive_formula_sql(
+    formula: Dict[str, Any],
+    *,
+    param_config: Dict[str, Any],
+) -> Tuple[str, List[Any], List[str]]:
+    op = str(formula.get("op") or "").strip().lower()
+    args = formula.get("args")
+    if not isinstance(args, list):
+        raise ValueError("derive formula args must be an array")
+
+    sql_args: List[str] = []
+    bindings: List[Any] = []
+    used_paths: List[str] = []
+    for raw_arg in args:
+        arg_sql, arg_bindings, arg_paths = _resolve_derive_arg_value(raw_arg, param_config)
+        sql_args.append(arg_sql)
+        bindings.extend(arg_bindings)
+        for path in arg_paths:
+            if path and path not in used_paths:
+                used_paths.append(path)
+
+    if op == "add":
+        return (
+            f"(TRY_CAST({sql_args[0]} AS DOUBLE) + TRY_CAST({sql_args[1]} AS DOUBLE))",
+            bindings,
+            used_paths,
+        )
+    if op == "sub":
+        return (
+            f"(TRY_CAST({sql_args[0]} AS DOUBLE) - TRY_CAST({sql_args[1]} AS DOUBLE))",
+            bindings,
+            used_paths,
+        )
+    if op == "mul":
+        return (
+            f"(TRY_CAST({sql_args[0]} AS DOUBLE) * TRY_CAST({sql_args[1]} AS DOUBLE))",
+            bindings,
+            used_paths,
+        )
+    if op == "div":
+        return (
+            f"(TRY_CAST({sql_args[0]} AS DOUBLE) / NULLIF(TRY_CAST({sql_args[1]} AS DOUBLE), 0))",
+            bindings,
+            used_paths,
+        )
+    if op == "concat":
+        expr = " || ".join([f"COALESCE(CAST({arg} AS VARCHAR), '')" for arg in sql_args])
+        return f"({expr})", bindings, used_paths
+    if op == "lower":
+        return f"LOWER(CAST({sql_args[0]} AS VARCHAR))", bindings, used_paths
+    if op == "upper":
+        return f"UPPER(CAST({sql_args[0]} AS VARCHAR))", bindings, used_paths
+    if op == "trim":
+        return f"TRIM(CAST({sql_args[0]} AS VARCHAR))", bindings, used_paths
+    if op == "length":
+        return f"LENGTH(CAST({sql_args[0]} AS VARCHAR))", bindings, used_paths
+    if op == "coalesce":
+        return f"COALESCE({', '.join(sql_args)})", bindings, used_paths
+    raise ValueError(f"Unsupported derive formula op: {op}")
+
+
+def _execute_derive_op(
+    primary_df: pd.DataFrame,
+    spec: Dict[str, Any],
+    *,
+    param_config: Optional[Dict[str, Any]] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    mode = str(spec.get("mode") or "").strip().lower()
+    columns = spec.get("columns") if isinstance(spec.get("columns"), list) else []
+    rules = spec.get("rules") if isinstance(spec.get("rules"), list) else []
+    has_sql_expr = any(
+        isinstance(item, dict) and str(item.get("expr") or "").strip()
+        for item in columns
+    )
+    if mode not in {"rules", "sql"}:
+        mode = "sql" if has_sql_expr else "rules"
+    param_obj = param_config if isinstance(param_config, dict) else {}
+
+    if duckdb is None:
+        raise ModuleNotFoundError("duckdb is required for derive transform operations")
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("input", primary_df)
+        source_cols = [quote_ident(c) for c in list(primary_df.columns)]
+        if mode == "sql":
+            select_parts = list(source_cols)
+            for col in columns:
+                if not isinstance(col, dict):
+                    continue
+                name = str(col.get("name") or "").strip()
+                expr = str(col.get("expr") or "").strip()
+                if not name or not expr:
+                    continue
+                select_parts.append(f"({expr}) as {quote_ident(name)}")
+            sql_query = f"select {', '.join(select_parts)} from input"
+            out_df = con.execute(sql_query).df()
+            return out_df, {
+                "mode": "sql",
+                "selectSql": sql_query,
+                "bindingsCount": 0,
+                "paramPaths": [],
+            }
+
+        select_parts = list(source_cols)
+        bindings: List[Any] = []
+        used_paths: List[str] = []
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            name = str(rule.get("name") or "").strip()
+            formula = rule.get("formula")
+            if not name or not isinstance(formula, dict):
+                continue
+            expr_sql, expr_bindings, expr_paths = _compile_derive_formula_sql(
+                formula,
+                param_config=param_obj,
+            )
+            select_parts.append(f"({expr_sql}) as {quote_ident(name)}")
+            bindings.extend(expr_bindings)
+            for path in expr_paths:
+                if path and path not in used_paths:
+                    used_paths.append(path)
+        sql_query = f"select {', '.join(select_parts)} from input"
+        out_df = con.execute(sql_query, bindings).df()
+        return out_df, {
+            "mode": "rules",
+            "selectSql": sql_query,
+            "bindingsCount": len(bindings),
+            "paramPaths": used_paths,
+        }
+    finally:
+        con.close()
+
 # ---- duckdb execution ----
 
 def execute_transform_op(
@@ -3008,11 +3163,13 @@ def execute_transform_op(
             return con.execute(f"select {', '.join(parts)} from {primary_name}").df()
 
         elif op == "derive":
-            cols = list(primary_df.columns)
-            parts = [quote_ident(c) for c in cols]
-            for d in params["derive"]["columns"]:
-                parts.append(f"({d['expr']}) as {quote_ident(d['name'])}")
-            return con.execute(f"select {', '.join(parts)} from {primary_name}").df()
+            spec = params["derive"] if isinstance(params.get("derive"), dict) else {}
+            out_df, _ = _execute_derive_op(
+                primary_df,
+                spec,
+                param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+            )
+            return out_df
 
         elif op == "join":
             if not join_lookup:
@@ -3157,6 +3314,7 @@ def run_transform(
     tokenize_chunk_report: Optional[Dict[str, Any]] = None
     dataset_split_report: Optional[Dict[str, Any]] = None
     class_imbalance_report: Optional[Dict[str, Any]] = None
+    derive_compile_report: Optional[Dict[str, Any]] = None
     categorical_encode_report: Optional[Dict[str, Any]] = None
     numeric_scale_report: Optional[Dict[str, Any]] = None
     embedding_report: Optional[Dict[str, Any]] = None
@@ -3172,6 +3330,13 @@ def run_transform(
     if op == "filter":
         spec = params["filter"] if isinstance(params.get("filter"), dict) else {}
         out_df, filter_compile_report = _execute_filter_op(
+            primary_input,
+            spec,
+            param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+        )
+    elif op == "derive":
+        spec = params["derive"] if isinstance(params.get("derive"), dict) else {}
+        out_df, derive_compile_report = _execute_derive_op(
             primary_input,
             spec,
             param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
@@ -3333,6 +3498,8 @@ def run_transform(
         meta["inference_parity"] = inference_parity_report
     if filter_compile_report is not None:
         meta["filter_compile"] = filter_compile_report
+    if derive_compile_report is not None:
+        meta["derive_compile"] = derive_compile_report
     if op == "ml_contract":
         contract_spec = params.get("ml_contract") if isinstance(params.get("ml_contract"), dict) else {}
         meta["ml_contract"] = {

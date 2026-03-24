@@ -4470,12 +4470,25 @@ async def run_graph(
                                     ),
                                 )
                         elif op == "derive":
-                            derive_cols = ((norm.get("derive") or {}).get("columns") or [])
+                            derive_spec = norm.get("derive") or {}
+                            derive_mode = str(derive_spec.get("mode") or "").strip().lower()
+                            derive_cols = derive_spec.get("columns") if isinstance(derive_spec.get("columns"), list) else []
+                            derive_rules = derive_spec.get("rules") if isinstance(derive_spec.get("rules"), list) else []
                             expected_cols: list[str] = []
-                            for d in derive_cols:
-                                if not isinstance(d, dict):
-                                    continue
-                                expected_cols.extend(_extract_quoted_identifiers(str(d.get("expr") or "")))
+                            if derive_mode == "rules":
+                                for rule in derive_rules:
+                                    if not isinstance(rule, dict):
+                                        continue
+                                    formula = rule.get("formula")
+                                    args = formula.get("args") if isinstance(formula, dict) and isinstance(formula.get("args"), list) else []
+                                    for arg in args:
+                                        if isinstance(arg, dict) and str(arg.get("column") or "").strip():
+                                            expected_cols.append(str(arg.get("column")).strip())
+                            else:
+                                for d in derive_cols:
+                                    if not isinstance(d, dict):
+                                        continue
+                                    expected_cols.extend(_extract_quoted_identifiers(str(d.get("expr") or "")))
                             expected_cols = sorted(set(expected_cols))
                             if expected_cols:
                                 available_cols, available_source = _available_columns_for_input_handle(
@@ -5360,6 +5373,25 @@ async def run_graph(
                                     "message": (
                                         "transform: filter-compile "
                                         + json.dumps(filter_compile_meta, ensure_ascii=False, separators=(",", ":"))
+                                    ),
+                                    "nodeId": node_id,
+                                }
+                            )
+                        derive_compile_meta = (
+                            res.meta.get("derive_compile")
+                            if isinstance(res.meta, dict) and isinstance(res.meta.get("derive_compile"), dict)
+                            else None
+                        )
+                        if isinstance(derive_compile_meta, dict):
+                            await _emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": (
+                                        "transform: derive-compile "
+                                        + json.dumps(derive_compile_meta, ensure_ascii=False, separators=(",", ":"))
                                     ),
                                     "nodeId": node_id,
                                 }

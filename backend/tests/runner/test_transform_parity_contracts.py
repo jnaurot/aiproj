@@ -485,6 +485,99 @@ def test_filter_rules_null_operators() -> None:
 	assert not_null_out["id"].tolist() == [2]
 
 
+def test_derive_rules_compiles_and_produces_expected_columns() -> None:
+	_require_duckdb()
+	df = pd.DataFrame([{"value": 10, "text": " Hello "}])
+	norm = normalize_transform_params(
+		{
+			"op": "derive",
+			"derive": {
+				"mode": "rules",
+				"columns": [],
+				"rules": [
+					{"name": "value_plus_2", "formula": {"op": "add", "args": [{"column": "value"}, 2]}},
+					{"name": "text_clean", "formula": {"op": "trim", "args": [{"column": "text"}]}},
+					{"name": "text_len", "formula": {"op": "length", "args": [{"column": "text"}]}},
+				],
+			},
+		}
+	)
+	res = run_transform(params=norm, input_tables={"in": df}, join_lookup=None)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert "value_plus_2" in out_df.columns
+	assert "text_clean" in out_df.columns
+	assert "text_len" in out_df.columns
+	assert float(out_df.loc[0, "value_plus_2"]) == 12.0
+	assert str(out_df.loc[0, "text_clean"]) == "Hello"
+
+
+def test_derive_rules_resolves_param_value_from() -> None:
+	_require_duckdb()
+	df = pd.DataFrame([{"value": 10}])
+	norm = normalize_transform_params(
+		{
+			"op": "derive",
+			"derive": {
+				"mode": "rules",
+				"columns": [],
+				"rules": [
+					{
+						"name": "target_plus",
+						"formula": {
+							"op": "add",
+							"args": [
+								{"column": "value"},
+								{"valueFrom": {"handle": "param_config", "path": "prefs.bump"}},
+							],
+						},
+					}
+				],
+			},
+		}
+	)
+	res = run_transform(
+		params=norm,
+		input_tables={"in": df},
+		join_lookup=None,
+		param_inputs={"param_config": {"prefs": {"bump": 5}}},
+	)
+	out_df = pd.read_csv(pd.io.common.BytesIO(res.payload_bytes))
+	assert float(out_df.loc[0, "target_plus"]) == 15.0
+
+
+def test_derive_rules_missing_param_path_raises_error() -> None:
+	_require_duckdb()
+	df = pd.DataFrame([{"value": 10}])
+	norm = normalize_transform_params(
+		{
+			"op": "derive",
+			"derive": {
+				"mode": "rules",
+				"columns": [],
+				"rules": [
+					{
+						"name": "target_plus",
+						"formula": {
+							"op": "add",
+							"args": [
+								{"column": "value"},
+								{"valueFrom": {"handle": "param_config", "path": "prefs.missing"}},
+							],
+						},
+					}
+				],
+			},
+		}
+	)
+	with pytest.raises(ValueError, match="derive formula valueFrom.path not found"):
+		run_transform(
+			params=norm,
+			input_tables={"in": df},
+			join_lookup=None,
+			param_inputs={"param_config": {"prefs": {"bump": 5}}},
+		)
+
+
 @pytest.mark.parametrize(
 	("params", "payload_type"),
 	[
