@@ -166,6 +166,20 @@ class TestLLMParams:
                 "output_mode": "json"
             })
 
+    def test_allows_empty_output_schema_for_json_mode(self):
+        """Empty object schema is valid and means unconstrained JSON output."""
+        params = LLMParams.model_validate(
+            {
+                "model": "gpt-4",
+                "user_prompt": "Test",
+                "base_url": "http://api.example.com",
+                "output_mode": "json",
+                "output_schema": {},
+            }
+        )
+        assert params.output_mode == "json"
+        assert params.output_schema == {}
+
     def test_requires_embedding_contract_for_embeddings_mode(self):
         with pytest.raises(ValueError, match="embedding_contract required when output_mode='embeddings'"):
             LLMParams.model_validate(

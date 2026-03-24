@@ -956,7 +956,7 @@ class LLMParams(NodeParamSchema):
     def _validate_contract(self):
         if not self.base_url and not self.connection_ref:
             raise ValueError("Either base_url or connection_ref is required")
-        if self.output_mode == "json" and not self.output_schema:
+        if self.output_mode == "json" and self.output_schema is None:
             raise ValueError("output_schema required when output_mode='json'")
         if self.output_mode == "embeddings":
             contract = self.embedding_contract
