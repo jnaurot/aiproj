@@ -400,6 +400,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: hasOutput = !!activeArtifactId;
 	$: displayNodeStatus = getHeaderNodeStatus(nodeBinding as any);
 	$: headerCachePill = getHeaderCachePill(nodeOut, nodeBinding as any, displayNodeStatus);
+	$: nodeLabelById = new Map(
+		(nodes ?? []).map((node) => [
+			String(node.id ?? ''),
+			String((node.data as any)?.label ?? (node.data as any)?.kind ?? '').trim()
+		])
+	);
+	$: edgeById = new Map((edges ?? []).map((edge) => [String(edge.id ?? ''), edge]));
 	$: isComponentEditContext = $graphStore.editingContext === 'component';
 	$: editingComponentName = String($graphStore.componentEditSession?.componentId ?? '').trim() || 'unknown';
 	$: headerContextLabels = buildHeaderContextLabels({
@@ -429,14 +436,53 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
 		const q = runLogFilter.trim().toLowerCase();
 		if (!q) return true;
+		const nodeName = String(nodeLabelById.get(String(entry.nodeId ?? '')) ?? '');
+		const edgeTag = runLogEdgeTag(entry);
 		const parts = [
 			String(entry.ts ?? ''),
 			String(entry.message ?? ''),
 			String(entry.nodeId ?? ''),
+			nodeName,
+			edgeTag,
 			Array.isArray(entry.componentPath) ? entry.componentPath.join(' > ') : ''
 		];
 		return parts.join(' ').toLowerCase().includes(q);
 	});
+
+	function nodeToken(input: string): string {
+		const stripped = String(input ?? '').replace(/[^A-Za-z0-9]+/g, '').trim();
+		if (stripped.length > 0) return stripped.slice(0, 5);
+		const fallback = String(input ?? '').replace(/\s+/g, '').trim();
+		return fallback.slice(0, 5);
+	}
+
+	function edgeIdFromMessage(message: string): string | null {
+		const src = String(message ?? '');
+		const direct = src.match(/\be_[A-Za-z0-9-]{6,}\b/);
+		if (direct?.[0]) return direct[0];
+		const quoted = src.match(/edge\s+['"]([^'"]+)['"]/i);
+		if (quoted?.[1]) return quoted[1];
+		return null;
+	}
+
+	function runLogNodeName(entry: { nodeId?: string }): string {
+		const nodeId = String(entry.nodeId ?? '').trim();
+		if (!nodeId) return '';
+		return String(nodeLabelById.get(nodeId) ?? '').trim();
+	}
+
+	function runLogEdgeTag(entry: { edgeId?: string; message?: string }): string {
+		const edgeId = String(entry.edgeId ?? '').trim() || String(edgeIdFromMessage(String(entry.message ?? '')) ?? '').trim();
+		if (!edgeId) return '';
+		const edge = edgeById.get(edgeId);
+		if (!edge) return edgeId;
+		const sourceId = String((edge as any).source ?? '').trim();
+		const targetId = String((edge as any).target ?? '').trim();
+		const sourceName = String(nodeLabelById.get(sourceId) ?? sourceId).trim();
+		const targetName = String(nodeLabelById.get(targetId) ?? targetId).trim();
+		const abbrev = `${nodeToken(sourceName)}-${nodeToken(targetName)}`;
+		return `${edgeId} ${abbrev}`;
+	}
 	$: warningSummaryRows = Object.values(($graphStore.queueRuntime?.warningSummary ?? {}) as Record<string, any>)
 		.filter((row) => Number((row as any)?.count ?? 0) > 1)
 		.sort(
@@ -3276,7 +3322,10 @@ async function scrollToBottom() {
 									<span class="nid">[Component: {l.componentPath.join(' > ')}]</span>
 								{/if}
 								{#if l.nodeId}
-									<span class="nid">[{l.nodeId}]</span>
+									<span class="nid">[{l.nodeId}{runLogNodeName(l) ? ` | ${runLogNodeName(l)}` : ''}]</span>
+								{/if}
+								{#if runLogEdgeTag(l)}
+									<span class="nid">[edge: {runLogEdgeTag(l)}]</span>
 								{/if}
 								{l.message}
 							</span>

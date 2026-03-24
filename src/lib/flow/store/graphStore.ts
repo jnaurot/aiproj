@@ -124,6 +124,7 @@ type RunLog = {
 	level: LogLevel;
 	message: string;
 	nodeId?: string;
+	edgeId?: string;
 	componentPath?: string[];
 };
 const RUN_IDLE = "idle"
@@ -1324,7 +1325,8 @@ function logPush(
 	level: LogLevel,
 	message: string,
 	nodeId?: string,
-	componentPath?: string[]
+	componentPath?: string[],
+	edgeId?: string
 ) {
 	logSeq += 1;
 	const resolvedComponentPath = componentPath?.length ? componentPath : _componentPathFromNodeId(state, nodeId);
@@ -1333,7 +1335,15 @@ function logPush(
 		...state,
 		logs: [
 			...state.logs,
-			{ id: logSeq, ts: nowTs(), level, message: normalizedMessage, nodeId, componentPath: resolvedComponentPath }
+			{
+				id: logSeq,
+				ts: nowTs(),
+				level,
+				message: normalizedMessage,
+				nodeId,
+				edgeId: edgeId ? String(edgeId) : undefined,
+				componentPath: resolvedComponentPath
+			}
 		]
 	};
 }
@@ -2326,6 +2336,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		}
 		case 'log': {
 			const message = String(evt.message ?? '');
+			const edgeId = String((evt as any)?.edgeId ?? '').trim() || undefined;
 			const softFailMatch = message.match(/\[scheduler\]\s+soft-fail skip node=([^\s]+).*items=(\d+)/i);
 			if (softFailMatch) {
 				const nodeId = String(evt.nodeId ?? softFailMatch[1] ?? '').trim();
@@ -2350,9 +2361,9 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						}
 					}
 				};
-				return logPush(nextState, evt.level, message, evt.nodeId, (evt as any).componentPath);
+				return logPush(nextState, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
 			}
-			return logPush(state, evt.level, message, evt.nodeId, (evt as any).componentPath);
+			return logPush(state, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
 		}
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
