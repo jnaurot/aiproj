@@ -71,6 +71,56 @@ function sourceApiNodeWithQuery(query: Record<string, string>): Node<PipelineNod
 	};
 }
 
+function transformFilterNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_filter',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'filter',
+			label: 'Filter',
+			params: {
+				op: 'filter',
+				filter: {
+					mode: 'sql',
+					expr: '"salary" > 40000',
+					rules: { kind: 'group', op: 'all', conditions: [] }
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformDeriveNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_derive',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'derive',
+			label: 'Derive',
+			params: {
+				op: 'derive',
+				derive: {
+					mode: 'sql',
+					columns: [{ name: 'x2', expr: '"value" * 2' }],
+					rules: [
+						{
+							name: 'value_plus_bonus',
+							formula: {
+								op: 'add',
+								args: [{ column: 'value' }, { valueFrom: { handle: 'param_config', path: 'prefs.bonus' } }]
+							}
+						}
+					]
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
 describe('updateNodeParamsValidated builtin args replacement', () => {
 	it('replaces builtin args object on operation switch instead of deep-merging keys', () => {
 		const nodes = [
@@ -171,5 +221,62 @@ describe('updateNodeParamsValidated source api map replacement', () => {
 		>;
 		expect(params.json_item_path).toBe('$.jobs[]');
 		expect(params.json_item_strict).toBe(true);
+	});
+});
+
+describe('updateNodeParamsValidated transform dual-mode patch canonicalization', () => {
+	it('persists filter mode/rules when editor patches flat fields', () => {
+		const nodes = [transformFilterNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_filter', {
+			mode: 'rules',
+			expr: '',
+			rules: {
+				kind: 'group',
+				op: 'all',
+				conditions: [
+					{
+						kind: 'condition',
+						column: 'job_type',
+						op: 'eq',
+						value: { valueFrom: { handle: 'param_config', path: 'preferences.type' } }
+					}
+				]
+			}
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_filter')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.op).toBe('filter');
+		expect(params.filter.mode).toBe('rules');
+		expect(Array.isArray(params.filter.rules.conditions)).toBe(true);
+		expect(params.filter.rules.conditions[0].column).toBe('job_type');
+	});
+
+	it('persists derive mode/rules when editor patches flat fields', () => {
+		const nodes = [transformDeriveNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_derive', {
+			mode: 'rules',
+			rules: [
+				{
+					name: 'value_plus_bonus',
+					formula: {
+						op: 'add',
+						args: [{ column: 'value' }, { valueFrom: { handle: 'param_config', path: 'prefs.bonus' } }]
+					}
+				}
+			],
+			columns: []
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_derive')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.op).toBe('derive');
+		expect(params.derive.mode).toBe('rules');
+		expect(Array.isArray(params.derive.rules)).toBe(true);
+		expect(params.derive.rules[0].formula.op).toBe('add');
 	});
 });

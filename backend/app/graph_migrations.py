@@ -354,6 +354,73 @@ def _canonicalize_node_port_declarations(node: Dict[str, Any], notes: List[Dict[
 		)
 
 
+def _canonicalize_transform_dual_mode_params(node: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+	data = _node_data(node)
+	if str(data.get("kind") or "").strip().lower() != "transform":
+		return
+	params = data.get("params")
+	if not isinstance(params, dict):
+		return
+	op = str(params.get("op") or "").strip().lower()
+	if op == "filter":
+		raw_filter = params.get("filter")
+		if not isinstance(raw_filter, dict):
+			return
+		mode_raw = str(raw_filter.get("mode") or "").strip().lower()
+		expr = str(raw_filter.get("expr") or "").strip()
+		rules = raw_filter.get("rules")
+		has_rules = isinstance(rules, dict) and isinstance(rules.get("conditions"), list) and len(rules.get("conditions") or []) > 0
+		if mode_raw in {"rules", "sql"}:
+			return
+		if expr and has_rules:
+			raw_filter["mode"] = "sql"
+			notes.append(
+				{
+					"code": "TRANSFORM_FILTER_MODE_AMBIGUOUS_RESOLVED",
+					"nodeId": str(node.get("id") or ""),
+					"severity": "warning",
+					"message": "Transform filter had both legacy expr and rules with no mode; canonicalized mode=sql."
+				}
+			)
+			return
+		raw_filter["mode"] = "sql" if expr else "rules"
+		return
+	if op == "derive":
+		raw_derive = params.get("derive")
+		if not isinstance(raw_derive, dict):
+			return
+		mode_raw = str(raw_derive.get("mode") or "").strip().lower()
+		columns = raw_derive.get("columns")
+		has_sql_columns = isinstance(columns, list) and any(
+			isinstance(entry, dict)
+			and str(entry.get("name") or "").strip()
+			and str(entry.get("expr") or "").strip()
+			for entry in columns
+		)
+		rules = raw_derive.get("rules")
+		has_rules = isinstance(rules, list) and any(
+			isinstance(entry, dict)
+			and str(entry.get("name") or "").strip()
+			and isinstance(entry.get("formula"), dict)
+			for entry in rules
+		)
+		if mode_raw in {"rules", "sql"}:
+			return
+		if has_sql_columns and has_rules:
+			raw_derive["mode"] = "sql"
+			notes.append(
+				{
+					"code": "TRANSFORM_DERIVE_MODE_AMBIGUOUS_RESOLVED",
+					"nodeId": str(node.get("id") or ""),
+					"severity": "warning",
+					"message": "Transform derive had both legacy SQL columns and rules with no mode; canonicalized mode=sql."
+				}
+			)
+			return
+		raw_derive["mode"] = "sql" if has_sql_columns else "rules"
+		return
+
+
 def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
 	notes: List[Dict[str, Any]] = []
 	graph = copy.deepcopy(raw if isinstance(raw, dict) else {})
@@ -482,6 +549,7 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		if nid:
 			node_map[nid] = next_node
 		_canonicalize_builtin_tool_params(next_node, notes)
+		_canonicalize_transform_dual_mode_params(next_node, notes)
 		_canonicalize_node_schema_contract(next_node, notes)
 		_repair_expected_input_schemas(next_node, notes)
 		canonical_nodes.append(next_node)
