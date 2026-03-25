@@ -118,6 +118,7 @@ class RunArtifactBinding(BaseModel):
     run_id: str
     graph_id: str
     node_id: str
+    handle: str = "out"
     artifact_id: str
     status: str  # "computed" | "cached" | "reused"
     bound_at: datetime
@@ -1683,14 +1684,26 @@ class RunBindings:
         self.graph_id = str(graph_id or "")
         self._bindings: Dict[str, RunArtifactBinding] = {}
 
-    def _key(self, node_id: str) -> str:
-        return f"{self.graph_id}:{node_id}"
+    def _normalize_handle(self, handle: Optional[str]) -> str:
+        h = str(handle or "out").strip()
+        return h or "out"
 
-    def bind(self, node_id: str, artifact_id: str, status: str = "computed") -> RunArtifactBinding:
+    def _key(self, node_id: str, handle: Optional[str] = "out") -> str:
+        return f"{self.graph_id}:{node_id}:{self._normalize_handle(handle)}"
+
+    def bind(
+        self,
+        node_id: str,
+        artifact_id: str,
+        status: str = "computed",
+        handle: Optional[str] = "out",
+    ) -> RunArtifactBinding:
+        normalized_handle = self._normalize_handle(handle)
         logger.debug(
-            "run_binding_bind run_id=%s node_id=%s artifact_id=%s status=%s",
+            "run_binding_bind run_id=%s node_id=%s handle=%s artifact_id=%s status=%s",
             self.run_id,
             node_id,
+            normalized_handle,
             artifact_id,
             status,
         )
@@ -1698,22 +1711,34 @@ class RunBindings:
             run_id=self.run_id,
             graph_id=self.graph_id,
             node_id=node_id,
+            handle=normalized_handle,
             artifact_id=artifact_id,
             status=status,
             bound_at=datetime.now(timezone.utc),
         )
-        self._bindings[self._key(node_id)] = b
+        self._bindings[self._key(node_id, normalized_handle)] = b
         return b
 
-    def get(self, node_id: str) -> Optional[RunArtifactBinding]:
-        return self._bindings.get(self._key(node_id))
+    def get(self, node_id: str, handle: Optional[str] = "out") -> Optional[RunArtifactBinding]:
+        normalized_handle = self._normalize_handle(handle)
+        binding = self._bindings.get(self._key(node_id, normalized_handle))
+        if binding is not None:
+            return binding
+        # Backward-compat fallback for legacy callers that ask for "out" when only
+        # one handle was bound under a non-default key.
+        if normalized_handle == "out":
+            prefix = f"{self.graph_id}:{node_id}:"
+            matches = [b for k, b in self._bindings.items() if k.startswith(prefix)]
+            if len(matches) == 1:
+                return matches[0]
+        return None
 
-    def artifact_id_for(self, node_id: str) -> Optional[str]:
-        b = self._bindings.get(self._key(node_id))
+    def artifact_id_for(self, node_id: str, handle: Optional[str] = "out") -> Optional[str]:
+        b = self.get(node_id, handle=handle)
         return b.artifact_id if b else None
 
-    def get_current_artifact(self, node_id: str) -> Optional[str]:
-        return self.artifact_id_for(node_id)
+    def get_current_artifact(self, node_id: str, handle: Optional[str] = "out") -> Optional[str]:
+        return self.artifact_id_for(node_id, handle=handle)
 
     def all(self) -> List[RunArtifactBinding]:
         return list(self._bindings.values())

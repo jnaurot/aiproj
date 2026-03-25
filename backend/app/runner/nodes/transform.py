@@ -7,7 +7,7 @@ import re
 import unicodedata
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -968,6 +968,14 @@ def inputs_fingerprint(inputs: List[Tuple[str, str]]) -> List[Dict[str, str]]:
 
 @dataclass(frozen=True)
 class TransformResult:
+    payload_bytes: bytes
+    mime_type: str
+    meta: Dict[str, Any]
+    additional_outputs: Dict[str, "TransformAdditionalOutput"] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TransformAdditionalOutput:
     payload_bytes: bytes
     mime_type: str
     meta: Dict[str, Any]

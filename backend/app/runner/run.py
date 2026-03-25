@@ -223,7 +223,8 @@ async def resolve_input_refs(
         src = e.get("source")
         if not src:
             continue
-        aid = get_current_artifact(src)
+        source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+        aid = get_current_artifact(src, source_handle)
         if not aid:
             continue
         src_node = get_node_by_id(src) or {}
@@ -3297,13 +3298,13 @@ async def run_graph(
             "active_work_batch", default=[]
         )
 
-        def get_current_artifact(node_id_ref: str) -> Optional[str]:
+        def get_current_artifact(node_id_ref: str, source_handle: str = "out") -> Optional[str]:
             overrides = _work_input_overrides.get({})
             if isinstance(overrides, dict):
                 aid = overrides.get(str(node_id_ref))
                 if isinstance(aid, str) and aid.strip():
                     return aid.strip()
-            return context.bindings.get_current_artifact(node_id_ref)
+            return context.bindings.get_current_artifact(node_id_ref, handle=source_handle)
         component_runtime_state: Dict[str, Dict[str, Any]] = {}
         component_parent_for_internal = {}
         component_meta_by_parent = {}
@@ -4156,8 +4157,9 @@ async def run_graph(
                         else:
                             for e in join_edges:
                                 source_node = str(e.get("source") or "<unknown>")
+                                source_handle = str(e.get("sourceHandle") or "out")
                                 input_handle = str(e.get("targetHandle") or "in")
-                                source_artifact = get_current_artifact(source_node)
+                                source_artifact = get_current_artifact(source_node, source_handle)
                                 artifact_label = str(source_artifact or "<none>")
                                 if source_node.startswith("n_"):
                                     short_node = f"n_{source_node[2:10]}"
@@ -4247,11 +4249,12 @@ async def run_graph(
                             src = e.get("source")
                             if not src:
                                 continue
-                            src_artifact_id = get_current_artifact(src)
+                            source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+                            src_artifact_id = get_current_artifact(src, source_handle)
                             if not src_artifact_id:
                                 continue
                             upstream_source_by_artifact[src_artifact_id] = str(src)
-                            upstream_source_handle_by_artifact[src_artifact_id] = str(e.get("targetHandle") or "in")
+                            upstream_source_handle_by_artifact[src_artifact_id] = source_handle
                             contract = (e.get("data", {}) or {}).get("contract", {}) or {}
                             payload = contract.get("payload", {}) if isinstance(contract, dict) else {}
                             target_hint = payload.get("target", {}) if isinstance(payload, dict) else {}
@@ -5717,6 +5720,165 @@ async def run_graph(
                         )
                         context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
 
+                        additional_outputs = (
+                            res.additional_outputs if isinstance(getattr(res, "additional_outputs", None), dict) else {}
+                        )
+                        for output_handle, output_payload in additional_outputs.items():
+                            handle = str(output_handle or "").strip()
+                            if not handle or handle == "out":
+                                continue
+                            output_bytes = bytes(getattr(output_payload, "payload_bytes", b"") or b"")
+                            output_mime = str(getattr(output_payload, "mime_type", "") or "").strip() or "application/octet-stream"
+                            output_meta = (
+                                getattr(output_payload, "meta", {})
+                                if isinstance(getattr(output_payload, "meta", {}), dict)
+                                else {}
+                            )
+                            output_payload_type = str(output_meta.get("payloadType") or "").strip().lower()
+                            if output_payload_type not in {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}:
+                                output_payload_type = "json" if "json" in output_mime.lower() else "binary"
+
+                            output_artifact_id = f"{exec_key}::{handle}"
+                            output_schema_for_metadata: Optional[Dict[str, Any]] = None
+                            if output_payload_type == "table":
+                                output_columns = canonical_table_columns(
+                                    [{"name": str(c), "type": "unknown"} for c in (output_meta.get("columns") or [])]
+                                )
+                                output_table_schema = _table_schema_envelope(
+                                    columns=output_columns,
+                                    row_count=(output_meta.get("row_count") if isinstance(output_meta, dict) else None),
+                                    provenance={
+                                        "sourceKind": "transform",
+                                        "upstream": [
+                                            {
+                                                "nodeId": input_provenance_by_handle.get(input_handle, {})
+                                                .get("upstream", {})
+                                                .get("nodeId"),
+                                                "sourceHandle": input_provenance_by_handle.get(input_handle, {})
+                                                .get("upstream", {})
+                                                .get("sourceHandle", input_handle),
+                                            }
+                                            for input_handle, _ in input_refs
+                                        ],
+                                    },
+                                )
+                                output_base_payload_schema = {
+                                    "schema_version": 1,
+                                    "type": "table",
+                                    "columns": output_columns,
+                                    "schema": output_table_schema,
+                                }
+                                output_schema_for_metadata = output_table_schema
+                            elif output_payload_type == "json":
+                                output_text = output_bytes.decode("utf-8", errors="replace")
+                                try:
+                                    output_value = json.loads(output_text)
+                                except Exception:
+                                    output_value = output_text
+                                output_json_schema = _json_payload_value_schema(output_value)
+                                output_base_payload_schema = {
+                                    "schema_version": 1,
+                                    "type": "json",
+                                    "schema": output_json_schema,
+                                }
+                                output_schema_for_metadata = (
+                                    output_json_schema if isinstance(output_json_schema, dict) else None
+                                )
+                            else:
+                                output_base_payload_schema = {"schema_version": 1, "type": output_payload_type}
+                                output_schema_for_metadata = (
+                                    output_base_payload_schema
+                                    if isinstance(output_base_payload_schema, dict)
+                                    else None
+                                )
+
+                            output_schema_fp = _schema_fp_for_artifact(
+                                payload_schema=output_base_payload_schema,
+                                observed_typed_schema=typed_schema_observed,
+                                expected_typed_schema=typed_schema_expected,
+                            )
+                            output_lineage_v1 = await _artifact_lineage_v1(
+                                artifact_id=output_artifact_id,
+                                upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
+                                node_params=norm if isinstance(norm, dict) else {},
+                                node_id=node_id,
+                                run_id=run_id,
+                                graph_id=context.graph_id,
+                                exec_key=f"{exec_key}::{handle}",
+                                artifact_store=context.artifact_store,
+                            )
+                            output_base_payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
+                                exec_key=f"{exec_key}::{handle}",
+                                node_id=node_id,
+                                node_type=kind,
+                                node_impl_version=node_impl_version,
+                                params_fingerprint=node_state_hash,
+                                upstream_artifact_ids=sorted([aid for _, aid in input_refs]),
+                                contract_fingerprint=contract_fingerprint,
+                                schema_fingerprint=output_schema_fp,
+                                mime_type=output_mime,
+                                payload_type=output_payload_type,
+                                schema=output_schema_for_metadata,
+                                created_at_iso=created_at_dt.isoformat(),
+                                run_id=run_id,
+                                graph_id=context.graph_id,
+                                determinism_fingerprint=_determinism_fingerprint(determinism_env),
+                                code_hash=_determinism_code_hash_from_env(determinism_env),
+                                profile_lock=_determinism_profile_lock_from_env(determinism_env),
+                                component_context=(
+                                    (n.get("data", {}) or {}).get("_componentContext")
+                                    if isinstance((n.get("data", {}) or {}).get("_componentContext"), dict)
+                                    else None
+                                ),
+                                lineage_v1=output_lineage_v1,
+                            )
+                            output_artifact = Artifact(
+                                artifact_id=output_artifact_id,
+                                node_kind=kind,
+                                params_hash=node_state_hash,
+                                upstream_ids=sorted([aid for _, aid in input_refs]),
+                                created_at=created_at_dt,
+                                execution_version=context.execution_version,
+                                mime_type=output_mime,
+                                payload_type=output_payload_type,
+                                size_bytes=len(output_bytes),
+                                storage_uri=f"artifact://{output_artifact_id}",
+                                payload_schema=output_base_payload_schema,
+                                run_id=run_id,
+                                graph_id=context.graph_id,
+                                node_id=node_id,
+                                exec_key=f"{exec_key}::{handle}",
+                            )
+                            committed_output_artifact_id = await context.artifact_store.write(output_artifact, output_bytes)
+                            await _record_consumers(
+                                context=context,
+                                input_artifact_ids=[aid for _, aid in input_refs],
+                                consumer_run_id=run_id,
+                                consumer_node_id=node_id,
+                                consumer_exec_key=f"{exec_key}::{handle}",
+                                output_artifact_id=committed_output_artifact_id,
+                            )
+                            context.bindings.bind(
+                                node_id=node_id,
+                                handle=handle,
+                                artifact_id=committed_output_artifact_id,
+                                status="computed",
+                            )
+                            await _emit(
+                                {
+                                    "type": "node_output",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "artifactId": committed_output_artifact_id,
+                                    "mimeType": output_mime,
+                                    "payloadType": output_payload_type,
+                                    "handle": handle,
+                                    "sourceObservability": _source_observability_from_artifact(output_artifact),
+                                    "primingArtifact": _source_priming_artifact_from_artifact(output_artifact),
+                                }
+                            )
+
                         # cache index
                         await cache.store_artifact_id(exec_key, committed_artifact_id)
 
@@ -6708,11 +6870,12 @@ async def run_graph(
         async def _expand_edge_work_items(
             *,
             source_node_id: str,
+            source_handle: str,
             edge_obj: Dict[str, Any],
             edge_id: str,
             target_handle: str,
         ) -> List[Dict[str, Any]]:
-            artifact_id = str(get_current_artifact(source_node_id) or "").strip()
+            artifact_id = str(get_current_artifact(source_node_id, source_handle) or "").strip()
             if not artifact_id:
                 return []
             item_mode = _edge_work_item_mode(edge_obj)
@@ -6723,6 +6886,7 @@ async def run_graph(
                     {
                         "edgeId": edge_id,
                         "sourceNodeId": source_node_id,
+                        "sourceHandle": source_handle,
                         "targetHandle": target_handle,
                         "artifactId": artifact_id,
                         "itemIndex": 0,
@@ -6737,6 +6901,7 @@ async def run_graph(
                     {
                         "edgeId": edge_id,
                         "sourceNodeId": source_node_id,
+                        "sourceHandle": source_handle,
                         "targetHandle": target_handle,
                         "artifactId": artifact_id,
                         "itemIndex": 0,
@@ -6764,6 +6929,7 @@ async def run_graph(
                         {
                             "edgeId": edge_id,
                             "sourceNodeId": source_node_id,
+                            "sourceHandle": source_handle,
                             "targetHandle": target_handle,
                             "artifactId": artifact_id,
                             "itemIndex": idx,
@@ -6791,6 +6957,7 @@ async def run_graph(
                         {
                             "edgeId": edge_id,
                             "sourceNodeId": source_node_id,
+                            "sourceHandle": source_handle,
                             "targetHandle": target_handle,
                             "artifactId": artifact_id,
                             "itemIndex": idx,
@@ -6803,6 +6970,7 @@ async def run_graph(
                     {
                         "edgeId": edge_id,
                         "sourceNodeId": source_node_id,
+                        "sourceHandle": source_handle,
                         "targetHandle": target_handle,
                         "artifactId": artifact_id,
                         "itemIndex": 0,
@@ -7826,12 +7994,13 @@ async def run_graph(
                     edge_id = str(edge_info.get("edgeId") or "")
                     nb = str(edge_info.get("target") or "")
                     target_handle = str(edge_info.get("targetHandle") or "in")
+                    source_handle = str(edge_info.get("sourceHandle") or "out")
                     if not edge_id or not nb:
                         continue
                     edge_obj = edges.get(edge_id) or {}
                     edge_mode = _edge_mode(edge_obj)
                     if edge_mode != "work":
-                        source_artifact_id = str(get_current_artifact(node_id) or "").strip()
+                        source_artifact_id = str(get_current_artifact(node_id, source_handle) or "").strip()
                         meaningful, empty_reason = await _artifact_has_meaningful_payload(source_artifact_id)
                         if meaningful:
                             provided_nonwork_edges_by_handle.setdefault(nb, {}).setdefault(target_handle, {}).setdefault(
@@ -7855,6 +8024,7 @@ async def run_graph(
                         continue
                     work_items = await _expand_edge_work_items(
                         source_node_id=node_id,
+                        source_handle=source_handle,
                         edge_obj=edge_obj,
                         edge_id=edge_id,
                         target_handle=target_handle,
@@ -7970,7 +8140,8 @@ async def run_graph(
                                 if int(node_inflight_counts.get(upstream_node, 0)) > 0:
                                     # Suppress warning while upstream is still running/busy.
                                     continue
-                                source_artifact_id = str(get_current_artifact(upstream_node) or "").strip()
+                                source_handle = str(edge_obj.get("sourceHandle") or "out").strip() or "out"
+                                source_artifact_id = str(get_current_artifact(upstream_node, source_handle) or "").strip()
                                 meaningful, empty_reason = await _artifact_has_meaningful_payload(source_artifact_id)
                                 if meaningful:
                                     provided_nonwork_edges_by_handle.setdefault(candidate, {}).setdefault(handle, {}).setdefault(
