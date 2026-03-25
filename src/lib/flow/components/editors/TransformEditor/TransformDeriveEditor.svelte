@@ -160,6 +160,10 @@
 		commitPatch({ mode: nextMode }, false);
 	}
 
+	function commitNow(): void {
+		commitPatch({}, true);
+	}
+
 	function updateSqlColumn(index: number, key: keyof DeriveSqlColumn, value: string): void {
 		const nextRows = sqlColumnsDraft.map((item, current) => (current === index ? { ...item, [key]: value } : item));
 		commitPatch({ sqlColumns: nextRows }, false);
@@ -236,6 +240,7 @@
 		<button class={`small ${mode === 'sql' ? 'active' : ''}`} type="button" on:click={() => setMode('sql')}>
 			SQL (advanced)
 		</button>
+		<button class="small commit" type="button" on:click={commitNow}>Commit changes</button>
 	</div>
 
 	{#if knownColumns.length > 0}
@@ -380,6 +385,11 @@
 	button.small.active {
 		background: rgba(59, 130, 246, 0.24);
 		border-color: rgba(59, 130, 246, 0.6);
+	}
+	button.commit {
+		margin-left: auto;
+		border-color: rgba(59, 130, 246, 0.5);
+		background: rgba(59, 130, 246, 0.14);
 	}
 	button.danger {
 		border-color: rgba(239, 68, 68, 0.5);
