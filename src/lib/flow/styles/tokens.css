@@ -9,10 +9,18 @@
 	--color-border-default: var(--theme-border-default);
 
 	--color-control-bg: var(--theme-control-bg);
+	--color-control-bg-hover: var(--theme-control-bg-hover);
 	--color-control-text: var(--theme-control-text);
 	--color-control-border: var(--theme-control-border);
+	--color-control-border-focus: var(--theme-control-border-focus);
+	--color-control-ring: var(--theme-control-ring);
+	--color-control-disabled-bg: var(--theme-control-disabled-bg);
+	--color-control-disabled-text: var(--theme-control-disabled-text);
+	--color-control-disabled-border: var(--theme-control-disabled-border);
 	--color-control-option-bg: var(--theme-control-option-bg);
 	--color-control-option-text: var(--theme-control-option-text);
+	--color-control-option-hover-bg: var(--theme-control-option-hover-bg);
+	--color-control-option-selected-bg: var(--theme-control-option-selected-bg);
 	--color-control-option-active-bg: var(--theme-control-option-active-bg);
 
 	--color-button-bg: var(--theme-button-bg);

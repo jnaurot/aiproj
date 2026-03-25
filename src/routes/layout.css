@@ -6,10 +6,65 @@
 	background: var(--color-control-bg);
 	color: var(--color-control-text);
 	border-color: var(--color-control-border);
+	-webkit-text-fill-color: var(--color-control-text);
+	caret-color: var(--color-control-text);
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease,
+		box-shadow 120ms ease;
+}
+
+:global(select:hover) {
+	background: var(--color-control-bg-hover);
+}
+
+:global(select:focus),
+:global(select:focus-visible) {
+	outline: none;
+	border-color: var(--color-control-border-focus);
+	box-shadow: 0 0 0 2px var(--color-control-ring);
+}
+
+:global(select:disabled) {
+	background: var(--color-control-disabled-bg);
+	color: var(--color-control-disabled-text);
+	border-color: var(--color-control-disabled-border);
+	-webkit-text-fill-color: var(--color-control-disabled-text);
+	cursor: not-allowed;
 }
 
 :global(select option),
 :global(select optgroup) {
 	background: var(--color-control-option-bg);
 	color: var(--color-control-option-text);
+}
+
+:global(select option:hover) {
+	background: var(--color-control-option-hover-bg);
+}
+
+:global(select option:checked),
+:global(select option:focus) {
+	background: var(--color-control-option-selected-bg);
+	color: var(--color-control-option-text);
+}
+
+:global(:root[data-theme='dark'] select) {
+	color-scheme: dark;
+}
+
+:global(:root[data-theme='light'] select) {
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:global(:root:not([data-theme]) select) {
+		color-scheme: dark;
+	}
+}
+
+@media (prefers-color-scheme: light) {
+	:global(:root:not([data-theme]) select) {
+		color-scheme: light;
+	}
 }

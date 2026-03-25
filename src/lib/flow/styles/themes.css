@@ -10,10 +10,18 @@
 	--theme-border-default: #d7deea;
 
 	--theme-control-bg: #ffffff;
+	--theme-control-bg-hover: #f7f9ff;
 	--theme-control-text: #1f2937;
 	--theme-control-border: #b9c5da;
+	--theme-control-border-focus: #3b82f6;
+	--theme-control-ring: rgba(59, 130, 246, 0.22);
+	--theme-control-disabled-bg: #eef2f8;
+	--theme-control-disabled-text: #7c889d;
+	--theme-control-disabled-border: #ccd6e6;
 	--theme-control-option-bg: #ffffff;
 	--theme-control-option-text: #1f2937;
+	--theme-control-option-hover-bg: #edf2ff;
+	--theme-control-option-selected-bg: #dfe9ff;
 	--theme-control-option-active-bg: #e7eefc;
 
 	--theme-button-bg: #eef3ff;
@@ -38,10 +46,18 @@
 	--theme-border-default: #253049;
 
 	--theme-control-bg: #0b1220;
+	--theme-control-bg-hover: #111a2c;
 	--theme-control-text: #e5e7eb;
 	--theme-control-border: #283044;
+	--theme-control-border-focus: #5f8dff;
+	--theme-control-ring: rgba(95, 141, 255, 0.28);
+	--theme-control-disabled-bg: #101827;
+	--theme-control-disabled-text: #6f7b91;
+	--theme-control-disabled-border: #273146;
 	--theme-control-option-bg: #0b1220;
 	--theme-control-option-text: #e5e7eb;
+	--theme-control-option-hover-bg: #1a2438;
+	--theme-control-option-selected-bg: #23314b;
 	--theme-control-option-active-bg: #283044;
 
 	--theme-button-bg: #111522;
@@ -68,10 +84,18 @@
 		--theme-border-default: #253049;
 
 		--theme-control-bg: #0b1220;
+		--theme-control-bg-hover: #111a2c;
 		--theme-control-text: #e5e7eb;
 		--theme-control-border: #283044;
+		--theme-control-border-focus: #5f8dff;
+		--theme-control-ring: rgba(95, 141, 255, 0.28);
+		--theme-control-disabled-bg: #101827;
+		--theme-control-disabled-text: #6f7b91;
+		--theme-control-disabled-border: #273146;
 		--theme-control-option-bg: #0b1220;
 		--theme-control-option-text: #e5e7eb;
+		--theme-control-option-hover-bg: #1a2438;
+		--theme-control-option-selected-bg: #23314b;
 		--theme-control-option-active-bg: #283044;
 
 		--theme-button-bg: #111522;

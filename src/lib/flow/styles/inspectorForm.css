@@ -1,17 +1,50 @@
 :global(.inspector) {
 	--if-control-bg: var(--color-control-bg);
+	--if-control-bg-hover: var(--color-control-bg-hover);
 	--if-control-text: var(--color-control-text);
 	--if-control-border: var(--color-control-border);
+	--if-control-border-focus: var(--color-control-border-focus);
+	--if-control-ring: var(--color-control-ring);
+	--if-control-disabled-bg: var(--color-control-disabled-bg);
+	--if-control-disabled-text: var(--color-control-disabled-text);
+	--if-control-disabled-border: var(--color-control-disabled-border);
 	--if-option-bg: var(--color-control-option-bg);
 	--if-option-text: var(--color-control-option-text);
+	--if-option-hover-bg: var(--color-control-option-hover-bg);
+	--if-option-selected-bg: var(--color-control-option-selected-bg);
 	--if-option-active-bg: var(--color-control-option-active-bg);
 }
 
-:global(.inspector select) {
-	background: var(--if-control-bg);
-	color: var(--if-control-text);
-	border: 1px solid var(--if-control-border);
+:global(.inspector select),
+:global(.inspector select.select) {
+	background: var(--if-control-bg) !important;
+	color: var(--if-control-text) !important;
+	border: 1px solid var(--if-control-border) !important;
 	-webkit-text-fill-color: var(--if-control-text);
+	caret-color: var(--if-control-text);
+}
+
+:global(.inspector select:hover),
+:global(.inspector select.select:hover) {
+	background: var(--if-control-bg-hover) !important;
+}
+
+:global(.inspector select:focus),
+:global(.inspector select:focus-visible),
+:global(.inspector select.select:focus),
+:global(.inspector select.select:focus-visible) {
+	outline: none;
+	border-color: var(--if-control-border-focus) !important;
+	box-shadow: 0 0 0 2px var(--if-control-ring);
+}
+
+:global(.inspector select:disabled),
+:global(.inspector select.select:disabled) {
+	background: var(--if-control-disabled-bg) !important;
+	color: var(--if-control-disabled-text) !important;
+	border-color: var(--if-control-disabled-border) !important;
+	-webkit-text-fill-color: var(--if-control-disabled-text);
+	cursor: not-allowed;
 }
 
 :global(.inspector select option) {
@@ -20,8 +53,13 @@
 }
 
 :global(.inspector select option:checked),
+:global(.inspector select option:focus) {
+	background-color: var(--if-option-selected-bg) !important;
+	color: var(--if-option-text) !important;
+}
+
 :global(.inspector select option:hover) {
-	background-color: var(--if-option-active-bg) !important;
+	background-color: var(--if-option-hover-bg) !important;
 	color: var(--if-option-text) !important;
 }
 
