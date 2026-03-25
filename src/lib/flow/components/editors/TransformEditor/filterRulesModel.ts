@@ -93,13 +93,14 @@ function normalizeRuleNode(raw: unknown): FilterRuleNode | null {
 	if (kind === 'group') return normalizeGroup(record);
 	const op = normalizeOperator(record.op);
 	if (op == null) return null;
+	const parsedValue = normalizeConditionValue(record);
 	return {
 		kind: 'condition',
 		column: String(record.column ?? ''),
 		op,
-		valueSource: record.valueSource === 'param_config' ? 'param_config' : 'literal',
-		literalValue: String(record.literalValue ?? ''),
-		paramPath: String(record.paramPath ?? '')
+		valueSource: parsedValue.valueSource,
+		literalValue: parsedValue.literalValue,
+		paramPath: parsedValue.paramPath
 	};
 }
 
@@ -108,3 +109,62 @@ function normalizeOperator(raw: unknown): FilterOperator | null {
 	return FILTER_OPERATORS.some((entry) => entry.value === value) ? value : 'eq';
 }
 
+function normalizeConditionValue(record: Record<string, unknown>): {
+	valueSource: FilterValueSource;
+	literalValue: string;
+	paramPath: string;
+} {
+	const explicitSource = record.valueSource === 'param_config' ? 'param_config' : 'literal';
+	const explicitLiteral = record.literalValue;
+	const explicitParamPath = record.paramPath;
+	if (explicitSource === 'param_config' || explicitLiteral != null || explicitParamPath != null) {
+		return {
+			valueSource: explicitSource,
+			literalValue: String(explicitLiteral ?? ''),
+			paramPath: String(explicitParamPath ?? '')
+		};
+	}
+
+	// Persisted schema form:
+	// - literal: { value: <scalar|array> }
+	// - param:   { value: { valueFrom: { handle: "param_config", path: "..." } } }
+	const rawValue = record.value;
+	if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue)) {
+		const valueRecord = rawValue as Record<string, unknown>;
+		const valueFrom = valueRecord.valueFrom;
+		if (valueFrom && typeof valueFrom === 'object' && !Array.isArray(valueFrom)) {
+			const vf = valueFrom as Record<string, unknown>;
+			const handle = String(vf.handle ?? '').trim();
+			const path = String(vf.path ?? '').trim();
+			if (handle === 'param_config' || path.length > 0) {
+				return {
+					valueSource: 'param_config',
+					literalValue: '',
+					paramPath: path
+				};
+			}
+		}
+	}
+
+	if (Array.isArray(rawValue)) {
+		return {
+			valueSource: 'literal',
+			literalValue: rawValue.map((item) => String(item ?? '')).join(','),
+			paramPath: ''
+		};
+	}
+
+	if (rawValue != null) {
+		return {
+			valueSource: 'literal',
+			literalValue: String(rawValue),
+			paramPath: ''
+		};
+	}
+
+	return {
+		valueSource: 'literal',
+		literalValue: '',
+		paramPath: ''
+	};
+}
