@@ -233,6 +233,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let inspectorTopWeight = 2;
 	let environmentWeight = 1;
 	let runLogsWeight = 1;
+	let inspectorCollapseRestore: { top: number; logs: number } | null = null;
 	let inspectorTopPaneEl: HTMLElement | null = null;
 	let environmentPaneEl: HTMLElement | null = null;
 	let runLogsPaneEl: HTMLElement | null = null;
@@ -2427,6 +2428,58 @@ async function scrollToBottom() {
 		splitEnvLogsBypassEnvironment = false;
 	}
 
+	function rebalanceInspectorForCollapse(target: 'top' | 'logs'): void {
+		const total = Math.max(0.001, inspectorTopWeight + runLogsWeight);
+		const collapsedWeight = Math.max(0.001, total * 0.05);
+		if (target === 'top') {
+			inspectorTopWeight = collapsedWeight;
+			runLogsWeight = Math.max(0.001, total - collapsedWeight);
+			return;
+		}
+		runLogsWeight = collapsedWeight;
+		inspectorTopWeight = Math.max(0.001, total - collapsedWeight);
+	}
+
+	function snapshotInspectorCollapseRestore(): void {
+		inspectorCollapseRestore = {
+			top: Math.max(0.001, inspectorTopWeight),
+			logs: Math.max(0.001, runLogsWeight)
+		};
+	}
+
+	function restoreInspectorCollapseWeights(): void {
+		if (!inspectorCollapseRestore) return;
+		const total = Math.max(0.001, inspectorTopWeight + runLogsWeight);
+		const savedTotal = Math.max(0.001, inspectorCollapseRestore.top + inspectorCollapseRestore.logs);
+		inspectorTopWeight = (total * inspectorCollapseRestore.top) / savedTotal;
+		runLogsWeight = Math.max(0.001, total - inspectorTopWeight);
+		inspectorCollapseRestore = null;
+	}
+
+	function toggleNodeInspectorCollapsed(): void {
+		const next = !nodeInspectorCollapsed;
+		nodeInspectorCollapsed = next;
+		if (!next) {
+			restoreInspectorCollapseWeights();
+			return;
+		}
+		snapshotInspectorCollapseRestore();
+		if (runLogsCollapsed) runLogsCollapsed = false;
+		rebalanceInspectorForCollapse('top');
+	}
+
+	function toggleRunLogsCollapsed(): void {
+		const next = !runLogsCollapsed;
+		runLogsCollapsed = next;
+		if (!next) {
+			restoreInspectorCollapseWeights();
+			return;
+		}
+		snapshotInspectorCollapseRestore();
+		if (nodeInspectorCollapsed) nodeInspectorCollapsed = false;
+		rebalanceInspectorForCollapse('logs');
+	}
+
 	async function refreshWorkspaceEnvironmentPanel(): Promise<void> {
 		envProfilesLoading = true;
 		envProfilesError = null;
@@ -3009,7 +3062,7 @@ async function scrollToBottom() {
 									type="button"
 									class="tabBtn sectionToggle"
 									title={nodeInspectorCollapsed ? 'Expand Node Inspector' : 'Collapse Node Inspector'}
-									on:click={() => (nodeInspectorCollapsed = !nodeInspectorCollapsed)}
+									on:click={toggleNodeInspectorCollapsed}
 								>
 									<span class="sectionToggleIcon" aria-hidden="true">{nodeInspectorCollapsed ? '▸' : '▾'}</span>
 								</button>
@@ -3427,7 +3480,7 @@ async function scrollToBottom() {
 					type="button"
 					class="tabBtn sectionToggle"
 					title={runLogsCollapsed ? 'Expand Run Logs' : 'Collapse Run Logs'}
-					on:click={() => (runLogsCollapsed = !runLogsCollapsed)}
+					on:click={toggleRunLogsCollapsed}
 				>
 					<span class="sectionToggleIcon" aria-hidden="true">{runLogsCollapsed ? '▸' : '▾'}</span>
 				</button>
