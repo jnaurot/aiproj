@@ -98,6 +98,13 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["on_error"] = p.pop("onError")
     if "requestPolicy" in p and "request_policy" not in p:
         p["request_policy"] = p.pop("requestPolicy")
+    if isinstance(p.get("debug"), dict):
+        dbg = dict(p.get("debug") or {})
+        if "logInputPreview" in dbg and "log_input_preview" not in dbg:
+            dbg["log_input_preview"] = dbg.pop("logInputPreview")
+        if "logRawOutput" in dbg and "log_raw_output" not in dbg:
+            dbg["log_raw_output"] = dbg.pop("logRawOutput")
+        p["debug"] = dbg
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -247,6 +254,25 @@ def _runtime_work_item_preview(work_item: Dict[str, Any], max_chars: int = 220) 
         return _canon_json(preview)[:max_chars]
     except Exception:
         return str(preview)[:max_chars]
+
+
+def _llm_debug_flag(params: LLMParams, key: str) -> bool:
+    debug_cfg = getattr(params, "debug", None)
+    if debug_cfg is None:
+        return False
+    if isinstance(debug_cfg, dict):
+        return bool(debug_cfg.get(key, False))
+    return bool(getattr(debug_cfg, key, False))
+
+
+def _llm_debug_excerpt(value: Any, max_chars: int = 800) -> str:
+    try:
+        text = value if isinstance(value, str) else _canon_json(value)
+    except Exception:
+        text = str(value)
+    text = str(text or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text[:max_chars]
 
 
 async def _serialize_image_media(context: GraphContext, artifact_id: str) -> Optional[Dict[str, Any]]:
@@ -439,6 +465,21 @@ async def exec_llm(
                     f"index={int(runtime_work_item.get('itemIndex') or 0)} "
                     f"artifact={str(runtime_work_item.get('artifactId') or '')[:12]} "
                     f"preview={_runtime_work_item_preview(runtime_work_item)}"
+                ),
+                "nodeId": node["id"],
+            }
+        )
+    if _llm_debug_flag(llm_params, "enabled") and _llm_debug_flag(llm_params, "log_input_preview"):
+        await context.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    "LLM debug input excerpt: "
+                    f"encoding={input_encoding} chars={len(text or '')} "
+                    f"preview={_llm_debug_excerpt(text or '', 900)}"
                 ),
                 "nodeId": node["id"],
             }

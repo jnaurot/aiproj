@@ -53,6 +53,9 @@
 		params?.requestPolicy?.timeout_seconds ?? params?.timeout_seconds ?? 60
 	);
 	$: onErrorBehavior = asString(params?.on_error, 'fail_fast');
+	$: debugEnabled = Boolean(params?.debug?.enabled ?? false);
+	$: debugLogInputPreview = Boolean(params?.debug?.log_input_preview ?? false);
+	$: debugLogRawOutput = Boolean(params?.debug?.log_raw_output ?? false);
 	$: outputMode = (asString(params?.output?.mode, 'text') as LlmOutputMode) ?? 'text';
 	$: outputStrict = params?.output?.strict ?? true;
 	$: stopText = Array.isArray(params?.stop) ? params.stop.join('\n') : '';
@@ -87,6 +90,15 @@
 		return {
 			requestPolicy: {
 				...(params?.requestPolicy ?? {}),
+				...patch
+			}
+		};
+	}
+
+	function debugPatch(patch: Partial<NonNullable<LlmParams['debug']>>): LlmPatch {
+		return {
+			debug: {
+				...(params?.debug ?? {}),
 				...patch
 			}
 		};
@@ -441,6 +453,42 @@
 			<option value="fail_fast">fail_fast</option>
 			<option value="skip_failed">skip_failed</option>
 		</select>
+	</Field>
+
+	<Field label="debug.enabled">
+		<Input
+			type="checkbox"
+			checked={debugEnabled}
+			onChange={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).checked;
+				draft(debugPatch({ enabled: value }));
+				commit(debugPatch({ enabled: value }));
+			}}
+		/>
+	</Field>
+
+	<Field label="debug.log_input_preview">
+		<Input
+			type="checkbox"
+			checked={debugLogInputPreview}
+			onChange={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).checked;
+				draft(debugPatch({ log_input_preview: value }));
+				commit(debugPatch({ log_input_preview: value }));
+			}}
+		/>
+	</Field>
+
+	<Field label="debug.log_raw_output">
+		<Input
+			type="checkbox"
+			checked={debugLogRawOutput}
+			onChange={(event) => {
+				const value = (event.currentTarget as HTMLInputElement).checked;
+				draft(debugPatch({ log_raw_output: value }));
+				commit(debugPatch({ log_raw_output: value }));
+			}}
+		/>
 	</Field>
 
 	<Field label="output">

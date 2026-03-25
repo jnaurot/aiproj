@@ -60,6 +60,13 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["on_error"] = p.pop("onError")
     if "requestPolicy" in p and "request_policy" not in p:
         p["request_policy"] = p.pop("requestPolicy")
+    if isinstance(p.get("debug"), dict):
+        dbg = dict(p.get("debug") or {})
+        if "logInputPreview" in dbg and "log_input_preview" not in dbg:
+            dbg["log_input_preview"] = dbg.pop("logInputPreview")
+        if "logRawOutput" in dbg and "log_raw_output" not in dbg:
+            dbg["log_raw_output"] = dbg.pop("logRawOutput")
+        p["debug"] = dbg
     if "presencePenalty" in p and "presence_penalty" not in p:
         p["presence_penalty"] = p.pop("presencePenalty")
     if "frequencyPenalty" in p and "frequency_penalty" not in p:
@@ -908,6 +915,11 @@ class LLMThinking(NodeParamSchema):
     mode: Literal["none", "hidden", "visible"] = "none"
     budget_tokens: Optional[int] = Field(None, ge=1)
 
+class LLMDebug(NodeParamSchema):
+    enabled: bool = False
+    log_input_preview: bool = False
+    log_raw_output: bool = False
+
 class LLMParams(NodeParamSchema):
     # llm_type: LLMType = LLMType.COMPLETION
     
@@ -951,6 +963,7 @@ class LLMParams(NodeParamSchema):
     input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/handles
     input_envelope: Optional[List[Dict[str, Any]]] = None
     request_policy: Optional[Dict[str, Any]] = None
+    debug: Optional[LLMDebug] = None
 
     @model_validator(mode="after")
     def _validate_contract(self):

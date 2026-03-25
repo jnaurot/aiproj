@@ -29,6 +29,24 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _debug_flag(params: LLMParams, key: str) -> bool:
+    debug_cfg = getattr(params, "debug", None)
+    if debug_cfg is None:
+        return False
+    if isinstance(debug_cfg, dict):
+        return bool(debug_cfg.get(key, False))
+    return bool(getattr(debug_cfg, key, False))
+
+
+def _debug_excerpt(value: Any, max_chars: int = 1200) -> str:
+    try:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        text = str(value)
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return text[:max_chars]
+
+
 def _sha256_text(s: str) -> str:
     return hashlib.sha256((s or "").encode("utf-8")).hexdigest()
 
@@ -351,6 +369,17 @@ async def exec_llm_openai_compat(
                                 "message": f"JSON parse failed in output_mode={output_mode}: {str(e)}",
                             }
                         )
+                        if _debug_flag(params, "enabled") and _debug_flag(params, "log_raw_output"):
+                            await context.bus.emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "level": "warn",
+                                    "message": f"LLM debug raw output excerpt: {_debug_excerpt(data)}",
+                                }
+                            )
                         return NodeOutput(
                             status="failed",
                             metadata=None,
@@ -361,6 +390,17 @@ async def exec_llm_openai_compat(
                     try:
                         jsonschema_validate(instance=json_data, schema=params.output_schema or {})
                     except ValidationError as e:
+                        if _debug_flag(params, "enabled") and _debug_flag(params, "log_raw_output"):
+                            await context.bus.emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "level": "warn",
+                                    "message": f"LLM debug schema-fail output excerpt: {_debug_excerpt(json_data)}",
+                                }
+                            )
                         return NodeOutput(
                             status="failed",
                             metadata=None,

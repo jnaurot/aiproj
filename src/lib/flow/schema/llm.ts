@@ -84,6 +84,14 @@ export const LlmParamsSchema = z
 			.optional(),
 		inputEncoding: z.enum(['text', 'json_canonical', 'table_canonical']).optional(),
 		inputEnvelope: z.array(LlmInputEnvelopePartSchema).optional(),
+		debug: z
+			.object({
+				enabled: z.boolean().optional().default(false),
+				log_input_preview: z.boolean().optional().default(false),
+				log_raw_output: z.boolean().optional().default(false)
+			})
+			.strip()
+			.optional(),
 		on_error: z.enum(['fail_fast', 'skip_failed']).optional(),
 		requestPolicy: z
 			.object({

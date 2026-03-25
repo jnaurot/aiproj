@@ -11,6 +11,11 @@ export const defaultLlmOllamaParams: LlmParams = {
     system_prompt: "",
     user_prompt: "Summarize the input data.",
     temperature: 0.7,
+    debug: {
+        enabled: false,
+        log_input_preview: false,
+        log_raw_output: false
+    },
     output: { mode: "text" },
 };
 
@@ -22,6 +27,11 @@ export const defaultLlmOpenAICompatParams: LlmParams = {
     system_prompt: "",
     user_prompt: "Summarize the input data.",
     temperature: 0.7,
+    debug: {
+        enabled: false,
+        log_input_preview: false,
+        log_raw_output: false
+    },
     output: { mode: "text" },
 };
 
