@@ -138,7 +138,7 @@
 		});
 	}
 
-	function commitSelect(next: Partial<TransformSelectParams> = {}): void {
+	function commitSelect(next: Partial<TransformSelectParams> = {}, commit = false): void {
 		const payload = normalizeSelectParams({
 			mode,
 			columns: selectedColumns,
@@ -151,11 +151,15 @@
 		if (isWrappedParams) {
 			const wrapped = { op: 'select', select: payload } as unknown as Partial<TransformSelectParams>;
 			onDraft(wrapped);
-			onCommit(wrapped);
+			if (commit) onCommit(wrapped);
 			return;
 		}
 		onDraft(payload);
-		onCommit(payload);
+		if (commit) onCommit(payload);
+	}
+
+	function commitNow(): void {
+		commitSelect({}, true);
 	}
 
 	function addColumn(col: string): void {
@@ -198,6 +202,7 @@
 		<button class:active={mode === 'exclude'} type="button" on:click={() => commitSelect({ mode: 'exclude' })}>
 			Drop these columns
 		</button>
+		<button class="commitBtn" type="button" on:click={commitNow}>Commit changes</button>
 	</div>
 
 	<div class="optsRow">
@@ -312,7 +317,7 @@
 
 	.modeRow {
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 8px;
 		margin-top: 8px;
 	}
@@ -330,6 +335,10 @@
 	.modeRow button.active {
 		background: rgba(59, 130, 246, 0.2);
 		border-color: rgba(59, 130, 246, 0.6);
+	}
+	.modeRow button.commitBtn {
+		border-color: rgba(59, 130, 246, 0.5);
+		background: rgba(59, 130, 246, 0.14);
 	}
 
 	.optsRow {
