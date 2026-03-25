@@ -32,9 +32,16 @@
 	let suppressParamSync = false;
 	$: isWrappedParams =
 		isObject(params) && ('op' in (params as Record<string, unknown>) || 'derive' in (params as Record<string, unknown>));
+	$: effectiveParams = (() => {
+		if (!isObject(params)) return {};
+		const record = params as Record<string, unknown>;
+		const nested = record.derive;
+		if (isObject(nested)) return nested as Record<string, unknown>;
+		return record;
+	})();
 
 	$: void selectedNode?.id;
-	$: normalized = normalizeDeriveParams(isObject(params) ? (params as Record<string, unknown>) : {});
+	$: normalized = normalizeDeriveParams(effectiveParams);
 	$: paramsSignature = JSON.stringify({ mode: normalized.mode, columns: normalized.columns, rules: normalized.rules });
 	$: errorAvailableColumns = availableDeriveColumnsFromError(nodeError);
 	$: schemaColumns = toSchemaColumns([...inputColumns, ...errorAvailableColumns]);
@@ -383,4 +390,3 @@
 		font-size: 12px;
 	}
 </style>
-

@@ -147,7 +147,9 @@ export function defaultDeriveSqlColumns(): DeriveSqlColumn[] {
 }
 
 export function normalizeDeriveParams(raw: Partial<TransformDeriveParams> | Record<string, unknown>): NormalizedDeriveParams {
-	const params = asRecord(raw) ?? {};
+	const root = asRecord(raw) ?? {};
+	const nested = asRecord(root.derive);
+	const params = nested ?? root;
 	const columns = normalizeSqlColumns(params.columns);
 	const rules = normalizeRules(params.rules);
 	const explicitMode = String(params.mode ?? '').trim();
@@ -177,4 +179,3 @@ export function validateRule(rule: DeriveRule): string[] {
 	}
 	return messages;
 }
-
