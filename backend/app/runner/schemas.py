@@ -1429,6 +1429,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                 "quality_gate": "quality_gate",
                 "ml_contract": "ml_contract",
                 "sql": "sql",
+                "json_filter": "json_filter",
                 "json_to_table": "json_to_table",
                 "text_to_table": "text_to_table",
                 "table_to_json": "table_to_json",
@@ -1459,6 +1460,8 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                             "in",
                             "not_in",
                             "regex",
+                            "exists",
+                            "between",
                             "is_null",
                             "not_null",
                         }
@@ -1473,6 +1476,7 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                             "in",
                             "not_in",
                             "regex",
+                            "between",
                         }
                         ops_forbid_value = {"is_null", "not_null"}
 
@@ -1674,6 +1678,10 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                                     errors.append(
                                         f"derive.rules[{i}].formula.args[{j}] must be a literal, column ref, or valueFrom reference"
                                     )
+                elif op == "json_filter":
+                    rules = payload.get("rules")
+                    if rules is not None and not isinstance(rules, dict):
+                        errors.append("json_filter.rules must be an object")
                 elif op == "aggregate":
                     group_by = payload.get("groupBy")
                     if group_by is not None and (

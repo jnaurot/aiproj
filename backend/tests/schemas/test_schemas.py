@@ -981,7 +981,7 @@ class TestTransformFilterDualModeValidation:
                             "kind": "group",
                             "op": "all",
                             "conditions": [
-                                {"kind": "condition", "column": "salary", "op": "between", "value": 1000}
+                                {"kind": "condition", "column": "salary", "op": "not_a_real_op", "value": 1000}
                             ],
                         },
                     },
@@ -1046,6 +1046,29 @@ class TestTransformFilterDualModeValidation:
         }
         errors = validate_node_params(node)
         assert any("valueFrom.path must use dot notation" in err for err in errors)
+
+    def test_json_filter_rules_accepts_valid_payload(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "duckdb", SimpleNamespace(connect=lambda **_: None))
+        node = {
+            "data": {
+                "kind": "transform",
+                "params": {
+                    "op": "json_filter",
+                    "json_filter": {
+                        "mode": "rules",
+                        "rules": {
+                            "kind": "group",
+                            "op": "all",
+                            "conditions": [
+                                {"kind": "condition", "path": "pass", "op": "eq", "value": True}
+                            ],
+                        },
+                    },
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert errors == []
 
 
 class TestTransformDeriveDualModeValidation:
