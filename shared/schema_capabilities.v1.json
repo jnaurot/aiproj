@@ -57,7 +57,10 @@
       "out": ["table", "json"],
       "ports": {
         "in": { "default": { "affinity": "work", "behavior": "single_item" } },
-        "out": { "default": { "affinity": "work" } }
+        "out": {
+          "default": { "affinity": "work" },
+          "out_reject": { "affinity": "work" }
+        }
       },
       "inputContracts": {
         "workInputs": ["in"],

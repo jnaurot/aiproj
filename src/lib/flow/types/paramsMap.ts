@@ -41,6 +41,7 @@ export type LlmParamsByKind = {
 
 import type {
 	TransformFilterParams,
+	TransformJsonFilterParams,
 	TransformSelectParams,
 	TransformRenameParams,
 	TransformDeriveParams,
@@ -77,6 +78,7 @@ import type {
 } from '$lib/flow/schema/transform';
 export type TransformKind =
 	| 'filter'
+	| 'json_filter'
 	| 'select'
 	| 'rename'
 	| 'derive'
@@ -113,6 +115,7 @@ export type TransformKind =
 
 export type TransformParamsByKind = {
 	filter: TransformFilterParams;
+	json_filter: TransformJsonFilterParams;
 	select: TransformSelectParams;
 	rename: TransformRenameParams;
 	derive: TransformDeriveParams;

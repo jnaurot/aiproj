@@ -359,6 +359,7 @@ function deriveModelInPort(data: PipelineNodeData): PayloadType {
 function deriveTransformIo(params: Record<string, any>, transformKindRaw: unknown): { in: PayloadType; out: PayloadType } {
 	const op = String(params?.op ?? transformKindRaw ?? '').trim().toLowerCase();
 	if (op === 'json_to_table') return { in: 'json', out: 'table' };
+	if (op === 'json_filter') return { in: 'json', out: 'json' };
 	if (op === 'text_to_table') return { in: 'text', out: 'table' };
 	if (op === 'table_to_json') return { in: 'table', out: 'json' };
 	return { in: 'table', out: 'table' };
@@ -4171,6 +4172,7 @@ function inferredTransformOutputHint(node: Node<PipelineNodeData>): Record<strin
 	const params: any = node.data.params ?? {};
 	const op = String(params?.op ?? node.data.transformKind ?? '').trim().toLowerCase();
 	if (op === 'table_to_json') return { type: 'json' };
+	if (op === 'json_filter') return { type: 'json' };
 	if (op === 'json_to_table' || op === 'text_to_table') return { type: 'table' };
 	if (op === 'split') {
 		const outColumn = String(params?.split?.outColumn ?? 'part').trim() || 'part';

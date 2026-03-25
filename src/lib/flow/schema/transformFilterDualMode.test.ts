@@ -58,7 +58,7 @@ describe('TransformFilterParamsSchema dual mode', () => {
 					{
 						kind: 'condition',
 						column: 'salary',
-						op: 'between',
+						op: 'not_a_real_op',
 						value: 1000
 					}
 				]

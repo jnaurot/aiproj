@@ -1,5 +1,6 @@
 //lib/flow/components/editors/TransformEditor/TransformEditor.ts
 import TransformFilterEditor from './TransformFilterEditor.svelte';
+import TransformJsonFilterEditor from './TransformJsonFilterEditor.svelte';
 import TransformSelectEditor from './TransformSelectEditor.svelte';
 import TransformRenameEditor from './TransformRenameEditor.svelte';
 import TransformDeriveEditor from './TransformDeriveEditor.svelte';
@@ -36,6 +37,7 @@ export {
 
 export const TransformEditorByKind = {
     filter: TransformFilterEditor,
+    json_filter: TransformJsonFilterEditor,
     select: TransformSelectEditor,
     rename: TransformRenameEditor,
     derive: TransformDeriveEditor,

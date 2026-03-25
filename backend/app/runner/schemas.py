@@ -807,6 +807,7 @@ class TransformParamsCurrent(NodeParamSchema):
         "quality_gate",
         "ml_contract",
         "sql",
+        "json_filter",
         "json_to_table",
         "text_to_table",
         "table_to_json",
@@ -845,6 +846,7 @@ class TransformParamsCurrent(NodeParamSchema):
     quality_gate: Optional[Dict[str, Any]] = None
     ml_contract: Optional[Dict[str, Any]] = None
     sql: Optional[Dict[str, Any]] = None
+    json_filter: Optional[Dict[str, Any]] = None
     json_to_table: Optional[Dict[str, Any]] = None
     text_to_table: Optional[Dict[str, Any]] = None
     table_to_json: Optional[Dict[str, Any]] = None
@@ -882,6 +884,7 @@ class TransformParamsCurrent(NodeParamSchema):
             "quality_gate": "quality_gate",
             "ml_contract": "ml_contract",
             "sql": "sql",
+            "json_filter": "json_filter",
             "json_to_table": "json_to_table",
             "text_to_table": "text_to_table",
             "table_to_json": "table_to_json",

@@ -73,6 +73,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 
 const OP_TO_BLOCK: Record<string, string> = {
   filter: "filter",
+  json_filter: "json_filter",
   select: "select",
   rename: "rename",
   derive: "derive",
@@ -110,6 +111,7 @@ const OP_TO_BLOCK: Record<string, string> = {
 
 const FLAT_FIELDS_BY_OP: Record<string, string[]> = {
   filter: ["mode", "expr", "rules"],
+  json_filter: ["mode", "rules", "route_reject", "include_reject_meta"],
   select: ["mode", "columns", "keepOrder", "strict"],
   rename: ["map"],
   derive: ["mode", "columns", "rules"],

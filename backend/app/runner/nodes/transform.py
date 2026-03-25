@@ -57,6 +57,7 @@ OP_KEYS = {
     "quality_gate": "quality_gate",
     "ml_contract": "ml_contract",
     "sql": "sql",
+    "json_filter": "json_filter",
     "json_to_table": "json_to_table",
     "text_to_table": "text_to_table",
     "table_to_json": "table_to_json",
@@ -152,7 +153,7 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
 
     # keep only the active op payload
     keep_key = OP_KEYS[op]
-    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","null_policy","outlier_policy","text_clean","nlp_normalize","tokenize_chunk","dataset_split","class_imbalance","categorical_encode","numeric_scale","embedding","feature_selection","leakage_detect","quality_profile","drift_compare","determinism_profile","fit_state_registry","pii_guard","inference_parity","split","quality_gate","ml_contract","sql","json_to_table","text_to_table","table_to_json","code"):
+    for k in ("filter","select","rename","derive","aggregate","join","sort","limit","dedupe","null_policy","outlier_policy","text_clean","nlp_normalize","tokenize_chunk","dataset_split","class_imbalance","categorical_encode","numeric_scale","embedding","feature_selection","leakage_detect","quality_profile","drift_compare","determinism_profile","fit_state_registry","pii_guard","inference_parity","split","quality_gate","ml_contract","sql","json_filter","json_to_table","text_to_table","table_to_json","code"):
         if k != keep_key:
             p.pop(k, None)
 
@@ -173,6 +174,21 @@ def normalize_transform_params(params: Dict[str, Any], default_op: Optional[str]
             "mode": mode,
             "expr": expr,
             "rules": rules,
+        }
+
+    if op == "json_filter":
+        raw = p.get("json_filter") if isinstance(p.get("json_filter"), dict) else {}
+        mode_raw = str(raw.get("mode") or "").strip().lower()
+        mode = mode_raw if mode_raw in {"rules"} else "rules"
+        root_raw = raw.get("rules")
+        root = root_raw if isinstance(root_raw, dict) else {"kind": "group", "op": "all", "conditions": []}
+        route_reject = bool(raw.get("route_reject", True))
+        include_reject_meta = bool(raw.get("include_reject_meta", True))
+        p["json_filter"] = {
+            "mode": mode,
+            "rules": root,
+            "route_reject": route_reject,
+            "include_reject_meta": include_reject_meta,
         }
 
     if op == "derive":
@@ -2714,6 +2730,8 @@ def _compile_filter_condition_sql(
 
     if op == "is_null":
         return (f"({col} IS NULL)", [], used_paths)
+    if op == "exists":
+        return (f"({col} IS NOT NULL)", [], used_paths)
     if op == "not_null":
         return (f"({col} IS NOT NULL)", [], used_paths)
 
@@ -2758,6 +2776,14 @@ def _compile_filter_condition_sql(
         cmp_keyword = "IN" if op == "in" else "NOT IN"
         sql = f"COALESCE(CAST({col} AS VARCHAR) {cmp_keyword} ({placeholders}), FALSE)"
         return sql, [str(v) for v in value], used_paths
+
+    if op == "between":
+        if not isinstance(value, list) or len(value) != 2:
+            raise ValueError("filter op 'between' requires array value with 2 entries")
+        sql = (
+            f"COALESCE(TRY_CAST({col} AS DOUBLE) BETWEEN TRY_CAST(? AS DOUBLE) AND TRY_CAST(? AS DOUBLE), FALSE)"
+        )
+        return sql, [value[0], value[1]], used_paths
 
     raise ValueError(f"Unsupported filter op: {op}")
 
@@ -2839,6 +2865,196 @@ def _execute_filter_op(
         return out_df, diagnostics
     finally:
         con.close()
+
+
+JSON_FILTER_COMPARISON_OPS = {"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "between"}
+JSON_FILTER_UNARY_OPS = {"exists", "is_null"}
+
+
+def _json_filter_condition_path(condition: Dict[str, Any]) -> str:
+    path = str(condition.get("path") or "").strip()
+    if path:
+        return path
+    return str(condition.get("column") or "").strip()
+
+
+def _json_filter_resolve_condition_value(condition: Dict[str, Any], param_config: Dict[str, Any]) -> Any:
+    if "value" not in condition:
+        return None
+    return _resolve_filter_value(condition.get("value"), param_config)
+
+
+def _json_filter_eval_condition(
+    item: Any,
+    condition: Dict[str, Any],
+    *,
+    param_config: Dict[str, Any],
+) -> Tuple[bool, Dict[str, Any]]:
+    op = str(condition.get("op") or "").strip().lower()
+    path = _json_filter_condition_path(condition)
+    if not path:
+        return False, {"reason": "missing_path", "path": ""}
+
+    try:
+        lhs = _resolve_dot_path(item, path)
+        path_exists = True
+    except Exception:
+        lhs = None
+        path_exists = False
+
+    if op == "exists":
+        return path_exists, {"path": path, "operator": op}
+
+    if not path_exists:
+        return False, {"reason": "missing_path", "path": path, "operator": op}
+
+    if op == "is_null":
+        return lhs is None, {"path": path, "operator": op}
+
+    rhs = _json_filter_resolve_condition_value(condition, param_config)
+
+    if op in {"eq", "ne"}:
+        ok = lhs == rhs if op == "eq" else lhs != rhs
+        return bool(ok), {"path": path, "operator": op, "value": rhs}
+
+    if op in {"gt", "gte", "lt", "lte"}:
+        try:
+            left_num = float(lhs)
+            right_num = float(rhs)
+        except Exception:
+            return False, {"reason": "type_mismatch", "path": path, "operator": op, "value": rhs}
+        if op == "gt":
+            ok = left_num > right_num
+        elif op == "gte":
+            ok = left_num >= right_num
+        elif op == "lt":
+            ok = left_num < right_num
+        else:
+            ok = left_num <= right_num
+        return bool(ok), {"path": path, "operator": op, "value": rhs}
+
+    if op == "in":
+        if not isinstance(rhs, list):
+            return False, {"reason": "type_mismatch", "path": path, "operator": op, "value": rhs}
+        return lhs in rhs, {"path": path, "operator": op, "value": rhs}
+
+    if op == "contains":
+        if isinstance(lhs, str):
+            return str(rhs) in lhs, {"path": path, "operator": op, "value": rhs}
+        if isinstance(lhs, list):
+            return rhs in lhs, {"path": path, "operator": op, "value": rhs}
+        return False, {"reason": "type_mismatch", "path": path, "operator": op, "value": rhs}
+
+    if op == "between":
+        if not isinstance(rhs, list) or len(rhs) != 2:
+            return False, {"reason": "type_mismatch", "path": path, "operator": op, "value": rhs}
+        try:
+            left_num = float(lhs)
+            lo = float(rhs[0])
+            hi = float(rhs[1])
+        except Exception:
+            return False, {"reason": "type_mismatch", "path": path, "operator": op, "value": rhs}
+        return lo <= left_num <= hi, {"path": path, "operator": op, "value": rhs}
+
+    return False, {"reason": "unsupported_operator", "path": path, "operator": op}
+
+
+def _json_filter_eval_node(
+    item: Any,
+    node: Dict[str, Any],
+    *,
+    param_config: Dict[str, Any],
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    kind = str(node.get("kind") or "").strip().lower()
+    if kind == "condition":
+        ok, details = _json_filter_eval_condition(item, node, param_config=param_config)
+        if ok:
+            return True, None
+        return False, details
+
+    if kind != "group":
+        return False, {"reason": "invalid_rule", "operator": "group"}
+
+    group_op = str(node.get("op") or "all").strip().lower()
+    conditions = node.get("conditions") if isinstance(node.get("conditions"), list) else []
+    if not conditions:
+        return True, None
+
+    if group_op == "any":
+        first_reason: Optional[Dict[str, Any]] = None
+        for child in conditions:
+            if not isinstance(child, dict):
+                continue
+            ok, reason = _json_filter_eval_node(item, child, param_config=param_config)
+            if ok:
+                return True, None
+            if first_reason is None and isinstance(reason, dict):
+                first_reason = reason
+        return False, first_reason or {"reason": "no_match"}
+
+    # default all
+    for child in conditions:
+        if not isinstance(child, dict):
+            continue
+        ok, reason = _json_filter_eval_node(item, child, param_config=param_config)
+        if not ok:
+            return False, reason or {"reason": "no_match"}
+    return True, None
+
+
+def _execute_json_filter_op(
+    input_value: Any,
+    spec: Dict[str, Any],
+    *,
+    param_config: Optional[Dict[str, Any]] = None,
+) -> Tuple[Any, Any, Dict[str, Any]]:
+    root = spec.get("rules") if isinstance(spec.get("rules"), dict) else {"kind": "group", "op": "all", "conditions": []}
+    include_reject_meta = bool(spec.get("include_reject_meta", True))
+    route_reject = bool(spec.get("route_reject", True))
+    param_obj = param_config if isinstance(param_config, dict) else {}
+
+    is_list_input = isinstance(input_value, list)
+    items = input_value if isinstance(input_value, list) else [input_value]
+    passed: List[Any] = []
+    rejected: List[Any] = []
+    reject_reasons: List[str] = []
+    for idx, item in enumerate(items):
+        ok, reason = _json_filter_eval_node(item, root, param_config=param_obj)
+        if ok:
+            passed.append(item)
+            continue
+        reason_obj = reason if isinstance(reason, dict) else {"reason": "rejected"}
+        reason_code = str(reason_obj.get("reason") or "rejected")
+        reject_reasons.append(reason_code)
+        if include_reject_meta and isinstance(item, dict):
+            reject_item = dict(item)
+            reject_item["_reject"] = {
+                "reason": reason_code,
+                "rule": reason_obj.get("rule"),
+                "path": reason_obj.get("path"),
+                "operator": reason_obj.get("operator"),
+                "index": idx,
+            }
+            rejected.append(reject_item)
+        elif include_reject_meta:
+            rejected.append({"value": item, "_reject": {"reason": reason_code, "index": idx}})
+        else:
+            rejected.append(item)
+
+    pass_payload: Any
+    if is_list_input:
+        pass_payload = passed
+    else:
+        pass_payload = passed[0] if passed else []
+
+    reject_payload: Any = rejected if route_reject else []
+    diagnostics = {
+        "mode": "rules",
+        "passed": len(passed),
+        "rejected": len(rejected),
+        "rejectReasons": sorted(_stable_unique_strings(reject_reasons)),
+    }
+    return pass_payload, reject_payload, diagnostics
 
 
 def _resolve_derive_arg_value(raw_arg: Any, param_config: Dict[str, Any]) -> Tuple[str, List[Any], List[str]]:
@@ -3328,6 +3544,7 @@ def run_transform(
     embedding_report: Optional[Dict[str, Any]] = None
     feature_selection_report: Optional[Dict[str, Any]] = None
     filter_compile_report: Optional[Dict[str, Any]] = None
+    json_filter_compile_report: Optional[Dict[str, Any]] = None
     leakage_detect_report: Optional[Dict[str, Any]] = None
     quality_profile_report: Optional[Dict[str, Any]] = None
     drift_compare_report: Optional[Dict[str, Any]] = None
@@ -3341,6 +3558,48 @@ def run_transform(
             primary_input,
             spec,
             param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+        )
+    elif op == "json_filter":
+        spec = params["json_filter"] if isinstance(params.get("json_filter"), dict) else {}
+        filter_input_value = None
+        if isinstance(param_inputs, dict):
+            filter_input_value = param_inputs.get("_json_filter_in")
+        pass_payload, reject_payload, json_filter_compile_report = _execute_json_filter_op(
+            filter_input_value,
+            spec,
+            param_config=(param_inputs or {}).get("param_config") if isinstance(param_inputs, dict) else None,
+        )
+        pass_bytes = canonical_json(pass_payload).encode("utf-8")
+        reject_bytes = canonical_json(reject_payload).encode("utf-8")
+        meta = {
+            "content_hash": sha256_hex(pass_bytes),
+            "format": "json",
+            "payloadType": "json",
+            "json_filter_compile": json_filter_compile_report or {},
+            "row_count": len(pass_payload) if isinstance(pass_payload, list) else (1 if pass_payload not in (None, [], {}) else 0),
+            "columns": [],
+        }
+        reject_meta = {
+            "content_hash": sha256_hex(reject_bytes),
+            "format": "json",
+            "payloadType": "json",
+            "json_filter_compile": json_filter_compile_report or {},
+            "row_count": len(reject_payload) if isinstance(reject_payload, list) else (1 if reject_payload not in (None, [], {}) else 0),
+            "columns": [],
+            "is_reject_output": True,
+        }
+        additional = {
+            "out_reject": TransformAdditionalOutput(
+                payload_bytes=reject_bytes,
+                mime_type="application/json; charset=utf-8",
+                meta=reject_meta,
+            )
+        }
+        return TransformResult(
+            payload_bytes=pass_bytes,
+            mime_type="application/json; charset=utf-8",
+            meta=meta,
+            additional_outputs=additional,
         )
     elif op == "derive":
         spec = params["derive"] if isinstance(params.get("derive"), dict) else {}

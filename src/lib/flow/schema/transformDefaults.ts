@@ -1,6 +1,7 @@
 import type {
 	TransformParams,
 	TransformFilterParams,
+	TransformJsonFilterParams,
 	TransformSelectParams,
 	TransformRenameParams,
 	TransformDeriveParams,
@@ -44,6 +45,17 @@ export const defaultTransformFilterParams: TransformFilterParams = {
 		conditions: []
 	},
 	expr: ''
+};
+
+export const defaultTransformJsonFilterParams: TransformJsonFilterParams = {
+	mode: 'rules',
+	rules: {
+		kind: 'group',
+		op: 'all',
+		conditions: []
+	},
+	route_reject: true,
+	include_reject_meta: true
 };
 
 export const defaultTransformSelectParams: TransformSelectParams = {
@@ -327,6 +339,13 @@ export const defaultTransformParamsByKind = {
 		notes: '',
 		cache: { enabled: false },
 		filter: defaultTransformFilterParams
+	},
+	json_filter: {
+		op: 'json_filter',
+		enabled: true,
+		notes: '',
+		cache: { enabled: false },
+		json_filter: defaultTransformJsonFilterParams
 	},
 	select: {
 		op: 'select',

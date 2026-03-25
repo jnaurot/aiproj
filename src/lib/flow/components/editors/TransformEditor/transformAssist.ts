@@ -52,6 +52,11 @@ export function guidedControlsForTransform(kind: TransformKind): TransformGuided
 			{ id: 'schema_cols', label: 'Schema Columns', description: 'Insert known columns directly into the expression.' },
 			{ id: 'validate', label: 'Validation', description: 'Run with schema diagnostics to catch unknown columns.' }
 		],
+		json_filter: [
+			{ id: 'rules', label: 'JSON Rules', description: 'Filter JSON items using rule groups and path checks.' },
+			{ id: 'reject', label: 'Reject Branch', description: 'Route failed items through out_reject for downstream handling.' },
+			{ id: 'meta', label: 'Reject Metadata', description: 'Attach concise reject metadata for debugging.' }
+		],
 		select: [
 			{ id: 'mode', label: 'Mode', description: 'Choose include/exclude behavior.' },
 			{ id: 'columns', label: 'Columns', description: 'Pick 1-N key columns to keep/drop.' },
@@ -365,6 +370,7 @@ function projectColumns(kind: TransformKind, params: Record<string, unknown>, be
 		return b;
 	}
 	if (kind === 'table_to_json') return ['json'];
+	if (kind === 'json_filter') return ['json'];
 	return b;
 }
 
@@ -409,6 +415,9 @@ function projectRows(kind: TransformKind, params: Record<string, unknown>, rows:
 	if (kind === 'table_to_json') {
 		return sample.map((row) => ({ json: JSON.stringify(row) }));
 	}
+	if (kind === 'json_filter') {
+		return sample;
+	}
 	return sample;
 }
 
@@ -424,6 +433,7 @@ export function buildTransformPreviewDiff(input: {
 	const afterRows = projectRows(input.kind, input.params, beforeRows, afterColumns);
 	const notes: string[] = [];
 	if (input.kind === 'filter') notes.push('Filter preview does not evaluate expression until run.');
+	if (input.kind === 'json_filter') notes.push('JSON filter preview does not evaluate rules until run.');
 	if (input.kind === 'sql') notes.push('SQL preview is schema-only until run.');
 	if (input.kind === 'join') notes.push('Join preview uses current input schema union, not executed rows.');
 	return { beforeColumns, afterColumns, beforeRows, afterRows, notes };

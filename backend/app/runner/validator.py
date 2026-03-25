@@ -415,7 +415,7 @@ class GraphValidator:
             return "text"
         if kind == "transform":
             op = GraphValidator._transform_op(data, params)
-            if op == "table_to_json":
+            if op in {"table_to_json", "json_filter"}:
                 return "json"
             return "table"
         if kind == "model":
@@ -441,6 +441,8 @@ class GraphValidator:
         if kind == "transform":
             op = GraphValidator._transform_op(data, params)
             if op == "json_to_table":
+                return "json"
+            if op == "json_filter":
                 return "json"
             if op == "text_to_table":
                 return "text"

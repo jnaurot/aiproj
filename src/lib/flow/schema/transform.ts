@@ -3,6 +3,7 @@ import { z } from "zod";
 
 // ---- shared enums ----
 const TransformKindSchema = z.enum(["filter",
+  "json_filter",
   "select",
   "rename",
   "derive",
@@ -54,6 +55,8 @@ const TransformFilterOperatorSchema = z.enum([
 	"in",
 	"not_in",
 	"regex",
+	"exists",
+	"between",
 	"is_null",
 	"not_null"
 ]);
@@ -98,9 +101,10 @@ const TransformFilterConditionSchema = z.object({
 		"contains",
 		"in",
 		"not_in",
-		"regex"
+		"regex",
+		"between"
 	]);
-	const opsNoValue = new Set(["is_null", "not_null"]);
+	const opsNoValue = new Set(["exists", "is_null", "not_null"]);
 	if (opsRequiringValue.has(val.op) && val.value === undefined) {
 		ctx.addIssue({
 			code: "custom",
@@ -154,6 +158,98 @@ export const TransformFilterParamsSchema = z.preprocess((raw) => {
 	}
 	return raw;
 }, TransformFilterParamsSchemaBase);
+
+const TransformJsonFilterOperatorSchema = z.enum([
+	"eq",
+	"ne",
+	"gt",
+	"gte",
+	"lt",
+	"lte",
+	"in",
+	"contains",
+	"exists",
+	"is_null",
+	"between"
+]);
+
+const TransformJsonFilterConditionSchema = z
+	.object({
+		kind: z.literal("condition").default("condition"),
+		path: z.string().optional(),
+		column: z.string().optional(),
+		op: TransformJsonFilterOperatorSchema,
+		value: TransformFilterValueSchema.optional()
+	})
+	.superRefine((val, ctx) => {
+		const path = String(val.path ?? val.column ?? '').trim();
+		if (!path) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['path'],
+				message: 'JSON filter condition path is required'
+			});
+		}
+		const needsValue = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'contains', 'between']);
+		const noValue = new Set(['exists', 'is_null']);
+		if (needsValue.has(val.op) && val.value === undefined) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['value'],
+				message: `Operator '${val.op}' requires a value`
+			});
+		}
+		if (noValue.has(val.op) && val.value !== undefined) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['value'],
+				message: `Operator '${val.op}' must not provide a value`
+			});
+		}
+	})
+	.strip();
+
+type TransformJsonFilterRuleNode =
+	| z.infer<typeof TransformJsonFilterConditionSchema>
+	| {
+			kind: 'group';
+			op: z.infer<typeof TransformFilterGroupOperatorSchema>;
+			conditions: TransformJsonFilterRuleNode[];
+	  };
+
+const TransformJsonFilterRuleNodeSchema: z.ZodType<TransformJsonFilterRuleNode> = z.lazy(() =>
+	z.union([
+		TransformJsonFilterConditionSchema,
+		z
+			.object({
+				kind: z.literal('group').default('group'),
+				op: TransformFilterGroupOperatorSchema.default('all'),
+				conditions: z.array(TransformJsonFilterRuleNodeSchema).default([])
+			})
+			.strip()
+	])
+);
+
+export const TransformJsonFilterRuleGroupSchema = z
+	.object({
+		kind: z.literal('group').default('group'),
+		op: TransformFilterGroupOperatorSchema.default('all'),
+		conditions: z.array(TransformJsonFilterRuleNodeSchema).default([])
+	})
+	.strip();
+
+export const TransformJsonFilterParamsSchema = z
+	.object({
+		mode: z.literal('rules').default('rules'),
+		rules: TransformJsonFilterRuleGroupSchema.default({
+			kind: 'group',
+			op: 'all',
+			conditions: []
+		}),
+		route_reject: z.boolean().default(true),
+		include_reject_meta: z.boolean().default(true)
+	})
+	.strip();
 
 export const TransformSelectParamsSchema = z.object({
 	mode: z.enum(["include", "exclude"]).default("include"),
@@ -848,6 +944,7 @@ export const TransformMlContractParamsSchema = z
 
 export const TransformParamsSchemaByKind = {
   filter: TransformFilterParamsSchema,
+  json_filter: TransformJsonFilterParamsSchema,
   select: TransformSelectParamsSchema,
   rename: TransformRenameParamsSchema,
   derive: TransformDeriveParamsSchema,
@@ -885,6 +982,7 @@ export const TransformParamsSchemaByKind = {
 
 // ---- inferred types (single source of truth) ----
 export type TransformFilterParams = z.infer<typeof TransformFilterParamsSchema>;
+export type TransformJsonFilterParams = z.infer<typeof TransformJsonFilterParamsSchema>;
 export type TransformSelectParams  = z.infer<typeof   TransformSelectParamsSchema>;
 export type TransformRenameParams  = z.infer<typeof   TransformRenameParamsSchema>;
 export type TransformDeriveParams  = z.infer<typeof   TransformDeriveParamsSchema>;
@@ -941,6 +1039,11 @@ export const TransformParamsSchema = z.discriminatedUnion("op", [
   TransformCommonSchema.extend({
     op: z.literal("filter"),
     filter: TransformFilterParamsSchema
+  }).strip(),
+
+  TransformCommonSchema.extend({
+    op: z.literal("json_filter"),
+    json_filter: TransformJsonFilterParamsSchema
   }).strip(),
 
   TransformCommonSchema.extend({

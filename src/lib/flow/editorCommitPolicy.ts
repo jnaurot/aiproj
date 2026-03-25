@@ -4,6 +4,7 @@ export type EditorCommitMode = 'draft' | 'immediate';
 
 export const TransformEditorCommitModeByKind: Record<TransformKind, EditorCommitMode> = {
 	filter: 'draft',
+	json_filter: 'draft',
 	select: 'draft',
 	rename: 'draft',
 	derive: 'draft',

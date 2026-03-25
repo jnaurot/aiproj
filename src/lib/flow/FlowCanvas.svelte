@@ -3157,6 +3157,7 @@ async function scrollToBottom() {
 											<option value="quality_gate">quality_gate</option>
 											<option value="ml_contract">ml_contract</option>
 											<option value="sql">sql</option>
+											<option value="json_filter">json_filter</option>
 											<option value="json_to_table">json_to_table</option>
 											<option value="text_to_table">text_to_table</option>
 											<option value="table_to_json">table_to_json</option>

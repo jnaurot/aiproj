@@ -24,6 +24,10 @@
 			}
 			return params.filter?.expr ?? '-';
 		}
+		if (op === 'json_filter') {
+			const count = countFilterConditions(params.json_filter?.rules);
+			return count > 0 ? `JSON Rules (${count} condition${count === 1 ? '' : 's'})` : 'JSON Rules';
+		}
 		if (op === 'select') return (params.select?.columns || []).join(', ') || '-';
 		if (op === 'rename') return Object.keys(params.rename?.map || {}).length > 0 ? 'Rename columns' : '-';
 		if (op === 'derive') return (params.derive?.columns || []).length > 0 ? 'Derive columns' : '-';

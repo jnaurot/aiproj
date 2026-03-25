@@ -217,6 +217,13 @@ async def resolve_input_refs(
     Only includes edges whose source node has produced an artifact via bindings.
     """
     refs: list[tuple[str, str]] = []
+    def _get_artifact_for_source(node_id: str, source_handle: str = "out"):
+        # Backward-compatible: some tests and callers still pass a single-arg getter.
+        try:
+            return get_current_artifact(node_id, source_handle)
+        except TypeError:
+            return get_current_artifact(node_id)
+
     for e in edges.values():
         if e.get("target") != node_id:
             continue
@@ -224,7 +231,7 @@ async def resolve_input_refs(
         if not src:
             continue
         source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
-        aid = get_current_artifact(src, source_handle)
+        aid = _get_artifact_for_source(src, source_handle)
         if not aid:
             continue
         src_node = get_node_by_id(src) or {}
@@ -2284,7 +2291,7 @@ def _declared_out_port(kind: str, node: Dict[str, Any]) -> Optional[str]:
         return "text"
     if kind == "transform":
         transform_op = _transform_op_for_node(node)
-        if transform_op == "table_to_json":
+        if transform_op in {"table_to_json", "json_filter"}:
             return "json"
         return "table"
     if kind == "tool":
@@ -2333,6 +2340,8 @@ def _declared_in_port(kind: str, node: Dict[str, Any], input_port: Optional[str]
             return "text"
         if transform_op == "table_to_json":
             return "table"
+        if transform_op == "json_filter":
+            return "json"
         return "table"
     if kind == "llm":
         return "text"
@@ -4120,11 +4129,12 @@ async def run_graph(
                     transform_op = op_hint or transform_kind
                     allowed_in_contracts = (
                         {"json"} if transform_op == "json_to_table"
+                        else {"json"} if transform_op == "json_filter"
                         else {"text"} if transform_op == "text_to_table"
                         else {"table"} if transform_op == "table_to_json"
                         else {"table", "json", "text"}
                     )
-                    expected_out_contract = "json" if transform_op == "table_to_json" else "table"
+                    expected_out_contract = "json" if transform_op in {"table_to_json", "json_filter"} else "table"
                     # Transform contract is derived by operation.
                     in_contract = sorted(allowed_in_contracts)[0] if len(allowed_in_contracts) == 1 else "table"
                     out_contract = expected_out_contract
@@ -4239,6 +4249,7 @@ async def run_graph(
                         op = str(norm.get("op") or "").lower()
                         expected_payload_type = (
                             "json" if op == "json_to_table"
+                            else "json" if op == "json_filter"
                             else "text" if op == "text_to_table"
                             else str(in_contract or "table")
                         )
@@ -4317,7 +4328,26 @@ async def run_graph(
                                                 },
                                             ),
                                         )
-                            if op == "json_to_table":
+                            if op == "json_filter":
+                                parsed_json: Any = {}
+                                try:
+                                    parsed_json = json.loads(bytes(b).decode("utf-8"))
+                                except Exception:
+                                    parsed_json = {}
+                                if isinstance(parsed_json, dict) and "payload" in parsed_json:
+                                    payload_value = parsed_json.get("payload")
+                                    if isinstance(payload_value, (dict, list)):
+                                        parsed_json = payload_value
+                                if input_handle == "in":
+                                    param_inputs["_json_filter_in"] = parsed_json
+                                input_tables[input_handle] = load_table_from_json_bytes(
+                                    b"[]",
+                                    orient="records",
+                                    rows_key="rows",
+                                )
+                                input_columns[input_handle] = []
+                                input_schema_cols_by_handle[input_handle] = []
+                            elif op == "json_to_table":
                                 json_spec = norm.get("json_to_table") if isinstance(norm.get("json_to_table"), dict) else {}
                                 json_orient = str(json_spec.get("orient") or "records").strip().lower() or "records"
                                 json_rows_key = str(json_spec.get("rowsKey") or "rows").strip() or "rows"
@@ -4341,16 +4371,17 @@ async def run_graph(
                                 )
                             else:
                                 df = load_table_from_artifact_bytes(art.mime_type or "application/octet-stream", b)
-                            input_tables[input_handle] = df
-                            input_columns[input_handle] = [str(c) for c in list(getattr(df, "columns", []))]
-                            schema_cols = _extract_table_columns_from_payload_schema(getattr(art, "payload_schema", None))
-                            input_schema_cols_by_handle[input_handle] = (
-                                schema_cols
-                                if schema_cols
-                                else canonical_table_columns(
-                                    [{"name": c, "type": "unknown"} for c in input_columns[input_handle]]
+                            if op != "json_filter":
+                                input_tables[input_handle] = df
+                                input_columns[input_handle] = [str(c) for c in list(getattr(df, "columns", []))]
+                                schema_cols = _extract_table_columns_from_payload_schema(getattr(art, "payload_schema", None))
+                                input_schema_cols_by_handle[input_handle] = (
+                                    schema_cols
+                                    if schema_cols
+                                    else canonical_table_columns(
+                                        [{"name": c, "type": "unknown"} for c in input_columns[input_handle]]
+                                    )
                                 )
-                            )
                             input_provenance_by_handle[input_handle] = {
                                 "sourceKind": "upstream",
                                 "upstream": {
@@ -5376,6 +5407,25 @@ async def run_graph(
                                     "message": (
                                         "transform: filter-compile "
                                         + json.dumps(filter_compile_meta, ensure_ascii=False, separators=(",", ":"))
+                                    ),
+                                    "nodeId": node_id,
+                                }
+                            )
+                        json_filter_compile_meta = (
+                            res.meta.get("json_filter_compile")
+                            if isinstance(res.meta, dict) and isinstance(res.meta.get("json_filter_compile"), dict)
+                            else None
+                        )
+                        if isinstance(json_filter_compile_meta, dict):
+                            await _emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": (
+                                        "transform: json-filter-compile "
+                                        + json.dumps(json_filter_compile_meta, ensure_ascii=False, separators=(",", ":"))
                                     ),
                                     "nodeId": node_id,
                                 }

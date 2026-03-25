@@ -10,6 +10,8 @@ export type FilterOperator =
 	| 'in'
 	| 'not_in'
 	| 'regex'
+	| 'exists'
+	| 'between'
 	| 'is_null'
 	| 'not_null';
 
@@ -47,6 +49,8 @@ export const FILTER_OPERATORS: Array<{
 	{ value: 'in', label: 'in', needsValue: true },
 	{ value: 'not_in', label: 'not in', needsValue: true },
 	{ value: 'regex', label: 'regex', needsValue: true },
+	{ value: 'exists', label: 'exists', needsValue: false },
+	{ value: 'between', label: 'between', needsValue: true },
 	{ value: 'is_null', label: 'is null', needsValue: false },
 	{ value: 'not_null', label: 'not null', needsValue: false }
 ];
