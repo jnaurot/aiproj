@@ -15,6 +15,7 @@
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: nested = readNested(params);
 	$: columns = normalizeColumns(nested.columns);
 	$: tokenizer = nested.tokenizer ?? 'whitespace';
@@ -63,11 +64,9 @@
 		};
 		if (isWrapped(params)) {
 			onDraft({ op: 'tokenize_chunk', tokenize_chunk: merged } as unknown as Partial<TransformTokenizeChunkParams>);
-			onCommit({ op: 'tokenize_chunk', tokenize_chunk: merged } as unknown as Partial<TransformTokenizeChunkParams>);
 			return;
 		}
 		onDraft(merged);
-		onCommit(merged);
 	}
 
 	function addColumn(col: string): void {
@@ -113,8 +112,7 @@
 			<Input
 				value={tokenPattern}
 				placeholder="\\w+"
-				onInput={(event) => onDraft({ tokenPattern: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={() => commitPatch({ tokenPattern: tokenPattern || '\\w+' })}
+				onInput={(event) => commitPatch({ tokenPattern: (event.currentTarget as HTMLInputElement).value })}
 			/>
 		</Field>
 	{/if}
@@ -125,8 +123,7 @@
 			min="1"
 			step="1"
 			value={maxTokens}
-			onInput={(event) => onDraft({ maxTokens: Number((event.currentTarget as HTMLInputElement).value || 256) })}
-			onBlur={() => commitPatch({ maxTokens: Math.max(1, Number(maxTokens) || 256) })}
+			onInput={(event) => commitPatch({ maxTokens: Number((event.currentTarget as HTMLInputElement).value || 256) })}
 		/>
 	</Field>
 
@@ -136,8 +133,7 @@
 			min="0"
 			step="1"
 			value={overlap}
-			onInput={(event) => onDraft({ overlap: Number((event.currentTarget as HTMLInputElement).value || 0) })}
-			onBlur={() => commitPatch({ overlap: Math.max(0, Math.min((Number(maxTokens) || 256) - 1, Number(overlap) || 0)) })}
+			onInput={(event) => commitPatch({ overlap: Number((event.currentTarget as HTMLInputElement).value || 0) })}
 		/>
 	</Field>
 
@@ -145,8 +141,7 @@
 		<Input
 			value={outColumn}
 			placeholder="chunk"
-			onInput={(event) => onDraft({ outColumn: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ outColumn: outColumn.trim() || 'chunk' })}
+			onInput={(event) => commitPatch({ outColumn: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 

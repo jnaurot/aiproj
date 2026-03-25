@@ -20,6 +20,12 @@ import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract'
 import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
 import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
 import {
+	getLlmEditorCommitMode,
+	getSourceEditorCommitMode,
+	getToolEditorCommitMode,
+	getTransformEditorCommitMode
+} from '$lib/flow/editorCommitPolicy';
+import {
 	NodeSchemaEnvelopeSchema,
 	NodeSchemaObservationSchema,
 	type NodeSchemaObservation
@@ -168,6 +174,22 @@ export type SavePreflightDiagnostic = {
 export type SavePreflightResult = {
 	ok: boolean;
 	diagnostics: SavePreflightDiagnostic[];
+};
+export type SaveConsistencyEntity = {
+	id: string;
+	label: string;
+};
+export type SaveConsistencyMismatch = {
+	canvasNodeCount: number;
+	persistedNodeCount: number;
+	canvasEdgeCount: number;
+	persistedEdgeCount: number;
+	missingNodes: SaveConsistencyEntity[];
+	addedNodes: SaveConsistencyEntity[];
+	changedNodes: SaveConsistencyEntity[];
+	missingEdges: SaveConsistencyEntity[];
+	addedEdges: SaveConsistencyEntity[];
+	changedEdges: SaveConsistencyEntity[];
 };
 
 export type EditorContext = 'graph' | 'component';
@@ -2818,6 +2840,157 @@ function buildPersistableGraphStrict(
 	return { ok: true, graph: stripToDTO(normalized.nodes, rechecked.edges, graphId) };
 }
 
+function nodeLabelForSaveCompare(node: unknown): string {
+	if (!node || typeof node !== 'object') return '-';
+	const data = (node as any).data;
+	const label = String((data as any)?.label ?? '').trim();
+	if (label) return label;
+	const kind = String((data as any)?.kind ?? '').trim();
+	const subtype = String(
+		(data as any)?.transformKind ??
+			(data as any)?.sourceKind ??
+			(data as any)?.llmKind ??
+			((data as any)?.params?.provider ?? '')
+	).trim();
+	if (kind && subtype) return `${kind}:${subtype}`;
+	if (kind) return kind;
+	return '-';
+}
+
+function edgeLabelForSaveCompare(edge: unknown): string {
+	if (!edge || typeof edge !== 'object') return '-';
+	const source = String((edge as any).source ?? '').trim();
+	const target = String((edge as any).target ?? '').trim();
+	const sourceHandle = String((edge as any).sourceHandle ?? 'out').trim() || 'out';
+	const targetHandle = String((edge as any).targetHandle ?? 'in').trim() || 'in';
+	return `${source}:${sourceHandle} -> ${target}:${targetHandle}`;
+}
+
+function sanitizeNodeForSaveCompare(node: unknown): Record<string, unknown> {
+	const next = structuredClone((node ?? {}) as Record<string, unknown>);
+	delete (next as any).selected;
+	delete (next as any).dragging;
+	delete (next as any).positionAbsolute;
+	delete (next as any).resizing;
+	delete (next as any).measured;
+	return next;
+}
+
+function sanitizeEdgeForSaveCompare(edge: unknown): Record<string, unknown> {
+	const next = structuredClone((edge ?? {}) as Record<string, unknown>);
+	delete (next as any).selected;
+	return next;
+}
+
+function asSaveEntity(id: string, label: string): SaveConsistencyEntity {
+	return { id, label: label || '-' };
+}
+
+function computeSaveConsistencyMismatch(
+	canvasGraph: PipelineGraphDTO,
+	persistedGraph: PipelineGraphDTO
+): SaveConsistencyMismatch | null {
+	const canvasNodes = Array.isArray(canvasGraph?.nodes) ? (canvasGraph.nodes as any[]) : [];
+	const persistedNodes = Array.isArray(persistedGraph?.nodes) ? (persistedGraph.nodes as any[]) : [];
+	const canvasEdges = Array.isArray(canvasGraph?.edges) ? (canvasGraph.edges as any[]) : [];
+	const persistedEdges = Array.isArray(persistedGraph?.edges) ? (persistedGraph.edges as any[]) : [];
+
+	const canvasNodeMap = new Map<string, any>();
+	for (const node of canvasNodes) {
+		const id = String((node as any)?.id ?? '').trim();
+		if (!id) continue;
+		canvasNodeMap.set(id, node);
+	}
+	const persistedNodeMap = new Map<string, any>();
+	for (const node of persistedNodes) {
+		const id = String((node as any)?.id ?? '').trim();
+		if (!id) continue;
+		persistedNodeMap.set(id, node);
+	}
+
+	const canvasEdgeMap = new Map<string, any>();
+	for (const edge of canvasEdges) {
+		const id = String((edge as any)?.id ?? '').trim();
+		if (!id) continue;
+		canvasEdgeMap.set(id, edge);
+	}
+	const persistedEdgeMap = new Map<string, any>();
+	for (const edge of persistedEdges) {
+		const id = String((edge as any)?.id ?? '').trim();
+		if (!id) continue;
+		persistedEdgeMap.set(id, edge);
+	}
+
+	const missingNodes: SaveConsistencyEntity[] = [];
+	const addedNodes: SaveConsistencyEntity[] = [];
+	const changedNodes: SaveConsistencyEntity[] = [];
+	const missingEdges: SaveConsistencyEntity[] = [];
+	const addedEdges: SaveConsistencyEntity[] = [];
+	const changedEdges: SaveConsistencyEntity[] = [];
+
+	for (const [id, node] of canvasNodeMap.entries()) {
+		if (!persistedNodeMap.has(id)) {
+			missingNodes.push(asSaveEntity(id, nodeLabelForSaveCompare(node)));
+			continue;
+		}
+		const persisted = persistedNodeMap.get(id);
+		if (stableJson(sanitizeNodeForSaveCompare(node)) !== stableJson(sanitizeNodeForSaveCompare(persisted))) {
+			changedNodes.push(asSaveEntity(id, nodeLabelForSaveCompare(node)));
+		}
+	}
+	for (const [id, node] of persistedNodeMap.entries()) {
+		if (canvasNodeMap.has(id)) continue;
+		addedNodes.push(asSaveEntity(id, nodeLabelForSaveCompare(node)));
+	}
+
+	for (const [id, edge] of canvasEdgeMap.entries()) {
+		if (!persistedEdgeMap.has(id)) {
+			missingEdges.push(asSaveEntity(id, edgeLabelForSaveCompare(edge)));
+			continue;
+		}
+		const persisted = persistedEdgeMap.get(id);
+		if (stableJson(sanitizeEdgeForSaveCompare(edge)) !== stableJson(sanitizeEdgeForSaveCompare(persisted))) {
+			changedEdges.push(asSaveEntity(id, edgeLabelForSaveCompare(edge)));
+		}
+	}
+	for (const [id, edge] of persistedEdgeMap.entries()) {
+		if (canvasEdgeMap.has(id)) continue;
+		addedEdges.push(asSaveEntity(id, edgeLabelForSaveCompare(edge)));
+	}
+
+	const hasStructuralMismatch =
+		missingNodes.length > 0 ||
+		addedNodes.length > 0 ||
+		missingEdges.length > 0 ||
+		addedEdges.length > 0 ||
+		canvasNodes.length !== persistedNodes.length ||
+		canvasEdges.length !== persistedEdges.length;
+	if (!hasStructuralMismatch) {
+		// Strict canonicalization may rewrite node/edge payload details without changing graph structure.
+		// Do not block save on changed-only deltas (changedNodes/changedEdges) to avoid false positives.
+		return null;
+	}
+	return {
+		canvasNodeCount: canvasNodes.length,
+		persistedNodeCount: persistedNodes.length,
+		canvasEdgeCount: canvasEdges.length,
+		persistedEdgeCount: persistedEdges.length,
+		missingNodes,
+		addedNodes,
+		changedNodes,
+		missingEdges,
+		addedEdges,
+		changedEdges
+	};
+}
+
+export function __computeSaveConsistencyMismatchForTest(
+	canvasGraph: PipelineGraphDTO,
+	persistedGraph: PipelineGraphDTO
+): SaveConsistencyMismatch | null {
+	return computeSaveConsistencyMismatch(canvasGraph, persistedGraph);
+}
+
 function toolBuiltinPreflightDiagnostics(node: Node<PipelineNodeData>): SavePreflightDiagnostic[] {
 	if (node.data.kind !== 'tool') return [];
 	const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
@@ -3061,6 +3234,50 @@ function buildSavePreflightDiagnostics(
 	return {
 		ok: !diagnostics.some((d) => d.severity === 'error'),
 		diagnostics
+	};
+}
+
+function pendingInspectorDraftSaveDiagnostic(state: GraphState): SavePreflightDiagnostic | null {
+	if (!Boolean(state?.inspector?.dirty)) return null;
+	const inspectorNodeId = String(state?.inspector?.nodeId ?? '').trim();
+	if (!inspectorNodeId) return null;
+	const node = state.nodes.find((n) => String(n?.id ?? '') === inspectorNodeId);
+	if (!node) return null;
+	const draftParams = (state.inspector?.draftParams ?? {}) as Record<string, any>;
+	const nodeKind = node.data.kind;
+	let editorMode: 'draft' | 'immediate' = 'immediate';
+	let detail = '';
+	if (nodeKind === 'transform') {
+		const transformKind = String(
+			draftParams?.transformKind ??
+				(node?.data as any)?.transformKind ??
+				draftParams?.op ??
+				(node?.data as any)?.params?.op ??
+				'select'
+		).trim();
+		editorMode = getTransformEditorCommitMode(transformKind);
+		detail = `"${transformKind}"`;
+	} else if (nodeKind === 'source') {
+		const sourceKind = String(draftParams?.sourceKind ?? (node?.data as any)?.sourceKind ?? 'file').trim();
+		editorMode = getSourceEditorCommitMode(sourceKind);
+		detail = `"${sourceKind}"`;
+	} else if (nodeKind === 'llm' || nodeKind === 'model') {
+		const llmKind = String(draftParams?.llmKind ?? (node?.data as any)?.llmKind ?? 'ollama').trim();
+		editorMode = getLlmEditorCommitMode(llmKind);
+		detail = `"${llmKind}"`;
+	} else if (nodeKind === 'tool') {
+		const provider = String(draftParams?.provider ?? (node?.data as any)?.params?.provider ?? 'mcp').trim();
+		editorMode = getToolEditorCommitMode(provider);
+		detail = `"${provider}"`;
+	} else {
+		return null;
+	}
+	if (editorMode !== 'draft') return null;
+	return {
+		code: 'INSPECTOR_DRAFT_PENDING_ACCEPT',
+		path: `nodes.${inspectorNodeId}.inspector.draftParams`,
+		message: `Unsaved ${nodeKind} draft changes detected for ${detail}. Click Accept before saving the graph.`,
+		severity: 'error'
 	};
 }
 
@@ -6941,6 +7158,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const current = get({ subscribe } as any) as GraphState;
 			const graphId = String(current.graphId ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
+			const pendingDraftDiagnostic = pendingInspectorDraftSaveDiagnostic(current);
+			if (pendingDraftDiagnostic) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError([pendingDraftDiagnostic]),
+					diagnostics: [pendingDraftDiagnostic]
+				};
+			}
 			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
 			if (!preflight.ok) {
 				return {
@@ -6953,6 +7179,31 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
 			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 			const graph = strictGraph.graph;
+			const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			const strictCanvasGraph = buildPersistableGraphStrict(
+				canvasGraph.nodes as any,
+				canvasGraph.edges as any,
+				graphId
+			);
+			if (!strictCanvasGraph.ok) {
+				return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
+			}
+			const consistencyMismatch = computeSaveConsistencyMismatch(strictCanvasGraph.graph, graph);
+			if (consistencyMismatch) {
+				const diag: SavePreflightDiagnostic = {
+					code: 'SAVE_CONSISTENCY_MISMATCH',
+					path: 'graph',
+					message: 'Save blocked: persisted payload is inconsistent with current canvas graph.',
+					severity: 'error'
+				};
+				return {
+					ok: false,
+					reason: 'consistency_mismatch' as const,
+					error: summarizeSavePreflightError([diag]),
+					diagnostics: [diag],
+					consistency: consistencyMismatch
+				};
+			}
 			try {
 				const created = await createGraphRevision({
 					graphId,
@@ -6980,6 +7231,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextVersionName = String(versionName ?? '').trim();
 			if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
 			if (!nextVersionName) return { ok: false, reason: 'missing_version_name' as const };
+			const pendingDraftDiagnostic = pendingInspectorDraftSaveDiagnostic(current);
+			if (pendingDraftDiagnostic) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError([pendingDraftDiagnostic]),
+					diagnostics: [pendingDraftDiagnostic]
+				};
+			}
 			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
 			if (!preflight.ok) {
 				return {
@@ -6992,6 +7252,31 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
 			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 			const graph = strictGraph.graph;
+			const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+			const strictCanvasGraph = buildPersistableGraphStrict(
+				canvasGraph.nodes as any,
+				canvasGraph.edges as any,
+				graphId
+			);
+			if (!strictCanvasGraph.ok) {
+				return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
+			}
+			const consistencyMismatch = computeSaveConsistencyMismatch(strictCanvasGraph.graph, graph);
+			if (consistencyMismatch) {
+				const diag: SavePreflightDiagnostic = {
+					code: 'SAVE_CONSISTENCY_MISMATCH',
+					path: 'graph',
+					message: 'Save blocked: persisted payload is inconsistent with current canvas graph.',
+					severity: 'error'
+				};
+				return {
+					ok: false,
+					reason: 'consistency_mismatch' as const,
+					error: summarizeSavePreflightError([diag]),
+					diagnostics: [diag],
+					consistency: consistencyMismatch
+				};
+			}
 			try {
 				const created = await createGraphRevision({
 					graphId,
@@ -7017,6 +7302,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const nextGraphName = String(graphName ?? '').trim();
 			if (!nextGraphName) return { ok: false, reason: 'missing_graph_name' as const };
 			const current = get({ subscribe } as any) as GraphState;
+			const pendingDraftDiagnostic = pendingInspectorDraftSaveDiagnostic(current);
+			if (pendingDraftDiagnostic) {
+				return {
+					ok: false,
+					reason: 'preflight_failed' as const,
+					error: summarizeSavePreflightError([pendingDraftDiagnostic]),
+					diagnostics: [pendingDraftDiagnostic]
+				};
+			}
 			const preflight = buildSavePreflightDiagnostics(current.nodes as any, current.edges as any);
 			if (!preflight.ok) {
 				return {
@@ -7033,6 +7327,31 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			);
 			if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 			const graph = strictGraph.graph;
+			const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, current.graphId);
+			const strictCanvasGraph = buildPersistableGraphStrict(
+				canvasGraph.nodes as any,
+				canvasGraph.edges as any,
+				current.graphId
+			);
+			if (!strictCanvasGraph.ok) {
+				return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
+			}
+			const consistencyMismatch = computeSaveConsistencyMismatch(strictCanvasGraph.graph, graph);
+			if (consistencyMismatch) {
+				const diag: SavePreflightDiagnostic = {
+					code: 'SAVE_CONSISTENCY_MISMATCH',
+					path: 'graph',
+					message: 'Save blocked: persisted payload is inconsistent with current canvas graph.',
+					severity: 'error'
+				};
+				return {
+					ok: false,
+					reason: 'consistency_mismatch' as const,
+					error: summarizeSavePreflightError([diag]),
+					diagnostics: [diag],
+					consistency: consistencyMismatch
+				};
+			}
 			try {
 				const created = await createGraphRevision({
 					graphName: nextGraphName,

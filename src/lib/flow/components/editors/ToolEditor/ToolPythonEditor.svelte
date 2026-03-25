@@ -127,10 +127,7 @@
 						customPackagesDraft = (event.currentTarget as HTMLTextAreaElement).value;
 						customPackagesErrors = [];
 					}}
-					onBlur={(event) => {
-						customPackagesDraft = (event.currentTarget as HTMLTextAreaElement).value;
-						commitCustomPackages(customPackagesDraft);
-					}}
+
 				/>
 				<div class="hint">Allowlisted package names only. Version specifiers are allowed.</div>
 				{#if customPackagesErrors.length > 0}
@@ -150,7 +147,7 @@
 			rows={10}
 			value={python.code ?? ''}
 			onInput={(event) => onDraft({ python: { ...python, code: (event.currentTarget as HTMLTextAreaElement).value } })}
-			onBlur={(event) => onCommit({ python: { ...python, code: (event.currentTarget as HTMLTextAreaElement).value } })}
+
 		/>
 	</Field>
 
@@ -175,12 +172,7 @@
 				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				argsError = validateArgsJson(argsDraft).error ?? null;
 			}}
-			onBlur={(event) => {
-				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				const validated = validateArgsJson(argsDraft);
-				argsError = validated.error ?? null;
-				if (!argsError && validated.value) onCommit({ python: { ...python, args: validated.value } });
-			}}
+
 		/>
 		{#if argsError}
 			<div class="fieldError">{argsError}</div>

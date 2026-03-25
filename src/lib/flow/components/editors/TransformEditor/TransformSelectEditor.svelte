@@ -23,8 +23,6 @@
 	let lastNodeId = '';
 	let lastParamsSignature = '';
 	let suppressParamSync = false;
-	$: isWrappedParams = isObject(params) && ('op' in (params as Record<string, unknown>) || 'select' in (params as Record<string, unknown>));
-
 	$: void selectedNode?.id;
 	$: normalized = normalizeSelectParams(readSelectParams(params));
 	$: mode = normalized.mode;
@@ -148,14 +146,9 @@
 		});
 		markLocalEdit();
 		selectedColumns = [...payload.columns];
-		if (isWrappedParams) {
-			const wrapped = { op: 'select', select: payload } as unknown as Partial<TransformSelectParams>;
-			onDraft(wrapped);
-			if (commit) onCommit(wrapped);
-			return;
-		}
-		onDraft(payload);
-		if (commit) onCommit(payload);
+		const wrapped = { op: 'select', select: payload } as unknown as Partial<TransformSelectParams>;
+		onDraft(wrapped);
+		if (commit) onCommit(wrapped);
 	}
 
 	function commitNow(): void {

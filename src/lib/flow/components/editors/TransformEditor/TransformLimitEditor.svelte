@@ -31,6 +31,7 @@
 
 	$: void selectedNode?.id;
 	$: void params;
+	$: void onCommit;
 	$: persistedN = (() => {
 		const nodeId = selectedNode?.id;
 		if (!nodeId) return undefined;
@@ -59,7 +60,6 @@
 		const next = parsed === undefined ? fallback : Math.min(maxValue, parsed);
 		nDraft = String(next);
 		onDraft({ n: next });
-		onCommit({ n: next });
 	}
 </script>
 
@@ -80,7 +80,6 @@
 					const parsed = parseOptionalInt(raw, minValue);
 					if (parsed !== undefined) onDraft({ n: Math.min(maxValue, parsed) });
 				}}
-				onBlur={() => commitValue(nDraft, nSafe)}
 				onKeydown={(event) => {
 					if ((event as KeyboardEvent).key === 'Enter') {
 						event.preventDefault();

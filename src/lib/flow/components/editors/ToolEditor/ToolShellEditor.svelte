@@ -53,7 +53,7 @@
 			rows={6}
 			value={shell.command ?? ''}
 			onInput={(event) => onDraft({ shell: { ...shell, command: (event.currentTarget as HTMLTextAreaElement).value } })}
-			onBlur={(event) => onCommit({ shell: { ...shell, command: (event.currentTarget as HTMLTextAreaElement).value } })}
+
 		/>
 	</Field>
 
@@ -65,10 +65,7 @@
 				const value = (event.currentTarget as HTMLInputElement).value;
 				onDraft({ shell: { ...shell, cwd: value.trim() === '' ? undefined : value } });
 			}}
-			onBlur={(event) => {
-				const value = (event.currentTarget as HTMLInputElement).value;
-				onCommit({ shell: { ...shell, cwd: value.trim() === '' ? undefined : value } });
-			}}
+
 		/>
 	</Field>
 
@@ -93,12 +90,7 @@
 				envDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				envError = validateEnvJson(envDraft).error ?? null;
 			}}
-			onBlur={(event) => {
-				envDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				const validated = validateEnvJson(envDraft);
-				envError = validated.error ?? null;
-				if (!envError && validated.value) onCommit({ shell: { ...shell, env: validated.value } });
-			}}
+
 		/>
 		{#if envError}
 			<div class="fieldError">{envError}</div>

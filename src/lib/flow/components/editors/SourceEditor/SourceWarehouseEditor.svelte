@@ -56,7 +56,7 @@
 				value={connection_string}
 				placeholder="warehouse connection string"
 				onInput={(event) => draft({ connection_string: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ connection_string: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -65,7 +65,7 @@
 				value={connection_ref}
 				placeholder="conn:warehouse_default"
 				onInput={(event) => draft({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -76,7 +76,7 @@
 				value={query}
 				placeholder="select * from my_table"
 				onInput={(event) => draft({ query: (event.currentTarget as HTMLTextAreaElement).value })}
-				onBlur={(event) => commit({ query: (event.currentTarget as HTMLTextAreaElement).value })}
+
 			/>
 		</Field>
 
@@ -88,8 +88,7 @@
 				value={limit}
 				onInput={(event) =>
 					draft({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-				onBlur={(event) =>
-					commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+
 			/>
 		</Field>
 

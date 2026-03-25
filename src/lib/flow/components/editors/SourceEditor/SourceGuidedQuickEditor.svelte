@@ -33,7 +33,7 @@
 					value={asString((params as any)?.filename, '')}
 					placeholder="data.txt"
 					onInput={(event) => draft({ filename: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ filename: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="file_format">
@@ -41,7 +41,7 @@
 					value={asString((params as any)?.file_format, 'txt')}
 					placeholder="txt/csv/json/..."
 					onInput={(event) => draft({ file_format: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ file_format: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="output mode">
@@ -77,7 +77,7 @@
 					value={asString((params as any)?.connection_ref, '')}
 					placeholder="conn:default"
 					onInput={(event) => draft({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="query">
@@ -87,7 +87,7 @@
 					value={asString((params as any)?.query, '')}
 					placeholder="select * from my_table"
 					onInput={(event) => draft({ query: (event.currentTarget as HTMLTextAreaElement).value })}
-					onBlur={(event) => commit({ query: (event.currentTarget as HTMLTextAreaElement).value })}
+
 				/>
 			</Field>
 			<Field label="limit">
@@ -97,7 +97,7 @@
 					step="1"
 					value={asNumberOrEmpty((params as any)?.limit)}
 					onInput={(event) => draft({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-					onBlur={(event) => commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+
 				/>
 			</Field>
 			<Field label="output mode">
@@ -137,7 +137,7 @@
 					value={asString((params as any)?.url, '')}
 					placeholder="https://api.example.com/data"
 					onInput={(event) => draft({ url: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ url: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="auth_type">
@@ -160,7 +160,7 @@
 					value={asString((params as any)?.auth_token_ref, '')}
 					placeholder="API_TOKEN"
 					onInput={(event) => draft({ auth_token_ref: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ auth_token_ref: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="output mode">
@@ -197,7 +197,7 @@
 					value={asString((params as any)?.bucket, '')}
 					placeholder="my-bucket"
 					onInput={(event) => draft({ bucket: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ bucket: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="key">
@@ -205,7 +205,7 @@
 					value={asString((params as any)?.key, '')}
 					placeholder="path/to/object"
 					onInput={(event) => draft({ key: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ key: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="file_format">
@@ -213,7 +213,7 @@
 					value={asString((params as any)?.file_format, 'txt')}
 					placeholder="txt/csv/json/..."
 					onInput={(event) => draft({ file_format: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ file_format: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="output mode">
@@ -250,7 +250,7 @@
 					value={asString((params as any)?.connection_ref, '')}
 					placeholder="conn:warehouse_default"
 					onInput={(event) => draft({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 			<Field label="query">
@@ -260,7 +260,7 @@
 					value={asString((params as any)?.query, '')}
 					placeholder="select * from my_table"
 					onInput={(event) => draft({ query: (event.currentTarget as HTMLTextAreaElement).value })}
-					onBlur={(event) => commit({ query: (event.currentTarget as HTMLTextAreaElement).value })}
+
 				/>
 			</Field>
 			<Field label="limit">
@@ -270,7 +270,7 @@
 					step="1"
 					value={asNumberOrEmpty((params as any)?.limit)}
 					onInput={(event) => draft({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-					onBlur={(event) => commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+
 				/>
 			</Field>
 			<Field label="output mode">

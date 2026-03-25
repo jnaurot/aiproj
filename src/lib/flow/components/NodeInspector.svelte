@@ -1442,7 +1442,6 @@
 							type="text"
 							value={String((params as any)?.model ?? '')}
 							on:input={(e) => onDraft({ model: (e.currentTarget as HTMLInputElement).value })}
-							on:blur={(e) => onCommit({ model: (e.currentTarget as HTMLInputElement).value })}
 						/>
 					</label>
 					<label class="guidedToggle">

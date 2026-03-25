@@ -17,6 +17,7 @@
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: nested = readNested(params);
 	$: mode = (nested.mode ?? 'report') as NullPolicyMode;
 	$: columns = normalizeColumns(nested.columns);
@@ -60,11 +61,9 @@
 		};
 		if (isWrapped(params)) {
 			onDraft({ op: 'null_policy', null_policy: merged } as unknown as Partial<TransformNullPolicyParams>);
-			onCommit({ op: 'null_policy', null_policy: merged } as unknown as Partial<TransformNullPolicyParams>);
 			return;
 		}
 		onDraft(merged);
-		onCommit(merged);
 	}
 
 	function addColumn(col: string): void {
@@ -118,8 +117,7 @@
 			<Input
 				value={String(fillValue ?? '')}
 				placeholder="0"
-				onInput={(event) => onDraft({ fillValue: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={() => commitPatch({ fillValue })}
+				onInput={(event) => commitPatch({ fillValue: (event.currentTarget as HTMLInputElement).value })}
 			/>
 		</Field>
 	{/if}

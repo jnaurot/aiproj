@@ -152,10 +152,7 @@
 						customPackagesDraft = (event.currentTarget as HTMLTextAreaElement).value;
 						customPackagesErrors = [];
 					}}
-					onBlur={(event) => {
-						customPackagesDraft = (event.currentTarget as HTMLTextAreaElement).value;
-						commitCustomPackages(customPackagesDraft);
-					}}
+
 				/>
 				<div class="hint">Allowlisted package names only. Version specifiers are allowed.</div>
 				{#if customPackagesErrors.length > 0}
@@ -186,13 +183,13 @@
 			<Input
 				value={builtin.toolId ?? ''}
 				onInput={(event) => onDraft({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
-				onBlur={(event) => onCommit({ builtin: { ...builtin, toolId: (event.currentTarget as HTMLInputElement).value } })}
+
 			/>
 		{/if}
 	</div>
 
 	<Field label="args">
-		<Input multiline={true} rows={6} value={argsText} onBlur={(event) => commitArgs((event.currentTarget as HTMLTextAreaElement).value)} />
+		<Input multiline={true} rows={6} value={argsText}/>
 	</Field>
 </Section>
 

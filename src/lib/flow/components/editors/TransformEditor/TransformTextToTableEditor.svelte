@@ -12,6 +12,7 @@
 	export let onCommit: (patch: Partial<TransformTextToTableParams>) => void;
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: mode = params?.mode ?? 'lines';
 	$: column = params?.column ?? 'text';
 	$: delimiter = params?.delimiter ?? ',';
@@ -27,7 +28,6 @@
 			on:change={(event) => {
 				const next = (event.currentTarget as HTMLSelectElement).value as TransformTextToTableParams['mode'];
 				onDraft({ mode: next });
-				onCommit({ mode: next });
 			}}
 		>
 			<option value="lines">lines</option>
@@ -41,7 +41,6 @@
 			value={column}
 			placeholder="text"
 			onInput={(event) => onDraft({ column: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => onCommit({ column: column.trim() || 'text' })}
 		/>
 	</Field>
 
@@ -50,7 +49,6 @@
 			value={delimiter}
 			placeholder=","
 			onInput={(event) => onDraft({ delimiter: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => onCommit({ delimiter: delimiter || ',' })}
 		/>
 	</Field>
 
@@ -62,7 +60,6 @@
 				on:change={(event) => {
 					const next = (event.currentTarget as HTMLInputElement).checked;
 					onDraft({ hasHeader: next });
-					onCommit({ hasHeader: next });
 				}}
 			/>
 			<span>First row is header (csv/tsv)</span>

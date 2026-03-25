@@ -540,8 +540,7 @@
 					placeholder={file_format === 'tsv' ? '\\t' : ','}
 					onInput={(event) =>
 						draft({ delimiter: decodeDelimiterInput((event.currentTarget as HTMLInputElement).value) })}
-					onBlur={(event) =>
-						commit({ delimiter: decodeDelimiterInput((event.currentTarget as HTMLInputElement).value) })}
+
 				/>
 			</Field>
 			<Field label="first row is header">
@@ -565,7 +564,7 @@
 					value={quoteChar}
 					placeholder={'"'}
 					onInput={(event) => draft({ quote_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
-					onBlur={(event) => commit({ quote_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+
 				/>
 			</Field>
 			<Field label="escape character">
@@ -573,7 +572,7 @@
 					value={escapeChar}
 					placeholder={'\\'}
 					onInput={(event) => draft({ escape_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
-					onBlur={(event) => commit({ escape_char: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+
 				/>
 			</Field>
 			<Field label="malformed row policy">
@@ -610,7 +609,7 @@
 					value={thousandsSeparator}
 					placeholder=","
 					onInput={(event) => draft({ thousands_separator: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
-					onBlur={(event) => commit({ thousands_separator: (event.currentTarget as HTMLInputElement).value.slice(0, 1) || undefined })}
+
 				/>
 			</Field>
 			<Field label="date columns (comma-separated)">
@@ -624,13 +623,7 @@
 							.filter((v) => v.length > 0);
 						draft({ date_columns: values as any });
 					}}
-					onBlur={(event) => {
-						const values = (event.currentTarget as HTMLInputElement).value
-							.split(',')
-							.map((v) => v.trim())
-							.filter((v) => v.length > 0);
-						commit({ date_columns: values as any });
-					}}
+
 				/>
 			</Field>
 			<Field label="date format">
@@ -638,7 +631,7 @@
 					value={dateFormat}
 					placeholder="%Y-%m-%d"
 					onInput={(event) => draft({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
-					onBlur={(event) => commit({ date_format: (event.currentTarget as HTMLInputElement).value || undefined })}
+
 				/>
 			</Field>
 		{/if}
@@ -686,10 +679,7 @@
 						const value = (event.currentTarget as HTMLInputElement).value;
 						draft({ sheet_name: value.trim() === '' ? undefined : value });
 					}}
-					onBlur={(event) => {
-						const value = (event.currentTarget as HTMLInputElement).value;
-						commit({ sheet_name: value.trim() === '' ? undefined : value });
-					}}
+
 				/>
 			</Field>
 		{/if}
@@ -725,10 +715,7 @@
 							const raw = Number((event.currentTarget as HTMLInputElement).value);
 							draft({ txt_chunk_size: Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000 });
 						}}
-						onBlur={(event) => {
-							const raw = Number((event.currentTarget as HTMLInputElement).value);
-							commit({ txt_chunk_size: Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000 });
-						}}
+
 					/>
 				</Field>
 			{/if}
@@ -770,11 +757,7 @@
 							const value = Number.isFinite(raw) ? Math.max(0.01, Math.min(1, raw)) : 0.9;
 							draft({ audio_target_peak: value as any });
 						}}
-						onBlur={(event) => {
-							const raw = Number((event.currentTarget as HTMLInputElement).value);
-							const value = Number.isFinite(raw) ? Math.max(0.01, Math.min(1, raw)) : 0.9;
-							commit({ audio_target_peak: value as any });
-						}}
+
 					/>
 				</Field>
 			{/if}
@@ -835,11 +818,7 @@
 							const value = Number.isFinite(raw) && raw > 0 ? raw : 1;
 							draft({ video_frame_interval_sec: value as any });
 						}}
-						onBlur={(event) => {
-							const raw = Number((event.currentTarget as HTMLInputElement).value);
-							const value = Number.isFinite(raw) && raw > 0 ? raw : 1;
-							commit({ video_frame_interval_sec: value as any });
-						}}
+
 					/>
 				</Field>
 			{/if}
@@ -855,11 +834,7 @@
 							const value = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5;
 							draft({ video_max_frames: value as any });
 						}}
-						onBlur={(event) => {
-							const raw = Number((event.currentTarget as HTMLInputElement).value);
-							const value = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 5;
-							commit({ video_max_frames: value as any });
-						}}
+
 					/>
 				</Field>
 			{/if}

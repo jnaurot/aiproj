@@ -284,7 +284,7 @@
 					value={url}
 					placeholder="https://api.example.com/data"
 					onInput={(event) => draft({ url: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => commit({ url: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 
@@ -457,10 +457,7 @@
 						const value = (event.currentTarget as HTMLInputElement).value.trim();
 						draft({ auth_token_ref: value === '' ? undefined : value });
 					}}
-					onBlur={(event) => {
-						const value = (event.currentTarget as HTMLInputElement).value.trim();
-						commit({ auth_token_ref: value === '' ? undefined : value });
-					}}
+
 				/>
 			</Field>
 		</Disclosure>
@@ -480,8 +477,7 @@
 					value={timeout_seconds}
 					onInput={(event) =>
 						draft({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
-					onBlur={(event) =>
-						commit({ timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 30 })}
+
 				/>
 			</Field>
 
@@ -498,13 +494,7 @@
 								max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							retry: {
-								...(params?.retry ?? {}),
-								max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -521,13 +511,7 @@
 								backoff_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							retry: {
-								...(params?.retry ?? {}),
-								backoff_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -544,13 +528,7 @@
 								jitter_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							retry: {
-								...(params?.retry ?? {}),
-								jitter_seconds: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0) ?? 0
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -565,13 +543,7 @@
 								retry_on_status: parseRetryStatuses((event.currentTarget as HTMLInputElement).value)
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							retry: {
-								...(params?.retry ?? {}),
-								retry_on_status: parseRetryStatuses((event.currentTarget as HTMLInputElement).value)
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -589,13 +561,7 @@
 								rps: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							rate_limit: {
-								...(params?.rate_limit ?? {}),
-								rps: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0)
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -612,13 +578,7 @@
 								burst: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							rate_limit: {
-								...(params?.rate_limit ?? {}),
-								burst: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -655,14 +615,7 @@
 									cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								incremental: {
-									...(params?.incremental ?? {}),
-									enabled: true,
-									cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
-								}
-							})}
+
 					/>
 				</Field>
 
@@ -700,14 +653,7 @@
 									state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								incremental: {
-									...(params?.incremental ?? {}),
-									enabled: true,
-									state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
-								}
-							})}
+
 					/>
 				</Field>
 			{/if}
@@ -767,14 +713,7 @@
 									bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								partition: {
-									...(params?.partition ?? {}),
-									enabled: true,
-									bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
-								}
-							})}
+
 					/>
 				</Field>
 
@@ -792,14 +731,7 @@
 									parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								partition: {
-									...(params?.partition ?? {}),
-									enabled: true,
-									parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
-								}
-							})}
+
 					/>
 				</Field>
 
@@ -820,18 +752,7 @@
 											.filter((s) => s.length > 0)
 									}
 								})}
-							onBlur={(event) =>
-								commit({
-									partition: {
-										...(params?.partition ?? {}),
-										enabled: true,
-										kind: 'static_list',
-										static_values: String((event.currentTarget as HTMLInputElement).value ?? '')
-											.split(',')
-											.map((s) => s.trim())
-											.filter((s) => s.length > 0)
-									}
-								})}
+
 						/>
 					</Field>
 				{/if}
@@ -866,10 +787,7 @@
 						value={jsonItemPath}
 						placeholder="jobs or $.jobs"
 						onInput={(event) => draft({ json_item_path: (event.currentTarget as HTMLInputElement).value })}
-						onBlur={(event) => {
-							const next = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
-							commit({ json_item_path: next.length > 0 ? next : undefined });
-						}}
+
 					/>
 				</Field>
 
@@ -945,14 +863,7 @@
 									ttl_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								cache_policy: {
-									...(params?.cache_policy ?? { mode: 'ttl' }),
-									mode: 'ttl',
-									ttl_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-								}
-							})}
+
 					/>
 				</Field>
 			{/if}

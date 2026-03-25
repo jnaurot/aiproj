@@ -15,7 +15,7 @@
 		edgeSchemaDiagnostics,
 		deriveNodeIoForData
 	} from '$lib/flow/store/graphStore';
-	import type { GraphState, InputResolution } from '$lib/flow/store/graphStore';
+	import type { GraphState, InputResolution, SaveConsistencyMismatch } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
@@ -53,7 +53,12 @@ import {
 	summarizeComponentPreflight,
 	summarizeComponentPublishFailure
 } from '$lib/flow/components/componentPublishPreflight';
-	import { TransformEditorCommitModeByKind } from '$lib/flow/components/editors/TransformEditor/TransformEditor';
+	import {
+		getLlmEditorCommitMode,
+		getSourceEditorCommitMode,
+		getToolEditorCommitMode,
+		getTransformEditorCommitMode
+	} from '$lib/flow/editorCommitPolicy';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
@@ -71,6 +76,10 @@ import {
 
 	let outputOpen = false;
 	let outputNodeId: string | null = null;
+	let saveConsistencyModalOpen = false;
+	let saveConsistencyModalContext = '';
+	let saveConsistencyModalError = '';
+	let saveConsistencyModalData: SaveConsistencyMismatch | null = null;
 	const PORT_TYPE_LEGEND_MINIMIZED_KEY = 'flow.portTypeLegend.minimized.v1';
 	const PORT_TYPE_LEGEND_POS_X_KEY = 'flow.portTypeLegend.posX.v1';
 	const PORT_TYPE_LEGEND_POS_Y_KEY = 'flow.portTypeLegend.posY.v1';
@@ -376,8 +385,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			'graph_component') as ComponentKind);
 	$: hideInspectorApplyRow =
 		inspectorMode === 'edit' &&
-		$selectedNode?.data?.kind === 'transform' &&
-		TransformEditorCommitModeByKind[selectedTransformKind] === 'immediate';
+		(() => {
+			const kind = $selectedNode?.data?.kind;
+			if (kind === 'transform') return getTransformEditorCommitMode(selectedTransformKind) === 'immediate';
+			if (kind === 'source') return getSourceEditorCommitMode(selectedSourceKind) === 'immediate';
+			if (kind === 'llm' || kind === 'model') return getLlmEditorCommitMode(selectedLlmKind) === 'immediate';
+			if (kind === 'tool') return getToolEditorCommitMode(selectedToolProvider) === 'immediate';
+			return false;
+		})();
 	$: nodeBinding = selectedId ? $graphStore.nodeBindings?.[selectedId] : undefined;
 	$: nodeOut = selectedId ? $graphStore.nodeOutputs?.[selectedId] : undefined;
 	$: nodeError = (nodeOut as any)?.lastError ?? null;
@@ -2035,6 +2050,11 @@ async function scrollToBottom() {
 		if (!(result as any)?.ok) {
 			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
 				window.alert(`Save Graph blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			} else if (String((result as any)?.reason ?? '') === 'consistency_mismatch') {
+				saveConsistencyModalContext = 'Save Graph';
+				saveConsistencyModalError = String((result as any)?.error ?? 'Consistency mismatch detected.');
+				saveConsistencyModalData = ((result as any)?.consistency ?? null) as SaveConsistencyMismatch | null;
+				saveConsistencyModalOpen = true;
 			}
 			showToast(`Save Graph failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
@@ -2062,6 +2082,11 @@ async function scrollToBottom() {
 		if (!(result as any)?.ok) {
 			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
 				window.alert(`Save Version blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			} else if (String((result as any)?.reason ?? '') === 'consistency_mismatch') {
+				saveConsistencyModalContext = 'Save Version';
+				saveConsistencyModalError = String((result as any)?.error ?? 'Consistency mismatch detected.');
+				saveConsistencyModalData = ((result as any)?.consistency ?? null) as SaveConsistencyMismatch | null;
+				saveConsistencyModalOpen = true;
 			}
 			showToast(`Save Version failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
@@ -2088,6 +2113,11 @@ async function scrollToBottom() {
 		if (!(result as any)?.ok) {
 			if (String((result as any)?.reason ?? '') === 'preflight_failed') {
 				window.alert(`Save Graph As blocked by preflight.\n\n${String((result as any)?.error ?? 'Validation failed')}`);
+			} else if (String((result as any)?.reason ?? '') === 'consistency_mismatch') {
+				saveConsistencyModalContext = 'Save Graph As';
+				saveConsistencyModalError = String((result as any)?.error ?? 'Consistency mismatch detected.');
+				saveConsistencyModalData = ((result as any)?.consistency ?? null) as SaveConsistencyMismatch | null;
+				saveConsistencyModalOpen = true;
 			}
 			showToast(`Save Graph As failed: ${(result as any)?.error ?? (result as any)?.reason ?? 'unknown'}`, 'error');
 			return;
@@ -2704,6 +2734,116 @@ async function scrollToBottom() {
 						</button>
 						<button type="button" class="runSecondary" on:click={() => chooseComponentSaveApplyScope('all')}>
 							All matching ({componentSaveApplyPrompt.allMatchCount})
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
+		{#if saveConsistencyModalOpen}
+			<div class="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Save consistency mismatch">
+				<div class="componentSaveApplyModal saveConsistencyModal">
+					<div class="componentSaveApplyHead">
+						<b>{saveConsistencyModalContext} blocked</b>
+					</div>
+					<div class="componentSaveApplyBody">
+						<div class="saveConsistencyError">{saveConsistencyModalError}</div>
+						{#if saveConsistencyModalData}
+							<div class="saveConsistencyCounts">
+								<div>Nodes: canvas {saveConsistencyModalData.canvasNodeCount} / persisted {saveConsistencyModalData.persistedNodeCount}</div>
+								<div>Edges: canvas {saveConsistencyModalData.canvasEdgeCount} / persisted {saveConsistencyModalData.persistedEdgeCount}</div>
+							</div>
+							{#if saveConsistencyModalData.missingNodes.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Missing nodes</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.missingNodes as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+							{#if saveConsistencyModalData.addedNodes.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Added nodes</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.addedNodes as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+							{#if saveConsistencyModalData.changedNodes.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Changed nodes</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.changedNodes as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+							{#if saveConsistencyModalData.missingEdges.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Missing edges</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.missingEdges as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+							{#if saveConsistencyModalData.addedEdges.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Added edges</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.addedEdges as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+							{#if saveConsistencyModalData.changedEdges.length > 0}
+								<div class="saveConsistencyList">
+									<div class="saveConsistencyListTitle">Changed edges</div>
+									<ul class="saveConsistencyListBody">
+										{#each saveConsistencyModalData.changedEdges as entry (entry.id)}
+											<li>
+												<span>{entry.label}</span>
+												<span class="saveConsistencyEntryId">{entry.id}</span>
+											</li>
+										{/each}
+									</ul>
+								</div>
+							{/if}
+						{/if}
+					</div>
+					<div class="componentSaveApplyActions">
+						<button
+							type="button"
+							class="primary"
+							on:click={() => {
+								saveConsistencyModalOpen = false;
+								saveConsistencyModalData = null;
+								saveConsistencyModalContext = '';
+								saveConsistencyModalError = '';
+							}}
+						>
+							Close
 						</button>
 					</div>
 				</div>
@@ -3674,6 +3814,78 @@ async function scrollToBottom() {
 		align-items: center;
 		justify-content: flex-end;
 		gap: 8px;
+	}
+
+	.saveConsistencyModal {
+		width: min(760px, calc(100% - 20px));
+		color: #f4f8ff;
+		max-height: min(80vh, 760px);
+		background: #0a1324;
+		border-color: #3a4e78;
+	}
+
+	.saveConsistencyModal .componentSaveApplyBody {
+		max-height: calc(min(80vh, 760px) - 130px);
+		overflow: auto;
+		padding-right: 6px;
+		gap: 10px;
+	}
+
+	.saveConsistencyCounts {
+		display: grid;
+		gap: 4px;
+		padding: 10px;
+		border: 1px solid #3b4f78;
+		border-radius: 8px;
+		background: #111e36;
+		color: #edf4ff;
+		font-weight: 600;
+	}
+
+	.saveConsistencyError {
+		color: #ffd4d4;
+		font-weight: 700;
+		line-height: 1.35;
+		background: rgba(239, 68, 68, 0.2);
+		border: 1px solid rgba(248, 113, 113, 0.5);
+		border-radius: 8px;
+		padding: 10px;
+	}
+
+	.saveConsistencyList {
+		display: grid;
+		gap: 4px;
+		border: 1px solid #3a4e78;
+		background: #0f1b31;
+		border-radius: 8px;
+		padding: 10px;
+	}
+
+	.saveConsistencyListTitle {
+		font-weight: 700;
+		color: #e7f0ff;
+	}
+
+	.saveConsistencyListBody {
+		margin: 0;
+		padding-left: 18px;
+		color: #eff5ff;
+		line-height: 1.4;
+		display: grid;
+		gap: 6px;
+	}
+
+	.saveConsistencyListBody li {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+
+	.saveConsistencyEntryId {
+		font-family: ui-monospace, Menlo, Consolas, monospace;
+		font-size: 11px;
+		color: #aecdff;
+		overflow-wrap: anywhere;
 	}
 
 	.commandPaletteHead {

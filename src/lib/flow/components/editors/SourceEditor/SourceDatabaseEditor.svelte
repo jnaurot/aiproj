@@ -53,8 +53,7 @@
 				placeholder="postgresql://user:pass@host:5432/db"
 				onInput={(event) =>
 					draft({ connection_string: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) =>
-					commit({ connection_string: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -66,10 +65,7 @@
 					const value = (event.currentTarget as HTMLInputElement).value.trim();
 					draft({ connection_ref: value === '' ? undefined : value });
 				}}
-				onBlur={(event) => {
-					const value = (event.currentTarget as HTMLInputElement).value.trim();
-					commit({ connection_ref: value === '' ? undefined : value });
-				}}
+
 			/>
 		</Field>
 
@@ -89,14 +85,7 @@
 					draft(patch);
 					commit(patch);
 				}}
-				onBlur={(event) => {
-					const value = (event.currentTarget as HTMLTextAreaElement).value;
-					const nextQuery = value.trim();
-					commit({
-						query: nextQuery === '' ? undefined : value,
-						table_name: nextQuery ? undefined : params?.table_name
-					});
-				}}
+
 			/>
 		</Field>
 
@@ -114,14 +103,7 @@
 					draft(patch);
 					commit(patch);
 				}}
-				onBlur={(event) => {
-					const value = (event.currentTarget as HTMLInputElement).value;
-					const nextTable = value.trim();
-					commit({
-						table_name: nextTable === '' ? undefined : value,
-						query: nextTable ? undefined : params?.query
-					});
-				}}
+
 			/>
 		</Field>
 
@@ -134,8 +116,7 @@
 				placeholder="e.g. 5000"
 				onInput={(event) =>
 					draft({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-				onBlur={(event) =>
-					commit({ limit: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+
 			/>
 		</Field>
 
@@ -172,14 +153,7 @@
 								cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							incremental: {
-								...(params?.incremental ?? {}),
-								enabled: true,
-								cursor_column: (event.currentTarget as HTMLInputElement).value.trim()
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -217,14 +191,7 @@
 								state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							incremental: {
-								...(params?.incremental ?? {}),
-								enabled: true,
-								state_key: (event.currentTarget as HTMLInputElement).value.trim() || undefined
-							}
-						})}
+
 				/>
 			</Field>
 		{/if}
@@ -306,14 +273,7 @@
 								bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							partition: {
-								...(params?.partition ?? {}),
-								enabled: true,
-								bind_key: (event.currentTarget as HTMLInputElement).value.trim() || 'partition'
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -331,14 +291,7 @@
 								parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
 							}
 						})}
-					onBlur={(event) =>
-						commit({
-							partition: {
-								...(params?.partition ?? {}),
-								enabled: true,
-								parallelism_cap: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 2
-							}
-						})}
+
 				/>
 			</Field>
 
@@ -359,18 +312,7 @@
 										.filter((s) => s.length > 0)
 								}
 							})}
-						onBlur={(event) =>
-							commit({
-								partition: {
-									...(params?.partition ?? {}),
-									enabled: true,
-									kind: 'static_list',
-									static_values: String((event.currentTarget as HTMLInputElement).value ?? '')
-										.split(',')
-										.map((s) => s.trim())
-										.filter((s) => s.length > 0)
-								}
-							})}
+
 					/>
 				</Field>
 			{/if}

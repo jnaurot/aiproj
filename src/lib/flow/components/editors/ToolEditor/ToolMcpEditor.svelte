@@ -26,7 +26,7 @@
 		<Input
 			value={mcp.serverId ?? ''}
 			onInput={(event) => onDraft({ mcp: { ...mcp, serverId: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ mcp: { ...mcp, serverId: (event.currentTarget as HTMLInputElement).value } })}
+
 		/>
 	</Field>
 
@@ -34,11 +34,11 @@
 		<Input
 			value={mcp.toolName ?? ''}
 			onInput={(event) => onDraft({ mcp: { ...mcp, toolName: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ mcp: { ...mcp, toolName: (event.currentTarget as HTMLInputElement).value } })}
+
 		/>
 	</Field>
 
 	<Field label="args">
-		<Input multiline={true} rows={6} value={argsText} onBlur={(event) => commitArgs((event.currentTarget as HTMLTextAreaElement).value)} />
+		<Input multiline={true} rows={6} value={argsText}/>
 	</Field>
 </Section>

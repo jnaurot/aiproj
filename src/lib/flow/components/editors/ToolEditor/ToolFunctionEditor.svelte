@@ -46,7 +46,7 @@
 		<Input
 			value={fn.module ?? ''}
 			onInput={(event) => onDraft({ function: { ...fn, module: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ function: { ...fn, module: (event.currentTarget as HTMLInputElement).value } })}
+
 		/>
 	</Field>
 
@@ -54,7 +54,7 @@
 		<Input
 			value={fn.export ?? ''}
 			onInput={(event) => onDraft({ function: { ...fn, export: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ function: { ...fn, export: (event.currentTarget as HTMLInputElement).value } })}
+
 		/>
 	</Field>
 
@@ -79,12 +79,7 @@
 				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				argsError = validateArgsJson(argsDraft).error ?? null;
 			}}
-			onBlur={(event) => {
-				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				const validated = validateArgsJson(argsDraft);
-				argsError = validated.error ?? null;
-				if (!argsError && validated.value) onCommit({ function: { ...fn, args: validated.value } });
-			}}
+
 		/>
 		{#if argsError}
 			<div class="fieldError">{argsError}</div>

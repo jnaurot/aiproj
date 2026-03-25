@@ -18,6 +18,7 @@
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: nested = readNested(params);
 	$: mode = (nested.mode ?? 'clip') as OutlierMode;
 	$: method = (nested.method ?? 'iqr') as OutlierMethod;
@@ -66,11 +67,9 @@
 		};
 		if (isWrapped(params)) {
 			onDraft({ op: 'outlier_policy', outlier_policy: merged } as unknown as Partial<TransformOutlierPolicyParams>);
-			onCommit({ op: 'outlier_policy', outlier_policy: merged } as unknown as Partial<TransformOutlierPolicyParams>);
 			return;
 		}
 		onDraft(merged);
-		onCommit(merged);
 	}
 
 	function addColumn(col: string): void {
@@ -138,8 +137,7 @@
 				step="0.1"
 				value={iqrMultiplier}
 				onInput={(event) =>
-					onDraft({ iqrMultiplier: Number((event.currentTarget as HTMLInputElement).value || 1.5) })}
-				onBlur={() => commitPatch({ iqrMultiplier: Math.max(0.1, Number(iqrMultiplier) || 1.5) })}
+					commitPatch({ iqrMultiplier: Number((event.currentTarget as HTMLInputElement).value || 1.5) })}
 			/>
 		</Field>
 	{/if}
@@ -152,8 +150,7 @@
 				step="0.1"
 				value={zscoreThreshold}
 				onInput={(event) =>
-					onDraft({ zscoreThreshold: Number((event.currentTarget as HTMLInputElement).value || 3) })}
-				onBlur={() => commitPatch({ zscoreThreshold: Math.max(0.1, Number(zscoreThreshold) || 3) })}
+					commitPatch({ zscoreThreshold: Number((event.currentTarget as HTMLInputElement).value || 3) })}
 			/>
 		</Field>
 	{/if}
@@ -167,8 +164,7 @@
 				step="0.01"
 				value={lowerQuantile}
 				onInput={(event) =>
-					onDraft({ lowerQuantile: Number((event.currentTarget as HTMLInputElement).value || 0.01) })}
-				onBlur={() => commitPatch({ lowerQuantile: Math.min(0.99, Math.max(0, Number(lowerQuantile) || 0.01)) })}
+					commitPatch({ lowerQuantile: Number((event.currentTarget as HTMLInputElement).value || 0.01) })}
 			/>
 		</Field>
 		<Field label="upper quantile">
@@ -179,8 +175,7 @@
 				step="0.01"
 				value={upperQuantile}
 				onInput={(event) =>
-					onDraft({ upperQuantile: Number((event.currentTarget as HTMLInputElement).value || 0.99) })}
-				onBlur={() => commitPatch({ upperQuantile: Math.min(1, Math.max(0.01, Number(upperQuantile) || 0.99)) })}
+					commitPatch({ upperQuantile: Number((event.currentTarget as HTMLInputElement).value || 0.99) })}
 			/>
 		</Field>
 	{/if}

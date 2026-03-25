@@ -47,7 +47,7 @@
 			rows={10}
 			value={js.code ?? ''}
 			onInput={(event) => onDraft({ js: { ...js, code: (event.currentTarget as HTMLTextAreaElement).value } })}
-			onBlur={(event) => onCommit({ js: { ...js, code: (event.currentTarget as HTMLTextAreaElement).value } })}
+
 		/>
 	</Field>
 
@@ -72,12 +72,7 @@
 				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				argsError = validateArgsJson(argsDraft).error ?? null;
 			}}
-			onBlur={(event) => {
-				argsDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				const validated = validateArgsJson(argsDraft);
-				argsError = validated.error ?? null;
-				if (!argsError && validated.value) onCommit({ js: { ...js, args: validated.value } });
-			}}
+
 		/>
 		{#if argsError}
 			<div class="fieldError">{argsError}</div>

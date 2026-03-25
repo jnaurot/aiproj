@@ -15,6 +15,7 @@
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: contractParams = readContractParams(params);
 	$: taskType = contractParams.taskType ?? 'other';
 	$: labelColumn = String(contractParams.labelColumn ?? 'label');
@@ -66,11 +67,9 @@
 		};
 		if (isWrappedParams(params)) {
 			onDraft({ op: 'ml_contract', ml_contract: merged } as unknown as Partial<TransformMlContractParams>);
-			onCommit({ op: 'ml_contract', ml_contract: merged } as unknown as Partial<TransformMlContractParams>);
 			return;
 		}
 		onDraft(merged);
-		onCommit(merged);
 	}
 
 	function addFeatureColumn(col: string): void {
@@ -112,8 +111,7 @@
 		<Input
 			value={labelColumn}
 			placeholder="label"
-			onInput={(event) => onDraft({ labelColumn: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ labelColumn: labelColumn.trim() || 'label' })}
+			onInput={(event) => commitPatch({ labelColumn: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 
@@ -121,8 +119,7 @@
 		<Input
 			value={idColumn}
 			placeholder="id (optional)"
-			onInput={(event) => onDraft({ idColumn: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ idColumn: idColumn.trim() })}
+			onInput={(event) => commitPatch({ idColumn: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 
@@ -130,8 +127,7 @@
 		<Input
 			value={timestampColumn}
 			placeholder="timestamp (optional)"
-			onInput={(event) => onDraft({ timestampColumn: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ timestampColumn: timestampColumn.trim() })}
+			onInput={(event) => commitPatch({ timestampColumn: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 

@@ -12,6 +12,7 @@
 	export let onCommit: (patch: Partial<TransformJsonToTableParams>) => void;
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: orient = params?.orient ?? 'records';
 	$: rowsKey = params?.rowsKey ?? 'rows';
 </script>
@@ -25,7 +26,6 @@
 			on:change={(event) => {
 				const next = (event.currentTarget as HTMLSelectElement).value as TransformJsonToTableParams['orient'];
 				onDraft({ orient: next });
-				onCommit({ orient: next });
 			}}
 		>
 			<option value="records">records</option>
@@ -38,7 +38,6 @@
 			value={rowsKey}
 			placeholder="rows"
 			onInput={(event) => onDraft({ rowsKey: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => onCommit({ rowsKey: rowsKey.trim() || 'rows' })}
 		/>
 	</Field>
 </Section>

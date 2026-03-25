@@ -196,7 +196,7 @@
 					value={db.connectionRef ?? ''}
 					placeholder="duckdb:///C:/data/my.duckdb or :memory:"
 					onInput={(event) => onDraft({ db: { ...db, connectionRef: (event.currentTarget as HTMLInputElement).value } })}
-					onBlur={(event) => onCommit({ db: { ...db, connectionRef: (event.currentTarget as HTMLInputElement).value } })}
+
 				/>
 			</Field>
 
@@ -284,10 +284,7 @@
 						autoGrow(event);
 						onDraft({ db: { ...db, sql: (event.currentTarget as HTMLTextAreaElement).value } });
 					}}
-					onBlur={(event) => {
-						autoGrow(event);
-						onCommit({ db: { ...db, sql: (event.currentTarget as HTMLTextAreaElement).value } });
-					}}
+
 				/>
 			</Field>
 
@@ -301,13 +298,7 @@
 						paramsDraft = (event.currentTarget as HTMLTextAreaElement).value;
 						paramsError = validateParamsJson(paramsDraft).error ?? null;
 					}}
-					onBlur={(event) => {
-						autoGrow(event);
-						paramsDraft = (event.currentTarget as HTMLTextAreaElement).value;
-						const validated = validateParamsJson(paramsDraft);
-						paramsError = validated.error ?? null;
-						if (!paramsError && validated.value) onCommit({ db: { ...db, params: validated.value } });
-					}}
+
 				/>
 				{#if paramsError}
 					<div class="fieldError">{paramsError}</div>

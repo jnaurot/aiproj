@@ -245,7 +245,7 @@
 		<Input
 			value={baseUrl}
 			onInput={(event) => draft({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={(event) => commit({ baseUrl: (event.currentTarget as HTMLInputElement).value })}
+
 		/>
 	</Field>
 
@@ -257,10 +257,7 @@
 				const value = (event.currentTarget as HTMLInputElement).value.trim();
 				draft({ connectionRef: value === '' ? undefined : value });
 			}}
-			onBlur={(event) => {
-				const value = (event.currentTarget as HTMLInputElement).value.trim();
-				commit({ connectionRef: value === '' ? undefined : value });
-			}}
+
 		/>
 	</Field>
 
@@ -304,10 +301,7 @@
 				draft({
 					temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2)
 				})}
-			onBlur={(event) =>
-				commit({
-					temperature: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 2)
-				})}
+
 		/>
 	</Field>
 
@@ -320,10 +314,7 @@
 			value={top_p}
 			onInput={(event) =>
 				draft({ top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1) })}
-			onBlur={(event) =>
-				commit({
-					top_p: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0, 1)
-				})}
+
 		/>
 	</Field>
 
@@ -335,10 +326,7 @@
 			value={max_tokens}
 			onInput={(event) =>
 				draft({ max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-			onBlur={(event) =>
-				commit({
-					max_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-				})}
+
 		/>
 	</Field>
 
@@ -349,8 +337,7 @@
 			value={seed}
 			onInput={(event) =>
 				draft({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
-			onBlur={(event) =>
-				commit({ seed: parseOptionalInt((event.currentTarget as HTMLInputElement).value) })}
+
 		/>
 	</Field>
 
@@ -362,8 +349,7 @@
 			placeholder="One stop sequence per line"
 			onInput={(event) =>
 				draft({ stop: parseStopLines((event.currentTarget as HTMLTextAreaElement).value) })}
-			onBlur={(event) =>
-				commit({ stop: parseStopLines((event.currentTarget as HTMLTextAreaElement).value) })}
+
 		/>
 	</Field>
 
@@ -382,14 +368,7 @@
 						2
 					)
 				})}
-			onBlur={(event) =>
-				commit({
-					presence_penalty: parseOptionalFloat(
-						(event.currentTarget as HTMLInputElement).value,
-						-2,
-						2
-					)
-				})}
+
 		/>
 	</Field>
 
@@ -408,14 +387,7 @@
 						2
 					)
 				})}
-			onBlur={(event) =>
-				commit({
-					frequency_penalty: parseOptionalFloat(
-						(event.currentTarget as HTMLInputElement).value,
-						-2,
-						2
-					)
-				})}
+
 		/>
 	</Field>
 
@@ -430,10 +402,7 @@
 				draft({
 					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0.5, 2)
 				})}
-			onBlur={(event) =>
-				commit({
-					repeat_penalty: parseOptionalFloat((event.currentTarget as HTMLInputElement).value, 0.5, 2)
-				})}
+
 		/>
 	</Field>
 
@@ -477,12 +446,7 @@
 						budget_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
 					})
 				)}
-			onBlur={(event) =>
-				commit(
-					thinkingPatch({
-						budget_tokens: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-					})
-				)}
+
 		/>
 	</Field>
 
@@ -510,8 +474,7 @@
 			value={requestRetries}
 			onInput={(event) =>
 				draft(requestPolicyPatch({ retries: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) }))}
-			onBlur={(event) =>
-				commit(requestPolicyPatch({ retries: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) }))}
+
 		/>
 	</Field>
 
@@ -527,12 +490,7 @@
 						timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
 					})
 				)}
-			onBlur={(event) =>
-				commit(
-					requestPolicyPatch({
-						timeout_seconds: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1)
-					})
-				)}
+
 		/>
 	</Field>
 
@@ -629,8 +587,7 @@
 			placeholder="(optional)"
 			onInput={(event) =>
 				draft({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
-			onBlur={(event) =>
-				commit({ system_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+
 		/>
 	</Field>
 
@@ -643,8 +600,7 @@
 				placeholder="Summarize the input data."
 				onInput={(event) =>
 					draft({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
-				onBlur={(event) =>
-					commit({ user_prompt: (event.currentTarget as HTMLTextAreaElement).value })}
+
 			/>
 			<div class="hint">
 				Tip: you can reserve <code>{'{input}'}</code> as a placeholder for upstream text.
@@ -664,7 +620,7 @@
 					placeholder={jsonSchemaPlaceholder}
 					onInput={(event) =>
 						setJsonSchemaDraft((event.currentTarget as HTMLTextAreaElement).value)}
-					onBlur={(event) => commitJsonSchema((event.currentTarget as HTMLTextAreaElement).value)}
+
 				/>
 				<div class="hint">
 					JSON mode is enabled. Paste a JSON schema stored as <code>output.jsonSchema</code>.
@@ -694,18 +650,7 @@
 							}
 						}
 					})}
-				onBlur={(event) =>
-					commit({
-						output: {
-							...(params?.output ?? { mode: 'embeddings', strict: true }),
-							mode: 'embeddings',
-							embedding: {
-								dims: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1,
-								dtype: params?.output?.embedding?.dtype ?? 'float32',
-								layout: params?.output?.embedding?.layout ?? '1d'
-							}
-						}
-					})}
+
 			/>
 		</Field>
 

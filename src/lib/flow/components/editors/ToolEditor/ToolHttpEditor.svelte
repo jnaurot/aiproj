@@ -97,7 +97,7 @@
 		<Input
 			value={http.url ?? ''}
 			onInput={(event) => onDraft({ http: { ...http, url: (event.currentTarget as HTMLInputElement).value } })}
-			onBlur={(event) => onCommit({ http: { ...http, url: (event.currentTarget as HTMLInputElement).value } })}
+
 		/>
 	</Field>
 
@@ -139,11 +139,7 @@
 				headersDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				headersError = validateDraft('headers', headersDraft);
 			}}
-			onBlur={(event) => {
-				headersDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				headersError = validateDraft('headers', headersDraft);
-				if (!headersError) commitJson('headers', headersDraft);
-			}}
+
 		/>
 		{#if headersError}
 			<div class="fieldError">{headersError}</div>
@@ -159,11 +155,7 @@
 				queryDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				queryError = validateDraft('query', queryDraft);
 			}}
-			onBlur={(event) => {
-				queryDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				queryError = validateDraft('query', queryDraft);
-				if (!queryError) commitJson('query', queryDraft);
-			}}
+
 		/>
 		{#if queryError}
 			<div class="fieldError">{queryError}</div>
@@ -179,11 +171,7 @@
 				bodyDraft = (event.currentTarget as HTMLTextAreaElement).value;
 				bodyError = validateDraft('body', bodyDraft);
 			}}
-			onBlur={(event) => {
-				bodyDraft = (event.currentTarget as HTMLTextAreaElement).value;
-				bodyError = validateDraft('body', bodyDraft);
-				if (!bodyError) commitJson('body', bodyDraft);
-			}}
+
 		/>
 		{#if bodyError}
 			<div class="fieldError">{bodyError}</div>

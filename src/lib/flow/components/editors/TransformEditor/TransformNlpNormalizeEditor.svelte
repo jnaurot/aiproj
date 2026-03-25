@@ -15,6 +15,7 @@
 	export let inputSchemaColumns: Array<{ name: string; type?: string }> = [];
 
 	$: void selectedNode?.id;
+	$: void onCommit;
 	$: nested = readNested(params);
 	$: columns = normalizeColumns(nested.columns);
 	$: language = nested.language ?? 'en';
@@ -61,11 +62,9 @@
 		};
 		if (isWrapped(params)) {
 			onDraft({ op: 'nlp_normalize', nlp_normalize: merged } as unknown as Partial<TransformNlpNormalizeParams>);
-			onCommit({ op: 'nlp_normalize', nlp_normalize: merged } as unknown as Partial<TransformNlpNormalizeParams>);
 			return;
 		}
 		onDraft(merged);
-		onCommit(merged);
 	}
 
 	function addColumn(col: string): void {
@@ -103,8 +102,7 @@
 		<Input
 			value={language}
 			placeholder="en"
-			onInput={(event) => onDraft({ language: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ language: language.trim() || 'en' })}
+			onInput={(event) => commitPatch({ language: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 
@@ -112,8 +110,7 @@
 		<Input
 			value={tokenPattern}
 			placeholder="\\w+"
-			onInput={(event) => onDraft({ tokenPattern: (event.currentTarget as HTMLInputElement).value })}
-			onBlur={() => commitPatch({ tokenPattern: tokenPattern || '\\w+' })}
+			onInput={(event) => commitPatch({ tokenPattern: (event.currentTarget as HTMLInputElement).value })}
 		/>
 	</Field>
 

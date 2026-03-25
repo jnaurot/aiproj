@@ -25,7 +25,6 @@
 	function insertSnippet(snippet: string): void {
 		const merged = query.trimEnd().length > 0 ? `${query.trimEnd()}\n\n${snippet}` : snippet;
 		onDraft({ query: merged });
-		onCommit({ query: merged });
 	}
 </script>
 
@@ -38,7 +37,6 @@
 			on:change={(event) => {
 				const value = (event.currentTarget as HTMLSelectElement).value as Dialect;
 				onDraft({ dialect: value });
-				onCommit({ dialect: value });
 			}}
 		>
 			<option value="duckdb">duckdb</option>
@@ -55,7 +53,6 @@
 				value={query}
 				placeholder={defaults.query}
 				onInput={(event) => onDraft({ query: (event.currentTarget as HTMLTextAreaElement).value })}
-				onBlur={() => onCommit({ query: query.trim() })}
 			/>
 			<div class="actions">
 				<button

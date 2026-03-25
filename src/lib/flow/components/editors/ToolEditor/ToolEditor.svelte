@@ -54,7 +54,7 @@
 					value={name}
 					placeholder="http.request"
 					onInput={(event) => onDraft({ name: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => onCommit({ name: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 
@@ -63,7 +63,7 @@
 					value={toolVersion}
 					placeholder="v1"
 					onInput={(event) => onDraft({ toolVersion: (event.currentTarget as HTMLInputElement).value })}
-					onBlur={(event) => onCommit({ toolVersion: (event.currentTarget as HTMLInputElement).value })}
+
 				/>
 			</Field>
 
@@ -106,7 +106,7 @@
 					step="1"
 					value={timeoutMs}
 					onInput={(event) => onDraft({ timeoutMs: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
-					onBlur={(event) => onCommit({ timeoutMs: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) })}
+
 				/>
 			</Field>
 
@@ -118,8 +118,7 @@
 					value={maxAttempts}
 					onInput={(event) =>
 						onDraft({ retry: { ...retry, max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1 } })}
-					onBlur={(event) =>
-						onCommit({ retry: { ...retry, max_attempts: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 1) ?? 1 } })}
+
 				/>
 			</Field>
 
@@ -131,8 +130,7 @@
 					value={backoffMs}
 					onInput={(event) =>
 						onDraft({ retry: { ...retry, backoff_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) ?? 0 } })}
-					onBlur={(event) =>
-						onCommit({ retry: { ...retry, backoff_ms: parseOptionalInt((event.currentTarget as HTMLInputElement).value, 0) ?? 0 } })}
+
 				/>
 			</Field>
 		</div>

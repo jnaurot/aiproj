@@ -57,7 +57,7 @@
 				value={connection_ref}
 				placeholder="conn:object_store_default"
 				onInput={(event) => draft({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ connection_ref: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -66,7 +66,7 @@
 				value={bucket}
 				placeholder="my-bucket"
 				onInput={(event) => draft({ bucket: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ bucket: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -75,7 +75,7 @@
 				value={key}
 				placeholder="path/to/file.csv"
 				onInput={(event) => draft({ key: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ key: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 
@@ -84,7 +84,7 @@
 				value={file_format}
 				placeholder="txt/csv/json/parquet/..."
 				onInput={(event) => draft({ file_format: (event.currentTarget as HTMLInputElement).value as any })}
-				onBlur={(event) => commit({ file_format: (event.currentTarget as HTMLInputElement).value as any })}
+
 			/>
 		</Field>
 
@@ -93,7 +93,7 @@
 				value={encoding}
 				placeholder="utf-8"
 				onInput={(event) => draft({ encoding: (event.currentTarget as HTMLInputElement).value })}
-				onBlur={(event) => commit({ encoding: (event.currentTarget as HTMLInputElement).value })}
+
 			/>
 		</Field>
 

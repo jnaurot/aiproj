@@ -27,47 +27,12 @@ import TransformSqlEditor from './TransformSqlEditor.svelte';
 import TransformJsonToTableEditor from './TransformJsonToTableEditor.svelte';
 import TransformTextToTableEditor from './TransformTextToTableEditor.svelte';
 import TransformTableToJsonEditor from './TransformTableToJsonEditor.svelte';
+export {
+	type EditorCommitMode,
+	TransformEditorCommitModeByKind
+} from '$lib/flow/editorCommitPolicy';
 
 // filter, select, rename, derive, aggregate, join, sort, limit, dedupe, split, quality_gate, sql, json_to_table, text_to_table, table_to_json
-
-export type EditorCommitMode = 'draft' | 'immediate';
-
-export const TransformEditorCommitModeByKind = {
-	filter: 'draft',
-	select: 'immediate',
-	rename: 'draft',
-	derive: 'immediate',
-	aggregate: 'immediate',
-	join: 'immediate',
-	sort: 'immediate',
-	limit: 'immediate',
-	dedupe: 'immediate',
-	null_policy: 'immediate',
-	outlier_policy: 'immediate',
-	text_clean: 'immediate',
-	nlp_normalize: 'immediate',
-	tokenize_chunk: 'immediate',
-	dataset_split: 'immediate',
-	class_imbalance: 'immediate',
-	categorical_encode: 'immediate',
-	numeric_scale: 'immediate',
-	embedding: 'immediate',
-	feature_selection: 'immediate',
-	leakage_detect: 'immediate',
-	quality_profile: 'immediate',
-	drift_compare: 'immediate',
-	determinism_profile: 'immediate',
-	fit_state_registry: 'immediate',
-	pii_guard: 'immediate',
-	inference_parity: 'immediate',
-	split: 'draft',
-	quality_gate: 'immediate',
-	ml_contract: 'immediate',
-	sql: 'draft',
-	json_to_table: 'immediate',
-	text_to_table: 'immediate',
-	table_to_json: 'immediate',
-} as const satisfies Record<string, EditorCommitMode>;
 
 export const TransformEditorByKind = {
     filter: TransformFilterEditor,
