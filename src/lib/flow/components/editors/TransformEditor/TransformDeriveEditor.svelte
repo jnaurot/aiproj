@@ -157,23 +157,23 @@
 	}
 
 	function setMode(nextMode: DeriveMode): void {
-		commitPatch({ mode: nextMode }, true);
+		commitPatch({ mode: nextMode }, false);
 	}
 
 	function updateSqlColumn(index: number, key: keyof DeriveSqlColumn, value: string): void {
 		const nextRows = sqlColumnsDraft.map((item, current) => (current === index ? { ...item, [key]: value } : item));
-		commitPatch({ sqlColumns: nextRows }, true);
+		commitPatch({ sqlColumns: nextRows }, false);
 	}
 
 	function addSqlColumn(): void {
 		const nextRows = [...sqlColumnsDraft, { name: '', expr: '' }];
-		commitPatch({ sqlColumns: nextRows }, true);
+		commitPatch({ sqlColumns: nextRows }, false);
 		activeExprIndex = Math.max(0, nextRows.length - 1);
 	}
 
 	function removeSqlColumn(index: number): void {
 		const nextRows = sqlColumnsDraft.filter((_, current) => current !== index);
-		commitPatch({ sqlColumns: nextRows.length > 0 ? nextRows : [{ name: '', expr: '' }] }, true);
+		commitPatch({ sqlColumns: nextRows.length > 0 ? nextRows : [{ name: '', expr: '' }] }, false);
 		if (activeExprIndex >= nextRows.length) activeExprIndex = Math.max(0, nextRows.length - 1);
 	}
 
@@ -256,7 +256,7 @@
 		<DeriveFormulaBuilder
 			rules={rulesDraft}
 			columns={knownColumns}
-			onChange={(next) => commitPatch({ rules: next }, true)}
+			onChange={(next) => commitPatch({ rules: next }, false)}
 		/>
 	{:else}
 		<div class="hint">Each row compiles to <code>(expr) AS name</code>. Example: <code>length("text")</code>.</div>
