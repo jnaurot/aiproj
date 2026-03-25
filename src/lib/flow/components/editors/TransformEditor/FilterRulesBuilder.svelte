@@ -2,11 +2,12 @@
 	import type { FilterCondition, FilterGroup, FilterOperator, FilterRuleNode, FilterValueSource } from './filterRulesModel';
 	import { FILTER_OPERATORS } from './filterRulesModel';
 
-	export let group: FilterGroup;
-	export let columns: Array<{ name: string; type: string }> = [];
-	export let depth = 0;
-	export let onChange: (next: FilterGroup) => void;
-	export let onRemoveGroup: (() => void) | null = null;
+export let group: FilterGroup;
+export let columns: Array<{ name: string; type: string }> = [];
+export let fieldLabel = 'column';
+export let depth = 0;
+export let onChange: (next: FilterGroup) => void;
+export let onRemoveGroup: (() => void) | null = null;
 
 	const VALUE_OPERATORS = new Set(FILTER_OPERATORS.filter((entry) => entry.needsValue).map((entry) => entry.value));
 	const groupOpSelectId = `filter-group-op-${Math.random().toString(36).slice(2, 10)}`;
@@ -113,7 +114,7 @@
 										updateCondition(node, { column: (event.currentTarget as HTMLSelectElement).value })
 									)}
 							>
-								<option value="" disabled selected={node.column.length === 0}>Select column</option>
+								<option value="" disabled selected={node.column.length === 0}>Select {fieldLabel}</option>
 								{#each columns as col}
 									<option value={col.name}>{col.name}</option>
 								{/each}

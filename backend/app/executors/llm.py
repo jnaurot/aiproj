@@ -161,11 +161,12 @@ def _canon_json(obj: Any) -> str:
 def _is_table_artifact(art: Any) -> bool:
     mime = str(getattr(art, "mime_type", "") or "").lower()
     payload_schema = getattr(art, "payload_schema", None) or {}
-    payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
-    payload_type = str(getattr(art, "payload_type", "") or "").lower()
+    schema_payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
+    artifact_payload_type = str(getattr(art, "payload_type", "") or "").lower()
+    payload_type = artifact_payload_type or schema_payload_type
     return (
         payload_type == "table"
-        or payload_type == "table"
+        or schema_payload_type == "table"
         or "csv" in mime
         or "tab-separated-values" in mime
         or "parquet" in mime
@@ -177,9 +178,10 @@ def _is_table_artifact(art: Any) -> bool:
 def _is_json_artifact(art: Any) -> bool:
     mime = str(getattr(art, "mime_type", "") or "").lower()
     payload_schema = getattr(art, "payload_schema", None) or {}
-    payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
-    payload_type = str(getattr(art, "payload_type", "") or "").lower()
-    return payload_type == "json" or payload_type == "json" or "application/json" in mime or "json" in mime
+    schema_payload_type = str(payload_schema.get("type") or "").lower() if isinstance(payload_schema, dict) else ""
+    artifact_payload_type = str(getattr(art, "payload_type", "") or "").lower()
+    payload_type = artifact_payload_type or schema_payload_type
+    return payload_type == "json" or schema_payload_type == "json" or "application/json" in mime or "json" in mime
 
 
 async def _serialize_artifact_input(context: GraphContext, artifact_id: str, input_encoding: str) -> str:
@@ -191,11 +193,11 @@ async def _serialize_artifact_input(context: GraphContext, artifact_id: str, inp
     mime = str(getattr(art, "mime_type", "") or "")
 
     if input_encoding == "json_canonical":
-        if not _is_json_artifact(art):
-            raise ValueError(f"inputEncoding=json_canonical requires JSON artifact input (artifact_id={artifact_id})")
         try:
             obj = json.loads(payload.decode("utf-8", errors="replace"))
         except Exception as e:
+            if not _is_json_artifact(art):
+                raise ValueError(f"inputEncoding=json_canonical requires JSON artifact input (artifact_id={artifact_id})") from e
             raise ValueError(f"Failed parsing JSON input artifact {artifact_id}: {e}") from e
         return _canon_json(obj)
 

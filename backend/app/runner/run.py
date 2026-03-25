@@ -529,6 +529,20 @@ def _edge_work_item_mode(edge: Dict[str, Any]) -> str:
     return mode
 
 
+def _is_non_work_input_handle(handle: str) -> bool:
+    name = str(handle or "").strip().lower()
+    return name.startswith("param") or name.startswith("control") or name.startswith("ctl")
+
+
+def _work_input_pairs(input_refs: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+    out: List[Tuple[str, str]] = []
+    for port, aid in input_refs:
+        if _is_non_work_input_handle(str(port or "")):
+            continue
+        out.append((str(port or "in"), str(aid)))
+    return out
+
+
 def _edge_mode(edge: Dict[str, Any]) -> str:
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     mode = str(data.get("mode") or "work").strip().lower() or "work"
@@ -2216,6 +2230,26 @@ def _artifact_schema_fingerprint(artifact: Artifact) -> str:
     if isinstance(payload_without_meta, dict):
         payload_without_meta.pop("artifactMetadataV1", None)
     return contract_schema_fingerprint(payload_without_meta)
+
+
+def _schema_fp_for_artifact(
+    *,
+    payload_schema: Optional[Dict[str, Any]],
+    observed_typed_schema: Optional[Dict[str, Any]] = None,
+    expected_typed_schema: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Compute a stable schema fingerprint for artifact metadata.
+    Includes payload schema and (when available) typed schema envelopes.
+    """
+    schema_payload = dict(payload_schema) if isinstance(payload_schema, dict) else {}
+    if isinstance(schema_payload, dict):
+        schema_payload.pop("artifactMetadataV1", None)
+    if isinstance(observed_typed_schema, dict):
+        schema_payload["typedSchemaObserved"] = canonical_json(observed_typed_schema)
+    if isinstance(expected_typed_schema, dict):
+        schema_payload["typedSchemaExpected"] = canonical_json(expected_typed_schema)
+    return contract_schema_fingerprint(schema_payload)
 
 
 def _normalize_mime_strict(mime_type: str) -> str:
@@ -5844,8 +5878,8 @@ async def run_graph(
 
                             output_schema_fp = _schema_fp_for_artifact(
                                 payload_schema=output_base_payload_schema,
-                                observed_typed_schema=typed_schema_observed,
-                                expected_typed_schema=typed_schema_expected,
+                                observed_typed_schema=None,
+                                expected_typed_schema=None,
                             )
                             output_lineage_v1 = await _artifact_lineage_v1(
                                 artifact_id=output_artifact_id,
@@ -5961,16 +5995,23 @@ async def run_graph(
                             execution_time_ms=0.0
                         )
                 elif kind in {"llm", "model"}:
-                    # Canonical upstream artifact list (preserve input-handle mapping order if present)
-                    llm_upstream_ids = [aid for _, aid in input_refs] if input_refs else upstream_ids
+                    # Canonical upstream artifact list for model input serialization.
+                    # Only work handles are serialized into {input}; param/control handles
+                    # are for side-band configuration and must not be fed to json/table encoders.
+                    llm_work_input_pairs = _work_input_pairs(input_refs) if input_refs else []
+                    llm_upstream_ids = (
+                        [aid for _, aid in llm_work_input_pairs]
+                        if llm_work_input_pairs
+                        else ([] if input_refs else upstream_ids)
+                    )
 
                     llm_input_pairs = (
-                        [(str(port or "in"), aid) for port, aid in input_refs]
-                        if input_refs
+                        llm_work_input_pairs
+                        if llm_work_input_pairs
                         else [("in", aid) for aid in llm_upstream_ids]
                     )
                     for input_port_name, upstream_id in llm_input_pairs:
-                        if input_port_name.startswith("param") or input_port_name.startswith("control") or input_port_name.startswith("ctl"):
+                        if _is_non_work_input_handle(input_port_name):
                             # Param/control links are validated through affinity + param-shape contracts.
                             # Do not enforce work payload contracts on these handles.
                             continue

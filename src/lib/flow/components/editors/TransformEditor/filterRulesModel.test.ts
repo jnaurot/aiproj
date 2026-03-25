@@ -49,4 +49,35 @@ describe('filterRulesModel', () => {
 		expect(normalized.rules.conditions.length).toBe(2);
 		expect(normalized.rules.conditions[1].kind).toBe('group');
 	});
+
+	it('hydrates json_filter path back into condition key selection', () => {
+		const normalized = normalizeFilterParams({
+			mode: 'rules',
+			rules: {
+				kind: 'group',
+				op: 'all',
+				conditions: [
+					{
+						kind: 'condition',
+						path: 'pass',
+						op: 'eq',
+						value: true
+					},
+					{
+						kind: 'condition',
+						path: 'score',
+						op: 'gte',
+						value: 70
+					}
+				]
+			}
+		});
+
+		const first = normalized.rules.conditions[0] as any;
+		const second = normalized.rules.conditions[1] as any;
+		expect(first.column).toBe('pass');
+		expect(first.literalValue).toBe('true');
+		expect(second.column).toBe('score');
+		expect(second.literalValue).toBe('70');
+	});
 });

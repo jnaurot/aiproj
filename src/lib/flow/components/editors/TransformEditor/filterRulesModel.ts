@@ -100,7 +100,7 @@ function normalizeRuleNode(raw: unknown): FilterRuleNode | null {
 	const parsedValue = normalizeConditionValue(record);
 	return {
 		kind: 'condition',
-		column: String(record.column ?? ''),
+		column: String(record.column ?? record.path ?? ''),
 		op,
 		valueSource: parsedValue.valueSource,
 		literalValue: parsedValue.literalValue,

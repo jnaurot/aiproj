@@ -1,4 +1,6 @@
-from app.executors.llm import _resolve_llm_output_mode, normalize_llm_params
+from types import SimpleNamespace
+
+from app.executors.llm import _is_json_artifact, _resolve_llm_output_mode, normalize_llm_params
 
 
 def _node_with_expected_type(expected_type: str) -> dict:
@@ -35,3 +37,12 @@ def test_resolve_llm_output_mode_falls_back_to_declared_schema_when_missing_expl
 	node = _node_with_expected_type("json")
 	norm = normalize_llm_params({})
 	assert _resolve_llm_output_mode(node, norm) == "json"
+
+
+def test_is_json_artifact_accepts_payload_schema_json_even_without_payload_type_or_json_mime():
+	artifact = SimpleNamespace(
+		mime_type="application/octet-stream",
+		payload_type="",
+		payload_schema={"type": "json"},
+	)
+	assert _is_json_artifact(artifact) is True

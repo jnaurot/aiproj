@@ -2715,6 +2715,29 @@ def _resolve_filter_value(raw_value: Any, param_config: Dict[str, Any]) -> Any:
         raise ValueError(f"filter valueFrom.path not found: {path}") from ex
 
 
+def _coerce_json_filter_literal(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_coerce_json_filter_literal(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    raw = value.strip()
+    if raw == "":
+        return value
+    lowered = raw.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    try:
+        if raw.isdigit() or (raw.startswith("-") and raw[1:].isdigit()):
+            return int(raw)
+        return float(raw)
+    except Exception:
+        return value
+
+
 def _compile_filter_condition_sql(
     *,
     condition: Dict[str, Any],
@@ -2881,7 +2904,8 @@ def _json_filter_condition_path(condition: Dict[str, Any]) -> str:
 def _json_filter_resolve_condition_value(condition: Dict[str, Any], param_config: Dict[str, Any]) -> Any:
     if "value" not in condition:
         return None
-    return _resolve_filter_value(condition.get("value"), param_config)
+    resolved = _resolve_filter_value(condition.get("value"), param_config)
+    return _coerce_json_filter_literal(resolved)
 
 
 def _json_filter_eval_condition(

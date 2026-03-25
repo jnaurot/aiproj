@@ -1634,7 +1634,7 @@
 							{selectedNode}
 							{params}
 							{nodeError}
-							inputColumns={schemaProps.inputColumns}
+							inputColumns={Array.from(new Set([...(schemaProps.inputColumns ?? []), ...inputPreviewColumns]))}
 							inputSchemaColumns={schemaProps.inputSchemaColumns}
 							inputSchemas={schemaProps.inputSchemas}
 							{onDraft}
@@ -1658,7 +1658,7 @@
 					{selectedNode}
 					{params}
 					{nodeError}
-					inputColumns={schemaProps.inputColumns}
+					inputColumns={Array.from(new Set([...(schemaProps.inputColumns ?? []), ...inputPreviewColumns]))}
 					inputSchemaColumns={schemaProps.inputSchemaColumns}
 					inputSchemas={schemaProps.inputSchemas}
 					{onDraft}

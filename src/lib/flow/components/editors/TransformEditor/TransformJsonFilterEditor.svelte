@@ -140,7 +140,15 @@
 
 <Section title="JSON Filter">
 	<div class="hint">Filters JSON objects directly and routes rejects to <code>out_reject</code>.</div>
-	<FilterRulesBuilder group={rulesDraft} columns={columns} onChange={(next) => { rulesDraft = next; emitPatch(false); }} />
+	<FilterRulesBuilder
+		group={rulesDraft}
+		columns={columns}
+		fieldLabel="key"
+		onChange={(next) => {
+			rulesDraft = next;
+			emitPatch(false);
+		}}
+	/>
 	<div class="toggles">
 		<label><input type="checkbox" checked={routeReject} on:change={(e) => { routeReject = (e.currentTarget as HTMLInputElement).checked; emitPatch(true); }} /> route rejects to out_reject</label>
 		<label><input type="checkbox" checked={includeRejectMeta} on:change={(e) => { includeRejectMeta = (e.currentTarget as HTMLInputElement).checked; emitPatch(true); }} /> include reject metadata</label>
