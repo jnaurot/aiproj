@@ -59,6 +59,7 @@ import {
 		getToolEditorCommitMode,
 		getTransformEditorCommitMode
 	} from '$lib/flow/editorCommitPolicy';
+	import { graphSemanticSnapshotKey, isGraphSemanticDirty } from '$lib/flow/store/graphSemanticSnapshot';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
@@ -331,31 +332,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			targetHandle: string | null;
 		}>;
 	};
-	type CanonicalGraphSemanticSnapshot = {
-		graphId: string;
-		nodes: Array<{
-			id: string;
-			type: string;
-			data: {
-				kind?: string;
-				label?: string;
-				sourceKind?: string;
-				transformKind?: string;
-				llmKind?: string;
-				modelKind?: string;
-				taskKind?: string;
-				componentKind?: string;
-				params?: unknown;
-			};
-		}>;
-		edges: Array<{
-			id: string;
-			source: string;
-			target: string;
-			sourceHandle: string | null;
-			targetHandle: string | null;
-		}>;
-	};
 	const GlobalCacheModeLabels: Record<GlobalCacheMode, string> = {
 		default_on: 'Default on',
 		force_off: 'Forced off',
@@ -460,9 +436,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	});
 	$: statusScopeLabel = headerContextLabels.scopeLabel;
 	$: currentGraphSnapshotKey = JSON.stringify(canonicalGraphSnapshot($graphStore.graphId, nodes, edges));
-	$: currentGraphSemanticSnapshotKey = JSON.stringify(
-		canonicalGraphSemanticSnapshot($graphStore.graphId, nodes, edges)
-	);
+	$: currentGraphSemanticSnapshotKey = graphSemanticSnapshotKey($graphStore.graphId, nodes, edges);
 	$: currentComponentSessionKey = isComponentEditContext
 		? `${String($graphStore.componentEditSession?.componentId ?? '').trim()}@${String($graphStore.componentEditSession?.revisionId ?? '').trim()}`
 		: '';
@@ -561,9 +535,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if ((nodes?.length ?? 0) === 0 && currentGraphName !== 'unnamed') {
 		currentGraphName = 'unnamed';
 	}
-	$: hasUnsavedGraphChanges =
-		typeof lastSavedGraphSemanticSnapshotKey === 'string' &&
-		lastSavedGraphSemanticSnapshotKey !== currentGraphSemanticSnapshotKey;
+	$: hasUnsavedGraphChanges = isGraphSemanticDirty(
+		lastSavedGraphSemanticSnapshotKey,
+		currentGraphSemanticSnapshotKey
+	);
 	$: graphScopedSnapshot = {
 		runStatus:
 			isComponentEditContext && $graphStore.componentEditSession
@@ -731,49 +706,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						}
 					};
 				})
-			.sort((a, b) => a.id.localeCompare(b.id));
-
-		const edgesCanonical = [...(edgeList ?? [])]
-			.map((edge) => ({
-				id: String(edge?.id ?? ''),
-				source: String(edge?.source ?? ''),
-				target: String(edge?.target ?? ''),
-				sourceHandle: edge?.sourceHandle ? String(edge.sourceHandle) : null,
-				targetHandle: edge?.targetHandle ? String(edge.targetHandle) : null
-			}))
-			.sort((a, b) => a.id.localeCompare(b.id));
-
-		return {
-			graphId: String(graphId ?? ''),
-			nodes: nodesCanonical,
-			edges: edgesCanonical
-		};
-	}
-
-	function canonicalGraphSemanticSnapshot(
-		graphId: string | null | undefined,
-		nodeList: Node<PipelineNodeData>[],
-		edgeList: Edge<PipelineEdgeData>[]
-	): CanonicalGraphSemanticSnapshot {
-		const nodesCanonical = [...(nodeList ?? [])]
-			.map((node) => {
-				const data = (node?.data ?? {}) as Record<string, unknown>;
-				return {
-					id: String(node?.id ?? ''),
-					type: String(node?.type ?? ''),
-					data: {
-						kind: typeof data.kind === 'string' ? data.kind : undefined,
-						label: typeof data.label === 'string' ? data.label : undefined,
-						sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
-						transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
-						llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
-						modelKind: typeof data.modelKind === 'string' ? data.modelKind : undefined,
-						taskKind: typeof data.taskKind === 'string' ? data.taskKind : undefined,
-						componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
-						params: stableCanonicalValue(data.params ?? {})
-					}
-				};
-			})
 			.sort((a, b) => a.id.localeCompare(b.id));
 
 		const edgesCanonical = [...(edgeList ?? [])]

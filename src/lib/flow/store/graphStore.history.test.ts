@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { describe, expect, it } from 'vitest';
 
 import { graphStore } from './graphStore';
+import { __stripToDTOForTest } from './graphStore';
 
 describe('graphStore history foundation', () => {
 	it('supports undo/redo across graph edits', () => {
@@ -106,5 +107,89 @@ describe('graphStore history foundation', () => {
 		expect(graphStore.undo().ok).toBe(true);
 		const restored = get(graphStore).nodes.find((n) => n.id === nodeId);
 		expect(Number(restored?.position?.x ?? 0)).toBe(10);
+	});
+
+	it('persists node fields after switching selection', () => {
+		graphStore.hardResetGraph();
+		graphStore.clearHistory();
+
+		const transformId = graphStore.addNode('transform', { x: 20, y: 20 });
+		const modelId = graphStore.addNode('model', { x: 240, y: 20 });
+		const setKind = graphStore.setTransformKind(transformId, 'derive');
+		expect(setKind.ok).toBe(true);
+		const cfg = graphStore.updateNodeConfig(transformId, {
+			params: {
+				op: 'derive',
+				derive: {
+					mode: 'sql',
+					columns: [
+						{
+							name: 'description_text',
+							expr: `trim(regexp_replace(coalesce("description", ''), '<[^>]+>', ' ', 'g'))`
+						}
+					]
+				}
+			}
+		});
+		expect(cfg.ok).toBe(true);
+
+		graphStore.selectNode(modelId);
+		graphStore.selectNode(transformId);
+
+		const selected = get(graphStore).nodes.find((n) => n.id === transformId);
+		expect(String(selected?.data?.transformKind ?? '')).toBe('derive');
+		const params = (selected?.data?.params ?? {}) as Record<string, unknown>;
+		expect(String((params.derive as any)?.mode ?? '')).toBe('sql');
+		expect(String((params.derive as any)?.columns?.[0]?.name ?? '')).toBe('description_text');
+	});
+
+	it('round-trips graph state after undo/redo through save-load path', () => {
+		graphStore.hardResetGraph();
+		graphStore.clearHistory();
+
+		const sourceId = graphStore.addNode('source', { x: 10, y: 10 });
+		const modelId = graphStore.addNode('model', { x: 260, y: 10 });
+		const connect = graphStore.addEdge({
+			source: sourceId,
+			sourceHandle: 'out',
+			target: modelId,
+			targetHandle: 'in'
+		} as any);
+		expect(connect.ok).toBe(true);
+
+		const beforeUndoState = get(graphStore);
+		const beforeUndo = __stripToDTOForTest(
+			beforeUndoState.nodes as any,
+			beforeUndoState.edges as any,
+			beforeUndoState.graphId
+		);
+		expect(Array.isArray(beforeUndo.nodes)).toBe(true);
+		expect(Array.isArray(beforeUndo.edges)).toBe(true);
+
+		expect(graphStore.undo().ok).toBe(true);
+		expect(get(graphStore).edges.length).toBe(0);
+		expect(graphStore.redo().ok).toBe(true);
+		expect(get(graphStore).edges.length).toBe(1);
+
+		const savedState = get(graphStore);
+		const saved = __stripToDTOForTest(savedState.nodes as any, savedState.edges as any, savedState.graphId);
+		graphStore.hardResetGraph();
+		const applied = graphStore.loadGraphDocument(
+			{
+				nodes: saved.nodes,
+				edges: saved.edges
+			},
+			saved.meta?.graphId ?? null
+		);
+		expect(applied.ok).toBe(true);
+
+		const reloaded = get(graphStore);
+		expect(reloaded.nodes.length).toBe(2);
+		expect(reloaded.edges.length).toBe(1);
+		expect(
+			reloaded.edges.some(
+				(e) => e.source === sourceId && e.target === modelId && String(e.sourceHandle ?? '') === 'out'
+			)
+		).toBe(true);
 	});
 });
