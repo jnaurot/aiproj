@@ -616,8 +616,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					suggestedComponentId: isComponentEditContext ? '' : undefined
 				})
 		},
-		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
-		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
+		{ id: 'cmd_run', label: 'Run all graphs', run: () => void runFromStart() },
+		{
+			id: 'cmd_run_selected',
+			label: 'Run selected graph',
+			disabled: !$selectedNode,
+			run: () => void runFromSelected()
+		},
 		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
 		{ id: 'cmd_add_transform', label: 'Add Transform', run: () => void addNode('transform') },
 		{ id: 'cmd_add_model', label: 'Add Model', run: () => void addNode('model') },
@@ -1629,7 +1634,7 @@ async function scrollToBottom() {
 	}
 
 	function runFromStart() {
-		void graphStore.runRemote(null, 'from_start', globalCacheMode);
+		void graphStore.runRemoteAllGraphs(globalCacheMode);
 	}
 
 	function runFromSelected() {
@@ -2712,9 +2717,9 @@ async function scrollToBottom() {
 			</div>
 
 			<div class="toolbarZone runActions">
-				<button class="primary runBtn" on:click={runFromStart}>▶ Run</button>
+				<button class="primary runBtn" on:click={runFromStart}>▶ Run all graphs</button>
 				<button class="runSecondary" on:click={runFromSelected} disabled={!$selectedNode}>
-					Run from selected
+					Run selected graph
 				</button>
 				<button class="runSecondary" on:click={() => graphStore.undo()} disabled={!canUndo} title="Undo (Ctrl+Z)">
 					Undo

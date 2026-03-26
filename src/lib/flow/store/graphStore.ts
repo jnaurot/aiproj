@@ -136,6 +136,69 @@ type RunLog = {
 const RUN_IDLE = "idle"
 type RunStatus = typeof RUN_IDLE | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
 type GraphLastRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'never_run';
+type MultiGraphRunAggregate = {
+	totalGraphs: number;
+	succeeded: number;
+	failed: number;
+	cancelled: number;
+};
+
+function sleepMs(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, Math.max(1, Number(ms) || 1)));
+}
+
+function normalizeRunTerminalStatus(raw: unknown): RunStatus {
+	const value = String(raw ?? '').trim().toLowerCase();
+	if (value === 'succeeded') return 'succeeded';
+	if (value === 'failed') return 'failed';
+	if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+	return 'failed';
+}
+
+function isRunTerminalStatus(status: RunStatus): boolean {
+	return status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled';
+}
+
+function graphRunTag(graphId: string, graphName?: string | null): string {
+	const gid = String(graphId ?? '').trim();
+	const gname = String(graphName ?? '').trim();
+	return gname ? `[graph ${gname} | ${gid}]` : `[graph ${gid}]`;
+}
+
+export function __sortGraphCatalogForRunAllForTest<
+	T extends { graphId?: string | null; graphName?: string | null }
+>(graphs: T[]): T[] {
+	return [...(graphs ?? [])].sort((a, b) => {
+		const aid = String(a?.graphId ?? '').trim();
+		const bid = String(b?.graphId ?? '').trim();
+		const byId = aid.localeCompare(bid);
+		if (byId !== 0) return byId;
+		const an = String(a?.graphName ?? '').trim();
+		const bn = String(b?.graphName ?? '').trim();
+		return an.localeCompare(bn);
+	});
+}
+
+export function __aggregateRunAllSummaryForTest(statuses: Array<string | RunStatus>): MultiGraphRunAggregate {
+	const aggregate: MultiGraphRunAggregate = {
+		totalGraphs: 0,
+		succeeded: 0,
+		failed: 0,
+		cancelled: 0
+	};
+	for (const statusRaw of statuses ?? []) {
+		const status = normalizeRunTerminalStatus(statusRaw);
+		aggregate.totalGraphs += 1;
+		if (status === 'succeeded') {
+			aggregate.succeeded += 1;
+		} else if (status === 'cancelled' || status === 'canceled') {
+			aggregate.cancelled += 1;
+		} else {
+			aggregate.failed += 1;
+		}
+	}
+	return aggregate;
+}
 type AuditContext = {
 	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
 	evt?: KnownRunEvent;
@@ -8193,6 +8256,113 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			} catch (error) {
 				return { ok: false, reason: 'apply_revision_failed' as const, error: String(error) };
 			}
+		},
+
+		async runRemoteAllGraphs(cacheMode?: 'default_on' | 'force_off' | 'force_on') {
+			const s0 = get({ subscribe } as any) as GraphState;
+			if (s0.runStatus === 'running') return { ok: false as const, reason: 'already_running' as const };
+
+			this.resetRunUi();
+			update((s) => withGraphMeta({ ...s, runStatus: 'running' }));
+
+			const startedAt = Date.now();
+			let graphCatalog: Array<{ graphId: string; graphName?: string | null }> = [];
+			try {
+				const listed = await listGraphsClient(500, 0);
+				graphCatalog = __sortGraphCatalogForRunAllForTest(
+					((listed as any)?.graphs ?? []).filter((entry: any) => String(entry?.graphId ?? '').trim())
+				) as Array<{ graphId: string; graphName?: string | null }>;
+			} catch (error) {
+				update((s) =>
+					withGraphMeta(
+						logPush(
+							{ ...s, runStatus: 'failed' },
+							'error',
+							`Run all graphs failed: unable to list graphs (${String(error)})`
+						)
+					)
+				);
+				return { ok: false as const, reason: 'list_graphs_failed' as const, error: String(error) };
+			}
+
+			if (graphCatalog.length === 0) {
+				update((s) =>
+					withGraphMeta(
+						logPush({ ...s, runStatus: 'failed' }, 'warn', 'Run all graphs aborted: no graphs found')
+					)
+				);
+				return { ok: false as const, reason: 'no_graphs' as const };
+			}
+
+			update((s) => logPush(s, 'info', `Run all graphs started (count=${graphCatalog.length})`));
+			const terminalStatuses: RunStatus[] = [];
+			const perGraphResults: Array<{ graphId: string; graphName?: string | null; runId?: string; status: RunStatus }> =
+				[];
+
+			for (const graph of graphCatalog) {
+				const graphId = String(graph.graphId ?? '').trim();
+				const graphName = String(graph.graphName ?? '').trim() || null;
+				if (!graphId) continue;
+				const tag = graphRunTag(graphId, graphName);
+				try {
+					update((s) => logPush(s, 'info', `${tag} run started`));
+					const latest = await getLatestGraphRevision(graphId);
+					const payload = buildRunCreateRequest(
+						{
+							version: Number((latest as any)?.graph?.version ?? 1) || 1,
+							nodes: (((latest as any)?.graph?.nodes ?? []) as unknown[]).map((n) => structuredClone(n)),
+							edges: (((latest as any)?.graph?.edges ?? []) as unknown[]).map((e) => structuredClone(e))
+						},
+						graphId,
+						null,
+						'from_start',
+						[],
+						cacheMode
+					);
+					const created = await createRun(payload);
+					const runId = String((created as any)?.runId ?? '').trim();
+					if (!runId) throw new Error('missing runId');
+
+					let terminal: RunStatus = 'failed';
+					const timeoutMs = 1000 * 60 * 60;
+					const pollMs = 700;
+					const waitStartedAt = Date.now();
+					while (Date.now() - waitStartedAt < timeoutMs) {
+						const snap = await getRun(runId);
+						const status = normalizeRunTerminalStatus((snap as any)?.status);
+						if (isRunTerminalStatus(status)) {
+							terminal = status;
+							break;
+						}
+						await sleepMs(pollMs);
+					}
+					terminalStatuses.push(terminal);
+					perGraphResults.push({ graphId, graphName, runId, status: terminal });
+					update((s) => logPush(s, terminal === 'succeeded' ? 'info' : 'warn', `${tag} run finished (${terminal})`));
+				} catch (error) {
+					terminalStatuses.push('failed');
+					perGraphResults.push({ graphId, graphName, status: 'failed' });
+					update((s) => logPush(s, 'error', `${tag} run failed (${String(error)})`));
+				}
+			}
+
+			const aggregate = __aggregateRunAllSummaryForTest(terminalStatuses);
+			const elapsedMs = Date.now() - startedAt;
+			const finalStatus: RunStatus =
+				aggregate.failed > 0 || aggregate.cancelled > 0 ? 'failed' : 'succeeded';
+			update((s) =>
+				withGraphMeta(
+					logPush(
+						{
+							...s,
+							runStatus: finalStatus
+						},
+						finalStatus === 'succeeded' ? 'info' : 'warn',
+						`Run all graphs finished (total=${aggregate.totalGraphs} succeeded=${aggregate.succeeded} failed=${aggregate.failed} cancelled=${aggregate.cancelled} runtime_ms=${elapsedMs})`
+					)
+				)
+			);
+			return { ok: true as const, aggregate, results: perGraphResults, status: finalStatus };
 		},
 
 		async runRemote(
