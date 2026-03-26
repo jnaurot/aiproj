@@ -5094,6 +5094,41 @@ const initialState: GraphState = {
 
 export const graphStore = (() => {
 	const { subscribe, set, update: rawUpdate } = writable<GraphState>(initialState);
+	const HISTORY_LIMIT_DEFAULT = 100;
+	let historyLimit = HISTORY_LIMIT_DEFAULT;
+	let historyPast: PipelineGraphDTO[] = [];
+	let historyFuture: PipelineGraphDTO[] = [];
+	let historyPresent: PipelineGraphDTO = stripToDTO(
+		initialState.nodes as any,
+		initialState.edges as any,
+		initialState.graphId
+	);
+	let historyApplying = false;
+
+	function snapshotFromState(state: GraphState): PipelineGraphDTO {
+		return stripToDTO(state.nodes as any, state.edges as any, state.graphId);
+	}
+
+	function snapshotKey(snapshot: PipelineGraphDTO): string {
+		return stableJson(snapshot);
+	}
+
+	function resetHistoryToSnapshot(snapshot: PipelineGraphDTO): void {
+		historyPast = [];
+		historyFuture = [];
+		historyPresent = snapshot;
+	}
+
+	function pushHistorySnapshot(snapshot: PipelineGraphDTO): void {
+		if (historyApplying) return;
+		if (snapshotKey(snapshot) === snapshotKey(historyPresent)) return;
+		historyPast = [...historyPast, historyPresent];
+		if (historyPast.length > historyLimit) {
+			historyPast = historyPast.slice(historyPast.length - historyLimit);
+		}
+		historyPresent = snapshot;
+		historyFuture = [];
+	}
 
 	const update = (
 		recipe: (state: GraphState) => GraphState,
@@ -5102,6 +5137,7 @@ export const graphStore = (() => {
 		rawUpdate((state) => {
 			const next = recipe(state);
 			auditStateTransition(state, next, ctx);
+			pushHistorySnapshot(snapshotFromState(next));
 			return next;
 		});
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
@@ -5774,7 +5810,27 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			persist(nextState);
 			return nextState;
 		}, { source: 'graph_edit' });
+		if (!historyApplying) {
+			resetHistoryToSnapshot(snapshotFromState(get({ subscribe } as any) as GraphState));
+		}
 		return { ok: true };
+	}
+
+	function applyHistorySnapshot(snapshot: PipelineGraphDTO): boolean {
+		const graph = {
+			nodes: Array.isArray((snapshot as any)?.nodes) ? ((snapshot as any).nodes as unknown[]) : [],
+			edges: Array.isArray((snapshot as any)?.edges) ? ((snapshot as any).edges as unknown[]) : []
+		};
+		const graphId = String((snapshot as any)?.meta?.graphId ?? '').trim() || null;
+		historyApplying = true;
+		try {
+			const applied = applyGraphDocument(graph, graphId);
+			if (!applied.ok) return false;
+			historyPresent = snapshotFromState(get({ subscribe } as any) as GraphState);
+			return true;
+		} finally {
+			historyApplying = false;
+		}
 	}
 
 	function hydrateFromRunSnapshot(
@@ -5837,6 +5893,45 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 	return {
 		subscribe,
+		canUndo(): boolean {
+			return historyPast.length > 0;
+		},
+		canRedo(): boolean {
+			return historyFuture.length > 0;
+		},
+		setHistoryLimit(limit: number): void {
+			const nextLimit = Math.max(1, Number(limit || HISTORY_LIMIT_DEFAULT));
+			historyLimit = nextLimit;
+			if (historyPast.length > historyLimit) {
+				historyPast = historyPast.slice(historyPast.length - historyLimit);
+			}
+		},
+		clearHistory(): void {
+			resetHistoryToSnapshot(snapshotFromState(get({ subscribe } as any) as GraphState));
+		},
+		undo(): { ok: boolean; reason?: string } {
+			if (historyPast.length === 0) return { ok: false, reason: 'at_oldest' };
+			const target = historyPast[historyPast.length - 1];
+			const current = historyPresent;
+			const applied = applyHistorySnapshot(target);
+			if (!applied) return { ok: false, reason: 'restore_failed' };
+			historyPast = historyPast.slice(0, historyPast.length - 1);
+			historyFuture = [...historyFuture, current];
+			return { ok: true };
+		},
+		redo(): { ok: boolean; reason?: string } {
+			if (historyFuture.length === 0) return { ok: false, reason: 'at_newest' };
+			const target = historyFuture[historyFuture.length - 1];
+			const current = historyPresent;
+			const applied = applyHistorySnapshot(target);
+			if (!applied) return { ok: false, reason: 'restore_failed' };
+			historyFuture = historyFuture.slice(0, historyFuture.length - 1);
+			historyPast = [...historyPast, current];
+			if (historyPast.length > historyLimit) {
+				historyPast = historyPast.slice(historyPast.length - historyLimit);
+			}
+			return { ok: true };
+		},
 		patchInspectorDraft,
 		commitInspectorImmediate,
 		commitSnapshotSelection,
@@ -7144,6 +7239,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const next = buildHardResetState(freshGraphId);
 			persist(next);
 			set(next);
+			resetHistoryToSnapshot(snapshotFromState(next));
 		},
 
 		clearDraft() {
