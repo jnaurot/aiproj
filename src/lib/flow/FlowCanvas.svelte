@@ -253,6 +253,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let commandFilter = '';
 	let commandFilterInput: HTMLInputElement | null = null;
 	let runLogFilter = '';
+	let canUndo = false;
+	let canRedo = false;
 	let envProfiles: EnvProfileStatus[] = [];
 	let envProfilesLoading = false;
 	let envProfilesError: string | null = null;
@@ -539,6 +541,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		(total, row) => total + Math.max(0, Number((row as any)?.count ?? 0)),
 		0
 	);
+	$: canUndo = Boolean($graphStore) && graphStore.canUndo();
+	$: canRedo = Boolean($graphStore) && graphStore.canRedo();
 	$: if (previousEditingContext !== $graphStore.editingContext) {
 		if (previousEditingContext === 'graph' && $graphStore.editingContext === 'component') {
 			const vp = getViewport();
@@ -1788,10 +1792,22 @@ async function scrollToBottom() {
 	}
 
 	function onWindowKeyDown(event: KeyboardEvent) {
+		const target = event.target as HTMLElement | null;
+		const isEditableTarget =
+			!!target &&
+			(target.closest('input, textarea, [contenteditable=\"true\"], [role=\"textbox\"]') != null);
 		const isCtrlK = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k';
 		if (isCtrlK) {
 			event.preventDefault();
 			toggleCommandPalette();
+			return;
+		}
+		const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z';
+		const isRedo = (event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === 'z';
+		if ((isUndo || isRedo) && !isEditableTarget) {
+			event.preventDefault();
+			if (isUndo) graphStore.undo();
+			if (isRedo) graphStore.redo();
 			return;
 		}
 		if (commandPaletteOpen && event.key === 'Escape') {
@@ -2767,6 +2783,17 @@ async function scrollToBottom() {
 				<button class="primary runBtn" on:click={runFromStart}>▶ Run</button>
 				<button class="runSecondary" on:click={runFromSelected} disabled={!$selectedNode}>
 					Run from selected
+				</button>
+				<button class="runSecondary" on:click={() => graphStore.undo()} disabled={!canUndo} title="Undo (Ctrl+Z)">
+					Undo
+				</button>
+				<button
+					class="runSecondary"
+					on:click={() => graphStore.redo()}
+					disabled={!canRedo}
+					title="Redo (Ctrl+Shift+Z)"
+				>
+					Redo
 				</button>
 			</div>
 
