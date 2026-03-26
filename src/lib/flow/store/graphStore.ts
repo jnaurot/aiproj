@@ -2031,7 +2031,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						}
 					},
 					'info',
-					`${graphRunTag(String((evt as any)?.graphId ?? state.graphId ?? ''))} Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
+					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
 				)
 			);
 		}
@@ -2533,11 +2533,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				};
 			});
 			return withGraphMeta(
-				logPush(
-					{ ...state, runStatus: evt.status, edges: nextEdges },
-					'info',
-					`${graphRunTag(String((evt as any)?.graphId ?? state.graphId ?? ''))} Run finished (${evt.status})`
-				)
+				logPush({ ...state, runStatus: evt.status, edges: nextEdges }, 'info', `Run finished (${evt.status})`)
 			);
 		}
 		default:
