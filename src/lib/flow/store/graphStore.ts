@@ -67,6 +67,7 @@ import {
 	buildRunCreateRequest,
 	computeGraphFreshness,
 	computePlannedNodeSet,
+	planRunConnectedComponents,
 	displayStatusFromBinding,
 	getStaleFlipNodeIds,
 	isBindingStale,
@@ -8217,142 +8218,267 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							.filter(([, binding]) => isBindingStale(binding))
 							.map(([nodeId]) => nodeId)
 					: [];
-			const payload = buildRunCreateRequest(
-				{ version: 1, nodes: s1.nodes, edges: s1.edges },
-				s1.graphId,
-				runFrom,
-				effectiveRunMode,
-				dirtyNodeIds,
-				cacheMode
-			);
-			const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
-
-			// create run
-			let runId: string;
-
-			try {
-				const created = await createRun(payload);
-				runId = created.runId;
-				update((s) =>
-					withGraphMeta({
-						...s,
-						graphId: created.graphId || s.graphId,
-						activeRunId: runId,
-						activeRunMode: effectiveRunMode,
-						activeRunFrom: runFrom,
-						activeRunNodeSet: plannedNodeSet
-					})
-				);
+			const runSingleWithStream = async (
+				payload: ReturnType<typeof buildRunCreateRequest>,
+				plannedNodeSet: Set<string>
+			): Promise<void> => {
+				let runId: string;
 				try {
-					const snap = await getRun(runId);
-					update((s) => hydrateFromRunSnapshot(s, snap), {
-						source: 'hydrate_snapshot',
-						snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
-					});
-				} catch {
-					// non-fatal: stream events can still drive updates
+					const created = await createRun(payload);
+					runId = created.runId;
+					update((s) =>
+						withGraphMeta({
+							...s,
+							graphId: created.graphId || s.graphId,
+							activeRunId: runId,
+							activeRunMode: effectiveRunMode,
+							activeRunFrom: runFrom,
+							activeRunNodeSet: plannedNodeSet
+						})
+					);
+					try {
+						const snap = await getRun(runId);
+						update((s) => hydrateFromRunSnapshot(s, snap), {
+							source: 'hydrate_snapshot',
+							snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+						});
+					} catch {
+						// non-fatal: stream events can still drive updates
+					}
+				} catch (e) {
+					update((s) =>
+						withGraphMeta(
+							logPush({ ...s, runStatus: 'failed' }, 'error', `Run create failed: ${String(e)}`)
+						)
+					);
+					return;
 				}
-			} catch (e) {
-				update((s) =>
-					withGraphMeta(
-						logPush({ ...s, runStatus: 'failed' }, 'error', `Run create failed: ${String(e)}`)
-					)
+
+				await new Promise<void>((resolve) => {
+					let subHandle: { close: () => void } | null = null;
+					let settled = false;
+					const settle = () => {
+						if (settled) return;
+						settled = true;
+						if (activeRunStreamHandle?.runId === runId) {
+							activeRunStreamHandle = null;
+						}
+						resolve();
+					};
+					const applyEventBatch = (events: KnownRunEvent[]) => {
+						for (const evt of events) {
+							const cur = get({ subscribe } as any) as GraphState;
+							const evtGraphId = (evt as any)?.graphId;
+							if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== cur.graphId) {
+								continue;
+							}
+							const auditCtx: AuditContext =
+								evt.type === 'run_started'
+									? {
+											source: 'event',
+											evt,
+											expectedDirtyTransition: true,
+											allowedNodeIds: new Set<string>(
+												Array.isArray((evt as any).plannedNodeIds)
+													? ((evt as any).plannedNodeIds as string[])
+													: []
+											)
+										}
+									: { source: 'event', evt };
+							update((s) => {
+								const nextState = reduceRunEventState(s, evt, runId);
+								debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
+								debugLogStaleFlips(s, nextState, evt.type);
+								assertNoOutOfScopeStaleFlips(s, nextState, evt.type);
+								if (evt.type === 'run_started') {
+									assertRunStartedBindingTouchInScope(s, nextState);
+								}
+								return nextState;
+							}, auditCtx);
+
+							if (evt.type === 'run_finished') {
+								const current = get({ subscribe } as any) as GraphState;
+								persist(current);
+								void getRun(runId)
+									.then((snap) => {
+										const latest = get({ subscribe } as any) as GraphState;
+										if (
+											typeof snap.graphId === 'string' &&
+											snap.graphId &&
+											snap.graphId !== latest.graphId
+										) {
+											return;
+										}
+										update((s) => hydrateFromRunSnapshot(s, snap), {
+											source: 'hydrate_snapshot',
+											snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+										});
+									})
+									.catch(() => {});
+								subHandle?.close();
+								settle();
+							}
+						}
+					};
+					const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
+						maxBatchSize: 48,
+						maxDelayMs: 16
+					});
+					subHandle = streamRunEvents(
+						runId,
+						(evt: KnownRunEvent) => {
+							batcher.push(evt);
+						},
+						() => {
+							const cur = get({ subscribe } as any) as GraphState;
+							const isTerminalForThisRun =
+								cur.activeRunId !== runId ||
+								cur.runStatus === 'succeeded' ||
+								cur.runStatus === 'failed' ||
+								cur.runStatus === 'canceled' ||
+								cur.runStatus === 'cancelled';
+							if (isTerminalForThisRun) {
+								settle();
+								return;
+							}
+							batcher.flush();
+							update((s) =>
+								withGraphMeta(logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'))
+							);
+							settle();
+						}
+					);
+					activeRunStreamHandle = { runId, close: () => subHandle?.close() };
+				});
+			};
+
+			const componentPlans = planRunConnectedComponents(s1.nodes, s1.edges, runFrom, effectiveRunMode);
+			const shouldRunAsSubgraphs =
+				componentPlans.length > 1 ||
+				(effectiveRunMode !== 'from_start' &&
+					componentPlans.length === 1 &&
+					componentPlans[0].size > 0 &&
+					componentPlans[0].size < s1.nodes.length);
+
+			if (!shouldRunAsSubgraphs) {
+				const payload = buildRunCreateRequest(
+					{ version: 1, nodes: s1.nodes, edges: s1.edges },
+					s1.graphId,
+					runFrom,
+					effectiveRunMode,
+					dirtyNodeIds,
+					cacheMode
 				);
+				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
+				await runSingleWithStream(payload, plannedNodeSet);
 				return;
 			}
 
-			await new Promise<void>((resolve) => {
-				let subHandle: { close: () => void } | null = null;
-				let settled = false;
-				const settle = () => {
-					if (settled) return;
-					settled = true;
-					if (activeRunStreamHandle?.runId === runId) {
-						activeRunStreamHandle = null;
+			const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+			const waitForTerminalSnapshot = async (runId: string): Promise<any> => {
+				for (let i = 0; i < 600; i += 1) {
+					const snap = await getRun(runId);
+					const status = String((snap as any)?.status ?? '').toLowerCase();
+					if (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
+						return snap;
 					}
-					resolve();
-				};
-				const applyEventBatch = (events: KnownRunEvent[]) => {
-					for (const evt of events) {
-						const cur = get({ subscribe } as any) as GraphState;
-						const evtGraphId = (evt as any)?.graphId;
-						if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== cur.graphId) {
-							continue;
-						}
-						const auditCtx: AuditContext =
-							evt.type === 'run_started'
-								? {
-										source: 'event',
-										evt,
-										expectedDirtyTransition: true,
-										allowedNodeIds: new Set<string>(
-											Array.isArray((evt as any).plannedNodeIds)
-												? ((evt as any).plannedNodeIds as string[])
-												: []
-										)
-									}
-								: { source: 'event', evt };
-						update((s) => {
-							const nextState = reduceRunEventState(s, evt, runId);
-							debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
-							debugLogStaleFlips(s, nextState, evt.type);
-							assertNoOutOfScopeStaleFlips(s, nextState, evt.type);
-							if (evt.type === 'run_started') {
-								assertRunStartedBindingTouchInScope(s, nextState);
-							}
-							return nextState;
-						}, auditCtx);
+					await sleep(200);
+				}
+				throw new Error(`Run timeout: ${runId}`);
+			};
 
-						if (evt.type === 'run_finished') {
-							const current = get({ subscribe } as any) as GraphState;
-							persist(current);
-							void getRun(runId)
-								.then((snap) => {
-									const latest = get({ subscribe } as any) as GraphState;
-									if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== latest.graphId) {
-										return;
-									}
-									update((s) => hydrateFromRunSnapshot(s, snap), {
-										source: 'hydrate_snapshot',
-										snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
-									});
-								})
-								.catch(() => {});
-							subHandle?.close();
-							settle();
-						}
-					}
-				};
-				const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
-					maxBatchSize: 48,
-					maxDelayMs: 16
-				});
-				subHandle = streamRunEvents(
-					runId,
-					(evt: KnownRunEvent) => {
-						batcher.push(evt);
-					},
-					() => {
-						const cur = get({ subscribe } as any) as GraphState;
-						const isTerminalForThisRun =
-							cur.activeRunId !== runId ||
-							cur.runStatus === 'succeeded' ||
-							cur.runStatus === 'failed' ||
-							cur.runStatus === 'canceled' ||
-							cur.runStatus === 'cancelled';
-						if (isTerminalForThisRun) {
-							settle();
-							return;
-						}
-						batcher.flush();
-						update((s) =>
-							withGraphMeta(logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'))
-						);
-						settle();
-					}
+			const allPlannedNodeSet = new Set<string>();
+			for (const componentSet of componentPlans) {
+				for (const nodeId of componentSet) allPlannedNodeSet.add(nodeId);
+			}
+			update((s) =>
+				withGraphMeta({
+					...s,
+					activeRunId: null,
+					activeRunMode: effectiveRunMode,
+					activeRunFrom: runFrom,
+					activeRunNodeSet: allPlannedNodeSet
+				})
+			);
+
+			const plannedByNodeId = new Map(
+				s1.nodes.map((node) => [node.id, node]).filter(([id]) => Boolean(String(id ?? '').trim()))
+			);
+			const runPromises = componentPlans.map(async (componentSet, index) => {
+				const componentTag = `sg${index + 1}/${componentPlans.length}`;
+				const componentNodeIds = Array.from(componentSet);
+				const componentNodes = componentNodeIds
+					.map((id) => plannedByNodeId.get(id))
+					.filter((node): node is Node<PipelineNodeData & Record<string, unknown>> => Boolean(node));
+				const componentIdSet = new Set(componentNodes.map((node) => node.id));
+				const componentEdges = s1.edges.filter(
+					(edge) => componentIdSet.has(String(edge.source ?? '')) && componentIdSet.has(String(edge.target ?? ''))
 				);
-				activeRunStreamHandle = { runId, close: () => subHandle?.close() };
+				const componentDirtyNodeIds = dirtyNodeIds.filter((nodeId) => componentIdSet.has(nodeId));
+				update((s) =>
+					withGraphMeta(
+						logPush(
+							{ ...s },
+							'info',
+							`[subgraph ${componentTag}] Run started (nodes=${componentNodes.length})`
+						)
+					)
+				);
+				try {
+					const payload = buildRunCreateRequest(
+						{ version: 1, nodes: componentNodes, edges: componentEdges },
+						s1.graphId,
+						null,
+						'from_start',
+						componentDirtyNodeIds,
+						cacheMode
+					);
+					const created = await createRun(payload);
+					const snap = await waitForTerminalSnapshot(created.runId);
+					update(
+						(s) => hydrateFromRunSnapshot(s, snap),
+						{
+							source: 'hydrate_snapshot',
+							snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+						}
+					);
+					const status = String((snap as any)?.status ?? 'failed').toLowerCase();
+					update((s) =>
+						withGraphMeta(
+							logPush({ ...s }, status === 'failed' ? 'error' : 'info', `[subgraph ${componentTag}] Run finished (${status})`)
+						)
+					);
+					return status;
+				} catch (error) {
+					update((s) =>
+						withGraphMeta(
+							logPush(
+								{ ...s },
+								'error',
+								`[subgraph ${componentTag}] Run failed: ${String(error)}`
+							)
+						)
+					);
+					return 'failed';
+				}
 			});
+
+			const statuses = await Promise.all(runPromises);
+			const succeeded = statuses.filter((status) => status === 'succeeded').length;
+			const failed = statuses.filter((status) => status === 'failed').length;
+			const cancelled = statuses.filter((status) => status === 'cancelled' || status === 'canceled').length;
+			const aggregateStatus: RunStatus = failed > 0 ? 'failed' : cancelled > 0 ? 'cancelled' : 'succeeded';
+			update((s) =>
+				withGraphMeta(
+					logPush(
+						{ ...s, runStatus: aggregateStatus, activeRunId: null },
+						failed > 0 ? 'error' : 'info',
+						`[subgraph summary] total=${componentPlans.length} succeeded=${succeeded} failed=${failed} cancelled=${cancelled}`
+					)
+				)
+			);
+			const current = get({ subscribe } as any) as GraphState;
+			persist(current);
 		}
 	};
 })();

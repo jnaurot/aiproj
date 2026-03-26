@@ -192,6 +192,19 @@ export function computeSelectedConnectedComponentNodeSet(
 	return components.find((component) => component.has(selected)) ?? new Set<string>();
 }
 
+export function planRunConnectedComponents(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[],
+	runFrom: string | null,
+	runMode: ActiveRunMode
+): Set<string>[] {
+	if (runMode === 'from_start' || runFrom === null) {
+		return computeConnectedComponentNodeSets(nodes, edges);
+	}
+	const selectedComponent = computeSelectedConnectedComponentNodeSet(nodes, edges, runFrom);
+	return selectedComponent.size > 0 ? [selectedComponent] : [];
+}
+
 export function shouldUpdateBinding(
 	activeRunId: string | null,
 	activeRunNodeSet: Set<string> | null | undefined,

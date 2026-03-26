@@ -5,6 +5,7 @@ import {
 	computeConnectedComponentNodeSets,
 	computeGraphFreshness,
 	computePlannedNodeSet,
+	planRunConnectedComponents,
 	computeSelectedConnectedComponentNodeSet,
 	getStaleFlipNodeIds,
 	isBindingStale,
@@ -246,5 +247,21 @@ describe('runScope partial-run binding behavior', () => {
 		const edges: any[] = [];
 		const selected = computeSelectedConnectedComponentNodeSet(nodes, edges, 'unknown');
 		expect([...selected]).toEqual([]);
+	});
+
+	it('run planner returns all components for from_start', () => {
+		const nodes: any[] = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+		const edges: any[] = [{ source: 'a', target: 'b' }];
+		const planned = planRunConnectedComponents(nodes, edges, null, 'from_start').map((set) => [...set].sort());
+		expect(planned).toEqual([['a', 'b'], ['c']]);
+	});
+
+	it('run planner returns selected component only for from_selected_onward', () => {
+		const nodes: any[] = [{ id: 'l1' }, { id: 'l2' }, { id: 'r1' }];
+		const edges: any[] = [{ source: 'l1', target: 'l2' }];
+		const planned = planRunConnectedComponents(nodes, edges, 'l2', 'from_selected_onward').map((set) =>
+			[...set].sort()
+		);
+		expect(planned).toEqual([['l1', 'l2']]);
 	});
 });
