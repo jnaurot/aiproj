@@ -276,6 +276,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let toastActionLabel: string | null = null;
 	let toastAction: (() => void) | null = null;
 	let lastSavedGraphSnapshotKey: string | null = null;
+	let lastSavedGraphSemanticSnapshotKey: string | null = null;
 	let currentGraphName = 'unnamed';
 	const DRAFT_RECOVERY_PROMPT_SESSION_KEY = 'graph_draft_recovery_prompted_at';
 	let importFileInput: HTMLInputElement | null = null;
@@ -319,6 +320,31 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							componentKind?: string;
 							params?: unknown;
 						};
+		}>;
+		edges: Array<{
+			id: string;
+			source: string;
+			target: string;
+			sourceHandle: string | null;
+			targetHandle: string | null;
+		}>;
+	};
+	type CanonicalGraphSemanticSnapshot = {
+		graphId: string;
+		nodes: Array<{
+			id: string;
+			type: string;
+			data: {
+				kind?: string;
+				label?: string;
+				sourceKind?: string;
+				transformKind?: string;
+				llmKind?: string;
+				modelKind?: string;
+				taskKind?: string;
+				componentKind?: string;
+				params?: unknown;
+			};
 		}>;
 		edges: Array<{
 			id: string;
@@ -432,6 +458,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	});
 	$: statusScopeLabel = headerContextLabels.scopeLabel;
 	$: currentGraphSnapshotKey = JSON.stringify(canonicalGraphSnapshot($graphStore.graphId, nodes, edges));
+	$: currentGraphSemanticSnapshotKey = JSON.stringify(
+		canonicalGraphSemanticSnapshot($graphStore.graphId, nodes, edges)
+	);
 	$: currentComponentSessionKey = isComponentEditContext
 		? `${String($graphStore.componentEditSession?.componentId ?? '').trim()}@${String($graphStore.componentEditSession?.revisionId ?? '').trim()}`
 		: '';
@@ -529,8 +558,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		currentGraphName = 'unnamed';
 	}
 	$: hasUnsavedGraphChanges =
-		typeof lastSavedGraphSnapshotKey === 'string' &&
-		lastSavedGraphSnapshotKey !== currentGraphSnapshotKey;
+		typeof lastSavedGraphSemanticSnapshotKey === 'string' &&
+		lastSavedGraphSemanticSnapshotKey !== currentGraphSemanticSnapshotKey;
 	$: graphScopedSnapshot = {
 		runStatus:
 			isComponentEditContext && $graphStore.componentEditSession
@@ -698,6 +727,49 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 						}
 					};
 				})
+			.sort((a, b) => a.id.localeCompare(b.id));
+
+		const edgesCanonical = [...(edgeList ?? [])]
+			.map((edge) => ({
+				id: String(edge?.id ?? ''),
+				source: String(edge?.source ?? ''),
+				target: String(edge?.target ?? ''),
+				sourceHandle: edge?.sourceHandle ? String(edge.sourceHandle) : null,
+				targetHandle: edge?.targetHandle ? String(edge.targetHandle) : null
+			}))
+			.sort((a, b) => a.id.localeCompare(b.id));
+
+		return {
+			graphId: String(graphId ?? ''),
+			nodes: nodesCanonical,
+			edges: edgesCanonical
+		};
+	}
+
+	function canonicalGraphSemanticSnapshot(
+		graphId: string | null | undefined,
+		nodeList: Node<PipelineNodeData>[],
+		edgeList: Edge<PipelineEdgeData>[]
+	): CanonicalGraphSemanticSnapshot {
+		const nodesCanonical = [...(nodeList ?? [])]
+			.map((node) => {
+				const data = (node?.data ?? {}) as Record<string, unknown>;
+				return {
+					id: String(node?.id ?? ''),
+					type: String(node?.type ?? ''),
+					data: {
+						kind: typeof data.kind === 'string' ? data.kind : undefined,
+						label: typeof data.label === 'string' ? data.label : undefined,
+						sourceKind: typeof data.sourceKind === 'string' ? data.sourceKind : undefined,
+						transformKind: typeof data.transformKind === 'string' ? data.transformKind : undefined,
+						llmKind: typeof data.llmKind === 'string' ? data.llmKind : undefined,
+						modelKind: typeof data.modelKind === 'string' ? data.modelKind : undefined,
+						taskKind: typeof data.taskKind === 'string' ? data.taskKind : undefined,
+						componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
+						params: stableCanonicalValue(data.params ?? {})
+					}
+				};
+			})
 			.sort((a, b) => a.id.localeCompare(b.id));
 
 		const edgesCanonical = [...(edgeList ?? [])]
@@ -1775,6 +1847,7 @@ async function scrollToBottom() {
 	function newGraph() {
 		graphStore.hardResetGraph();
 		lastSavedGraphSnapshotKey = null;
+		lastSavedGraphSemanticSnapshotKey = null;
 		currentGraphName = 'unnamed';
 	}
 
@@ -2061,6 +2134,7 @@ async function scrollToBottom() {
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 		const resolvedName = String((result as any)?.graphName ?? graphName ?? '').trim();
 		if (resolvedName) currentGraphName = resolvedName;
 		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
@@ -2093,6 +2167,7 @@ async function scrollToBottom() {
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
 			(item) => String(item?.severity ?? '').toLowerCase() === 'warning'
 		);
@@ -2124,6 +2199,7 @@ async function scrollToBottom() {
 			return;
 		}
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 		currentGraphName = graphName;
 		const saveWarnings = (((result as any)?.diagnostics ?? []) as Array<any>).filter(
 			(item) => String(item?.severity ?? '').toLowerCase() === 'warning'
@@ -2208,6 +2284,7 @@ async function scrollToBottom() {
 		}
 		await centerGraphAfterLoad();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 		currentGraphName = String((loaded as any)?.graphName ?? pickedGraph.graphName ?? '').trim() || 'unnamed';
 		showToast('Loaded graph revision.', 'info');
 	}
@@ -2276,6 +2353,7 @@ async function scrollToBottom() {
 		}
 		await centerGraphAfterLoad();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 		showToast('Latest revision deleted and graph reloaded to previous revision.', 'info');
 	}
 
@@ -2334,6 +2412,7 @@ async function scrollToBottom() {
 			}
 			await centerGraphAfterLoad();
 			lastSavedGraphSnapshotKey = null;
+			lastSavedGraphSemanticSnapshotKey = null;
 			const warnings = imported?.migrationReport?.warnings ?? [];
 			if (warnings.length > 0) {
 				showToast(`Imported with warnings: ${warnings.join(' | ')}`, 'warn');
@@ -2573,6 +2652,7 @@ async function scrollToBottom() {
 		await tick();
 		clampPortTypeLegendPosition();
 		lastSavedGraphSnapshotKey = currentGraphSnapshotKey;
+		lastSavedGraphSemanticSnapshotKey = currentGraphSemanticSnapshotKey;
 	});
 
 	function togglePortTypeLegendMinimized() {
