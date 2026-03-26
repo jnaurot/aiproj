@@ -5133,14 +5133,14 @@ export const graphStore = (() => {
 		historyFuture = [];
 	}
 
-	function beginHistoryTransaction(): void {
+	function beginHistoryTxn(): void {
 		if (historyTransactionDepth === 0) {
 			historyTransactionStartKey = snapshotKey(historyPresent);
 		}
 		historyTransactionDepth += 1;
 	}
 
-	function endHistoryTransaction(): void {
+	function endHistoryTxn(): void {
 		if (historyTransactionDepth <= 0) return;
 		historyTransactionDepth -= 1;
 		if (historyTransactionDepth > 0) return;
@@ -5158,11 +5158,11 @@ export const graphStore = (() => {
 	}
 
 	function runInHistoryTransaction<T>(fn: () => T): T {
-		beginHistoryTransaction();
+		beginHistoryTxn();
 		try {
 			return fn();
 		} finally {
-			endHistoryTransaction();
+			endHistoryTxn();
 		}
 	}
 
@@ -5944,6 +5944,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 		clearHistory(): void {
 			resetHistoryToSnapshot(snapshotFromState(get({ subscribe } as any) as GraphState));
+		},
+		beginHistoryTransaction(): void {
+			beginHistoryTxn();
+		},
+		endHistoryTransaction(): void {
+			endHistoryTxn();
 		},
 		undo(): { ok: boolean; reason?: string } {
 			if (historyPast.length === 0) return { ok: false, reason: 'at_oldest' };

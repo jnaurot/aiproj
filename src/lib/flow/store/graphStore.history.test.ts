@@ -79,4 +79,32 @@ describe('graphStore history foundation', () => {
 		const restored = get(graphStore).nodes.find((n) => n.id === nodeId);
 		expect(String(restored?.data?.transformKind ?? '')).toBe(beforeKind);
 	});
+
+	it('coalesces canvas sync updates inside a transaction into one undo step', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('source', { x: 10, y: 10 });
+		graphStore.clearHistory();
+
+		const beforeState = get(graphStore);
+		const beforeNode = beforeState.nodes.find((n) => n.id === nodeId);
+		expect(beforeNode).toBeTruthy();
+
+		graphStore.beginHistoryTransaction();
+		const firstMoveNodes = beforeState.nodes.map((n) =>
+			n.id === nodeId ? { ...n, position: { x: 110, y: 10 } } : n
+		);
+		graphStore.syncFromCanvas(firstMoveNodes as any, beforeState.edges as any);
+		const secondMoveNodes = firstMoveNodes.map((n) =>
+			n.id === nodeId ? { ...n, position: { x: 210, y: 10 } } : n
+		);
+		graphStore.syncFromCanvas(secondMoveNodes as any, beforeState.edges as any);
+		graphStore.endHistoryTransaction();
+
+		const moved = get(graphStore).nodes.find((n) => n.id === nodeId);
+		expect(Number(moved?.position?.x ?? 0)).toBe(210);
+
+		expect(graphStore.undo().ok).toBe(true);
+		const restored = get(graphStore).nodes.find((n) => n.id === nodeId);
+		expect(Number(restored?.position?.x ?? 0)).toBe(10);
+	});
 });

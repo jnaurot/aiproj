@@ -923,6 +923,7 @@ async function scrollToBottom() {
 	const NODE_LONG_PRESS_MOVE_PX = 8;
 	const NODE_DUPLICATE_OFFSET_X = 40;
 	const NODE_DUPLICATE_OFFSET_Y = 30;
+	let historyDragTransactionOpen = false;
 	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let longPressNodeId: string | null = null;
 	let longPressPointerId: number | null = null;
@@ -988,6 +989,10 @@ async function scrollToBottom() {
 		const nodeEl = target?.closest?.('.svelte-flow__node') as HTMLElement | null;
 		const nodeId = String(nodeEl?.dataset?.id ?? '').trim();
 		if (!nodeId) return;
+		if (!historyDragTransactionOpen) {
+			graphStore.beginHistoryTransaction();
+			historyDragTransactionOpen = true;
+		}
 		clearLongPressState();
 		longPressNodeId = nodeId;
 		longPressPointerId = event.pointerId;
@@ -1016,8 +1021,13 @@ async function scrollToBottom() {
 	}
 
 	function onFlowPointerUp(event: PointerEvent): void {
-		if (longPressPointerId !== event.pointerId) return;
-		clearLongPressState();
+		if (longPressPointerId === event.pointerId) {
+			clearLongPressState();
+		}
+		if (historyDragTransactionOpen) {
+			graphStore.endHistoryTransaction();
+			historyDragTransactionOpen = false;
+		}
 	}
 
 	function onnodeclick({ node }: { node: Node<PipelineNodeData> }) {
