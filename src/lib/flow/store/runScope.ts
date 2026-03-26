@@ -127,6 +127,71 @@ export function computePlannedNodeSet(
 	return planned;
 }
 
+function buildUndirectedAdjacency(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[]
+): Map<string, Set<string>> {
+	const adj = new Map<string, Set<string>>();
+	const ensure = (id: string) => {
+		if (!adj.has(id)) adj.set(id, new Set<string>());
+	};
+	for (const node of nodes) {
+		const id = String(node?.id ?? '').trim();
+		if (!id) continue;
+		ensure(id);
+	}
+	for (const edge of edges) {
+		const src = String(edge?.source ?? '').trim();
+		const dst = String(edge?.target ?? '').trim();
+		if (!src || !dst) continue;
+		ensure(src);
+		ensure(dst);
+		adj.get(src)!.add(dst);
+		adj.get(dst)!.add(src);
+	}
+	return adj;
+}
+
+export function computeConnectedComponentNodeSets(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[]
+): Set<string>[] {
+	const adj = buildUndirectedAdjacency(nodes, edges);
+	const visited = new Set<string>();
+	const out: Set<string>[] = [];
+	for (const node of nodes) {
+		const seed = String(node?.id ?? '').trim();
+		if (!seed || visited.has(seed)) continue;
+		const component = new Set<string>();
+		const queue: string[] = [seed];
+		visited.add(seed);
+		while (queue.length) {
+			const cur = queue.shift()!;
+			component.add(cur);
+			const next = adj.get(cur);
+			if (!next) continue;
+			for (const neighbor of next) {
+				if (visited.has(neighbor)) continue;
+				visited.add(neighbor);
+				queue.push(neighbor);
+			}
+		}
+		out.push(component);
+	}
+	return out;
+}
+
+export function computeSelectedConnectedComponentNodeSet(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[],
+	selectedNodeId: string | null
+): Set<string> {
+	const selected = String(selectedNodeId ?? '').trim();
+	if (!selected) return new Set<string>();
+	const components = computeConnectedComponentNodeSets(nodes, edges);
+	return components.find((component) => component.has(selected)) ?? new Set<string>();
+}
+
 export function shouldUpdateBinding(
 	activeRunId: string | null,
 	activeRunNodeSet: Set<string> | null | undefined,

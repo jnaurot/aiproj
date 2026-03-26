@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	buildRunCreateRequest,
+	computeConnectedComponentNodeSets,
 	computeGraphFreshness,
 	computePlannedNodeSet,
+	computeSelectedConnectedComponentNodeSet,
 	getStaleFlipNodeIds,
 	isBindingStale,
 	mergeBindingsSticky,
@@ -217,5 +219,32 @@ describe('runScope partial-run binding behavior', () => {
 		const planned = computePlannedNodeSet(nodes, edges, 'b', 'selected_only');
 		expect([...planned].sort()).toEqual(['b', 'src', 'xfm']);
 		expect(planned.has('a')).toBe(false);
+	});
+
+	it('connected components split disconnected chains and isolated nodes', () => {
+		const nodes: any[] = [{ id: 'a1' }, { id: 'a2' }, { id: 'b1' }, { id: 'iso' }];
+		const edges: any[] = [
+			{ source: 'a1', target: 'a2' },
+			{ source: 'b1', target: 'b1' }
+		];
+		const components = computeConnectedComponentNodeSets(nodes, edges).map((set) => [...set].sort());
+		expect(components).toEqual([['a1', 'a2'], ['b1'], ['iso']]);
+	});
+
+	it('selected component resolves exactly the selected node component', () => {
+		const nodes: any[] = [{ id: 'left1' }, { id: 'left2' }, { id: 'right1' }, { id: 'right2' }];
+		const edges: any[] = [
+			{ source: 'left1', target: 'left2' },
+			{ source: 'right1', target: 'right2' }
+		];
+		const selected = computeSelectedConnectedComponentNodeSet(nodes, edges, 'right2');
+		expect([...selected].sort()).toEqual(['right1', 'right2']);
+	});
+
+	it('selected component returns empty for missing selected node', () => {
+		const nodes: any[] = [{ id: 'n1' }];
+		const edges: any[] = [];
+		const selected = computeSelectedConnectedComponentNodeSet(nodes, edges, 'unknown');
+		expect([...selected]).toEqual([]);
 	});
 });
