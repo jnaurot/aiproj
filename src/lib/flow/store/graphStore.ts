@@ -8218,6 +8218,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							.filter(([, binding]) => isBindingStale(binding))
 							.map(([nodeId]) => nodeId)
 					: [];
+			const sseRuntimeStats = {
+				sseTerminalCount: 0,
+				fallbackTerminalCount: 0,
+				fallbackPollAttempts: 0
+			};
 			const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 			const waitForTerminalSnapshotWithFallback = async (
 				runId: string,
@@ -8226,6 +8231,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const intervalMs = Math.max(500, Number(options?.intervalMs ?? 3000));
 				const maxAttempts = Math.max(1, Number(options?.maxAttempts ?? 120));
 				for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+					sseRuntimeStats.fallbackPollAttempts += 1;
 					const snap = await getRun(runId);
 					const status = String((snap as any)?.status ?? '').toLowerCase();
 					if (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
@@ -8270,7 +8276,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							(evt: KnownRunEvent) => {
 								if (evt.type !== 'run_finished') return;
 								void getRun(runId)
-									.then((snap) => settleResolve({ snap, completionSource: 'sse' }))
+									.then((snap) => {
+										sseRuntimeStats.sseTerminalCount += 1;
+										settleResolve({ snap, completionSource: 'sse' });
+									})
 									.catch((error) => settleReject(error));
 							},
 							() => {
@@ -8285,7 +8294,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 									intervalMs: options?.fallbackIntervalMs ?? 3000,
 									maxAttempts: options?.fallbackMaxAttempts ?? 120
 								})
-									.then((snap) => settleResolve({ snap, completionSource: 'fallback_poll' }))
+									.then((snap) => {
+										sseRuntimeStats.fallbackTerminalCount += 1;
+										settleResolve({ snap, completionSource: 'fallback_poll' });
+									})
 									.catch((error) => settleReject(error));
 							}
 						);
@@ -8436,7 +8448,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 											logPush(
 												{ ...s },
 												'info',
-												`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')})`
+												`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')}) polls=${sseRuntimeStats.fallbackPollAttempts}`
 											)
 										)
 									);
@@ -8576,7 +8588,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					logPush(
 						{ ...s, runStatus: aggregateStatus, activeRunId: null },
 						failed > 0 ? 'error' : 'info',
-						`[subgraph summary] total=${componentPlans.length} succeeded=${succeeded} failed=${failed} cancelled=${cancelled}`
+						`[subgraph summary] total=${componentPlans.length} succeeded=${succeeded} failed=${failed} cancelled=${cancelled} completion_source(sse=${sseRuntimeStats.sseTerminalCount},fallback=${sseRuntimeStats.fallbackTerminalCount}) polls=${sseRuntimeStats.fallbackPollAttempts}`
 					)
 				)
 			);
