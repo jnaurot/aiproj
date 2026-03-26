@@ -8235,6 +8235,44 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				}
 				throw new Error(`Run terminal snapshot timeout: ${runId}`);
 			};
+			const waitForTerminalViaSse = async (
+				runId: string,
+				options?: { fallbackIntervalMs?: number; fallbackMaxAttempts?: number }
+			): Promise<{ snap: any; completionSource: 'sse' | 'fallback_poll' }> => {
+				return await new Promise((resolve, reject) => {
+					let settled = false;
+					let subHandle: { close: () => void } | null = null;
+					const settleResolve = (value: { snap: any; completionSource: 'sse' | 'fallback_poll' }) => {
+						if (settled) return;
+						settled = true;
+						subHandle?.close();
+						resolve(value);
+					};
+					const settleReject = (error: unknown) => {
+						if (settled) return;
+						settled = true;
+						subHandle?.close();
+						reject(error);
+					};
+					subHandle = streamRunEvents(
+						runId,
+						(evt: KnownRunEvent) => {
+							if (evt.type !== 'run_finished') return;
+							void getRun(runId)
+								.then((snap) => settleResolve({ snap, completionSource: 'sse' }))
+								.catch((error) => settleReject(error));
+						},
+						() => {
+							void waitForTerminalSnapshotWithFallback(runId, {
+								intervalMs: options?.fallbackIntervalMs ?? 3000,
+								maxAttempts: options?.fallbackMaxAttempts ?? 120
+							})
+								.then((snap) => settleResolve({ snap, completionSource: 'fallback_poll' }))
+								.catch((error) => settleReject(error));
+						}
+					);
+				});
+			};
 			const runSingleWithStream = async (
 				payload: ReturnType<typeof buildRunCreateRequest>,
 				plannedNodeSet: Set<string>
@@ -8467,9 +8505,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						cacheMode
 					);
 					const created = await createRun(payload);
-					const snap = await waitForTerminalSnapshotWithFallback(created.runId, {
-						intervalMs: 3000,
-						maxAttempts: 120
+					const { snap, completionSource } = await waitForTerminalViaSse(created.runId, {
+						fallbackIntervalMs: 3000,
+						fallbackMaxAttempts: 120
 					});
 					update(
 						(s) => hydrateFromRunSnapshot(s, snap),
@@ -8481,7 +8519,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					const status = String((snap as any)?.status ?? 'failed').toLowerCase();
 					update((s) =>
 						withGraphMeta(
-							logPush({ ...s }, status === 'failed' ? 'error' : 'info', `[subgraph ${componentTag}] Run finished (${status})`)
+							logPush(
+								{ ...s },
+								status === 'failed' ? 'error' : 'info',
+								`[subgraph ${componentTag}] Run finished (${status}) via ${completionSource}`
+							)
 						)
 					);
 					return status;
