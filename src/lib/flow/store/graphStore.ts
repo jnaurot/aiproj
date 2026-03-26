@@ -8237,11 +8237,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			};
 			const waitForTerminalViaSse = async (
 				runId: string,
-				options?: { fallbackIntervalMs?: number; fallbackMaxAttempts?: number }
+				options?: {
+					fallbackIntervalMs?: number;
+					fallbackMaxAttempts?: number;
+					maxReconnectAttempts?: number;
+					reconnectBackoffMs?: number;
+				}
 			): Promise<{ snap: any; completionSource: 'sse' | 'fallback_poll' }> => {
 				return await new Promise((resolve, reject) => {
 					let settled = false;
 					let subHandle: { close: () => void } | null = null;
+					const maxReconnectAttempts = Math.max(0, Number(options?.maxReconnectAttempts ?? 2));
+					const reconnectBackoffMs = Math.max(100, Number(options?.reconnectBackoffMs ?? 500));
+					let reconnectAttempts = 0;
 					const settleResolve = (value: { snap: any; completionSource: 'sse' | 'fallback_poll' }) => {
 						if (settled) return;
 						settled = true;
@@ -8254,23 +8262,35 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						subHandle?.close();
 						reject(error);
 					};
-					subHandle = streamRunEvents(
-						runId,
-						(evt: KnownRunEvent) => {
-							if (evt.type !== 'run_finished') return;
-							void getRun(runId)
-								.then((snap) => settleResolve({ snap, completionSource: 'sse' }))
-								.catch((error) => settleReject(error));
-						},
-						() => {
-							void waitForTerminalSnapshotWithFallback(runId, {
-								intervalMs: options?.fallbackIntervalMs ?? 3000,
-								maxAttempts: options?.fallbackMaxAttempts ?? 120
-							})
-								.then((snap) => settleResolve({ snap, completionSource: 'fallback_poll' }))
-								.catch((error) => settleReject(error));
-						}
-					);
+					const startStream = () => {
+						if (settled) return;
+						subHandle?.close();
+						subHandle = streamRunEvents(
+							runId,
+							(evt: KnownRunEvent) => {
+								if (evt.type !== 'run_finished') return;
+								void getRun(runId)
+									.then((snap) => settleResolve({ snap, completionSource: 'sse' }))
+									.catch((error) => settleReject(error));
+							},
+							() => {
+								if (settled) return;
+								if (reconnectAttempts < maxReconnectAttempts) {
+									const delay = reconnectBackoffMs * Math.pow(2, reconnectAttempts);
+									reconnectAttempts += 1;
+									void sleep(delay).then(() => startStream());
+									return;
+								}
+								void waitForTerminalSnapshotWithFallback(runId, {
+									intervalMs: options?.fallbackIntervalMs ?? 3000,
+									maxAttempts: options?.fallbackMaxAttempts ?? 120
+								})
+									.then((snap) => settleResolve({ snap, completionSource: 'fallback_poll' }))
+									.catch((error) => settleReject(error));
+							}
+						);
+					};
+					startStream();
 				});
 			};
 			const runSingleWithStream = async (
@@ -8400,18 +8420,23 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							update((s) =>
 								withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; switching to fallback polling'))
 							);
-							void waitForTerminalSnapshotWithFallback(runId)
+							void waitForTerminalViaSse(runId, {
+								fallbackIntervalMs: 3000,
+								fallbackMaxAttempts: 120,
+								maxReconnectAttempts: 2,
+								reconnectBackoffMs: 500
+							})
 								.then((snap) => {
-									update((s) => hydrateFromRunSnapshot(s, snap), {
+									update((s) => hydrateFromRunSnapshot(s, snap.snap), {
 										source: 'hydrate_snapshot',
-										snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+										snapshotNodeIds: new Set(Object.keys((snap as any)?.snap?.nodeBindings ?? {}))
 									});
 									update((s) =>
 										withGraphMeta(
 											logPush(
 												{ ...s },
 												'info',
-												`Run finished via fallback polling (${String((snap as any)?.status ?? 'unknown')})`
+												`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')})`
 											)
 										)
 									);
