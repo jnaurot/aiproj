@@ -60,4 +60,23 @@ describe('graphStore history foundation', () => {
 
 		graphStore.setHistoryLimit(100);
 	});
+
+	it('groups subtype switch into a single undo step', () => {
+		graphStore.hardResetGraph();
+		graphStore.clearHistory();
+
+		const nodeId = graphStore.addNode('transform', { x: 24, y: 24 });
+		const before = get(graphStore).nodes.find((n) => n.id === nodeId);
+		const beforeKind = String(before?.data?.transformKind ?? '');
+
+		const switched = graphStore.setTransformKind(nodeId, 'derive');
+		expect(switched.ok).toBe(true);
+		const after = get(graphStore).nodes.find((n) => n.id === nodeId);
+		expect(String(after?.data?.transformKind ?? '')).toBe('derive');
+
+		const undone = graphStore.undo();
+		expect(undone.ok).toBe(true);
+		const restored = get(graphStore).nodes.find((n) => n.id === nodeId);
+		expect(String(restored?.data?.transformKind ?? '')).toBe(beforeKind);
+	});
 });

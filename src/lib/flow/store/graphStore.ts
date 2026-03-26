@@ -5104,6 +5104,8 @@ export const graphStore = (() => {
 		initialState.graphId
 	);
 	let historyApplying = false;
+	let historyTransactionDepth = 0;
+	let historyTransactionStartKey: string | null = null;
 
 	function snapshotFromState(state: GraphState): PipelineGraphDTO {
 		return stripToDTO(state.nodes as any, state.edges as any, state.graphId);
@@ -5121,6 +5123,7 @@ export const graphStore = (() => {
 
 	function pushHistorySnapshot(snapshot: PipelineGraphDTO): void {
 		if (historyApplying) return;
+		if (historyTransactionDepth > 0) return;
 		if (snapshotKey(snapshot) === snapshotKey(historyPresent)) return;
 		historyPast = [...historyPast, historyPresent];
 		if (historyPast.length > historyLimit) {
@@ -5128,6 +5131,39 @@ export const graphStore = (() => {
 		}
 		historyPresent = snapshot;
 		historyFuture = [];
+	}
+
+	function beginHistoryTransaction(): void {
+		if (historyTransactionDepth === 0) {
+			historyTransactionStartKey = snapshotKey(historyPresent);
+		}
+		historyTransactionDepth += 1;
+	}
+
+	function endHistoryTransaction(): void {
+		if (historyTransactionDepth <= 0) return;
+		historyTransactionDepth -= 1;
+		if (historyTransactionDepth > 0) return;
+		const current = snapshotFromState(get({ subscribe } as any) as GraphState);
+		const currentKey = snapshotKey(current);
+		if (historyTransactionStartKey != null && currentKey !== historyTransactionStartKey) {
+			historyPast = [...historyPast, historyPresent];
+			if (historyPast.length > historyLimit) {
+				historyPast = historyPast.slice(historyPast.length - historyLimit);
+			}
+			historyPresent = current;
+			historyFuture = [];
+		}
+		historyTransactionStartKey = null;
+	}
+
+	function runInHistoryTransaction<T>(fn: () => T): T {
+		beginHistoryTransaction();
+		try {
+			return fn();
+		} finally {
+			endHistoryTransaction();
+		}
 	}
 
 	const update = (
@@ -5967,183 +6003,191 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
-			const nextParams = structuredClone(defaultSourceParamsByKind[nextKind]);
+			return runInHistoryTransaction(() => {
+				const nextParams = structuredClone(defaultSourceParamsByKind[nextKind]);
 
-			// 1) update structural subtype on the node
-			update((s) => {
-				const node = s.nodes.find((n) => n.id === nodeId);
-				if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
-
-				const nodes = s.nodes.map((n) =>
-					n.id === nodeId
-						? {
-							...n,
-							data: {
-								...n.data,
-								sourceKind: nextKind, // âœ… structural
-								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-							}
-						}
-						: n
-				);
-
-				const next = { ...s, nodes };
-				persist(next);
-				return next;
-			});
-
-			// 2) replace params via your validated path (schema stripping happens here)
-			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
-			if (r.ok) {
-				applySemanticSubtypeReset(nodeId, { kind: 'source', sourceKind: nextKind });
-			}
-
-			// 3) ensure inspector draft matches immediately after type switch
-			if (r.ok) {
+				// 1) update structural subtype on the node
 				update((s) => {
-					const n = s.nodes.find((x) => x.id === nodeId);
-					return {
-						...s,
-						inspector: {
-							nodeId,
-							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false,
-							uiByNodeId: s.inspector.uiByNodeId
-						}
-					};
+					const node = s.nodes.find((n) => n.id === nodeId);
+					if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
+
+					const nodes = s.nodes.map((n) =>
+						n.id === nodeId
+							? {
+								...n,
+								data: {
+									...n.data,
+									sourceKind: nextKind, // âœ… structural
+									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+								}
+							}
+							: n
+					);
+
+					const next = { ...s, nodes };
+					persist(next);
+					return next;
 				});
-			}
-			return r;
+
+				// 2) replace params via your validated path (schema stripping happens here)
+				const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+				if (r.ok) {
+					applySemanticSubtypeReset(nodeId, { kind: 'source', sourceKind: nextKind });
+				}
+
+				// 3) ensure inspector draft matches immediately after type switch
+				if (r.ok) {
+					update((s) => {
+						const n = s.nodes.find((x) => x.id === nodeId);
+						return {
+							...s,
+							inspector: {
+								nodeId,
+								draftParams: structuredClone((n?.data.params ?? {}) as any),
+								dirty: false,
+								uiByNodeId: s.inspector.uiByNodeId
+							}
+						};
+					});
+				}
+				return r;
+			});
 		},
 
 		// graphStore.ts (inside your graphStore object)
 		setLlmKind(nodeId: string, nextKind: LlmKind) {
-			const nextParams = structuredClone(defaultLlmParamsByKind[nextKind]);
+			return runInHistoryTransaction(() => {
+				const nextParams = structuredClone(defaultLlmParamsByKind[nextKind]);
 
-			// 1) update structural subtype on the node
-			update((s) => {
-				const node = s.nodes.find((n) => n.id === nodeId);
-				if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
-
-				const nodes = s.nodes.map((n) =>
-					n.id === nodeId
-						? {
-							...n,
-							data: {
-								...n.data,
-								llmKind: nextKind, // âœ… structural
-								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-							}
-						}
-						: n
-				);
-
-				const next = { ...s, nodes };
-				persist(next);
-				return next;
-			});
-
-			// 2) replace params via your validated path (schema stripping happens here)
-			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
-			if (r.ok) {
-				const node = get({ subscribe } as any).nodes.find((n: any) => n.id === nodeId);
-				applySemanticSubtypeReset(nodeId, { kind: node?.data?.kind ?? 'model', llmKind: nextKind });
-			}
-
-			// 3) ensure inspector draft matches immediately after type switch
-			if (r.ok) {
+				// 1) update structural subtype on the node
 				update((s) => {
-					const n = s.nodes.find((x) => x.id === nodeId);
-					return {
-						...s,
-						inspector: {
-							nodeId,
-							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false,
-							uiByNodeId: s.inspector.uiByNodeId
-						}
-					};
-				});
-			}
+					const node = s.nodes.find((n) => n.id === nodeId);
+					if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
 
-			return r;
+					const nodes = s.nodes.map((n) =>
+						n.id === nodeId
+							? {
+								...n,
+								data: {
+									...n.data,
+									llmKind: nextKind, // âœ… structural
+									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+								}
+							}
+							: n
+					);
+
+					const next = { ...s, nodes };
+					persist(next);
+					return next;
+				});
+
+				// 2) replace params via your validated path (schema stripping happens here)
+				const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+				if (r.ok) {
+					const node = get({ subscribe } as any).nodes.find((n: any) => n.id === nodeId);
+					applySemanticSubtypeReset(nodeId, { kind: node?.data?.kind ?? 'model', llmKind: nextKind });
+				}
+
+				// 3) ensure inspector draft matches immediately after type switch
+				if (r.ok) {
+					update((s) => {
+						const n = s.nodes.find((x) => x.id === nodeId);
+						return {
+							...s,
+							inspector: {
+								nodeId,
+								draftParams: structuredClone((n?.data.params ?? {}) as any),
+								dirty: false,
+								uiByNodeId: s.inspector.uiByNodeId
+							}
+						};
+					});
+				}
+
+				return r;
+			});
 		},
 
 		// graphStore.ts (inside your graphStore object)
 		setTransformKind(nodeId: string, nextKind: TransformKind) {
-			const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
+			return runInHistoryTransaction(() => {
+				const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
 
-			// 1) update structural subtype on the node
-			update((s) => {
-				const node = s.nodes.find((n) => n.id === nodeId);
-				if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
-
-				const nodes = s.nodes.map((n) =>
-					n.id === nodeId
-						? {
-							...n,
-							data: {
-								...n.data,
-								transformKind: nextKind, // âœ… structural
-								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-							}
-						}
-						: n
-				);
-
-				const next = { ...s, nodes };
-				persist(next);
-				return next;
-			});
-
-			// 2) replace params via your validated path (schema stripping happens here)
-			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
-			if (r.ok) {
-				applySemanticSubtypeReset(nodeId, { kind: 'transform', transformKind: nextKind });
-			}
-
-			// 3) ensure inspector draft matches immediately after type switch
-			if (r.ok) {
+				// 1) update structural subtype on the node
 				update((s) => {
-					const n = s.nodes.find((x) => x.id === nodeId);
-					return {
-						...s,
-						inspector: {
-							nodeId,
-							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false,
-							uiByNodeId: s.inspector.uiByNodeId
-						}
-					};
-				});
-			}
+					const node = s.nodes.find((n) => n.id === nodeId);
+					if (!node) return logPush(s, 'warn', 'Node not found', nodeId);
 
-			return r;
+					const nodes = s.nodes.map((n) =>
+						n.id === nodeId
+							? {
+								...n,
+								data: {
+									...n.data,
+									transformKind: nextKind, // âœ… structural
+									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+								}
+							}
+							: n
+					);
+
+					const next = { ...s, nodes };
+					persist(next);
+					return next;
+				});
+
+				// 2) replace params via your validated path (schema stripping happens here)
+				const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+				if (r.ok) {
+					applySemanticSubtypeReset(nodeId, { kind: 'transform', transformKind: nextKind });
+				}
+
+				// 3) ensure inspector draft matches immediately after type switch
+				if (r.ok) {
+					update((s) => {
+						const n = s.nodes.find((x) => x.id === nodeId);
+						return {
+							...s,
+							inspector: {
+								nodeId,
+								draftParams: structuredClone((n?.data.params ?? {}) as any),
+								dirty: false,
+								uiByNodeId: s.inspector.uiByNodeId
+							}
+						};
+					});
+				}
+
+				return r;
+			});
 		},
 
 		setToolProvider(nodeId: string, nextProvider: ToolProvider) {
-			const nextParams = structuredClone(defaultToolParamsByProvider[nextProvider]);
-			const r = updateNodeConfigImpl(nodeId, { params: nextParams });
-			if (r.ok) {
-				applySemanticSubtypeReset(nodeId, { kind: 'tool', provider: nextProvider });
-			}
+			return runInHistoryTransaction(() => {
+				const nextParams = structuredClone(defaultToolParamsByProvider[nextProvider]);
+				const r = updateNodeConfigImpl(nodeId, { params: nextParams });
+				if (r.ok) {
+					applySemanticSubtypeReset(nodeId, { kind: 'tool', provider: nextProvider });
+				}
 
-			if (r.ok) {
-				update((s) => {
-					const n = s.nodes.find((x) => x.id === nodeId);
-					return {
-						...s,
-						inspector: {
-							nodeId,
-							draftParams: structuredClone((n?.data.params ?? {}) as any),
-							dirty: false,
-							uiByNodeId: s.inspector.uiByNodeId
-						}
-					};
-				});
-			}
+				if (r.ok) {
+					update((s) => {
+						const n = s.nodes.find((x) => x.id === nodeId);
+						return {
+							...s,
+							inspector: {
+								nodeId,
+								draftParams: structuredClone((n?.data.params ?? {}) as any),
+								dirty: false,
+								uiByNodeId: s.inspector.uiByNodeId
+							}
+						};
+					});
+				}
 
-			return r;
+				return r;
+			});
 		},
 
 		setToolKind(nodeId: string, nextProvider: ToolProvider) {
