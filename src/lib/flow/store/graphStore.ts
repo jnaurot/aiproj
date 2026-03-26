@@ -8218,6 +8218,23 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							.filter(([, binding]) => isBindingStale(binding))
 							.map(([nodeId]) => nodeId)
 					: [];
+			const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+			const waitForTerminalSnapshotWithFallback = async (
+				runId: string,
+				options?: { intervalMs?: number; maxAttempts?: number }
+			): Promise<any> => {
+				const intervalMs = Math.max(500, Number(options?.intervalMs ?? 3000));
+				const maxAttempts = Math.max(1, Number(options?.maxAttempts ?? 120));
+				for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+					const snap = await getRun(runId);
+					const status = String((snap as any)?.status ?? '').toLowerCase();
+					if (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
+						return snap;
+					}
+					await sleep(intervalMs);
+				}
+				throw new Error(`Run terminal snapshot timeout: ${runId}`);
+			};
 			const runSingleWithStream = async (
 				payload: ReturnType<typeof buildRunCreateRequest>,
 				plannedNodeSet: Set<string>
@@ -8343,9 +8360,38 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							}
 							batcher.flush();
 							update((s) =>
-								withGraphMeta(logPush({ ...s, runStatus: 'failed' }, 'error', 'Event stream error'))
+								withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; switching to fallback polling'))
 							);
-							settle();
+							void waitForTerminalSnapshotWithFallback(runId)
+								.then((snap) => {
+									update((s) => hydrateFromRunSnapshot(s, snap), {
+										source: 'hydrate_snapshot',
+										snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+									});
+									update((s) =>
+										withGraphMeta(
+											logPush(
+												{ ...s },
+												'info',
+												`Run finished via fallback polling (${String((snap as any)?.status ?? 'unknown')})`
+											)
+										)
+									);
+								})
+								.catch((error) => {
+									update((s) =>
+										withGraphMeta(
+											logPush(
+												{ ...s, runStatus: 'failed' },
+												'error',
+												`Event stream error and fallback polling failed: ${String(error)}`
+											)
+										)
+									);
+								})
+								.finally(() => {
+									settle();
+								});
 						}
 					);
 					activeRunStreamHandle = { runId, close: () => subHandle?.close() };
@@ -8373,19 +8419,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				await runSingleWithStream(payload, plannedNodeSet);
 				return;
 			}
-
-			const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-			const waitForTerminalSnapshot = async (runId: string): Promise<any> => {
-				for (let i = 0; i < 600; i += 1) {
-					const snap = await getRun(runId);
-					const status = String((snap as any)?.status ?? '').toLowerCase();
-					if (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
-						return snap;
-					}
-					await sleep(200);
-				}
-				throw new Error(`Run timeout: ${runId}`);
-			};
 
 			const allPlannedNodeSet = new Set<string>();
 			for (const componentSet of componentPlans) {
@@ -8434,7 +8467,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						cacheMode
 					);
 					const created = await createRun(payload);
-					const snap = await waitForTerminalSnapshot(created.runId);
+					const snap = await waitForTerminalSnapshotWithFallback(created.runId, {
+						intervalMs: 3000,
+						maxAttempts: 120
+					});
 					update(
 						(s) => hydrateFromRunSnapshot(s, snap),
 						{
