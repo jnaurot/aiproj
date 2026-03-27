@@ -60,12 +60,10 @@
 					type="button"
 					on:click={() => {
 						onDraft(defaults);
-						onCommit(defaults);
 					}}
 				>
 					Reset
 				</button>
-				<button class="small" type="button" on:click={() => onCommit({ query: query.trim() })}>Commit</button>
 			</div>
 		</div>
 	</Field>

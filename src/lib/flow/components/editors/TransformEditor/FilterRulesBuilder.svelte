@@ -9,6 +9,39 @@ export let depth = 0;
 export let onChange: (next: FilterGroup) => void;
 export let onRemoveGroup: (() => void) | null = null;
 
+	function collectConditionColumns(node: FilterRuleNode): string[] {
+		if (node.kind === 'condition') {
+			const name = String(node.column ?? '').trim();
+			return name.length > 0 ? [name] : [];
+		}
+		const out: string[] = [];
+		for (const child of node.conditions ?? []) {
+			out.push(...collectConditionColumns(child));
+		}
+		return out;
+	}
+
+	function uniqueColumns(values: Array<{ name: string; type: string }>): Array<{ name: string; type: string }> {
+		const seen = new Set<string>();
+		const out: Array<{ name: string; type: string }> = [];
+		for (const item of values) {
+			const name = String(item?.name ?? '').trim();
+			if (!name || seen.has(name)) continue;
+			seen.add(name);
+			out.push({
+				name,
+				type: String(item?.type ?? 'unknown').trim() || 'unknown'
+			});
+		}
+		return out;
+	}
+
+	$: selectedColumns = collectConditionColumns(group);
+	$: selectedAsOptions = selectedColumns.map((name) => ({ name, type: 'selected' }));
+	$: optionColumns = uniqueColumns([...columns, ...selectedAsOptions]).sort((a, b) =>
+		a.name.localeCompare(b.name)
+	);
+
 	const VALUE_OPERATORS = new Set(FILTER_OPERATORS.filter((entry) => entry.needsValue).map((entry) => entry.value));
 	const groupOpSelectId = `filter-group-op-${Math.random().toString(36).slice(2, 10)}`;
 
@@ -115,7 +148,7 @@ export let onRemoveGroup: (() => void) | null = null;
 									)}
 							>
 								<option value="" disabled selected={node.column.length === 0}>Select {fieldLabel}</option>
-								{#each columns as col}
+								{#each optionColumns as col}
 									<option value={col.name}>{col.name}</option>
 								{/each}
 							</select>
@@ -188,6 +221,7 @@ export let onRemoveGroup: (() => void) | null = null;
 						<svelte:self
 							group={node}
 							columns={columns}
+							{fieldLabel}
 							depth={depth + 1}
 							onChange={(next) => updateChild(index, next)}
 							onRemoveGroup={() => removeChild(index)}

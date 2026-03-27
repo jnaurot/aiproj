@@ -151,10 +151,6 @@
 		if (commit) onCommit(wrapped);
 	}
 
-	function commitNow(): void {
-		commitSelect({}, true);
-	}
-
 	function addColumn(col: string): void {
 		const name = String(col ?? '').trim();
 		if (!name) return;
@@ -195,7 +191,6 @@
 		<button class:active={mode === 'exclude'} type="button" on:click={() => commitSelect({ mode: 'exclude' })}>
 			Drop these columns
 		</button>
-		<button class="commitBtn" type="button" on:click={commitNow}>Commit changes</button>
 	</div>
 
 	<div class="optsRow">
@@ -310,7 +305,7 @@
 
 	.modeRow {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 8px;
 		margin-top: 8px;
 	}
@@ -329,11 +324,6 @@
 		background: rgba(59, 130, 246, 0.2);
 		border-color: rgba(59, 130, 246, 0.6);
 	}
-	.modeRow button.commitBtn {
-		border-color: rgba(59, 130, 246, 0.5);
-		background: rgba(59, 130, 246, 0.14);
-	}
-
 	.optsRow {
 		margin-top: 8px;
 		display: flex;
