@@ -19,10 +19,12 @@
 		return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 	}
 
-	function commitPatch(next: Partial<TransformCategoricalEncodeParams>) {
+	function commitPatch(next: Partial<TransformCategoricalEncodeParams>, immediate = false) {
 		const merged = { encoding, unknownPolicy, rareThreshold, dropFirst, columns: parseColumns(columnsText), ...next };
 		onDraft({ op: 'categorical_encode', categorical_encode: merged } as unknown as Partial<TransformCategoricalEncodeParams>);
-		onCommit({ op: 'categorical_encode', categorical_encode: merged } as unknown as Partial<TransformCategoricalEncodeParams>);
+		if (immediate) {
+			onCommit({ op: 'categorical_encode', categorical_encode: merged } as unknown as Partial<TransformCategoricalEncodeParams>);
+		}
 	}
 </script>
 
@@ -31,14 +33,14 @@
 		<Input value={columnsText} onInput={(e) => commitPatch({ columns: parseColumns((e.currentTarget as HTMLInputElement).value) })} />
 	</Field>
 	<Field label="encoding">
-		<select value={encoding} on:change={(e) => commitPatch({ encoding: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={encoding} on:change={(e) => commitPatch({ encoding: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="one_hot">one_hot</option>
 			<option value="ordinal">ordinal</option>
 			<option value="frequency">frequency</option>
 		</select>
 	</Field>
 	<Field label="unknown policy">
-		<select value={unknownPolicy} on:change={(e) => commitPatch({ unknownPolicy: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={unknownPolicy} on:change={(e) => commitPatch({ unknownPolicy: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="ignore">ignore</option>
 			<option value="error">error</option>
 			<option value="impute">impute</option>
@@ -48,6 +50,6 @@
 		<Input value={String(rareThreshold)} onInput={(e) => commitPatch({ rareThreshold: Number((e.currentTarget as HTMLInputElement).value || 0) })} />
 	</Field>
 	<Field label="drop first">
-		<input type="checkbox" checked={dropFirst} on:change={(e) => commitPatch({ dropFirst: (e.currentTarget as HTMLInputElement).checked })} />
+		<input type="checkbox" checked={dropFirst} on:change={(e) => commitPatch({ dropFirst: (e.currentTarget as HTMLInputElement).checked }, true)} />
 	</Field>
 </Section>

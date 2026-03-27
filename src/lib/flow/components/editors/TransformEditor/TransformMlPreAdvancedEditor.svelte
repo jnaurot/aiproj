@@ -44,10 +44,10 @@
 		return Number.isFinite(n) ? n : fallback;
 	}
 
-	function commitPatch(nextNested: Record<string, unknown>): void {
+	function commitPatch(nextNested: Record<string, unknown>, immediate = false): void {
 		const patch = { op, [op]: { ...nested, ...nextNested } };
 		onDraft(patch);
-		onCommit(patch);
+		if (immediate) onCommit(patch);
 	}
 </script>
 
@@ -88,14 +88,14 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.includeHistograms ?? true)}
-				onChange={(e) => commitPatch({ includeHistograms: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ includeHistograms: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 		<Field label="include samples">
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.includeSamples ?? true)}
-				onChange={(e) => commitPatch({ includeSamples: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ includeSamples: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 	{:else if op === 'drift_compare'}
@@ -114,7 +114,7 @@
 		<Field label="metric">
 			<select
 				value={String(nested.metric ?? 'psi')}
-				on:change={(e) => commitPatch({ metric: (e.currentTarget as HTMLSelectElement).value })}
+				on:change={(e) => commitPatch({ metric: (e.currentTarget as HTMLSelectElement).value }, true)}
 			>
 				<option value="psi">psi</option>
 				<option value="jsd">jsd</option>
@@ -131,7 +131,7 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.failOnDrift ?? false)}
-				onChange={(e) => commitPatch({ failOnDrift: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ failOnDrift: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 	{:else if op === 'determinism_profile'}
@@ -139,7 +139,7 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.strict ?? true)}
-				onChange={(e) => commitPatch({ strict: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ strict: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 		<Field label="seed">
@@ -152,21 +152,21 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.stableSort ?? true)}
-				onChange={(e) => commitPatch({ stableSort: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ stableSort: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 		<Field label="stable coercion">
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.stableCoercion ?? true)}
-				onChange={(e) => commitPatch({ stableCoercion: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ stableCoercion: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 	{:else if op === 'fit_state_registry'}
 		<Field label="mode">
 			<select
 				value={String(nested.mode ?? 'fit')}
-				on:change={(e) => commitPatch({ mode: (e.currentTarget as HTMLSelectElement).value })}
+				on:change={(e) => commitPatch({ mode: (e.currentTarget as HTMLSelectElement).value }, true)}
 			>
 				<option value="fit">fit</option>
 				<option value="apply">apply</option>
@@ -194,7 +194,7 @@
 		<Field label="action">
 			<select
 				value={String(nested.action ?? 'report')}
-				on:change={(e) => commitPatch({ action: (e.currentTarget as HTMLSelectElement).value })}
+				on:change={(e) => commitPatch({ action: (e.currentTarget as HTMLSelectElement).value }, true)}
 			>
 				<option value="report">report</option>
 				<option value="mask">mask</option>
@@ -205,7 +205,7 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.failOnDetect ?? false)}
-				onChange={(e) => commitPatch({ failOnDetect: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ failOnDetect: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 	{:else if op === 'inference_parity'}
@@ -225,7 +225,7 @@
 			<Input
 				type="checkbox"
 				checked={Boolean(nested.failOnMismatch ?? true)}
-				onChange={(e) => commitPatch({ failOnMismatch: (e.currentTarget as HTMLInputElement).checked })}
+				onChange={(e) => commitPatch({ failOnMismatch: (e.currentTarget as HTMLInputElement).checked }, true)}
 			/>
 		</Field>
 	{:else}

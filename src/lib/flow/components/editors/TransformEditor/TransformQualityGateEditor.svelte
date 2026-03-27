@@ -171,25 +171,27 @@
 		onCommit(merged);
 	}
 
-	function replaceChecks(nextChecks: GateCheck[]) {
+	function replaceChecks(nextChecks: GateCheck[], immediate = true) {
 		patchDraft({ checks: nextChecks });
-		patchCommit({ checks: nextChecks });
+		if (immediate) {
+			patchCommit({ checks: nextChecks });
+		}
 	}
 
 	function addCheck(kind: GateKind) {
-		replaceChecks([...checks, defaultCheck(kind)]);
+		replaceChecks([...checks, defaultCheck(kind)], true);
 	}
 
 	function removeCheck(index: number) {
-		replaceChecks(checks.filter((_, i) => i !== index));
+		replaceChecks(checks.filter((_, i) => i !== index), true);
 	}
 
-	function updateCheck(index: number, next: Partial<GateCheck>) {
+	function updateCheck(index: number, next: Partial<GateCheck>, immediate = false) {
 		const updated = checks.map((check, i) => {
 			if (i !== index) return check;
 			return { ...check, ...next } as GateCheck;
 		});
-		replaceChecks(updated);
+		replaceChecks(updated, immediate);
 	}
 
 	function updateRangeBound(index: number, side: 'min' | 'max', rawValue: string) {
@@ -203,7 +205,7 @@
 			}
 			return { ...check, [side]: value };
 		});
-		replaceChecks(updated);
+		replaceChecks(updated, false);
 	}
 </script>
 
@@ -252,7 +254,7 @@
 				<select
 					value={check.severity}
 					on:change={(event) =>
-						updateCheck(index, { severity: (event.currentTarget as HTMLSelectElement).value as GateSeverity })}
+						updateCheck(index, { severity: (event.currentTarget as HTMLSelectElement).value as GateSeverity }, true)}
 				>
 					<option value="fail">fail</option>
 					<option value="warn">warn</option>
@@ -264,7 +266,7 @@
 					<Input
 						value={check.column}
 						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="max null %">
@@ -277,7 +279,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								maxNullPct: toRatio((event.currentTarget as HTMLInputElement).value, check.maxNullPct)
-							})}
+							}, false)}
 					/>
 				</Field>
 			{:else if check.kind === 'range'}
@@ -285,7 +287,7 @@
 					<Input
 						value={check.column}
 						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="min">
@@ -307,7 +309,7 @@
 						type="checkbox"
 						checked={check.inclusiveMin}
 						onChange={(event) =>
-							updateCheck(index, { inclusiveMin: (event.currentTarget as HTMLInputElement).checked })}
+							updateCheck(index, { inclusiveMin: (event.currentTarget as HTMLInputElement).checked }, true)}
 					/>
 				</Field>
 				<Field label="inclusive max">
@@ -315,7 +317,7 @@
 						type="checkbox"
 						checked={check.inclusiveMax}
 						onChange={(event) =>
-							updateCheck(index, { inclusiveMax: (event.currentTarget as HTMLInputElement).checked })}
+							updateCheck(index, { inclusiveMax: (event.currentTarget as HTMLInputElement).checked }, true)}
 					/>
 				</Field>
 				<Field label="max out-of-range %">
@@ -328,7 +330,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								maxOutOfRangePct: toRatio((event.currentTarget as HTMLInputElement).value, check.maxOutOfRangePct)
-							})}
+							}, false)}
 					/>
 				</Field>
 			{:else if check.kind === 'uniqueness'}
@@ -336,7 +338,7 @@
 					<Input
 						value={check.column}
 						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="min unique ratio">
@@ -349,7 +351,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								minUniqueRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.minUniqueRatio)
-							})}
+							}, false)}
 					/>
 				</Field>
 			{:else if check.kind === 'class_balance'}
@@ -357,7 +359,7 @@
 					<Input
 						value={check.column}
 						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="min minority ratio">
@@ -370,7 +372,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								minMinorityRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.minMinorityRatio)
-							})}
+							}, false)}
 					/>
 				</Field>
 				<Field label="max dominant ratio">
@@ -383,7 +385,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								maxDominantRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.maxDominantRatio)
-							})}
+							}, false)}
 					/>
 				</Field>
 			{:else if check.kind === 'leakage'}
@@ -391,14 +393,14 @@
 					<Input
 						value={check.featureColumn}
 						onInput={(event) =>
-							updateCheck(index, { featureColumn: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { featureColumn: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="target column">
 					<Input
 						value={check.targetColumn}
 						onInput={(event) =>
-							updateCheck(index, { targetColumn: (event.currentTarget as HTMLInputElement).value })}
+							updateCheck(index, { targetColumn: (event.currentTarget as HTMLInputElement).value }, false)}
 					/>
 				</Field>
 				<Field label="max abs corr">
@@ -411,7 +413,7 @@
 						onInput={(event) =>
 							updateCheck(index, {
 								maxAbsCorrelation: toRatio((event.currentTarget as HTMLInputElement).value, check.maxAbsCorrelation)
-							})}
+							}, false)}
 					/>
 				</Field>
 			{/if}

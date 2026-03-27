@@ -19,10 +19,12 @@
 		return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 	}
 
-	function commitPatch(next: Partial<TransformEmbeddingParams>) {
+	function commitPatch(next: Partial<TransformEmbeddingParams>, immediate = false) {
 		const merged = { provider, model, dimensions, outputColumn, columns: parseColumns(columnsText), ...next };
 		onDraft({ op: 'embedding', embedding: merged } as unknown as Partial<TransformEmbeddingParams>);
-		onCommit({ op: 'embedding', embedding: merged } as unknown as Partial<TransformEmbeddingParams>);
+		if (immediate) {
+			onCommit({ op: 'embedding', embedding: merged } as unknown as Partial<TransformEmbeddingParams>);
+		}
 	}
 </script>
 
@@ -31,7 +33,7 @@
 		<Input value={columnsText} onInput={(e) => commitPatch({ columns: parseColumns((e.currentTarget as HTMLInputElement).value) })} />
 	</Field>
 	<Field label="provider">
-		<select value={provider} on:change={(e) => commitPatch({ provider: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={provider} on:change={(e) => commitPatch({ provider: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="local_hash">local_hash</option>
 			<option value="openai">openai</option>
 			<option value="ollama">ollama</option>

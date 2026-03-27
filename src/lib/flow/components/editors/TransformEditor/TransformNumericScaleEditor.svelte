@@ -19,10 +19,12 @@
 		return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 	}
 
-	function commitPatch(next: Partial<TransformNumericScaleParams>) {
+	function commitPatch(next: Partial<TransformNumericScaleParams>, immediate = false) {
 		const merged = { method, clip, columns: parseColumns(columnsText), clipMin, clipMax, ...next };
 		onDraft({ op: 'numeric_scale', numeric_scale: merged } as unknown as Partial<TransformNumericScaleParams>);
-		onCommit({ op: 'numeric_scale', numeric_scale: merged } as unknown as Partial<TransformNumericScaleParams>);
+		if (immediate) {
+			onCommit({ op: 'numeric_scale', numeric_scale: merged } as unknown as Partial<TransformNumericScaleParams>);
+		}
 	}
 </script>
 
@@ -31,14 +33,14 @@
 		<Input value={columnsText} onInput={(e) => commitPatch({ columns: parseColumns((e.currentTarget as HTMLInputElement).value) })} />
 	</Field>
 	<Field label="method">
-		<select value={method} on:change={(e) => commitPatch({ method: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={method} on:change={(e) => commitPatch({ method: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="standard">standard</option>
 			<option value="minmax">minmax</option>
 			<option value="robust">robust</option>
 		</select>
 	</Field>
 	<Field label="clip">
-		<input type="checkbox" checked={clip} on:change={(e) => commitPatch({ clip: (e.currentTarget as HTMLInputElement).checked })} />
+		<input type="checkbox" checked={clip} on:change={(e) => commitPatch({ clip: (e.currentTarget as HTMLInputElement).checked }, true)} />
 	</Field>
 	{#if clip}
 		<Field label="clip min">

@@ -20,16 +20,18 @@
 		return raw.split(',').map((v) => v.trim()).filter((v) => v.length > 0);
 	}
 
-	function commitPatch(next: Partial<TransformFeatureSelectionParams>) {
+	function commitPatch(next: Partial<TransformFeatureSelectionParams>, immediate = false) {
 		const merged = { method, topK, varianceThreshold, targetColumn, columns: parseColumns(columnsText), selectedColumns: parseColumns(selectedText), ...next };
 		onDraft({ op: 'feature_selection', feature_selection: merged } as unknown as Partial<TransformFeatureSelectionParams>);
-		onCommit({ op: 'feature_selection', feature_selection: merged } as unknown as Partial<TransformFeatureSelectionParams>);
+		if (immediate) {
+			onCommit({ op: 'feature_selection', feature_selection: merged } as unknown as Partial<TransformFeatureSelectionParams>);
+		}
 	}
 </script>
 
 <Section title="Feature Selection">
 	<Field label="method">
-		<select value={method} on:change={(e) => commitPatch({ method: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={method} on:change={(e) => commitPatch({ method: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="variance">variance</option>
 			<option value="mutual_info">mutual_info</option>
 			<option value="model_importance">model_importance</option>

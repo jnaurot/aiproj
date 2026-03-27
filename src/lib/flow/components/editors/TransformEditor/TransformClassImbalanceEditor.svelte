@@ -14,16 +14,18 @@
 	$: targetRatio = Number((nested as any)?.targetRatio ?? 1);
 	$: seed = Number((nested as any)?.seed ?? 42);
 
-	function commitPatch(next: Partial<TransformClassImbalanceParams>) {
+	function commitPatch(next: Partial<TransformClassImbalanceParams>, immediate = false) {
 		const merged = { strategy, labelColumn, targetRatio, seed, ...next };
 		onDraft({ op: 'class_imbalance', class_imbalance: merged } as unknown as Partial<TransformClassImbalanceParams>);
-		onCommit({ op: 'class_imbalance', class_imbalance: merged } as unknown as Partial<TransformClassImbalanceParams>);
+		if (immediate) {
+			onCommit({ op: 'class_imbalance', class_imbalance: merged } as unknown as Partial<TransformClassImbalanceParams>);
+		}
 	}
 </script>
 
 <Section title="Class Imbalance">
 	<Field label="strategy">
-		<select value={strategy} on:change={(e) => commitPatch({ strategy: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={strategy} on:change={(e) => commitPatch({ strategy: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="report">report</option>
 			<option value="undersample">undersample</option>
 			<option value="oversample">oversample</option>

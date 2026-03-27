@@ -19,16 +19,18 @@
 	$: groupColumn = String((nested as any)?.groupColumn ?? '');
 	$: timeColumn = String((nested as any)?.timeColumn ?? '');
 
-	function commitPatch(next: Partial<TransformDatasetSplitParams>) {
+	function commitPatch(next: Partial<TransformDatasetSplitParams>, immediate = false) {
 		const merged = { strategy, trainRatio, valRatio, testRatio, seed, shuffle, stratifyColumn, groupColumn, timeColumn, ...next };
 		onDraft({ op: 'dataset_split', dataset_split: merged } as unknown as Partial<TransformDatasetSplitParams>);
-		onCommit({ op: 'dataset_split', dataset_split: merged } as unknown as Partial<TransformDatasetSplitParams>);
+		if (immediate) {
+			onCommit({ op: 'dataset_split', dataset_split: merged } as unknown as Partial<TransformDatasetSplitParams>);
+		}
 	}
 </script>
 
 <Section title="Dataset Split">
 	<Field label="strategy">
-		<select value={strategy} on:change={(e) => commitPatch({ strategy: (e.currentTarget as HTMLSelectElement).value as any })}>
+		<select value={strategy} on:change={(e) => commitPatch({ strategy: (e.currentTarget as HTMLSelectElement).value as any }, true)}>
 			<option value="random">random</option>
 			<option value="stratified">stratified</option>
 			<option value="group">group</option>
@@ -46,7 +48,7 @@
 		<Input value={String(seed)} onInput={(e) => commitPatch({ seed: Number((e.currentTarget as HTMLInputElement).value || 0) })} />
 	</Field>
 	<Field label="shuffle">
-		<input type="checkbox" checked={shuffle} on:change={(e) => commitPatch({ shuffle: (e.currentTarget as HTMLInputElement).checked })} />
+		<input type="checkbox" checked={shuffle} on:change={(e) => commitPatch({ shuffle: (e.currentTarget as HTMLInputElement).checked }, true)} />
 	</Field>
 	{#if strategy === 'stratified'}
 		<Field label="stratify column">
