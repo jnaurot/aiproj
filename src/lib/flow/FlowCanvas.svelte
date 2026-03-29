@@ -546,8 +546,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
-		Array.isArray(($graphStore.queueRuntime?.runHistory as any) ? ($graphStore.queueRuntime as any).runHistory : [])
-			? (($graphStore.queueRuntime as any).runHistory as Array<Record<string, unknown>>)
+		Array.isArray(($graphStore.queueRuntime as any)?.runHistory)
+			? ((($graphStore.queueRuntime as any)?.runHistory ?? []) as Array<Record<string, unknown>>)
 			: []
 	)
 		.slice()
