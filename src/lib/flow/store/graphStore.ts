@@ -1675,7 +1675,11 @@ function stableJson(value: unknown): string {
 	}
 }
 
-function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set<string> {
+function downstreamNodeIds(
+	edges: Edge<PipelineEdgeData>[],
+	nodeId: string,
+	pinnedNodeIds: Set<string> = new Set<string>()
+): Set<string> {
 	const out = new Set<string>([nodeId]);
 	const q = [nodeId];
 	while (q.length > 0) {
@@ -1684,6 +1688,8 @@ function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set
 			if (e.source !== cur) continue;
 			const nxt = String(e.target ?? '');
 			if (!nxt || out.has(nxt)) continue;
+			// Pinned nodes are execution/staleness boundaries for upstream changes.
+			if (nxt !== nodeId && pinnedNodeIds.has(nxt)) continue;
 			out.add(nxt);
 			q.push(nxt);
 		}
@@ -1692,10 +1698,12 @@ function downstreamNodeIds(edges: Edge<PipelineEdgeData>[], nodeId: string): Set
 }
 
 export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): GraphState {
-	const candidateIds = downstreamNodeIds(state.edges, nodeId);
+	const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(state.nodes as any));
+	const candidateIds = downstreamNodeIds(state.edges, nodeId, pinnedNodeIds);
 	const nodeBindings = { ...state.nodeBindings };
 	let changed = false;
 	for (const affectedId of candidateIds) {
+		if (affectedId !== nodeId && pinnedNodeIds.has(affectedId)) continue;
 		const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 		const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 		if (!hadArtifact) continue;
@@ -1778,6 +1786,39 @@ function nodeFreezeMode(
 	const mode = String(freeze.mode ?? '').trim().toLowerCase();
 	if (mode === 'per_run' || mode === 'sticky') return mode;
 	return null;
+}
+
+function hasCurrentBoundArtifact(binding: NormalizedNodeBinding | undefined | null): boolean {
+	const execKey = String(binding?.current?.execKey ?? '').trim();
+	const artifactId = String(binding?.current?.artifactId ?? '').trim();
+	return execKey.length > 0 && artifactId.length > 0;
+}
+
+function validatePinEligibility(
+	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null,
+	binding: NormalizedNodeBinding | undefined | null
+): { ok: true } | { ok: false; error: string } {
+	if (!node) return { ok: false, error: 'Node not found.' };
+	const display = displayStatusFromBinding(binding as any);
+	if (display !== 'succeeded') {
+		return { ok: false, error: 'Pin is only allowed when node status is succeeded.' };
+	}
+	if (!hasCurrentBoundArtifact(binding)) {
+		return {
+			ok: false,
+			error: 'Pin requires a current bound artifact. Run the node successfully first.'
+		};
+	}
+	return { ok: true };
+}
+
+export function __validatePinEligibilityForTest(
+	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null,
+	binding: NodeBindingInfo | NormalizedNodeBinding | undefined | null
+): { ok: true } | { ok: false; error: string } {
+	const normalized =
+		binding == null ? undefined : _normalizeBinding(binding as NodeBindingInfo, String(node?.id ?? 'test'));
+	return validatePinEligibility(node, normalized);
 }
 
 function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): string[] {
@@ -5598,6 +5639,8 @@ export const graphStore = (() => {
 			let nodes = s.nodes;
 			let edges = s.edges;
 			let removedEdgeIds: string[] = [];
+			let autoUnpinned = false;
+			let pinAutoClearNotice: string | null = null;
 
 			// 0) Ensure node exists
 			const node = nodes.find((n) => n.id === nodeId);
@@ -5605,6 +5648,8 @@ export const graphStore = (() => {
 				out = { ok: false, error: 'Node not found' };
 				return logPush(s, 'warn', out.error!, nodeId);
 			}
+			const beforeExecParams = effectiveExecParamsForNode(node as Node<PipelineNodeData>);
+			const wasPinnedBeforeParams = nodeFreezeMode(node as any) !== null;
 			const previousComponentOutputNames =
 				node.data.kind === 'component' ? listComponentOutputNames(node as Node<PipelineNodeData>) : [];
 
@@ -5637,6 +5682,25 @@ export const graphStore = (() => {
 			}
 
 			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
+			const afterExecParams = effectiveExecParamsForNode(currentNode as Node<PipelineNodeData>);
+			const execParamsChanged = stableJson(beforeExecParams) !== stableJson(afterExecParams);
+			if (config.params !== undefined && wasPinnedBeforeParams && execParamsChanged) {
+				nodes = nodes.map((n) => {
+					if (n.id !== nodeId) return n;
+					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
+					delete (nextMeta as any).freeze;
+					return {
+						...n,
+						data: {
+							...(n.data as any),
+							meta: nextMeta
+						}
+					} as Node<PipelineNodeData>;
+				});
+				autoUnpinned = true;
+				pinAutoClearNotice =
+					'[Pin cleared] Parameters changed, so this node was automatically unpinned to keep execution integrity.';
+			}
 			const effectiveIo = deriveNodeIoForData(currentNode.data);
 			const { in: inputType, out: outputType } = effectiveIo;
 			if (inputType !== null && !isPayloadType(inputType)) {
@@ -5688,7 +5752,14 @@ export const graphStore = (() => {
 				out.removedEdgeIds = uniq;
 			}
 
-			const next = logPush({ ...s, nodes, edges }, 'info', 'Node config updated', nodeId);
+			const nextInspector =
+				autoUnpinned && String(s.inspector?.nodeId ?? '') === nodeId
+					? {
+							...s.inspector,
+							systemNotice: pinAutoClearNotice
+						}
+					: s.inspector;
+			const next = logPush({ ...s, nodes, edges, inspector: nextInspector }, 'info', 'Node config updated', nodeId);
 			persist(next);
 			return next;
 		});
@@ -5971,11 +6042,13 @@ export const graphStore = (() => {
 
 function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
 		update((cur) => {
-			const candidateIds = downstreamNodeIds(cur.edges, nodeId);
+			const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(cur.nodes as any));
+			const candidateIds = downstreamNodeIds(cur.edges, nodeId, pinnedNodeIds);
 			const nodeBindings = { ...cur.nodeBindings };
 			let nodeOutputs = { ...cur.nodeOutputs };
 			let changed = false;
 			for (const affectedId of candidateIds) {
+				if (affectedId !== nodeId && pinnedNodeIds.has(affectedId)) continue;
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 				if (!hadArtifact && affectedId !== nodeId) continue;
@@ -6003,9 +6076,11 @@ function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAM
 function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string): void {
 		if (!Array.isArray(affectedNodeIds) || affectedNodeIds.length === 0) return;
 		update((cur) => {
+			const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(cur.nodes as any));
 			const nodeBindings = { ...cur.nodeBindings };
 			const touchedIds: string[] = [];
 			for (const affectedId of affectedNodeIds) {
+				if (affectedId !== rootNodeId && pinnedNodeIds.has(affectedId)) continue;
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
 				let next = {
@@ -7313,7 +7388,29 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
+			let out: { ok: boolean; error?: string } = { ok: true };
 			update((s) => {
+				const targetNode = s.nodes.find((n) => n.id === nodeId) as
+					| Node<PipelineNodeData & Record<string, unknown>>
+					| undefined;
+				if (!targetNode) {
+					out = { ok: false, error: 'Node not found.' };
+					return s;
+				}
+				if (mode !== null) {
+					const eligibility = validatePinEligibility(
+						targetNode,
+						_normalizeBinding(s.nodeBindings?.[nodeId], nodeId)
+					);
+					if (!eligibility.ok) {
+						out = { ok: false, error: eligibility.error };
+						const inspector =
+							String(s.inspector?.nodeId ?? '') === nodeId
+								? { ...s.inspector, systemNotice: eligibility.error }
+								: s.inspector;
+						return logPush({ ...s, inspector }, 'warn', eligibility.error, nodeId);
+					}
+				}
 				const nodes = s.nodes.map((n) => {
 					if (n.id !== nodeId) return n;
 					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
@@ -7335,14 +7432,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				persist(next);
 				return next;
 			});
+			return out;
 		},
 
 		setSelectedNodeFreezeMode(mode: 'per_run' | 'sticky' | null) {
 			const cur = get({ subscribe } as any) as GraphState;
 			const nodeId = String(cur.selectedNodeId ?? '').trim();
 			if (!nodeId) return { ok: false as const, error: 'No node selected' };
-			this.setNodeFreezeMode(nodeId, mode);
-			return { ok: true as const };
+			return this.setNodeFreezeMode(nodeId, mode);
 		},
 
 		updateNodeProcessingPolicy(

@@ -376,6 +376,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: inspectorAcceptValidation = graphStore.getInspectorDraftAcceptValidation($graphStore as GraphState);
 	$: inspectorAcceptDisabled = !$graphStore.inspector.dirty || !inspectorAcceptValidation.ok;
 	$: inspectorSystemNotice = String(($graphStore.inspector as any)?.systemNotice ?? '').trim();
+	let lastPinAutoClearNotice = '';
+	$: {
+		if (typeof window !== 'undefined' && inspectorSystemNotice.startsWith('[Pin cleared]')) {
+			if (inspectorSystemNotice !== lastPinAutoClearNotice) {
+				lastPinAutoClearNotice = inspectorSystemNotice;
+				window.alert(inspectorSystemNotice);
+			}
+		}
+	}
 	$: inspectorAcceptTooltip =
 		$graphStore.inspector.dirty && !inspectorAcceptValidation.ok
 			? String(inspectorAcceptValidation.errors?.[0] ?? 'Resolve draft validation errors before Accept.')
@@ -1725,11 +1734,13 @@ async function scrollToBottom() {
 	}
 
 	function pinSelectedPerRun() {
-		graphStore.setSelectedNodeFreezeMode('per_run');
+		const result = graphStore.setSelectedNodeFreezeMode('per_run');
+		if (!result?.ok && result?.error) window.alert(String(result.error));
 	}
 
 	function pinSelectedSticky() {
-		graphStore.setSelectedNodeFreezeMode('sticky');
+		const result = graphStore.setSelectedNodeFreezeMode('sticky');
+		if (!result?.ok && result?.error) window.alert(String(result.error));
 	}
 
 	function clearSelectedPin() {
