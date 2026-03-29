@@ -2025,7 +2025,7 @@
 							<div class="guidedAssistLabel">
 								{String(row.direction)} {String(row.edgeId)}:{String(row.handle)}
 							</div>
-							<div class="schemaEdgeCounterparty">
+							<div class="queueEdgeCounterparty">
 								{queueEdgeCounterpartyName(
 									String(row.edgeId),
 									String(row.direction),
@@ -2757,6 +2757,15 @@
 		padding-left: 4ch;
 		font-weight: 500;
 		opacity: 0.9;
+	}
+
+	.queueEdgeCounterparty {
+		padding-left: 0;
+		font-size: 11px;
+		font-weight: 500;
+		opacity: 0.9;
+		text-align: left;
+		justify-self: start;
 	}
 
 	.schemaEdgeConfig {

@@ -1681,6 +1681,13 @@ async function scrollToBottom() {
 		focusNodeFromMonitor(fallback);
 	}
 
+	function compactEdgeId(edgeId: string): string {
+		const raw = String(edgeId ?? '').trim();
+		if (!raw) return '';
+		if (raw.length <= 8) return raw;
+		return `${raw.slice(0, 8)}...`;
+	}
+
 	async function resetRunUi() {
 		await graphStore.hardCancelActiveRuns();
 		graphStore.resetRunUi();
@@ -3577,18 +3584,18 @@ async function scrollToBottom() {
 						{#if runMonitorEdgeRows.length === 0}
 							<div class="envProfileEmpty">No edge telemetry yet.</div>
 						{:else}
-							{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
-								<button
+								{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
+									<button
 									type="button"
 									class="runMonitorNodeRow"
 									role="row"
 									on:click={() => focusEdgeFromMonitor(row.sourceNodeId, row.targetNodeId)}
-									title={`Focus ${row.targetLabel}`}
-								>
-									<span>{row.edgeId}:{row.handle}</span>
-									<span>{row.sourceLabel}</span>
-									<span>{row.targetLabel}</span>
-									<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
+										title={`Focus ${row.targetLabel}`}
+									>
+										<span>{compactEdgeId(row.edgeId)}:{row.handle}</span>
+										<span>{row.sourceLabel}</span>
+										<span>{row.targetLabel}</span>
+										<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
 									<span>{row.oldestAgeSec === null ? '-' : row.oldestAgeSec.toFixed(1)}</span>
 								</button>
 							{/each}
@@ -4317,7 +4324,7 @@ async function scrollToBottom() {
 		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
 		gap: 6px;
 		align-items: center;
-		font-size: 11px;
+		font-size: 12px;
 	}
 
 	.runMonitorNodeHead {
