@@ -435,6 +435,10 @@
 		}
 		return out;
 	})();
+	$: graphNodesForInspector = (($graphStore?.nodes ?? []) as any[]).map((node) => ({
+		id: String(node?.id ?? ''),
+		label: String((node?.data as any)?.label ?? node?.id ?? '')
+	}));
 	$: runScopedQueueSummary = (() => {
 		const runScoped = (($graphStore as any)?.queueRuntime?.runScoped ?? null) as Record<string, any> | null;
 		if (!runScoped || typeof runScoped !== 'object') return null;
@@ -617,6 +621,29 @@
 				max_items: Math.max(1, Number((edge?.data as any)?.work?.max_items ?? (edge?.data as any)?.work?.maxItems ?? 256))
 			},
 		};
+	}
+
+	function queueEdgeCounterpartyName(
+		edgeId: string,
+		direction: string,
+		selectedId: string,
+		nodes: Array<{ id: string; label: string }>
+	): string {
+		const edge = ($graphStore?.edges ?? []).find((candidate) => String(candidate.id ?? '') === String(edgeId));
+		if (!edge) return '(unknown node)';
+		const sourceId = String((edge as any)?.source ?? '').trim();
+		const targetId = String((edge as any)?.target ?? '').trim();
+		const pickId =
+			String(direction).trim().toLowerCase() === 'in'
+				? sourceId
+				: String(direction).trim().toLowerCase() === 'out'
+					? targetId
+					: sourceId === selectedId
+						? targetId
+						: sourceId;
+		const node = (nodes ?? []).find((item) => String(item.id) === String(pickId));
+		const label = String(node?.label ?? '').trim();
+		return label || pickId || '(unknown node)';
 	}
 
 	function patchEdgeRuntimeConfig(
@@ -1904,6 +1931,14 @@
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">
 								{String(row.direction)} {String(row.edgeId)}:{String(row.handle)}
+							</div>
+							<div class="schemaEdgeCounterparty">
+								{queueEdgeCounterpartyName(
+									String(row.edgeId),
+									String(row.direction),
+									String(selectedNode?.id ?? ''),
+									graphNodesForInspector
+								)}
 							</div>
 							<div class="guidedAssistDesc">
 								depth {String((row.metric as any)?.depth ?? 0)} | blocked {String((row.metric as any)?.blocked ?? false)} | full {String((row.metric as any)?.full ?? false)} | age {String((row.metric as any)?.oldestAgeSec ?? '-')}
