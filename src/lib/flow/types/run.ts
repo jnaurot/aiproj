@@ -218,6 +218,17 @@ export type KnownRunEvent =
         pendingInputCount: number;
         lastBlockedReasonCode?: string;
       }>;
+    }
+  | {
+      type: "llm_lease";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      state: "waiting" | "acquired" | "released";
+      nodeId?: string;
+      holderNodeId?: string | null;
+      waitQueueLength?: number;
+      waitingNodeIds?: string[];
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

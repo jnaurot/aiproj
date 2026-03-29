@@ -1053,6 +1053,14 @@ export type GraphState = {
 			}>;
 			updatedAt?: string;
 		};
+		llmLease?: {
+			state: 'waiting' | 'acquired' | 'released';
+			nodeId?: string;
+			holderNodeId?: string | null;
+			waitQueueLength?: number;
+			waitingNodeIds?: string[];
+			updatedAt?: string;
+		};
 		handleStates?: Record<string, { state: string; updatedAt?: string }>;
 		handleTimeline?: Array<{
 			nodeId: string;
@@ -1994,6 +2002,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							runtimeItemMetrics: {},
 							runScoped: undefined,
 							schedulerSnapshot: undefined,
+							llmLease: undefined,
 							blockedByNode: {},
 							softFailByNode: {}
 						}
@@ -2447,6 +2456,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						typeof state.queueRuntime.schedulerSnapshot === 'object'
 							? state.queueRuntime.schedulerSnapshot
 							: undefined),
+					llmLease:
+						(state.queueRuntime?.llmLease &&
+						typeof state.queueRuntime.llmLease === 'object'
+							? state.queueRuntime.llmLease
+							: undefined),
 					blockedByNode:
 						(state.queueRuntime?.blockedByNode &&
 						typeof state.queueRuntime.blockedByNode === 'object'
@@ -2510,6 +2524,38 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nextState,
 				stalled ? 'warn' : 'info',
 				`[scheduler-snapshot] ready=${readyCount} inflight=${inflightCount} pending=${pendingQueueDepth} runnable=${runnableNodeCount} stalled=${String(stalled).toLowerCase()}`
+			);
+		}
+		case 'llm_lease': {
+			const stateRaw = String((evt as any)?.state ?? '').trim().toLowerCase();
+			const leaseState = stateRaw === 'waiting' || stateRaw === 'acquired' || stateRaw === 'released' ? stateRaw : 'released';
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			const holderRaw = (evt as any)?.holderNodeId;
+			const holderNodeId =
+				holderRaw === null || holderRaw === undefined ? null : (String(holderRaw ?? '').trim() || null);
+			const waitQueueLength = Math.max(0, Number((evt as any)?.waitQueueLength ?? 0));
+			const waitingNodeIds = Array.isArray((evt as any)?.waitingNodeIds)
+				? ((evt as any).waitingNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
+				: [];
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					llmLease: {
+						state: leaseState as 'waiting' | 'acquired' | 'released',
+						nodeId: nodeId || undefined,
+						holderNodeId,
+						waitQueueLength,
+						waitingNodeIds,
+						updatedAt: String((evt as any)?.at ?? '')
+					}
+				}
+			};
+			return logPush(
+				nextState,
+				'info',
+				`[llm-lease] state=${leaseState} holder=${holderNodeId ?? '(none)'} queue=${waitQueueLength}`,
+				nodeId || undefined
 			);
 		}
 		case 'contract_drift': {

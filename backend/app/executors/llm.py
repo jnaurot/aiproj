@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 _MODEL_PROVIDER_SEMAPHORES: Dict[str, asyncio.Semaphore] = {}
+_MODEL_PROVIDER_WAITERS: Dict[str, set[str]] = {}
+_MODEL_PROVIDER_HOLDERS: Dict[str, str] = {}
 _MODEL_PROVIDER_LOCK = threading.Lock()
 
 
@@ -52,6 +54,56 @@ def _provider_semaphore(provider: str) -> Optional[asyncio.Semaphore]:
             sem = asyncio.Semaphore(cap)
             _MODEL_PROVIDER_SEMAPHORES[key] = sem
         return sem
+
+
+def _provider_key(provider: str) -> str:
+    return str(provider or "").strip().lower()
+
+
+def _provider_waiter_add(provider: str, node_id: str) -> int:
+    key = _provider_key(provider)
+    nid = str(node_id or "").strip()
+    with _MODEL_PROVIDER_LOCK:
+        waiters = _MODEL_PROVIDER_WAITERS.setdefault(key, set())
+        if nid:
+            waiters.add(nid)
+        return len(waiters)
+
+
+def _provider_waiter_remove(provider: str, node_id: str) -> int:
+    key = _provider_key(provider)
+    nid = str(node_id or "").strip()
+    with _MODEL_PROVIDER_LOCK:
+        waiters = _MODEL_PROVIDER_WAITERS.setdefault(key, set())
+        if nid:
+            waiters.discard(nid)
+        if not waiters:
+            _MODEL_PROVIDER_WAITERS.pop(key, None)
+        return len(waiters)
+
+
+def _provider_waiting_nodes(provider: str) -> List[str]:
+    key = _provider_key(provider)
+    with _MODEL_PROVIDER_LOCK:
+        return sorted(str(item) for item in (_MODEL_PROVIDER_WAITERS.get(key) or set()) if str(item).strip())
+
+
+def _provider_holder_set(provider: str, node_id: Optional[str]) -> Optional[str]:
+    key = _provider_key(provider)
+    holder = str(node_id or "").strip()
+    with _MODEL_PROVIDER_LOCK:
+        if holder:
+            _MODEL_PROVIDER_HOLDERS[key] = holder
+            return holder
+        _MODEL_PROVIDER_HOLDERS.pop(key, None)
+        return None
+
+
+def _provider_holder_get(provider: str) -> Optional[str]:
+    key = _provider_key(provider)
+    with _MODEL_PROVIDER_LOCK:
+        holder = str(_MODEL_PROVIDER_HOLDERS.get(key) or "").strip()
+        return holder or None
 
 
 def _provider_acquire_timeout_seconds(provider: str) -> float:
@@ -540,6 +592,28 @@ async def exec_llm(
             )
         raise ValueError(f"Unsupported llmKind: {kind}")
 
+    async def _emit_llm_lease(
+        *,
+        provider: str,
+        state: str,
+        node_id_for_event: Optional[str] = None,
+        holder_node_id: Optional[str] = None,
+    ) -> None:
+        waiting_node_ids = _provider_waiting_nodes(provider)
+        await context.bus.emit(
+            {
+                "type": "llm_lease",
+                "schema_version": 1,
+                "runId": run_id,
+                "at": iso_now(),
+                "state": str(state),
+                "nodeId": str(node_id_for_event or node["id"]),
+                "holderNodeId": holder_node_id,
+                "waitQueueLength": len(waiting_node_ids),
+                "waitingNodeIds": waiting_node_ids,
+            }
+        )
+
     request_policy = normalize_request_policy(llm_params)
     if request_policy.deterministic_enabled:
         if request_policy.deterministic_seed is not None and llm_params.seed is None:
@@ -610,6 +684,13 @@ async def exec_llm(
         if sem is not None:
             acquire_timeout = _provider_acquire_timeout_seconds(kind)
             waiting_started_at = asyncio.get_running_loop().time()
+            _provider_waiter_add(kind, str(node["id"]))
+            await _emit_llm_lease(
+                provider=kind,
+                state="waiting",
+                node_id_for_event=str(node["id"]),
+                holder_node_id=_provider_holder_get(kind),
+            )
             await context.bus.emit(
                 {
                     "type": "log",
@@ -626,6 +707,13 @@ async def exec_llm(
                 else:
                     await sem.acquire()
             except asyncio.TimeoutError:
+                _provider_waiter_remove(kind, str(node["id"]))
+                await _emit_llm_lease(
+                    provider=kind,
+                    state="waiting",
+                    node_id_for_event=str(node["id"]),
+                    holder_node_id=_provider_holder_get(kind),
+                )
                 return NodeOutput(
                     status="failed",
                     metadata=None,
@@ -638,6 +726,14 @@ async def exec_llm(
                     ),
                 )
             waited_ms = max(0, int((asyncio.get_running_loop().time() - waiting_started_at) * 1000))
+            _provider_waiter_remove(kind, str(node["id"]))
+            holder_node_id = _provider_holder_set(kind, str(node["id"]))
+            await _emit_llm_lease(
+                provider=kind,
+                state="acquired",
+                node_id_for_event=str(node["id"]),
+                holder_node_id=holder_node_id,
+            )
             await context.bus.emit(
                 {
                     "type": "log",
@@ -663,6 +759,15 @@ async def exec_llm(
             try:
                 out = await _dispatch(kind, params_override)
             finally:
+                current_holder = _provider_holder_get(kind)
+                if current_holder == str(node["id"]):
+                    _provider_holder_set(kind, None)
+                await _emit_llm_lease(
+                    provider=kind,
+                    state="released",
+                    node_id_for_event=str(node["id"]),
+                    holder_node_id=_provider_holder_get(kind),
+                )
                 await context.bus.emit(
                     {
                         "type": "control_signal",
@@ -674,6 +779,13 @@ async def exec_llm(
                 )
                 sem.release()
         else:
+            _provider_holder_set(kind, str(node["id"]))
+            await _emit_llm_lease(
+                provider=kind,
+                state="acquired",
+                node_id_for_event=str(node["id"]),
+                holder_node_id=str(node["id"]),
+            )
             await context.bus.emit(
                 {
                     "type": "control_signal",
@@ -686,6 +798,13 @@ async def exec_llm(
             try:
                 out = await _dispatch(kind, params_override)
             finally:
+                _provider_holder_set(kind, None)
+                await _emit_llm_lease(
+                    provider=kind,
+                    state="released",
+                    node_id_for_event=str(node["id"]),
+                    holder_node_id=None,
+                )
                 await context.bus.emit(
                     {
                         "type": "control_signal",
