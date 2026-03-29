@@ -3929,26 +3929,40 @@ async def run_graph(
             cache_only: bool = False,
             work_batch: Optional[List[Dict[str, Any]]] = None,
         ) -> Dict[str, Any]:
-            node_started_t = asyncio.get_running_loop().time()
+            node_enqueued_t = asyncio.get_running_loop().time()
+            node_started_t = node_enqueued_t
+            node_started_emitted = False
             decision_value = "accept"
             decision_reason_code = ""
             binding_snapshot = _binding_snapshot(node_id)
-            await _emit({
-                "type": "node_started",
-                "runId": run_id,
-                "at": iso_now(),
-                "nodeId": node_id
-            })
+            incoming_edge_ids = [str(edge_id) for edge_id in plan.incoming_edges.get(node_id, [])]
+            incoming_work_edge_ids = [
+                edge_id
+                for edge_id in incoming_edge_ids
+                if _edge_mode(edges.get(edge_id) or {}) == "work"
+            ]
 
-            # Activate incoming edges
-            for edge_id in plan.incoming_edges.get(node_id, []):
+            async def _emit_node_started_once() -> None:
+                nonlocal node_started_t, node_started_emitted
+                if node_started_emitted:
+                    return
+                node_started_emitted = True
+                node_started_t = asyncio.get_running_loop().time()
                 await _emit({
-                    "type": "edge_exec",
+                    "type": "node_started",
                     "runId": run_id,
                     "at": iso_now(),
-                    "edgeId": edge_id,
-                    "exec": "active"
+                    "nodeId": node_id
                 })
+                # Running edge visuals are reserved for work-plane execution only.
+                for edge_id in incoming_work_edge_ids:
+                    await _emit({
+                        "type": "edge_exec",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "edgeId": edge_id,
+                        "exec": "active"
+                    })
 
             work_batch_list = work_batch if isinstance(work_batch, list) else []
             override_map: Dict[str, str] = {}
@@ -3964,6 +3978,7 @@ async def run_graph(
             try:
                 trusted_pin = trusted_pinned_artifacts.get(node_id) if cache_only else None
                 if isinstance(trusted_pin, dict):
+                    await _emit_node_started_once()
                     pinned_artifact_id = str(trusted_pin.get("artifactId") or "").strip()
                     pinned_exec_key = str(trusted_pin.get("execKey") or "").strip() or f"pinned:{node_id}"
                     try:
@@ -4021,7 +4036,7 @@ async def run_graph(
                         ),
                         "cached": True,
                     })
-                    for edge_id in plan.incoming_edges.get(node_id, []):
+                    for edge_id in incoming_work_edge_ids:
                         await _emit({
                             "type": "edge_exec",
                             "runId": run_id,
@@ -4060,6 +4075,7 @@ async def run_graph(
             cache_miss_reason = str(resolved.get("cache_miss_reason") or "CACHE_ENTRY_MISSING")
             resolve_input_refs_error = resolved.get("resolve_input_refs_error")
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
+            lease_gated_node = kind in {"llm", "model"}
 
             if expected_schema_source.startswith("default:"):
                 await _emit({
@@ -4221,6 +4237,7 @@ async def run_graph(
                         "Selected-only run requires cache for ancestor nodes, "
                         f"but node '{node_id}' cannot use cache in this run."
                     )
+                    await _emit_node_started_once()
                     await _emit({
                         "type": "node_finished",
                         "runId": run_id,
@@ -4303,6 +4320,7 @@ async def run_graph(
                             "Selected-only run requires cached ancestors, "
                             f"but cached entry was rejected for node '{node_id}' due to contract mismatch."
                         )
+                        await _emit_node_started_once()
                         await _emit({
                             "type": "node_finished",
                             "runId": run_id,
@@ -4355,8 +4373,8 @@ async def run_graph(
                         "cached": True
                     })
 
-                    # Mark incoming edges as done
-                    for edge_id in plan.incoming_edges.get(node_id, []):
+                    # Mark incoming work-plane edges as done.
+                    for edge_id in incoming_work_edge_ids:
                         await _emit({
                             "type": "edge_exec",
                             "runId": run_id,
@@ -4392,6 +4410,7 @@ async def run_graph(
                         "Selected-only run requires cached ancestors, "
                         f"but cache entry was missing for node '{node_id}'."
                     )
+                    await _emit_node_started_once()
                     await _emit({
                         "type": "node_finished",
                         "runId": run_id,
@@ -4408,6 +4427,8 @@ async def run_graph(
 
             # ---- Execute node ----
             try:
+                if not lease_gated_node:
+                    await _emit_node_started_once()
                 if preflight_error is not None:
                     raise preflight_error
                 await asyncio.sleep(0.5)  # visual delay
@@ -6306,6 +6327,7 @@ async def run_graph(
                         n,
                         context,
                         upstream_artifact_ids=llm_upstream_ids,
+                        on_execution_started=_emit_node_started_once,
                     )
                 elif kind == "tool":
                     if tool_mode == "effectful" and not _tool_is_armed(params):
@@ -7119,8 +7141,8 @@ async def run_graph(
                     })
                 return {"ok": False, "cached": False, "errorCode": error_code}
 
-            # Mark incoming edges as done
-            for edge_id in plan.incoming_edges.get(node_id, []):
+            # Mark incoming work-plane edges as done.
+            for edge_id in incoming_work_edge_ids:
                 await _emit({
                     "type": "edge_exec",
                     "runId": run_id,

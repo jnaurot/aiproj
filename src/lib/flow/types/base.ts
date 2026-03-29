@@ -16,6 +16,7 @@ export type NodeStatus =
   | "idle"
   | "stale"
   | "running"
+  | "busy"
   | "succeeded"
   | "failed"
   | "skipped"

@@ -7,6 +7,7 @@ export const NodeStatusSchema = z.enum([
   "idle",
   "stale",
   "running",
+  "busy",
   "succeeded",
   "failed",
   "skipped",

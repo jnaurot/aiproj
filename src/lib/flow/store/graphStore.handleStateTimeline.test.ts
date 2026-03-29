@@ -40,7 +40,7 @@ describe('graphStore handle state timeline projection', () => {
 		expect(timeline[timeline.length - 1]?.signal).toBe('ready');
 	});
 
-	it('toggles model llmAllocated meta from llm control signals', () => {
+	it('does not toggle llmAllocated meta from llm control signals (lease events own star projection)', () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('model', { x: 0, y: 0 });
 		const base = get(graphStore as any);
@@ -56,7 +56,7 @@ describe('graphStore handle state timeline projection', () => {
 			'run_llm_alloc'
 		);
 		const acquiredNode = ((next as any)?.nodes ?? []).find((n: any) => String(n?.id) === String(nodeId));
-		expect(Boolean(acquiredNode?.data?.meta?.llmAllocated)).toBe(true);
+		expect(Boolean(acquiredNode?.data?.meta?.llmAllocated)).toBe(false);
 		next = __applyRunEventForTest(
 			next as any,
 			{

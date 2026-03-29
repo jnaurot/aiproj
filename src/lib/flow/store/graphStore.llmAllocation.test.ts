@@ -106,4 +106,67 @@ describe('graphStore llm allocation UI state', () => {
 		const next = __applyRunEventForTest(state, evt, 'run-next');
 		expect(allocated(next)).toEqual([]);
 	});
+
+	it('marks node busy and clears active work-edge visuals on llm_released', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			edges: [
+				{ id: 'e_work', source: 'src', sourceHandle: 'out', target: 'a', targetHandle: 'in', data: { mode: 'work', exec: 'active' } },
+				{
+					id: 'e_param',
+					source: 'cfg',
+					sourceHandle: 'out',
+					target: 'a',
+					targetHandle: 'param_config',
+					data: { mode: 'param', exec: 'active' }
+				}
+			] as any,
+			nodeBindings: {
+				a: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: null, artifactId: null },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				}
+			} as any
+		};
+		const evt: KnownRunEvent = {
+			type: 'control_signal',
+			runId: 'run-llm',
+			at: '2026-03-29T00:00:06Z',
+			nodeId: 'a',
+			signal: 'llm_released'
+		} as any;
+		const next = __applyRunEventForTest(state, evt, 'run-llm');
+		expect(String((next as any)?.nodeBindings?.a?.status ?? '')).toBe('busy');
+		const workEdge = (next.edges as any[]).find((e) => String(e?.id) === 'e_work');
+		const paramEdge = (next.edges as any[]).find((e) => String(e?.id) === 'e_param');
+		expect(String(workEdge?.data?.exec ?? '')).toBe('done');
+		expect(String(paramEdge?.data?.exec ?? '')).toBe('active');
+	});
+
+	it('ignores edge_exec active for non-work edges', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			edges: [
+				{ id: 'e_param', source: 'cfg', target: 'a', data: { mode: 'param', exec: 'idle' } },
+				{ id: 'e_ctrl', source: 'ctl', target: 'a', data: { mode: 'control', exec: 'idle' } }
+			] as any
+		};
+		const activeParam = __applyRunEventForTest(
+			state,
+			{ type: 'edge_exec', runId: 'run-llm', at: '2026-03-29T00:00:07Z', edgeId: 'e_param', exec: 'active' } as any,
+			'run-llm'
+		);
+		const activeCtrl = __applyRunEventForTest(
+			activeParam as any,
+			{ type: 'edge_exec', runId: 'run-llm', at: '2026-03-29T00:00:08Z', edgeId: 'e_ctrl', exec: 'active' } as any,
+			'run-llm'
+		);
+		expect(String(((activeCtrl.edges as any[]).find((e) => e.id === 'e_param') as any)?.data?.exec ?? '')).toBe('idle');
+		expect(String(((activeCtrl.edges as any[]).find((e) => e.id === 'e_ctrl') as any)?.data?.exec ?? '')).toBe('idle');
+	});
 });

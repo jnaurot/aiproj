@@ -219,6 +219,9 @@
 	.st-running .status {
 		color: #8ab4ff;
 	}
+	.st-busy .status {
+		color: #9fb3d9;
+	}
 	.st-succeeded .status {
 		color: #7ee787;
 	}

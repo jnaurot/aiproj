@@ -5,7 +5,7 @@ import base64
 import os
 import threading
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
 from app.runner.nodes.transform import load_table_from_artifact_bytes
@@ -439,7 +439,8 @@ async def exec_llm(
     run_id: str,
     node: Dict[str, Any],
     context: GraphContext,
-    upstream_artifact_ids: Optional[list[str]] = None
+    upstream_artifact_ids: Optional[list[str]] = None,
+    on_execution_started: Optional[Callable[[], Awaitable[None]]] = None,
 ) -> NodeOutput:
     """Execute LLM node"""
     
@@ -666,6 +667,16 @@ async def exec_llm(
         chain.append({"llm_kind": kind, "params": llm_params.model_copy(update=patch)})
 
     last_output: Optional[NodeOutput] = None
+    started_emitted = False
+
+    async def _emit_execution_started_once() -> None:
+        nonlocal started_emitted
+        if started_emitted:
+            return
+        started_emitted = True
+        if callable(on_execution_started):
+            await on_execution_started()
+
     for idx, entry in enumerate(chain, start=1):
         kind = str(entry["llm_kind"])
         params_override = entry["params"]
@@ -734,6 +745,7 @@ async def exec_llm(
                 node_id_for_event=str(node["id"]),
                 holder_node_id=holder_node_id,
             )
+            await _emit_execution_started_once()
             await context.bus.emit(
                 {
                     "type": "log",
@@ -786,6 +798,7 @@ async def exec_llm(
                 node_id_for_event=str(node["id"]),
                 holder_node_id=str(node["id"]),
             )
+            await _emit_execution_started_once()
             await context.bus.emit(
                 {
                     "type": "control_signal",

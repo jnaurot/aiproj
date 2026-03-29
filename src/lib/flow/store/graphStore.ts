@@ -1621,6 +1621,31 @@ function applyLlmHolderToNodes(
 	return changed ? nextNodes : nodes;
 }
 
+function clearActiveWorkIncomingEdgesForNode(
+	edges: Edge<PipelineEdgeData & Record<string, unknown>>[],
+	nodeId: string
+): Edge<PipelineEdgeData & Record<string, unknown>>[] {
+	let changed = false;
+	const targetId = String(nodeId ?? '').trim();
+	if (!targetId) return edges;
+	const nextEdges = edges.map((edge) => {
+		if (String(edge?.target ?? '') !== targetId) return edge;
+		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
+		if (mode !== 'work') return edge;
+		const exec = String((edge?.data as any)?.exec ?? 'idle').trim().toLowerCase();
+		if (exec !== 'active') return edge;
+		changed = true;
+		return {
+			...edge,
+			data: {
+				...(edge.data ?? {}),
+				exec: 'done'
+			}
+		};
+	});
+	return changed ? nextEdges : edges;
+}
+
 function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string): boolean {
 	if (!nodeId) return false;
 	if (!state.activeRunId) return true;
@@ -2304,21 +2329,40 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return withGraphMeta(logPush({ ...state, nodeBindings, nodeOutputs }, 'error', 'Component failed', evt.nodeId));
 		}
 		case 'edge_exec': {
-			const edges = state.edges.map((e) =>
-				e.id === evt.edgeId ? { ...e, data: { ...(e.data ?? {}), exec: evt.exec } } : e
-			);
+			const edges = state.edges.map((e) => {
+				if (e.id !== evt.edgeId) return e;
+				const mode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
+				// Running visuals are only valid for active work-plane execution.
+				if (mode !== 'work' && evt.exec === 'active') return e;
+				return { ...e, data: { ...(e.data ?? {}), exec: evt.exec } };
+			});
 			return { ...state, edges };
 		}
 		case 'control_signal': {
-			if (evt.nodeId && (evt.signal === 'llm_acquired' || evt.signal === 'llm_released')) {
+			if (evt.nodeId && evt.signal === 'llm_acquired') {
 				// LLM star ownership is driven by llm_lease holder events (single source of truth).
-				// Keep control_signal as log-only to avoid stale/out-of-run star leaks.
-				return logPush(
-					state,
-					'info',
-					`[control] ${evt.signal} node=${evt.nodeId}`,
-					evt.nodeId
-				);
+				return logPush(state, 'info', `[control] ${evt.signal} node=${evt.nodeId}`, evt.nodeId);
+			}
+			if (evt.nodeId && evt.signal === 'llm_released') {
+				const nodeId = String(evt.nodeId ?? '').trim();
+				const prevBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
+				const nextBinding =
+					prevBinding.status === 'running' && prevBinding.currentRunId === (evt.runId ?? runId)
+						? {
+								...prevBinding,
+								status: 'busy',
+								currentRunId: evt.runId ?? runId
+							}
+						: prevBinding;
+				const nextState = {
+					...state,
+					edges: clearActiveWorkIncomingEdgesForNode(state.edges, nodeId),
+					nodeBindings: {
+						...state.nodeBindings,
+						[nodeId]: nextBinding
+					}
+				};
+				return logPush(nextState, 'info', `[control] ${evt.signal} node=${nodeId}`, nodeId);
 			}
 			const nodePart = evt.nodeId ? ` node=${evt.nodeId}` : '';
 			const handle = String((evt as any)?.handle ?? '').trim();
@@ -7473,7 +7517,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						}
 					};
 				});
-				const next = withGraphMeta({ ...s, nodes });
+				const recomputedActiveRunNodeSet = computePlannedNodeSet(
+					nodes as any,
+					s.edges as any,
+					s.activeRunFrom,
+					s.activeRunMode
+				);
+				const next = withGraphMeta({
+					...s,
+					nodes,
+					activeRunNodeSet: recomputedActiveRunNodeSet
+				});
 				persist(next);
 				return next;
 			});

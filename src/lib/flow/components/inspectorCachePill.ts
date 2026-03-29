@@ -10,7 +10,7 @@ type NodeBindingLike = {
 	currentArtifactId?: string | null;
 };
 
-type HeaderNodeStatus = 'idle' | 'stale' | 'running' | 'succeeded' | 'failed' | 'canceled';
+type HeaderNodeStatus = 'idle' | 'stale' | 'running' | 'busy' | 'succeeded' | 'failed' | 'canceled';
 
 export type HeaderCachePill = {
 	label: 'cached' | 'cached:mismatch';
@@ -29,6 +29,7 @@ export function getHeaderNodeStatus(binding: NodeBindingLike | undefined): Heade
 	const raw = String(binding.status ?? '').toLowerCase();
 	const currentArtifactId = binding.current?.artifactId ?? binding.currentArtifactId ?? null;
 	if (raw === 'running') return 'running';
+	if (raw === 'busy') return 'running';
 	if (raw === 'failed') return 'failed';
 	if (raw === 'cancelled' || raw === 'canceled') return 'canceled';
 	if (raw === 'stale' || binding.isUpToDate === false) return 'stale';

@@ -35,6 +35,7 @@ export function displayStatusFromBinding(binding: NodeBindingLike | null | undef
 	const hasArtifact = Boolean(currentArtifactId || lastArtifactId);
 	const raw = String(binding.status ?? '').toLowerCase();
 	if (raw === 'running') return 'running';
+	if (raw === 'busy') return 'busy';
 	if (isBindingStale(binding)) return 'stale';
 	if (typeof currentExecKey === 'string' && typeof lastExecKey === 'string' && currentExecKey !== lastExecKey) {
 		return 'stale';
