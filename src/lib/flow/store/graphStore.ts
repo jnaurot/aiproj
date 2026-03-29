@@ -1038,6 +1038,21 @@ export type GraphState = {
 			itemsAccepted: number;
 			itemsRejected: number;
 		};
+		schedulerSnapshot?: {
+			readyCount: number;
+			inflightCount: number;
+			pendingQueueDepth: number;
+			runnableNodeCount: number;
+			stalled: boolean;
+			perNode?: Array<{
+				nodeId: string;
+				readyWork: boolean;
+				inflight: number;
+				pendingInputCount: number;
+				lastBlockedReasonCode?: string;
+			}>;
+			updatedAt?: string;
+		};
 		handleStates?: Record<string, { state: string; updatedAt?: string }>;
 		handleTimeline?: Array<{
 			nodeId: string;
@@ -1978,6 +1993,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							nodeMetrics: {},
 							runtimeItemMetrics: {},
 							runScoped: undefined,
+							schedulerSnapshot: undefined,
 							blockedByNode: {},
 							softFailByNode: {}
 						}
@@ -2426,6 +2442,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						typeof state.queueRuntime.warningSummary === 'object'
 							? state.queueRuntime.warningSummary
 							: {}) ?? {},
+					schedulerSnapshot:
+						(state.queueRuntime?.schedulerSnapshot &&
+						typeof state.queueRuntime.schedulerSnapshot === 'object'
+							? state.queueRuntime.schedulerSnapshot
+							: undefined),
 					blockedByNode:
 						(state.queueRuntime?.blockedByNode &&
 						typeof state.queueRuntime.blockedByNode === 'object'
@@ -2437,6 +2458,58 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nextState,
 				'info',
 				`[queue] scope=run depth=${globalDepth} per_edge_max=${perEdgeMax} enq=${enq} deq=${deq} rejected=${rej} by_plane(work=${workEnq},param=${paramEnq},control=${controlEnq})`
+			);
+		}
+		case 'scheduler_snapshot': {
+			const readyCount = Math.max(0, Number((evt as any)?.readyCount ?? 0));
+			const inflightCount = Math.max(0, Number((evt as any)?.inflightCount ?? 0));
+			const pendingQueueDepth = Math.max(0, Number((evt as any)?.pendingQueueDepth ?? 0));
+			const runnableNodeCount = Math.max(0, Number((evt as any)?.runnableNodeCount ?? 0));
+			const stalled = Boolean((evt as any)?.stalled ?? false);
+			const perNodeRaw = Array.isArray((evt as any)?.perNode) ? ((evt as any).perNode as unknown[]) : [];
+			const perNode = perNodeRaw
+				.map((item) => {
+					const row = item as Record<string, unknown>;
+					const nodeId = String(row?.nodeId ?? '').trim();
+					if (!nodeId) return null;
+					const readyWork = Boolean(row?.readyWork ?? false);
+					const inflight = Math.max(0, Number(row?.inflight ?? 0));
+					const pendingInputCount = Math.max(0, Number(row?.pendingInputCount ?? 0));
+					const lastBlockedReasonCode = String(row?.lastBlockedReasonCode ?? '').trim();
+					return {
+						nodeId,
+						readyWork,
+						inflight,
+						pendingInputCount,
+						lastBlockedReasonCode: lastBlockedReasonCode || undefined
+					};
+				})
+				.filter(Boolean) as Array<{
+					nodeId: string;
+					readyWork: boolean;
+					inflight: number;
+					pendingInputCount: number;
+					lastBlockedReasonCode?: string;
+				}>;
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					schedulerSnapshot: {
+						readyCount,
+						inflightCount,
+						pendingQueueDepth,
+						runnableNodeCount,
+						stalled,
+						perNode,
+						updatedAt: String((evt as any)?.at ?? '')
+					}
+				}
+			};
+			return logPush(
+				nextState,
+				stalled ? 'warn' : 'info',
+				`[scheduler-snapshot] ready=${readyCount} inflight=${inflightCount} pending=${pendingQueueDepth} runnable=${runnableNodeCount} stalled=${String(stalled).toLowerCase()}`
 			);
 		}
 		case 'contract_drift': {

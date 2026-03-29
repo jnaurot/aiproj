@@ -200,6 +200,24 @@ export type KnownRunEvent =
       missingEdgeIds?: string[];
       waitingOnNodeIds?: string[];
       details?: Record<string, unknown>;
+    }
+  | {
+      type: "scheduler_snapshot";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      readyCount: number;
+      inflightCount: number;
+      pendingQueueDepth: number;
+      runnableNodeCount: number;
+      stalled: boolean;
+      perNode?: Array<{
+        nodeId: string;
+        readyWork: boolean;
+        inflight: number;
+        pendingInputCount: number;
+        lastBlockedReasonCode?: string;
+      }>;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

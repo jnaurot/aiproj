@@ -97,6 +97,9 @@ async def test_pending_queue_without_runnable_node_fails_with_explicit_code(monk
 		and "scheduler_stall_no_runnable_with_pending_queue" in str(evt.get("message") or "")
 		for evt in events
 	)
+	scheduler_snapshots = [evt for evt in events if str(evt.get("type") or "") == "scheduler_snapshot"]
+	assert scheduler_snapshots, "expected scheduler_snapshot events to be emitted"
+	assert any(bool(evt.get("stalled")) for evt in scheduler_snapshots), "expected stalled snapshot before failure"
 	blocked_events = [evt for evt in events if str(evt.get("type") or "") == "node_blocked"]
 	assert blocked_events, "expected node_blocked events to be emitted"
 	assert any(

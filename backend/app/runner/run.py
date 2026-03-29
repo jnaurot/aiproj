@@ -7812,6 +7812,57 @@ async def run_graph(
         def _clear_node_blocked(node_id: str) -> None:
             blocked_state_by_node.pop(str(node_id), None)
 
+        async def _emit_scheduler_snapshot(*, stalled: bool = False) -> None:
+            pending_by_node = _pending_work_depth_by_node(streaming_only=True)
+            pending_depth = int(sum(int(v) for v in pending_by_node.values()))
+            per_node: List[Dict[str, Any]] = []
+            runnable_count = 0
+            for candidate in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
+                pending_input_count = int(pending_by_node.get(candidate, 0))
+                inflight_for_node = int(node_inflight_counts.get(candidate, 0))
+                blocked_state = blocked_state_by_node.get(candidate) or {}
+                last_blocked_reason = str(blocked_state.get("reasonCode") or "").strip() or None
+                ready_work = False
+                if (
+                    candidate not in blocked_descendants
+                    and bool(deps_released.get(candidate, False))
+                ):
+                    policy = _effective_node_runtime_policy(candidate)
+                    consume_mode = str(policy.get("consume_mode") or "once")
+                    per_node_max = max(1, int(policy.get("max_inflight") or 1))
+                    in_ready = ready.count(candidate)
+                    if inflight_for_node + in_ready < per_node_max:
+                        if consume_mode == "once":
+                            ready_work = not bool(node_started_once.get(candidate, False))
+                        else:
+                            ready_work = bool(_node_ready_probe(candidate).get("ready", False))
+                if ready_work:
+                    runnable_count += 1
+                if pending_input_count > 0 or inflight_for_node > 0 or last_blocked_reason:
+                    row: Dict[str, Any] = {
+                        "nodeId": str(candidate),
+                        "readyWork": bool(ready_work),
+                        "inflight": inflight_for_node,
+                        "pendingInputCount": pending_input_count,
+                    }
+                    if last_blocked_reason:
+                        row["lastBlockedReasonCode"] = last_blocked_reason
+                    per_node.append(row)
+            await _emit(
+                {
+                    "type": "scheduler_snapshot",
+                    "schema_version": 1,
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "readyCount": len(ready),
+                    "inflightCount": len(inflight),
+                    "pendingQueueDepth": pending_depth,
+                    "runnableNodeCount": int(runnable_count),
+                    "stalled": bool(stalled),
+                    "perNode": per_node,
+                }
+            )
+
         async def _dequeue_work_batch(node_id: str) -> List[Dict[str, Any]]:
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
@@ -8045,12 +8096,14 @@ async def run_graph(
             }
         )
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "ready"})
+        await _emit_scheduler_snapshot(stalled=False)
 
         while True:
             if not ready and not inflight:
                 pending_by_node = _pending_work_depth_by_node(streaming_only=True)
                 pending_depth = int(sum(int(v) for v in pending_by_node.values()))
                 if pending_depth <= 0:
+                    await _emit_scheduler_snapshot(stalled=False)
                     break
                 rebuilt = await _rebuild_ready_from_state()
                 if rebuilt:
@@ -8066,6 +8119,7 @@ async def run_graph(
                             ),
                         }
                     )
+                    await _emit_scheduler_snapshot(stalled=False)
                     continue
                 pending_by_node_compact = ",".join(
                     f"{node_id}:{depth}" for node_id, depth in sorted(pending_by_node.items())
@@ -8085,6 +8139,7 @@ async def run_graph(
                         ),
                     }
                 )
+                await _emit_scheduler_snapshot(stalled=True)
                 await _emit(
                     {
                         "type": "run_finished",
@@ -8191,6 +8246,7 @@ async def run_graph(
 
             if not inflight:
                 await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})
+                await _emit_scheduler_snapshot(stalled=False)
                 break
 
             done, _pending = await asyncio.wait(
