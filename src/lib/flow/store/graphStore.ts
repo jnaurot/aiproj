@@ -1592,6 +1592,35 @@ function withGraphMeta(state: GraphState): GraphState {
 	};
 }
 
+function applyLlmHolderToNodes(
+	nodes: Node<PipelineNodeData>[],
+	holderNodeId: string | null
+): Node<PipelineNodeData>[] {
+	const holder = holderNodeId ? String(holderNodeId).trim() : '';
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		const nodeId = String(node.id ?? '');
+		const meta = { ...((node.data as any)?.meta ?? {}) };
+		const currentlyAllocated = Boolean((meta as any).llmAllocated);
+		const shouldAllocate = Boolean(holder) && nodeId === holder;
+		if (currentlyAllocated === shouldAllocate) return node;
+		changed = true;
+		if (shouldAllocate) {
+			(meta as any).llmAllocated = true;
+		} else {
+			delete (meta as any).llmAllocated;
+		}
+		return {
+			...node,
+			data: {
+				...node.data,
+				meta
+			}
+		};
+	});
+	return changed ? nextNodes : nodes;
+}
+
 function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string): boolean {
 	if (!nodeId) return false;
 	if (!state.activeRunId) return true;
@@ -2109,10 +2138,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				};
 			}
 			const nodeOutputs = clearNodeCacheUiForNodes(state.nodeOutputs, evtPlanned);
+			const nodes = applyLlmHolderToNodes(state.nodes, null);
 			return withGraphMeta(
 				logPush(
 					{
 						...state,
+						nodes,
 						activeRunId: evt.runId ?? state.activeRunId,
 						activeRunMode: evtMode,
 						activeRunFrom: evt.runFrom ?? state.activeRunFrom,
@@ -2280,22 +2311,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		}
 		case 'control_signal': {
 			if (evt.nodeId && (evt.signal === 'llm_acquired' || evt.signal === 'llm_released')) {
-				const llmAllocated = evt.signal === 'llm_acquired';
-				const nodes = state.nodes.map((node) => {
-					if (String(node.id) !== String(evt.nodeId)) return node;
-					return {
-						...node,
-						data: {
-							...node.data,
-							meta: {
-								...((node.data as any)?.meta ?? {}),
-								llmAllocated
-							}
-						}
-					};
-				});
+				// LLM star ownership is driven by llm_lease holder events (single source of truth).
+				// Keep control_signal as log-only to avoid stale/out-of-run star leaks.
 				return logPush(
-					{ ...state, nodes },
+					state,
 					'info',
 					`[control] ${evt.signal} node=${evt.nodeId}`,
 					evt.nodeId
@@ -2720,8 +2739,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const waitingNodeIds = Array.isArray((evt as any)?.waitingNodeIds)
 				? ((evt as any).waitingNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
 				: [];
+			const holderForUi =
+				state.runStatus === 'running' && leaseState === 'acquired' ? holderNodeId : null;
+			const nodes = applyLlmHolderToNodes(state.nodes, holderForUi);
 			const nextState = {
 				...state,
+				nodes,
 				queueRuntime: {
 					...(state.queueRuntime ?? {}),
 					llmLease: {
@@ -7831,8 +7854,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		resetRunUi() {
 			update((s) => {
 				const edges = resetEdgesExec(s.edges);
+				const nodes = applyLlmHolderToNodes(s.nodes, null);
 				const next = withGraphMeta({
 					...s,
+					nodes,
 					edges,
 					logs: [],
 					runStatus: IDLE,
