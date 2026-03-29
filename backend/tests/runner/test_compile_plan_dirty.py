@@ -50,3 +50,31 @@ def test_compile_plan_ignores_pins_not_in_subgraph_for_selected_only():
 	assert set(plan.subgraph) == {"a", "b"}
 	assert "c" not in plan.cache_only_nodes
 	assert "b" in plan.execute_nodes
+
+
+def test_compile_plan_pinned_run_from_skips_ancestor_validation_from_selected_onward():
+	plan = compile_plan(
+		_graph(),
+		run_from="b",
+		run_mode="from_selected_onward",
+		dirty_node_ids=None,
+		pinned_node_ids={"b"},
+	)
+	assert set(plan.subgraph) == {"b"}
+	assert "a" not in plan.subgraph
+	assert "b" in plan.cache_only_nodes
+	assert "b" not in plan.execute_nodes
+
+
+def test_compile_plan_pinned_run_from_skips_ancestor_validation_selected_only():
+	plan = compile_plan(
+		_graph(),
+		run_from="b",
+		run_mode="selected_only",
+		dirty_node_ids=None,
+		pinned_node_ids={"b"},
+	)
+	assert set(plan.subgraph) == {"b"}
+	assert "a" not in plan.subgraph
+	assert "b" in plan.cache_only_nodes
+	assert "b" not in plan.execute_nodes

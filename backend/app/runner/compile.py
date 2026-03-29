@@ -83,16 +83,25 @@ def compile_plan(
     sub: Set[str] = set()
     execute_nodes: Set[str] = set()
     cache_only_nodes: Set[str] = set()
+    requested_pins = {
+        nid
+        for nid in (pinned_node_ids or set())
+        if isinstance(nid, str) and nid in adj
+    }
     if run_from:
+        run_from_is_pinned = run_from in requested_pins
         ancestors = _upstream(run_from, edges)
         if mode == "selected_only":
-            sub = ancestors | {run_from}
+            # Pinned selected node is treated as a checkpoint; ancestors are not revalidated.
+            sub = {run_from} if run_from_is_pinned else (ancestors | {run_from})
             execute_nodes = {run_from}
             cache_only_nodes = sub - execute_nodes
         else:
             # Include ancestors to resolve deterministic inputs, and downstream
             # to preserve "run from here forward" semantics.
-            sub = ancestors | {run_from} | _downstream(run_from, edges)
+            # If run_from is pinned, treat it as a trusted checkpoint and skip ancestors.
+            base = {run_from} if run_from_is_pinned else (ancestors | {run_from})
+            sub = base | _downstream(run_from, edges)
             execute_nodes = set(sub)
     else:
         mode = "full"
@@ -109,7 +118,7 @@ def compile_plan(
         execute_nodes = set(sub)
     pinned = {
         nid
-        for nid in (pinned_node_ids or set())
+        for nid in requested_pins
         if isinstance(nid, str) and nid in sub
     }
     if pinned:
