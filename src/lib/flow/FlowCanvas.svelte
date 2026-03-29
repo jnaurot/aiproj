@@ -433,10 +433,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				: 'pill';
 	$: selectedKindPillText =
 		selectedFreezeMode === 'sticky'
-			? `${$selectedNode?.data?.kind ?? ''} !`
+			? `${$selectedNode?.data?.kind ?? ''} #`
+			: `${$selectedNode?.data?.kind ?? ''}`;
+	$: selectedPinPillClass =
+		selectedFreezeMode === 'sticky'
+			? 'pill pinBtn pinSticky active'
 			: selectedFreezeMode === 'per_run'
-				? `${$selectedNode?.data?.kind ?? ''} #`
-				: `${$selectedNode?.data?.kind ?? ''}`;
+				? 'pill pinBtn active'
+				: 'pill pinBtn';
+	$: selectedPinPillText = selectedFreezeMode === 'sticky' ? 'pin #' : 'pin';
 		$: hasInputs = Boolean($selectedNode && deriveNodeIoForData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -1729,6 +1734,18 @@ async function scrollToBottom() {
 
 	function clearSelectedPin() {
 		graphStore.setSelectedNodeFreezeMode(null);
+	}
+
+	function cycleSelectedPinMode() {
+		if (selectedFreezeMode === 'per_run') {
+			pinSelectedSticky();
+			return;
+		}
+		if (selectedFreezeMode === 'sticky') {
+			clearSelectedPin();
+			return;
+		}
+		pinSelectedPerRun();
 	}
 
 	async function returnFromComponentEditMode() {
@@ -3265,27 +3282,11 @@ async function scrollToBottom() {
 								</span>
 								<button
 									type="button"
-									class={`pill pinBtn ${selectedFreezeMode === 'per_run' ? 'active' : ''}`}
-									title="Pin output for this run only"
-									on:click={pinSelectedPerRun}
+									class={selectedPinPillClass}
+									title="Cycle pin mode: unpinned → run-only → sticky → unpinned"
+									on:click={cycleSelectedPinMode}
 								>
-									pin #
-								</button>
-								<button
-									type="button"
-									class={`pill pinBtn pinSticky ${selectedFreezeMode === 'sticky' ? 'active' : ''}`}
-									title="Pin output until removed"
-									on:click={pinSelectedSticky}
-								>
-									pin !
-								</button>
-								<button
-									type="button"
-									class="pill pinBtn"
-									title="Clear pin"
-									on:click={clearSelectedPin}
-								>
-									unpin
+									{selectedPinPillText}
 								</button>
 								{#if selectedComponentHasUpdate}
 									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
@@ -4561,16 +4562,16 @@ async function scrollToBottom() {
 
 	.pill-freeze-per-run {
 		opacity: 1;
-		color: #cfe3ff;
-		border-color: #3b82f6;
-		background: rgba(59, 130, 246, 0.2);
+		color: #fff1c2;
+		border-color: #f59e0b;
+		background: rgba(245, 158, 11, 0.2);
 	}
 
 	.pill-freeze-sticky {
 		opacity: 1;
-		color: #fff1c2;
-		border-color: #f59e0b;
-		background: rgba(245, 158, 11, 0.2);
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.pinBtn {
@@ -4581,15 +4582,15 @@ async function scrollToBottom() {
 
 	.pinBtn.active {
 		opacity: 1;
-		color: #cfe3ff;
-		border-color: #3b82f6;
-		background: rgba(59, 130, 246, 0.2);
-	}
-
-	.pinBtn.pinSticky.active {
 		color: #fff1c2;
 		border-color: #f59e0b;
 		background: rgba(245, 158, 11, 0.2);
+	}
+
+	.pinBtn.pinSticky.active {
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.pill-cache {

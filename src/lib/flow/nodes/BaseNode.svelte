@@ -25,7 +25,7 @@
 		freezeMeta && freezeMeta.enabled === true && (freezeMeta.mode === 'per_run' || freezeMeta.mode === 'sticky')
 			? freezeMeta.mode
 			: null;
-	$: freezeIcon = freezeMode === 'sticky' ? '!' : freezeMode === 'per_run' ? '#' : '';
+	$: freezeIcon = freezeMode === 'sticky' ? '#' : '';
 	$: freezeClass = freezeMode === 'sticky' ? 'freeze-sticky' : freezeMode === 'per_run' ? 'freeze-per-run' : '';
 
 	// IO contracts are derived from node kind/params.
@@ -155,19 +155,22 @@
 		border: 1px solid #283044;
 		border-radius: 999px;
 		padding: 2px 8px;
+		white-space: nowrap;
+		flex-shrink: 0;
+		margin-left: -2px;
 	}
 
 	.badge.freeze-per-run {
-		color: #cfe3ff;
-		border-color: #3b82f6;
-		background: rgba(59, 130, 246, 0.2);
+		color: #fff1c2;
+		border-color: #f59e0b;
+		background: rgba(245, 158, 11, 0.22);
 		opacity: 1;
 	}
 
 	.badge.freeze-sticky {
-		color: #fff1c2;
-		border-color: #f59e0b;
-		background: rgba(245, 158, 11, 0.22);
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
 		opacity: 1;
 	}
 
