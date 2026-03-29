@@ -139,5 +139,5 @@ describe('graphStore freeze/pin rules', () => {
 		expect(freeze).toBeNull();
 		expect(String((after.inspector as any)?.systemNotice ?? '')).toContain('[Pin cleared]');
 	});
-});
 
+});
