@@ -20,6 +20,13 @@
 	$: status = displayStatusFromBinding(binding as any);
 	$: kind = data?.kind ?? 'node';
 	$: label = data?.label ?? 'Node';
+	$: freezeMeta = (data as any)?.meta?.freeze;
+	$: freezeMode =
+		freezeMeta && freezeMeta.enabled === true && (freezeMeta.mode === 'per_run' || freezeMeta.mode === 'sticky')
+			? freezeMeta.mode
+			: null;
+	$: freezeIcon = freezeMode === 'sticky' ? '!' : freezeMode === 'per_run' ? '#' : '';
+	$: freezeClass = freezeMode === 'sticky' ? 'freeze-sticky' : freezeMode === 'per_run' ? 'freeze-per-run' : '';
 
 	// IO contracts are derived from node kind/params.
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
@@ -97,7 +104,7 @@
 <div class={`node ${selected ? 'selected' : ''} st-${status}`}>
 	<div class="title">
 		<span class="label">{label}</span>
-		<span class="badge">{kind}</span>
+		<span class={`badge ${freezeClass}`}>{kind}{freezeIcon ? ` ${freezeIcon}` : ''}</span>
 	</div>
 
 	<slot />
@@ -148,6 +155,20 @@
 		border: 1px solid #283044;
 		border-radius: 999px;
 		padding: 2px 8px;
+	}
+
+	.badge.freeze-per-run {
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
+		opacity: 1;
+	}
+
+	.badge.freeze-sticky {
+		color: #fff1c2;
+		border-color: #f59e0b;
+		background: rgba(245, 158, 11, 0.22);
+		opacity: 1;
 	}
 
 	.footer {

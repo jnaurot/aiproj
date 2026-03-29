@@ -21,8 +21,16 @@ export const NodeMetaSchema = z.object({
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
   description: z.string().optional(),
-  tags: z.array(z.string()).optional()
-});
+  tags: z.array(z.string()).optional(),
+  freeze: z
+    .object({
+      enabled: z.boolean().optional(),
+      mode: z.enum(["per_run", "sticky"]).optional()
+    })
+    .strip()
+    .optional(),
+  llmAllocated: z.boolean().optional()
+}).strip();
 
 export const BaseNodeDataSchema = <K extends string, P extends z.ZodTypeAny>(
   kind: K,

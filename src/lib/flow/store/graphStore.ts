@@ -1769,6 +1769,47 @@ function clearNodeCacheUiForNodes(
 	return next;
 }
 
+function nodeFreezeMode(
+	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null
+): 'per_run' | 'sticky' | null {
+	const freeze = (node?.data as any)?.meta?.freeze;
+	if (!freeze || typeof freeze !== 'object') return null;
+	if (freeze.enabled !== true) return null;
+	const mode = String(freeze.mode ?? '').trim().toLowerCase();
+	if (mode === 'per_run' || mode === 'sticky') return mode;
+	return null;
+}
+
+function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): string[] {
+	return nodes
+		.filter((node) => nodeFreezeMode(node) !== null)
+		.map((node) => String(node.id ?? '').trim())
+		.filter(Boolean);
+}
+
+function clearPerRunPinsOnNodes(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[]
+): Node<PipelineNodeData & Record<string, unknown>>[] {
+	let changed = false;
+	const next = nodes.map((node) => {
+		if (nodeFreezeMode(node) !== 'per_run') return node;
+		const meta = { ...(((node.data as any)?.meta ?? {}) as Record<string, unknown>) };
+		delete (meta as any).freeze;
+		changed = true;
+		return {
+			...node,
+			data: {
+				...(node.data as any),
+				meta: {
+					...meta,
+					updatedAt: new Date().toISOString()
+				}
+			}
+		} as Node<PipelineNodeData & Record<string, unknown>>;
+	});
+	return changed ? next : nodes;
+}
+
 function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, context: string): void {
 	if (!DEV_MODE) return;
 	if (!next.activeRunId || !next.activeRunNodeSet || next.activeRunNodeSet.size === 0) return;
@@ -7271,6 +7312,39 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			});
 		},
 
+		setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
+			update((s) => {
+				const nodes = s.nodes.map((n) => {
+					if (n.id !== nodeId) return n;
+					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
+					if (mode === null) {
+						delete (nextMeta as any).freeze;
+					} else {
+						(nextMeta as any).freeze = { enabled: true, mode };
+					}
+					nextMeta.updatedAt = new Date().toISOString();
+					return {
+						...n,
+						data: {
+							...(n.data as any),
+							meta: nextMeta
+						}
+					};
+				});
+				const next = withGraphMeta({ ...s, nodes });
+				persist(next);
+				return next;
+			});
+		},
+
+		setSelectedNodeFreezeMode(mode: 'per_run' | 'sticky' | null) {
+			const cur = get({ subscribe } as any) as GraphState;
+			const nodeId = String(cur.selectedNodeId ?? '').trim();
+			if (!nodeId) return { ok: false as const, error: 'No node selected' };
+			this.setNodeFreezeMode(nodeId, mode);
+			return { ok: true as const };
+		},
+
 		updateNodeProcessingPolicy(
 			nodeId: string,
 			patch: {
@@ -8586,6 +8660,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							.filter(([, binding]) => isBindingStale(binding))
 							.map(([nodeId]) => nodeId)
 					: [];
+			const pinnedNodeIds = collectPinnedNodeIds(s1.nodes);
+			const clearPerRunPinsIfAny = () => {
+				update((s) => {
+					const nextNodes = clearPerRunPinsOnNodes(s.nodes);
+					if (nextNodes === s.nodes) return s;
+					const next = withGraphMeta({ ...s, nodes: nextNodes });
+					persist(next);
+					return next;
+				});
+			};
 			const sseRuntimeStats = {
 				sseTerminalCount: 0,
 				fallbackTerminalCount: 0,
@@ -8856,10 +8940,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					runFrom,
 					effectiveRunMode,
 					dirtyNodeIds,
+					pinnedNodeIds,
 					cacheMode
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 				await runSingleWithStream(payload, plannedNodeSet);
+				clearPerRunPinsIfAny();
 				return;
 			}
 
@@ -8907,6 +8993,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						null,
 						'from_start',
 						componentDirtyNodeIds,
+						pinnedNodeIds,
 						cacheMode
 					);
 					const created = await createRun(payload);
@@ -8960,6 +9047,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					)
 				)
 			);
+			clearPerRunPinsIfAny();
 			const current = get({ subscribe } as any) as GraphState;
 			persist(current);
 		}

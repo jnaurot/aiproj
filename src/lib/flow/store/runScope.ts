@@ -222,10 +222,16 @@ export function buildRunCreateRequest(
 	runFrom: string | null,
 	runMode?: ActiveRunMode,
 	dirtyNodeIds?: string[],
+	pinnedNodeIds?: string[],
 	cacheMode?: 'default_on' | 'force_off' | 'force_on'
 ): {
 	graphId: string;
-	graph: { version: number; nodes: unknown[]; edges: unknown[]; __executionHints?: { dirtyNodeIds: string[] } };
+	graph: {
+		version: number;
+		nodes: unknown[];
+		edges: unknown[];
+		__executionHints?: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] };
+	};
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
 	cacheMode?: 'default_on' | 'force_off' | 'force_on';
@@ -233,11 +239,17 @@ export function buildRunCreateRequest(
 	const sanitizedDirty = Array.isArray(dirtyNodeIds)
 		? Array.from(new Set(dirtyNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
 		: [];
+	const sanitizedPinned = Array.isArray(pinnedNodeIds)
+		? Array.from(new Set(pinnedNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
+		: [];
+	const executionHints: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] } = {};
+	if (sanitizedDirty.length > 0) executionHints.dirtyNodeIds = sanitizedDirty;
+	if (sanitizedPinned.length > 0) executionHints.pinnedNodeIds = sanitizedPinned;
 	const payloadGraph =
-		sanitizedDirty.length > 0
+		Object.keys(executionHints).length > 0
 			? {
 					...graph,
-					__executionHints: { dirtyNodeIds: sanitizedDirty }
+					__executionHints: executionHints
 				}
 			: graph;
 
@@ -251,7 +263,12 @@ export function buildRunCreateRequest(
 		runMode
 	} as {
 		graphId: string;
-		graph: { version: number; nodes: unknown[]; edges: unknown[]; __executionHints?: { dirtyNodeIds: string[] } };
+		graph: {
+			version: number;
+			nodes: unknown[];
+			edges: unknown[];
+			__executionHints?: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] };
+		};
 		runFrom?: string;
 		runMode?: 'from_selected_onward' | 'selected_only';
 		cacheMode?: 'default_on' | 'force_off' | 'force_on';

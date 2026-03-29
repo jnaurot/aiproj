@@ -419,6 +419,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$selectedNode?.data?.kind === 'component'
 			? String(($selectedNode.data.meta as any)?.componentLatestRevisionId ?? '').trim()
 			: '';
+	$: selectedFreezeMode = (() => {
+		const freeze = (($selectedNode?.data as any)?.meta?.freeze ?? null) as any;
+		if (!freeze || freeze.enabled !== true) return null;
+		const mode = String(freeze.mode ?? '').trim().toLowerCase();
+		return mode === 'per_run' || mode === 'sticky' ? mode : null;
+	})();
+	$: selectedKindPillClass =
+		selectedFreezeMode === 'sticky'
+			? 'pill pill-freeze-sticky'
+			: selectedFreezeMode === 'per_run'
+				? 'pill pill-freeze-per-run'
+				: 'pill';
+	$: selectedKindPillText =
+		selectedFreezeMode === 'sticky'
+			? `${$selectedNode?.data?.kind ?? ''} !`
+			: selectedFreezeMode === 'per_run'
+				? `${$selectedNode?.data?.kind ?? ''} #`
+				: `${$selectedNode?.data?.kind ?? ''}`;
 		$: hasInputs = Boolean($selectedNode && deriveNodeIoForData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -1699,6 +1717,18 @@ async function scrollToBottom() {
 
 	function runFromSelected() {
 		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward', globalCacheMode);
+	}
+
+	function pinSelectedPerRun() {
+		graphStore.setSelectedNodeFreezeMode('per_run');
+	}
+
+	function pinSelectedSticky() {
+		graphStore.setSelectedNodeFreezeMode('sticky');
+	}
+
+	function clearSelectedPin() {
+		graphStore.setSelectedNodeFreezeMode(null);
 	}
 
 	async function returnFromComponentEditMode() {
@@ -3218,7 +3248,7 @@ async function scrollToBottom() {
 								</b>
 							{/if}
 
-							<span class="pill">{$selectedNode.data.kind}</span>
+							<span class={selectedKindPillClass}>{selectedKindPillText}</span>
 							{#if headerCachePill}
 								<span
 									class={headerCachePill.className}
@@ -3233,6 +3263,30 @@ async function scrollToBottom() {
 								<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
 									{displayNodeStatus ?? 'idle'}
 								</span>
+								<button
+									type="button"
+									class={`pill pinBtn ${selectedFreezeMode === 'per_run' ? 'active' : ''}`}
+									title="Pin output for this run only"
+									on:click={pinSelectedPerRun}
+								>
+									pin #
+								</button>
+								<button
+									type="button"
+									class={`pill pinBtn pinSticky ${selectedFreezeMode === 'sticky' ? 'active' : ''}`}
+									title="Pin output until removed"
+									on:click={pinSelectedSticky}
+								>
+									pin !
+								</button>
+								<button
+									type="button"
+									class="pill pinBtn"
+									title="Clear pin"
+									on:click={clearSelectedPin}
+								>
+									unpin
+								</button>
 								{#if selectedComponentHasUpdate}
 									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
 										update {selectedComponentLatestRevisionId}
@@ -4503,6 +4557,39 @@ async function scrollToBottom() {
 		display: inline-flex;
 		align-items: center;
 		line-height: 1.2;
+	}
+
+	.pill-freeze-per-run {
+		opacity: 1;
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
+	}
+
+	.pill-freeze-sticky {
+		opacity: 1;
+		color: #fff1c2;
+		border-color: #f59e0b;
+		background: rgba(245, 158, 11, 0.2);
+	}
+
+	.pinBtn {
+		cursor: pointer;
+		background: transparent;
+		color: inherit;
+	}
+
+	.pinBtn.active {
+		opacity: 1;
+		color: #cfe3ff;
+		border-color: #3b82f6;
+		background: rgba(59, 130, 246, 0.2);
+	}
+
+	.pinBtn.pinSticky.active {
+		color: #fff1c2;
+		border-color: #f59e0b;
+		background: rgba(245, 158, 11, 0.2);
 	}
 
 	.pill-cache {

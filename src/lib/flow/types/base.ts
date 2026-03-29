@@ -44,6 +44,10 @@ export type NodeMeta = {
   updatedAt?: string;     // ISO
   description?: string;
   tags?: string[];
+  freeze?: {
+    enabled?: boolean;
+    mode?: "per_run" | "sticky";
+  };
   presetRef?: {
     id: string;
     name: string;
