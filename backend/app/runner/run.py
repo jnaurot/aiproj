@@ -543,6 +543,105 @@ def _work_input_pairs(input_refs: List[Tuple[str, str]]) -> List[Tuple[str, str]
     return out
 
 
+_INJECTABLE_NON_WORK_HANDLES = {"param_context", "param_filters", "control_in"}
+_PLACEHOLDER_TOKEN_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_EXACT_PLACEHOLDER_RE = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def _collect_placeholder_tokens(value: Any) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for nested in value.values():
+            found.update(_collect_placeholder_tokens(nested))
+        return found
+    if isinstance(value, list):
+        for nested in value:
+            found.update(_collect_placeholder_tokens(nested))
+        return found
+    if isinstance(value, str):
+        for match in _PLACEHOLDER_TOKEN_RE.finditer(value):
+            token = str(match.group(1) or "").strip()
+            if token:
+                found.add(token)
+    return found
+
+
+def _placeholder_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(value)
+
+
+def _inject_placeholders(value: Any, injected: Dict[str, Any]) -> Any:
+    if isinstance(value, dict):
+        return {k: _inject_placeholders(v, injected) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_inject_placeholders(v, injected) for v in value]
+    if not isinstance(value, str):
+        return value
+
+    exact = _EXACT_PLACEHOLDER_RE.fullmatch(value.strip())
+    if exact:
+        key = str(exact.group(1) or "").strip()
+        if key in injected:
+            return copy.deepcopy(injected[key])
+
+    def _replace(match: re.Match[str]) -> str:
+        key = str(match.group(1) or "").strip()
+        if key not in injected:
+            return match.group(0)
+        return _placeholder_text(injected.get(key))
+
+    return _PLACEHOLDER_TOKEN_RE.sub(_replace, value)
+
+
+def _artifact_payload_to_python(artifact: Artifact, payload_bytes: bytes) -> Any:
+    payload_type = _infer_artifact_payload_type(artifact)
+    raw = bytes(payload_bytes or b"")
+    if payload_type == "json":
+        try:
+            return json.loads(raw.decode("utf-8", errors="replace"))
+        except Exception:
+            return {}
+    if payload_type == "text":
+        return raw.decode("utf-8", errors="replace")
+    if payload_type == "table":
+        try:
+            df = load_table_from_artifact_bytes(str(getattr(artifact, "mime_type", "") or ""), raw)
+            return df.to_dict(orient="records")
+        except Exception:
+            return raw.decode("utf-8", errors="replace")
+    return raw.decode("utf-8", errors="replace")
+
+
+async def _build_non_work_injection_values(
+    context: GraphContext,
+    input_refs: List[Tuple[str, str]],
+    *,
+    handles_to_inject: set[str],
+) -> Dict[str, Any]:
+    grouped: Dict[str, List[Any]] = {}
+    for handle, artifact_id in input_refs:
+        key = str(handle or "").strip()
+        if key not in handles_to_inject:
+            continue
+        art = await context.artifact_store.get(str(artifact_id))
+        payload = await context.artifact_store.read(str(artifact_id))
+        grouped.setdefault(key, []).append(_artifact_payload_to_python(art, payload))
+
+    merged: Dict[str, Any] = {}
+    for handle, values in grouped.items():
+        if not values:
+            continue
+        merged[handle] = copy.deepcopy(values[0]) if len(values) == 1 else copy.deepcopy(values)
+    return merged
+
+
 def _edge_mode(edge: Dict[str, Any]) -> str:
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     mode = str(data.get("mode") or "work").strip().lower() or "work"
@@ -3627,6 +3726,24 @@ async def run_graph(
             except ContractMismatchError as ex:
                 resolve_input_refs_error = ex
                 input_refs = []
+
+            # Runtime placeholder injection for non-work handles, available to any node kind.
+            # Supported tokens: {param_context}, {param_filters}, {control_in}
+            placeholder_tokens = _collect_placeholder_tokens(params)
+            injectable_handles = {
+                token
+                for token in placeholder_tokens
+                if token in _INJECTABLE_NON_WORK_HANDLES
+            }
+            if injectable_handles and input_refs:
+                injected_values = await _build_non_work_injection_values(
+                    context,
+                    input_refs,
+                    handles_to_inject=injectable_handles,
+                )
+                if injected_values:
+                    params = _inject_placeholders(params, injected_values)
+                    n["data"]["params"] = copy.deepcopy(params)
 
             try:
                 normalized_params_for_hash = _normalized_params_for_exec_key(
