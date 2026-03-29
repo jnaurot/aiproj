@@ -3860,7 +3860,7 @@ async def run_graph(
                     "snapshotId": normalized_params_for_hash.get("snapshot_id"),
                     "keys": sorted(list(normalized_params_for_hash.keys())),
                 }
-                print("[debug-exec-inputs]", json.dumps(debug_payload, sort_keys=True))
+                logger.debug("debug_exec_inputs %s", json.dumps(debug_payload, sort_keys=True))
             source_fp = build_source_fingerprint(n, normalized_params_for_hash) if kind == "source" else None
             node_impl_version = _node_impl_version(kind)
             node_state_hash = build_node_state_hash(
@@ -4202,7 +4202,12 @@ async def run_graph(
                 run_from,
                 run_mode,
             )
-            print(f"[debug-exec-key] graphId={context.graph_id} nodeId={node_id} exec_key={exec_key}")
+            logger.debug(
+                "debug_exec_key graph_id=%s node_id=%s exec_key=%s",
+                context.graph_id,
+                node_id,
+                exec_key,
+            )
             if not use_cache_for_node:
                 await _emit_cache_decision(
                     node_id=node_id,
