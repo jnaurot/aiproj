@@ -106,7 +106,15 @@ export type KnownRunEvent =
       type: "control_signal";
       runId: string;
       at: string;
-      signal: "ready" | "busy" | "drain" | "pause" | "blocked" | "resume";
+      signal:
+        | "ready"
+        | "busy"
+        | "drain"
+        | "pause"
+        | "blocked"
+        | "resume"
+        | "llm_acquired"
+        | "llm_released";
       nodeId?: string;
       handle?: string;
     }

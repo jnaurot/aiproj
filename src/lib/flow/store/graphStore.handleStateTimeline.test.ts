@@ -39,4 +39,65 @@ describe('graphStore handle state timeline projection', () => {
 		expect(timeline[timeline.length - 1]?.handle).toBe('in');
 		expect(timeline[timeline.length - 1]?.signal).toBe('ready');
 	});
+
+	it('toggles model llmAllocated meta from llm control signals', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('model', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		let next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'control_signal',
+				runId: 'run_llm_alloc',
+				at: '2026-03-29T02:00:00.000Z',
+				nodeId,
+				signal: 'llm_acquired'
+			} as any,
+			'run_llm_alloc'
+		);
+		const acquiredNode = ((next as any)?.nodes ?? []).find((n: any) => String(n?.id) === String(nodeId));
+		expect(Boolean(acquiredNode?.data?.meta?.llmAllocated)).toBe(true);
+		next = __applyRunEventForTest(
+			next as any,
+			{
+				type: 'control_signal',
+				runId: 'run_llm_alloc',
+				at: '2026-03-29T02:00:01.000Z',
+				nodeId,
+				signal: 'llm_released'
+			} as any,
+			'run_llm_alloc'
+		);
+		const releasedNode = ((next as any)?.nodes ?? []).find((n: any) => String(n?.id) === String(nodeId));
+		expect(Boolean(releasedNode?.data?.meta?.llmAllocated)).toBe(false);
+	});
+
+	it('clears llmAllocated marker on run_finished', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('model', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		let next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'control_signal',
+				runId: 'run_llm_finish',
+				at: '2026-03-29T02:10:00.000Z',
+				nodeId,
+				signal: 'llm_acquired'
+			} as any,
+			'run_llm_finish'
+		);
+		next = __applyRunEventForTest(
+			next as any,
+			{
+				type: 'run_finished',
+				runId: 'run_llm_finish',
+				at: '2026-03-29T02:10:03.000Z',
+				status: 'succeeded'
+			} as any,
+			'run_llm_finish'
+		);
+		const finalNode = ((next as any)?.nodes ?? []).find((n: any) => String(n?.id) === String(nodeId));
+		expect(Boolean(finalNode?.data?.meta?.llmAllocated)).toBe(false);
+	});
 });

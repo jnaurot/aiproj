@@ -651,12 +651,50 @@ async def exec_llm(
                     "nodeId": node["id"],
                 }
             )
+            await context.bus.emit(
+                {
+                    "type": "control_signal",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "signal": "llm_acquired",
+                    "nodeId": node["id"],
+                }
+            )
             try:
                 out = await _dispatch(kind, params_override)
             finally:
+                await context.bus.emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "llm_released",
+                        "nodeId": node["id"],
+                    }
+                )
                 sem.release()
         else:
-            out = await _dispatch(kind, params_override)
+            await context.bus.emit(
+                {
+                    "type": "control_signal",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "signal": "llm_acquired",
+                    "nodeId": node["id"],
+                }
+            )
+            try:
+                out = await _dispatch(kind, params_override)
+            finally:
+                await context.bus.emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "llm_released",
+                        "nodeId": node["id"],
+                    }
+                )
         if out.status == "succeeded":
             return out
         last_output = out.model_copy(

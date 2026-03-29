@@ -9,6 +9,7 @@
 	export let data: LlmNodeData | ModelNodeData;
 
 	$: meta = modelNodeMeta(data);
+	$: llmAllocated = Boolean((data as any)?.meta?.llmAllocated);
 	$: workHandleStats = (() => {
 		const byHandle =
 			(($graphStore as any)?.queueRuntime?.runScoped?.runtimeItemMetrics?.byHandle ??
@@ -34,6 +35,9 @@
 
 <BaseNode {id} {data} {selected}>
 	<div style="font-size:12px; opacity:0.85;">Model: {meta.model}</div>
+	{#if llmAllocated}
+		<div style="font-size:12px; color:#facc15; line-height:1; margin-top:2px;">★</div>
+	{/if}
 	<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
 		<span style="font-size:11px; border:1px solid rgba(255,255,255,0.15); border-radius:999px; padding:2px 8px;"
 			>{meta.modelKind}</span

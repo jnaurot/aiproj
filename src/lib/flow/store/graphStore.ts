@@ -2069,6 +2069,28 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return { ...state, edges };
 		}
 		case 'control_signal': {
+			if (evt.nodeId && (evt.signal === 'llm_acquired' || evt.signal === 'llm_released')) {
+				const llmAllocated = evt.signal === 'llm_acquired';
+				const nodes = state.nodes.map((node) => {
+					if (String(node.id) !== String(evt.nodeId)) return node;
+					return {
+						...node,
+						data: {
+							...node.data,
+							meta: {
+								...((node.data as any)?.meta ?? {}),
+								llmAllocated
+							}
+						}
+					};
+				});
+				return logPush(
+					{ ...state, nodes },
+					'info',
+					`[control] ${evt.signal} node=${evt.nodeId}`,
+					evt.nodeId
+				);
+			}
 			const nodePart = evt.nodeId ? ` node=${evt.nodeId}` : '';
 			const handle = String((evt as any)?.handle ?? '').trim();
 			const handlePart = handle ? ` handle=${handle}` : '';
@@ -2449,9 +2471,21 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					lastError: errorPayload
 				}
 			};
+			const nodes = state.nodes.map((node) => {
+				if (String(node.id) !== String(evt.nodeId)) return node;
+				const meta = { ...((node.data as any)?.meta ?? {}) };
+				delete (meta as any).llmAllocated;
+				return {
+					...node,
+					data: {
+						...node.data,
+						meta
+					}
+				};
+			});
 			return withGraphMeta(
 				logPush(
-					{ ...state, nodeBindings, nodeOutputs },
+					{ ...state, nodeBindings, nodeOutputs, nodes },
 					'info',
 					`Node finished (${displayStatusFromBinding(nextBinding)})`,
 					evt.nodeId
@@ -2459,6 +2493,18 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			);
 		}
 		case 'run_finished': {
+			const nodes = state.nodes.map((node) => {
+				const meta = { ...((node.data as any)?.meta ?? {}) };
+				if (!Object.prototype.hasOwnProperty.call(meta, 'llmAllocated')) return node;
+				delete (meta as any).llmAllocated;
+				return {
+					...node,
+					data: {
+						...node.data,
+						meta
+					}
+				};
+			});
 			const nextEdges = (state.edges ?? []).map((edge) => {
 				const exec = String((edge.data as any)?.exec ?? 'idle').trim().toLowerCase();
 				if (exec !== 'active') return edge;
@@ -2471,7 +2517,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				};
 			});
 			return withGraphMeta(
-				logPush({ ...state, runStatus: evt.status, edges: nextEdges }, 'info', `Run finished (${evt.status})`)
+				logPush(
+					{ ...state, runStatus: evt.status, edges: nextEdges, nodes },
+					'info',
+					`Run finished (${evt.status})`
+				)
 			);
 		}
 		default:
