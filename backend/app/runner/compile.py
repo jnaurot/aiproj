@@ -42,6 +42,33 @@ def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
                 q.append(prev)
     return seen
 
+
+def _upstream_until_boundaries(
+    start_id: str,
+    edges: List[Dict[str, Any]],
+    boundary_ids: Set[str],
+) -> Set[str]:
+    """
+    Walk upstream and include ancestors, but stop traversal beyond any boundary node.
+    Boundary nodes are included in the returned set.
+    """
+    rev: Dict[str, List[str]] = {}
+    for e in edges:
+        rev.setdefault(e["target"], []).append(e["source"])
+    seen: Set[str] = set()
+    q = [start_id]
+    while q:
+        cur = q.pop(0)
+        for prev in rev.get(cur, []):
+            if prev in seen:
+                continue
+            seen.add(prev)
+            if prev in boundary_ids:
+                # Include boundary ancestor but do not walk beyond it.
+                continue
+            q.append(prev)
+    return seen
+
 def _expand_dirty_subgraph(dirty_ids: Set[str], edges: List[Dict[str, Any]]) -> Set[str]:
     if not dirty_ids:
         return set()
@@ -90,7 +117,7 @@ def compile_plan(
     }
     if run_from:
         run_from_is_pinned = run_from in requested_pins
-        ancestors = _upstream(run_from, edges)
+        ancestors = _upstream_until_boundaries(run_from, edges, requested_pins)
         if mode == "selected_only":
             # Pinned selected node is treated as a checkpoint; ancestors are not revalidated.
             sub = {run_from} if run_from_is_pinned else (ancestors | {run_from})
