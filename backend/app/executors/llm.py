@@ -54,6 +54,20 @@ def _provider_semaphore(provider: str) -> Optional[asyncio.Semaphore]:
         return sem
 
 
+def _provider_acquire_timeout_seconds(provider: str) -> float:
+    key = str(provider or "").strip().upper().replace("-", "_")
+    specific = os.getenv(f"RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_{key}")
+    default = os.getenv("RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT", "")
+    raw = specific if specific not in {None, ""} else default
+    if raw in {None, ""}:
+        return 0.0
+    try:
+        value = float(str(raw).strip())
+    except Exception:
+        return 0.0
+    return value if value > 0 else 0.0
+
+
 #
 def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize frontend LLM params (camelCase + nested output) to backend shape."""
@@ -594,8 +608,53 @@ async def exec_llm(
             )
         sem = _provider_semaphore(kind)
         if sem is not None:
-            async with sem:
+            acquire_timeout = _provider_acquire_timeout_seconds(kind)
+            waiting_started_at = asyncio.get_running_loop().time()
+            await context.bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": f"MODEL_PROVIDER_QUEUE: waiting for provider slot provider={kind}",
+                    "nodeId": node["id"],
+                }
+            )
+            try:
+                if acquire_timeout > 0:
+                    await asyncio.wait_for(sem.acquire(), timeout=acquire_timeout)
+                else:
+                    await sem.acquire()
+            except asyncio.TimeoutError:
+                return NodeOutput(
+                    status="failed",
+                    metadata=None,
+                    execution_time_ms=0.0,
+                    error=_model_error_payload(
+                        "MODEL_PROVIDER_ACQUIRE_TIMEOUT",
+                        f"Timed out waiting for provider slot ({kind}) after {acquire_timeout:.2f}s",
+                        provider=kind,
+                        acquireTimeoutSeconds=acquire_timeout,
+                    ),
+                )
+            waited_ms = max(0, int((asyncio.get_running_loop().time() - waiting_started_at) * 1000))
+            await context.bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": (
+                        f"MODEL_PROVIDER_ACQUIRED: provider={kind} wait_ms={waited_ms} "
+                        "request timeout starts now"
+                    ),
+                    "nodeId": node["id"],
+                }
+            )
+            try:
                 out = await _dispatch(kind, params_override)
+            finally:
+                sem.release()
         else:
             out = await _dispatch(kind, params_override)
         if out.status == "succeeded":
