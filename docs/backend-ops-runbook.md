@@ -172,3 +172,32 @@ docker compose --profile backend-cpu-dev build --no-cache backend
 - Keep backend logic in server; frontend should not own env resolution.
 - Prefer profile-based installs over ad-hoc pip installs.
 - Keep ROCm profile CUDA-free by policy and CI guard.
+
+## LLM Queue + Timeout Tuning (Low-VRAM)
+
+If your preferred model consumes most VRAM (for example 22GB on a 24GB GPU), run a single model
+execution at a time and treat provider-slot waiting separately from provider request timeout.
+
+Recommended env profile:
+
+```bash
+RUNNER_MAX_MODEL=1
+RUNNER_MAX_LLM=1
+RUNNER_MAX_CONCURRENCY=4
+RUNNER_MAX_MODEL_PROVIDER=1
+```
+
+Optional provider-slot acquire timeout (queue wait cap):
+
+```bash
+RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT=900
+# or provider-specific:
+RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_OLLAMA=900
+```
+
+Notes:
+- Scheduler arbitration remains FIFO by default.
+- Provider request timeout (`requestPolicy.timeout_seconds`) starts after provider slot acquisition.
+- Queue/acquire logs emitted by model executor:
+  - `MODEL_PROVIDER_QUEUE: waiting for provider slot ...`
+  - `MODEL_PROVIDER_ACQUIRED: ... request timeout starts now`
