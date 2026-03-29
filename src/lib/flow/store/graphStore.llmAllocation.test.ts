@@ -148,6 +148,45 @@ describe('graphStore llm allocation UI state', () => {
 		expect(String(paramEdge?.data?.exec ?? '')).toBe('active');
 	});
 
+	it('llm_released edge cleanup is scoped to the released node only', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			edges: [
+				{ id: 'e_a_work', source: 'src_a', sourceHandle: 'out', target: 'a', targetHandle: 'in', data: { mode: 'work', exec: 'active' } },
+				{ id: 'e_b_work', source: 'src_b', sourceHandle: 'out', target: 'b', targetHandle: 'in', data: { mode: 'work', exec: 'active' } }
+			] as any,
+			nodeBindings: {
+				a: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: null, artifactId: null },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				},
+				b: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: null, artifactId: null },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				}
+			} as any
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'control_signal', runId: 'run-llm', at: '2026-03-29T00:00:06Z', nodeId: 'a', signal: 'llm_released' } as any,
+			'run-llm'
+		);
+		const edgeA = (next.edges as any[]).find((e) => String(e?.id) === 'e_a_work');
+		const edgeB = (next.edges as any[]).find((e) => String(e?.id) === 'e_b_work');
+		expect(String(edgeA?.data?.exec ?? '')).toBe('done');
+		expect(String(edgeB?.data?.exec ?? '')).toBe('active');
+	});
+
 	it('ignores edge_exec active for non-work edges', () => {
 		const state: GraphState = {
 			...makeState('running'),
@@ -168,5 +207,46 @@ describe('graphStore llm allocation UI state', () => {
 		);
 		expect(String(((activeCtrl.edges as any[]).find((e) => e.id === 'e_param') as any)?.data?.exec ?? '')).toBe('idle');
 		expect(String(((activeCtrl.edges as any[]).find((e) => e.id === 'e_ctrl') as any)?.data?.exec ?? '')).toBe('idle');
+	});
+
+	it('release/finish race never regresses succeeded node back to busy', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodeBindings: {
+				a: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: 'k1', artifactId: 'a1' },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				}
+			} as any
+		};
+		const finishedFirst = __applyRunEventForTest(
+			state,
+			{ type: 'node_finished', runId: 'run-llm', at: '2026-03-29T00:00:10Z', nodeId: 'a', status: 'succeeded' } as any,
+			'run-llm'
+		);
+		const afterLateRelease = __applyRunEventForTest(
+			finishedFirst as any,
+			{ type: 'control_signal', runId: 'run-llm', at: '2026-03-29T00:00:11Z', nodeId: 'a', signal: 'llm_released' } as any,
+			'run-llm'
+		);
+		expect(String((afterLateRelease as any)?.nodeBindings?.a?.status ?? '')).toBe('succeeded_up_to_date');
+
+		const releaseFirst = __applyRunEventForTest(
+			state,
+			{ type: 'control_signal', runId: 'run-llm', at: '2026-03-29T00:00:12Z', nodeId: 'a', signal: 'llm_released' } as any,
+			'run-llm'
+		);
+		expect(String((releaseFirst as any)?.nodeBindings?.a?.status ?? '')).toBe('busy');
+		const afterFinish = __applyRunEventForTest(
+			releaseFirst as any,
+			{ type: 'node_finished', runId: 'run-llm', at: '2026-03-29T00:00:13Z', nodeId: 'a', status: 'succeeded' } as any,
+			'run-llm'
+		);
+		expect(String((afterFinish as any)?.nodeBindings?.a?.status ?? '')).toBe('succeeded_up_to_date');
 	});
 });

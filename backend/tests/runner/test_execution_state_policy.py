@@ -94,6 +94,177 @@ async def test_model_node_started_emits_only_after_llm_lease_acquired(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_node_started_emits_exactly_once_for_non_lease_and_lease_nodes(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}},
+		)
+
+	async def _fake_exec_ollama(
+		run_id,
+		node,
+		context,
+		_ignored,
+		params_override,
+		input_text=None,
+		input_items=None,
+		input_media=None,
+		upstream_artifact_ids=None,
+	):
+		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
+	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
+	llm_exec._MODEL_PROVIDER_WAITERS.clear()
+	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
+
+	graph_non_lease = {
+		"nodes": [
+			{
+				"id": "n_tool_up",
+				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+			{
+				"id": "n_tool_down",
+				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+		],
+		"edges": [
+			{"id": "e_tool", "source": "n_tool_up", "target": "n_tool_down", "targetHandle": "in", "data": {"mode": "work"}},
+		],
+	}
+	events_non_lease: list[dict] = []
+	bus_non_lease = RunEventBus("run-exec-policy-start-once-non-lease", on_emit=lambda evt: events_non_lease.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-exec-policy-start-once-non-lease",
+		graph=graph_non_lease,
+		run_from=None,
+		bus=bus_non_lease,
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="graph-exec-policy-start-once-non-lease",
+	)
+	started_tool_up = [
+		evt
+		for evt in events_non_lease
+		if str(evt.get("type") or "") == "node_started" and str(evt.get("nodeId") or "") == "n_tool_up"
+	]
+	assert len(started_tool_up) == 1
+
+	graph_lease = {
+		"nodes": [
+			{
+				"id": "n_model",
+				"data": {
+					"kind": "model",
+					"llmKind": "ollama",
+					"modelKind": "llm",
+					"params": {
+						"model": "glm-4.7-flash:latest",
+						"base_url": "http://127.0.0.1:11434",
+						"user_prompt": "hello",
+						"output_mode": "text",
+					},
+				},
+			},
+		],
+		"edges": [],
+	}
+	events_lease: list[dict] = []
+	bus = RunEventBus("run-exec-policy-start-once", on_emit=lambda evt: events_lease.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-exec-policy-start-once",
+		graph=graph_lease,
+		run_from=None,
+		bus=bus,
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="graph-exec-policy-start-once",
+	)
+
+	started_model = [
+		evt for evt in events_lease if str(evt.get("type") or "") == "node_started" and str(evt.get("nodeId") or "") == "n_model"
+	]
+	assert len(started_model) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_timeout_before_lease_has_no_node_started_or_active_work_edges(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
+	monkeypatch.setenv("RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_OLLAMA", "0.01")
+	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
+	llm_exec._MODEL_PROVIDER_WAITERS.clear()
+	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	sem = llm_exec._provider_semaphore("ollama")
+	assert sem is not None
+	# Saturate provider so model times out before acquiring a lease.
+	await sem.acquire()
+	try:
+		graph = {
+			"nodes": [
+				{
+					"id": "n_model",
+					"data": {
+						"kind": "model",
+						"llmKind": "ollama",
+						"modelKind": "llm",
+						"params": {
+							"model": "glm-4.7-flash:latest",
+							"base_url": "http://127.0.0.1:11434",
+							"user_prompt": "hello",
+							"output_mode": "text",
+						},
+					},
+				},
+			],
+			"edges": [],
+		}
+		events: list[dict] = []
+		bus = RunEventBus("run-exec-policy-timeout-before-lease", on_emit=lambda evt: events.append(dict(evt)))
+		await run_mod.run_graph(
+			run_id="run-exec-policy-timeout-before-lease",
+			graph=graph,
+			run_from=None,
+			bus=bus,
+			artifact_store=MemoryArtifactStore(),
+			cache=ExecutionCache(),
+			graph_id="graph-exec-policy-timeout-before-lease",
+		)
+	finally:
+		sem.release()
+
+	started_model = [
+		evt for evt in events if str(evt.get("type") or "") == "node_started" and str(evt.get("nodeId") or "") == "n_model"
+	]
+	model_active_edges = [
+		evt
+		for evt in events
+		if str(evt.get("type") or "") == "edge_exec"
+		and str(evt.get("exec") or "") == "active"
+	]
+	model_finished = [
+		evt
+		for evt in events
+		if str(evt.get("type") or "") == "node_finished"
+		and str(evt.get("nodeId") or "") == "n_model"
+	]
+	assert started_model == []
+	assert model_active_edges == []
+	assert model_finished and str(model_finished[-1].get("status") or "") in {"failed", "stale"}
+
+
+@pytest.mark.asyncio
 async def test_edge_exec_active_and_done_are_work_plane_only(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")
