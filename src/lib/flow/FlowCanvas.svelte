@@ -72,6 +72,14 @@ import {
 		type GuidedRecommendation
 	} from './components/dsmlGuidedUx';
 	import { refreshSchemaCapabilitiesFromBackend } from '$lib/flow/schemaCapabilities';
+	import {
+		buildRunMonitorEdgeRows,
+		buildRunMonitorNodeRows,
+		filterAndSortRunMonitorNodes,
+		preferredMonitorEdgeFocusNodeId,
+		type RunMonitorFilter,
+		type RunMonitorSort
+	} from '$lib/flow/components/runMonitorModel';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
@@ -263,8 +271,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	let nodeInspectorCollapsed = false;
-	let environmentCollapsed = true;
+	let environmentCollapsed = false;
 	let runLogsCollapsed = false;
+	let runMonitorNodeFilter: RunMonitorFilter = 'all';
+	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
@@ -515,6 +525,34 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		(total, row) => total + Math.max(0, Number((row as any)?.count ?? 0)),
 		0
 	);
+	$: runMonitorGlobalStalled = Boolean(($graphStore.queueRuntime?.schedulerSnapshot as any)?.stalled ?? false);
+	$: runMonitorNodeRows = buildRunMonitorNodeRows({
+		nodes: ($graphStore.nodes ?? []) as any,
+		edges: ($graphStore.edges ?? []) as any,
+		nodeBindings: ($graphStore.nodeBindings ?? {}) as any,
+		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
+	});
+	$: runMonitorNodeRowsVisible = filterAndSortRunMonitorNodes(
+		runMonitorNodeRows,
+		runMonitorNodeFilter,
+		runMonitorNodeSort,
+		runMonitorGlobalStalled
+	);
+	$: runMonitorEdgeRows = buildRunMonitorEdgeRows({
+		nodes: ($graphStore.nodes ?? []) as any,
+		edges: ($graphStore.edges ?? []) as any,
+		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
+	});
+	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
+	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
+	$: runMonitorHistoryRows = (
+		Array.isArray(($graphStore.queueRuntime?.runHistory as any) ? ($graphStore.queueRuntime as any).runHistory : [])
+			? (($graphStore.queueRuntime as any).runHistory as Array<Record<string, unknown>>)
+			: []
+	)
+		.slice()
+		.reverse()
+		.slice(0, 20);
 	$: canUndo = Boolean($graphStore) && graphStore.canUndo();
 	$: canRedo = Boolean($graphStore) && graphStore.canRedo();
 	$: if (previousEditingContext !== $graphStore.editingContext) {
@@ -1621,6 +1659,26 @@ async function scrollToBottom() {
 		inspectorMode = 'output';
 		const vp = getViewport();
 		setCenter(n.position.x + 120, n.position.y + 40, { zoom: vp.zoom, duration: 250 });
+	}
+
+	function focusNodeFromMonitor(nodeId: string) {
+		const resolvedNodeId = String(nodeId ?? '').trim();
+		if (!resolvedNodeId) return;
+		const n = nodes.find((candidate) => String(candidate.id ?? '').trim() === resolvedNodeId);
+		if (!n) return;
+		graphStore.selectNode(resolvedNodeId);
+		inspectorMode = 'edit';
+		const vp = getViewport();
+		setCenter(Number(n.position?.x ?? 0) + 120, Number(n.position?.y ?? 0) + 40, {
+			zoom: Number(vp.zoom ?? 1),
+			duration: 220
+		});
+	}
+
+	function focusEdgeFromMonitor(sourceNodeId: string, targetNodeId: string) {
+		const fallback = preferredMonitorEdgeFocusNodeId(sourceNodeId, targetNodeId);
+		if (!fallback) return;
+		focusNodeFromMonitor(fallback);
 	}
 
 	async function resetRunUi() {
@@ -3423,11 +3481,10 @@ async function scrollToBottom() {
 				<p>Click a node to edit it.</p>
 			{/if}
 		</div>
-		{#if false}
 		<button
 			type="button"
 			class="inspectorSplitter"
-			aria-label="Resize Node Inspector and Environment panels"
+			aria-label="Resize Node Inspector and Run Monitor panels"
 			on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
 		></button>
 		<div
@@ -3436,82 +3493,142 @@ async function scrollToBottom() {
 			style={environmentCollapsed ? 'flex: 0 0 auto;' : `flex: ${environmentWeight} 1 0;`}
 		>
 			<div class="envPanel">
-					<div class="envPanelHead">
-						<div class="sectionHeadTitle">
-							<h3>Environment</h3>
-							<button
-								type="button"
-								class="tabBtn sectionToggle"
-								title={environmentCollapsed ? 'Expand Environment' : 'Collapse Environment'}
-								on:click={() => (environmentCollapsed = !environmentCollapsed)}
-							>
-								<span class="sectionToggleIcon" aria-hidden="true">{environmentCollapsed ? '▸' : '▾'}</span>
-							</button>
-						</div>
-						{#if !environmentCollapsed}
-							<button
-								class="tabBtn envRefreshBtn"
-								on:click={() => void refreshWorkspaceEnvironmentPanel()}
-								disabled={envProfilesLoading}
-							>
-								{envProfilesLoading ? 'Refreshing...' : 'Refresh'}
-							</button>
-						{/if}
+				<div class="envPanelHead">
+					<div class="sectionHeadTitle">
+						<h3>Run Monitor</h3>
+						<button
+							type="button"
+							class="tabBtn sectionToggle"
+							title={environmentCollapsed ? 'Expand Run Monitor' : 'Collapse Run Monitor'}
+							on:click={() => (environmentCollapsed = !environmentCollapsed)}
+						>
+							<span class="sectionToggleIcon" aria-hidden="true">{environmentCollapsed ? '?' : '?'}</span>
+						</button>
 					</div>
-					{#if !environmentCollapsed}
-						<div class="envPanelSummary">
-							{envProfilesInstalledCount}/{envProfiles.length} installed
-							{#if envProfilesMissingCount > 0}
-								<span class="envMissing">({envProfilesMissingCount} missing)</span>
-							{/if}
-						</div>
-						{#if envProfilesError}
-							<div class="envPanelError">{envProfilesError}</div>
-						{/if}
-						<div class="envProfileList">
-							{#if !envProfilesLoading && envProfiles.length === 0}
-								<div class="envProfileEmpty">No profiles available.</div>
-							{/if}
-							{#each envProfiles as profile (profile.profileId)}
-								<div class="envProfileRow">
-									<div class="envProfileMeta">
-										<div class="envProfileTitle">
-											<span class="mono">{profile.profileId}</span>
-											<span class={`pill ${profile.installed ? 'st-succeeded' : 'st-stale'}`}>
-												{profile.installed ? 'installed' : 'missing'}
-											</span>
-										</div>
-										{#if !profile.installed && profile.missingPackages.length > 0}
-											<div class="envProfileMissing">
-												missing: {profile.missingPackages.join(', ')}
-											</div>
+				</div>
+				{#if !environmentCollapsed}
+					<div class="envPanelSummary">
+						nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
+					</div>
+					<div class="monitorToolbar">
+						<label class="monitorField">
+							<span>Filter</span>
+							<select bind:value={runMonitorNodeFilter}>
+								<option value="all">All</option>
+								<option value="blocked">Blocked</option>
+								<option value="waiting">Waiting</option>
+								<option value="stalled">Stalled</option>
+							</select>
+						</label>
+						<label class="monitorField">
+							<span>Sort</span>
+							<select bind:value={runMonitorNodeSort}>
+								<option value="depth_desc">Depth desc</option>
+								<option value="depth_asc">Depth asc</option>
+								<option value="pending_desc">Pending desc</option>
+								<option value="pending_asc">Pending asc</option>
+								<option value="label_asc">Label A-Z</option>
+							</select>
+						</label>
+					</div>
+					{#if runMonitorNodeRowsVisible.length === 0}
+						<div class="envProfileEmpty">No monitor rows for current filter.</div>
+					{:else}
+						<div class="runMonitorNodeTable" role="table" aria-label="Run monitor nodes">
+							<div class="runMonitorNodeHead" role="row">
+								<span>node</span>
+								<span>status</span>
+								<span>pending</span>
+								<span>depth</span>
+								<span>blocked</span>
+							</div>
+							{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
+								<button
+									type="button"
+									class="runMonitorNodeRow"
+									role="row"
+									on:click={() => focusNodeFromMonitor(row.nodeId)}
+									title={`Focus ${row.label}`}
+								>
+									<span class="runMonitorNodeName">
+										{row.label}
+										{#if row.isLlmHolder}
+											<span class="mono"> (llm-holder)</span>
+										{:else if row.isLlmWaiting}
+											<span class="mono"> (llm-wait)</span>
 										{/if}
-										{#if profile.platformNotes?.length}
-											<div class="envProfileNotes">
-												{profile.platformNotes.join(' ')}
-											</div>
-										{/if}
-									</div>
-									<button
-										class="tabBtn envInstallBtn"
-										disabled={Boolean(envInstallPendingByProfile[profile.profileId])}
-										on:click={() => void installWorkspaceProfile(profile.profileId)}
-									>
-										{#if envInstallPendingByProfile[profile.profileId]}
-											Installing...
-										{:else if profile.installed}
-											Reinstall
-										{:else}
-											Install
-										{/if}
-									</button>
-								</div>
+									</span>
+									<span>{row.status}</span>
+									<span>{row.pendingInputCount}</span>
+									<span>{row.inboundDepth}</span>
+									<span>{row.blockedReasonCode ?? '-'}</span>
+								</button>
 							{/each}
 						</div>
 					{/if}
+					<div class="runMonitorEdgeTable" role="table" aria-label="Run monitor edges">
+						<div class="runMonitorNodeHead" role="row">
+							<span>edge</span>
+							<span>from</span>
+							<span>to</span>
+							<span>depth</span>
+							<span>age</span>
+						</div>
+						{#if runMonitorEdgeRows.length === 0}
+							<div class="envProfileEmpty">No edge telemetry yet.</div>
+						{:else}
+							{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
+								<button
+									type="button"
+									class="runMonitorNodeRow"
+									role="row"
+									on:click={() => focusEdgeFromMonitor(row.sourceNodeId, row.targetNodeId)}
+									title={`Focus ${row.targetLabel}`}
+								>
+									<span>{row.edgeId}:{row.handle}</span>
+									<span>{row.sourceLabel}</span>
+									<span>{row.targetLabel}</span>
+									<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
+									<span>{row.oldestAgeSec === null ? '-' : row.oldestAgeSec.toFixed(1)}</span>
+								</button>
+							{/each}
+							{/if}
+						</div>
+						<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">
+							<div class="runMonitorNodeHead" role="row">
+								<span>run</span>
+								<span>status</span>
+								<span>runtime</span>
+								<span>max q</span>
+								<span>flags</span>
+							</div>
+							{#if runMonitorHistoryRows.length === 0}
+								<div class="envProfileEmpty">No finished runs yet.</div>
+							{:else}
+								{#each runMonitorHistoryRows as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
+									<div class="runMonitorNodeRow" role="row">
+										<span class="mono">{String(row.runId ?? '-')}</span>
+										<span>{String(row.status ?? '-')}</span>
+										<span>{Number(row.runtimeMs ?? 0)}</span>
+										<span>{Number(row.maxPendingQueueDepth ?? 0)}</span>
+										<span>
+											{#if Boolean(row.hadStalledSnapshot ?? false)}
+												stalled
+											{/if}
+											{#if Number(row.blockedEvents ?? 0) > 0}
+												{Boolean(row.hadStalledSnapshot ?? false) ? ' | ' : ''}blocked={Number(row.blockedEvents ?? 0)}
+											{/if}
+											{#if !Boolean(row.hadStalledSnapshot ?? false) && Number(row.blockedEvents ?? 0) === 0}
+												-
+											{/if}
+										</span>
+									</div>
+								{/each}
+							{/if}
+						</div>
+				{/if}
 			</div>
 		</div>
-		{/if}
 		<button
 			type="button"
 			class="inspectorSplitter"
@@ -4158,6 +4275,73 @@ async function scrollToBottom() {
 		margin-top: 6px;
 		font-size: 12px;
 		opacity: 0.85;
+	}
+
+	.monitorToolbar {
+		margin-top: 8px;
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
+	}
+
+	.monitorField {
+		display: grid;
+		gap: 4px;
+		font-size: 11px;
+	}
+
+	.monitorField select {
+		width: 100%;
+		padding: 4px 6px;
+		border-radius: 8px;
+		border: 1px solid #2a3655;
+		background: #0c1220;
+		color: #dbe7ff;
+		font-size: 12px;
+	}
+
+	.runMonitorNodeTable,
+	.runMonitorEdgeTable,
+	.runMonitorHistoryTable {
+		margin-top: 8px;
+		display: grid;
+		gap: 4px;
+		max-height: 172px;
+		overflow: auto;
+		padding-right: 2px;
+	}
+
+	.runMonitorNodeHead,
+	.runMonitorNodeRow {
+		display: grid;
+		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
+		gap: 6px;
+		align-items: center;
+		font-size: 11px;
+	}
+
+	.runMonitorNodeHead {
+		opacity: 0.72;
+		text-transform: lowercase;
+	}
+
+	.runMonitorNodeRow {
+		border: 1px solid #1c2335;
+		border-radius: 8px;
+		padding: 6px;
+		background: #0c1220;
+		color: #dbe7ff;
+		text-align: left;
+	}
+
+	.runMonitorNodeRow:hover {
+		border-color: #35548c;
+	}
+
+	.runMonitorNodeName {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.envMissing {

@@ -1061,6 +1061,24 @@ export type GraphState = {
 			waitingNodeIds?: string[];
 			updatedAt?: string;
 		};
+		currentRunSummary?: {
+			runId: string;
+			maxPendingQueueDepth: number;
+			hadStalledSnapshot: boolean;
+			blockedEvents: number;
+			runtimeMs?: number;
+			peakConcurrency?: number;
+		};
+		runHistory?: Array<{
+			runId: string;
+			finishedAt: string;
+			status: RunStatus;
+			runtimeMs: number;
+			peakConcurrency: number;
+			maxPendingQueueDepth: number;
+			hadStalledSnapshot: boolean;
+			blockedEvents: number;
+		}>;
 		handleStates?: Record<string, { state: string; updatedAt?: string }>;
 		handleTimeline?: Array<{
 			nodeId: string;
@@ -1794,6 +1812,8 @@ function assertRunStartedBindingTouchInScope(prev: GraphState, next: GraphState)
 	});
 }
 
+const RUN_MONITOR_HISTORY_LIMIT = 20;
+
 function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
 	const evtGraphId = (evt as any)?.graphId;
 	if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== state.graphId) {
@@ -2003,6 +2023,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							runScoped: undefined,
 							schedulerSnapshot: undefined,
 							llmLease: undefined,
+							currentRunSummary: {
+								runId: String(evt.runId ?? runId),
+								maxPendingQueueDepth: 0,
+								hadStalledSnapshot: false,
+								blockedEvents: 0
+							},
 							blockedByNode: {},
 							softFailByNode: {}
 						}
@@ -2011,6 +2037,25 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
 				)
 			);
+		}
+		case 'run_telemetry': {
+			const previousSummary =
+				(state.queueRuntime?.currentRunSummary &&
+				typeof state.queueRuntime.currentRunSummary === 'object'
+					? state.queueRuntime.currentRunSummary
+					: null) ?? null;
+			if (!previousSummary) return state;
+			return {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					currentRunSummary: {
+						...previousSummary,
+						runtimeMs: Math.max(0, Number((evt as any)?.runtime_ms ?? 0)),
+						peakConcurrency: Math.max(0, Number((evt as any)?.peak_concurrency ?? 0))
+					}
+				}
+			};
 		}
 		case 'node_started': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
@@ -2366,10 +2411,21 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				(state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
 					? state.queueRuntime.blockedByNode
 					: {}) ?? {};
+			const previousSummary =
+				(state.queueRuntime?.currentRunSummary &&
+				typeof state.queueRuntime.currentRunSummary === 'object'
+					? state.queueRuntime.currentRunSummary
+					: null) ?? null;
 			const nextState = {
 				...state,
 				queueRuntime: {
 					...(state.queueRuntime ?? {}),
+					currentRunSummary: previousSummary
+						? {
+								...previousSummary,
+								blockedEvents: Math.max(0, Number(previousSummary.blockedEvents ?? 0)) + 1
+							}
+						: undefined,
 					blockedByNode: {
 						...previous,
 						[nodeId]: {
@@ -2461,6 +2517,14 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						typeof state.queueRuntime.llmLease === 'object'
 							? state.queueRuntime.llmLease
 							: undefined),
+					currentRunSummary:
+						(state.queueRuntime?.currentRunSummary &&
+						typeof state.queueRuntime.currentRunSummary === 'object'
+							? state.queueRuntime.currentRunSummary
+							: undefined),
+					runHistory: Array.isArray(state.queueRuntime?.runHistory)
+						? state.queueRuntime?.runHistory
+						: [],
 					blockedByNode:
 						(state.queueRuntime?.blockedByNode &&
 						typeof state.queueRuntime.blockedByNode === 'object'
@@ -2495,20 +2559,35 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						readyWork,
 						inflight,
 						pendingInputCount,
-						lastBlockedReasonCode: lastBlockedReasonCode || undefined
-					};
-				})
-				.filter(Boolean) as Array<{
+					lastBlockedReasonCode: lastBlockedReasonCode || undefined
+				};
+			})
+			.filter(Boolean) as Array<{
 					nodeId: string;
 					readyWork: boolean;
 					inflight: number;
 					pendingInputCount: number;
 					lastBlockedReasonCode?: string;
 				}>;
+			const previousSummary =
+				(state.queueRuntime?.currentRunSummary &&
+				typeof state.queueRuntime.currentRunSummary === 'object'
+					? state.queueRuntime.currentRunSummary
+					: null) ?? null;
 			const nextState = {
 				...state,
 				queueRuntime: {
 					...(state.queueRuntime ?? {}),
+					currentRunSummary: previousSummary
+						? {
+								...previousSummary,
+								maxPendingQueueDepth: Math.max(
+									Math.max(0, Number(previousSummary.maxPendingQueueDepth ?? 0)),
+									pendingQueueDepth
+								),
+								hadStalledSnapshot: Boolean(previousSummary.hadStalledSnapshot ?? false) || stalled
+							}
+						: undefined,
 					schedulerSnapshot: {
 						readyCount,
 						inflightCount,
@@ -2700,6 +2779,28 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			);
 		}
 		case 'run_finished': {
+			const previousSummary =
+				(state.queueRuntime?.currentRunSummary &&
+				typeof state.queueRuntime.currentRunSummary === 'object'
+					? state.queueRuntime.currentRunSummary
+					: null) ?? null;
+			const priorHistory = Array.isArray(state.queueRuntime?.runHistory)
+				? (state.queueRuntime?.runHistory as Array<Record<string, unknown>>)
+				: [];
+			const historyRow = {
+				runId: String(evt.runId ?? runId),
+				finishedAt: String(evt.at ?? ''),
+				status: (evt.status ?? 'succeeded') as RunStatus,
+				runtimeMs: Math.max(0, Number((previousSummary as any)?.runtimeMs ?? 0)),
+				peakConcurrency: Math.max(0, Number((previousSummary as any)?.peakConcurrency ?? 0)),
+				maxPendingQueueDepth: Math.max(
+					0,
+					Number((previousSummary as any)?.maxPendingQueueDepth ?? 0)
+				),
+				hadStalledSnapshot: Boolean((previousSummary as any)?.hadStalledSnapshot ?? false),
+				blockedEvents: Math.max(0, Number((previousSummary as any)?.blockedEvents ?? 0))
+			};
+			const nextHistory = [...priorHistory, historyRow].slice(-RUN_MONITOR_HISTORY_LIMIT);
 			const nodes = state.nodes.map((node) => {
 				const meta = { ...((node.data as any)?.meta ?? {}) };
 				if (!Object.prototype.hasOwnProperty.call(meta, 'llmAllocated')) return node;
@@ -2725,7 +2826,17 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			});
 			return withGraphMeta(
 				logPush(
-					{ ...state, runStatus: evt.status, edges: nextEdges, nodes },
+					{
+						...state,
+						runStatus: evt.status,
+						edges: nextEdges,
+						nodes,
+						queueRuntime: {
+							...(state.queueRuntime ?? {}),
+							currentRunSummary: undefined,
+							runHistory: nextHistory as any
+						}
+					},
 					'info',
 					`Run finished (${evt.status})`
 				)
