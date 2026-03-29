@@ -181,11 +181,13 @@ execution at a time and treat provider-slot waiting separately from provider req
 Recommended env profile:
 
 ```bash
-RUNNER_MAX_MODEL=1
-RUNNER_MAX_LLM=1
 RUNNER_MAX_CONCURRENCY=4
 RUNNER_MAX_MODEL_PROVIDER=1
 ```
+
+Defaults:
+- `RUNNER_MAX_MODEL` / `RUNNER_MAX_LLM` default to `1` if unset.
+- Increase either value later when you want more concurrent model nodes.
 
 Optional provider-slot acquire timeout (queue wait cap):
 

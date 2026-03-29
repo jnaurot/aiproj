@@ -3111,7 +3111,9 @@ async def run_graph(
     max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
     max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
     max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
-    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
+    # Default model concurrency is intentionally conservative (1) for low-VRAM hosts.
+    # Override with RUNNER_MAX_MODEL (or legacy RUNNER_MAX_LLM) to increase later.
+    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 1, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
     node_retry_max_attempts = _env_int_allow_zero("RUNNER_NODE_MAX_RETRIES", 0)
