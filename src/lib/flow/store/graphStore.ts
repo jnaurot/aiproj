@@ -1828,6 +1828,24 @@ function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unkn
 		.filter(Boolean);
 }
 
+function collectPinnedArtifactsByNode(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
+): Record<string, { artifactId: string; execKey?: string }> {
+	const out: Record<string, { artifactId: string; execKey?: string }> = {};
+	for (const node of nodes) {
+		if (nodeFreezeMode(node) === null) continue;
+		const nodeId = String(node.id ?? '').trim();
+		if (!nodeId) continue;
+		const binding = _normalizeBinding(nodeBindings?.[nodeId], nodeId);
+		const artifactId = String(binding.current?.artifactId ?? '').trim();
+		const execKey = String(binding.current?.execKey ?? '').trim();
+		if (!artifactId || !execKey) continue;
+		out[nodeId] = { artifactId, execKey };
+	}
+	return out;
+}
+
 function clearPerRunPinsOnNodes(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[]
 ): Node<PipelineNodeData & Record<string, unknown>>[] {
@@ -2066,8 +2084,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					evt.runFrom ?? null,
 					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start')
 				);
+			const evtPinned = Array.isArray((evt as any).pinnedNodeIds)
+				? new Set<string>((evt as any).pinnedNodeIds as string[])
+				: new Set<string>();
 			const nodeBindings = { ...state.nodeBindings };
 			for (const nodeId of evtPlanned) {
+				if (evtPinned.has(nodeId)) continue;
 				const prevBinding = _normalizeBinding(nodeBindings[nodeId], nodeId);
 				const hasArtifact = Boolean(
 					prevBinding.current?.artifactId ??
@@ -8758,6 +8780,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							.map(([nodeId]) => nodeId)
 					: [];
 			const pinnedNodeIds = collectPinnedNodeIds(s1.nodes);
+			const pinnedArtifacts = collectPinnedArtifactsByNode(
+				s1.nodes,
+				(s1.nodeBindings ?? {}) as Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
+			);
 			const clearPerRunPinsIfAny = () => {
 				update((s) => {
 					const nextNodes = clearPerRunPinsOnNodes(s.nodes);
@@ -9038,6 +9064,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					effectiveRunMode,
 					dirtyNodeIds,
 					pinnedNodeIds,
+					pinnedArtifacts,
 					cacheMode
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
@@ -9091,6 +9118,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						'from_start',
 						componentDirtyNodeIds,
 						pinnedNodeIds,
+						pinnedArtifacts,
 						cacheMode
 					);
 					const created = await createRun(payload);

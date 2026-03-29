@@ -88,6 +88,29 @@ describe('runScope partial-run binding behavior', () => {
 		});
 	});
 
+	it('includes pinned artifact hints when provided', () => {
+		const graph = { version: 1, nodes: [], edges: [] };
+		const req = buildRunCreateRequest(
+			graph,
+			'graph-test',
+			null,
+			'from_start',
+			[],
+			['n2'],
+			{
+				n2: { artifactId: 'a2', execKey: 'k2' },
+				' ': { artifactId: 'bad' },
+				n3: { artifactId: '' as any }
+			}
+		);
+		expect(req.graph.__executionHints).toEqual({
+			pinnedNodeIds: ['n2'],
+			pinnedArtifacts: {
+				n2: { artifactId: 'a2', execKey: 'k2' }
+			}
+		});
+	});
+
 	it('stales only affected nodes for accept-params style updates', () => {
 		const previous = {
 			a1: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-a1' },

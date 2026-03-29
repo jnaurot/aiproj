@@ -264,6 +264,27 @@ describe('graphStore partial run scope events', () => {
 		expect(displayStatusFromBinding(next.nodeBindings.llm_a as any)).toBe('succeeded');
 	});
 
+	it('run_started does not pre-stale planned pinned checkpoint nodes', () => {
+		const runId = 'run-1';
+		const state = makeState();
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-02-25T00:00:00Z',
+				runFrom: 'llm_b',
+				runMode: 'from_selected_onward',
+				plannedNodeIds: ['src', 'xfm', 'llm_b'],
+				pinnedNodeIds: ['xfm']
+			} as any,
+			runId
+		);
+		expect(displayStatusFromBinding(next.nodeBindings.src as any)).toBe('stale');
+		expect(displayStatusFromBinding(next.nodeBindings.xfm as any)).toBe('succeeded');
+		expect(displayStatusFromBinding(next.nodeBindings.llm_b as any)).toBe('stale');
+	});
+
 	it('hard reset rotates graphId, clears bindings, and rejects old-graph updates', () => {
 		const prev = makeState();
 		const reset = __hardResetGraphForTest(prev, 'graph-B');

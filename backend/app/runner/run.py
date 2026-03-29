@@ -1869,6 +1869,7 @@ _CACHE_REASONS = {
     "NODE_POLICY_PREFER_OFF",
     "NODE_POLICY_FORCE_OFF",
     "CONTRACT_MISMATCH",
+    "PINNED_TRUSTED_ARTIFACT",
 }
 _DEFAULT_REASON_BY_DECISION = {
     "cache_hit": "CACHE_HIT",
@@ -3420,6 +3421,7 @@ async def run_graph(
         raw_hints = graph.get("__executionHints") if isinstance(graph, dict) else None
         dirty_hint_ids = set()
         pinned_hint_ids = set()
+        pinned_artifact_hints: Dict[str, Dict[str, str]] = {}
         if isinstance(raw_hints, dict):
             raw_dirty = raw_hints.get("dirtyNodeIds")
             if isinstance(raw_dirty, list):
@@ -3427,6 +3429,20 @@ async def run_graph(
             raw_pinned = raw_hints.get("pinnedNodeIds")
             if isinstance(raw_pinned, list):
                 pinned_hint_ids = {str(nid) for nid in raw_pinned if isinstance(nid, str) and str(nid).strip()}
+            raw_pinned_artifacts = raw_hints.get("pinnedArtifacts")
+            if isinstance(raw_pinned_artifacts, dict):
+                for raw_node_id, raw_payload in raw_pinned_artifacts.items():
+                    node_id = str(raw_node_id or "").strip()
+                    if not node_id or not isinstance(raw_payload, dict):
+                        continue
+                    artifact_id = str(raw_payload.get("artifactId") or "").strip()
+                    exec_key = str(raw_payload.get("execKey") or "").strip()
+                    if not artifact_id:
+                        continue
+                    pinned_artifact_hints[node_id] = {
+                        "artifactId": artifact_id,
+                        "execKey": exec_key,
+                    }
         plan = compile_plan(
             execution_graph,
             run_from,
@@ -3437,6 +3453,9 @@ async def run_graph(
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
         planned_node_ids = sorted(list(plan.subgraph))
+        planned_pinned_node_ids = sorted(
+            nid for nid in plan.cache_only_nodes if nid in pinned_hint_ids
+        )
         if component_expansion:
             parent_ids = {
                 component_expansion.internal_to_parent.get(nid)
@@ -3451,11 +3470,27 @@ async def run_graph(
             "runFrom": run_from,
             "runMode": effective_run_mode,
             "plannedNodeIds": planned_node_ids,
+            "pinnedNodeIds": planned_pinned_node_ids,
             "reproducibility": reproducibility_metadata,
         })
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
+        trusted_pinned_artifacts: Dict[str, Dict[str, str]] = {}
+        for nid in plan.cache_only_nodes:
+            if nid not in pinned_hint_ids:
+                continue
+            payload = pinned_artifact_hints.get(nid)
+            if not isinstance(payload, dict):
+                continue
+            artifact_id = str(payload.get("artifactId") or "").strip()
+            exec_key = str(payload.get("execKey") or "").strip()
+            if not artifact_id:
+                continue
+            trusted_pinned_artifacts[nid] = {
+                "artifactId": artifact_id,
+                "execKey": exec_key,
+            }
         node_param_modes: Dict[str, str] = {nid: _node_runtime_param_mode(node) for nid, node in nodes.items()}
         node_param_snapshots: Dict[str, Dict[str, Any]] = {
             nid: copy.deepcopy((node.get("data", {}) or {}).get("params", {}) or {})
@@ -3927,6 +3962,80 @@ async def run_graph(
             token_overrides = _work_input_overrides.set(override_map)
             token_batch = _active_work_batch.set(work_batch_list)
             try:
+                trusted_pin = trusted_pinned_artifacts.get(node_id) if cache_only else None
+                if isinstance(trusted_pin, dict):
+                    pinned_artifact_id = str(trusted_pin.get("artifactId") or "").strip()
+                    pinned_exec_key = str(trusted_pin.get("execKey") or "").strip() or f"pinned:{node_id}"
+                    try:
+                        pinned_art = await context.artifact_store.get(pinned_artifact_id)
+                    except Exception:
+                        pinned_art = None
+                    if pinned_art is None:
+                        msg = (
+                            f"Pinned checkpoint artifact is unavailable for node '{node_id}'. "
+                            "Re-run upstream to refresh the pin."
+                        )
+                        await _emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": "failed",
+                            "execution_time_ms": max(
+                                0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                            ),
+                            "error": msg,
+                            "cached": False,
+                        })
+                        return {"ok": False, "cached": False}
+
+                    await _emit_cache_decision(
+                        node_id=node_id,
+                        node_kind=str(((execution_nodes_by_id.get(node_id) or {}).get("data") or {}).get("kind") or ""),
+                        decision="cache_hit",
+                        exec_key=pinned_exec_key,
+                        artifact_id=pinned_artifact_id,
+                        reason="PINNED_TRUSTED_ARTIFACT",
+                    )
+                    context.bindings.bind(node_id=node_id, artifact_id=pinned_artifact_id, status="cached")
+                    await _emit({
+                        "type": "node_output",
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "at": iso_now(),
+                        "artifactId": pinned_artifact_id,
+                        "mimeType": pinned_art.mime_type,
+                        "payloadType": _infer_artifact_payload_type(pinned_art),
+                        "sourceObservability": _source_observability_from_artifact(pinned_art),
+                        "primingArtifact": _source_priming_artifact_from_artifact(pinned_art),
+                        "cached": True,
+                    })
+                    await _emit({
+                        "type": "node_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "nodeId": node_id,
+                        "status": "succeeded",
+                        "execution_time_ms": max(
+                            0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                        ),
+                        "cached": True,
+                    })
+                    for edge_id in plan.incoming_edges.get(node_id, []):
+                        await _emit({
+                            "type": "edge_exec",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "edgeId": edge_id,
+                            "exec": "done",
+                        })
+                    await asyncio.sleep(0.05)
+                    return {
+                        "ok": True,
+                        "cached": True,
+                        "decision": "cache_hit",
+                        "reasonCode": "PINNED_TRUSTED_ARTIFACT",
+                    }
                 resolved = await _resolve_node_execution(node_id, work_batch=work_batch_list)
             finally:
                 _active_work_batch.reset(token_batch)

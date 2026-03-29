@@ -223,6 +223,7 @@ export function buildRunCreateRequest(
 	runMode?: ActiveRunMode,
 	dirtyNodeIds?: string[],
 	pinnedNodeIds?: string[],
+	pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>,
 	cacheMode?: 'default_on' | 'force_off' | 'force_on'
 ): {
 	graphId: string;
@@ -230,7 +231,11 @@ export function buildRunCreateRequest(
 		version: number;
 		nodes: unknown[];
 		edges: unknown[];
-		__executionHints?: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] };
+		__executionHints?: {
+			dirtyNodeIds?: string[];
+			pinnedNodeIds?: string[];
+			pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+		};
 	};
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
@@ -242,9 +247,34 @@ export function buildRunCreateRequest(
 	const sanitizedPinned = Array.isArray(pinnedNodeIds)
 		? Array.from(new Set(pinnedNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
 		: [];
-	const executionHints: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] } = {};
+	const sanitizedPinnedArtifacts =
+		pinnedArtifacts && typeof pinnedArtifacts === 'object'
+			? Object.fromEntries(
+					Object.entries(pinnedArtifacts)
+						.map(([nodeId, value]) => {
+							const nid = String(nodeId ?? '').trim();
+							const aid = String((value as any)?.artifactId ?? '').trim();
+							const execKey = String((value as any)?.execKey ?? '').trim();
+							if (!nid || !aid) return null;
+							return [
+								nid,
+								{
+									artifactId: aid,
+									...(execKey ? { execKey } : {})
+								}
+							];
+						})
+						.filter((entry): entry is [string, { artifactId: string; execKey?: string }] => entry !== null)
+			  )
+			: {};
+	const executionHints: {
+		dirtyNodeIds?: string[];
+		pinnedNodeIds?: string[];
+		pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+	} = {};
 	if (sanitizedDirty.length > 0) executionHints.dirtyNodeIds = sanitizedDirty;
 	if (sanitizedPinned.length > 0) executionHints.pinnedNodeIds = sanitizedPinned;
+	if (Object.keys(sanitizedPinnedArtifacts).length > 0) executionHints.pinnedArtifacts = sanitizedPinnedArtifacts;
 	const payloadGraph =
 		Object.keys(executionHints).length > 0
 			? {
@@ -267,7 +297,11 @@ export function buildRunCreateRequest(
 			version: number;
 			nodes: unknown[];
 			edges: unknown[];
-			__executionHints?: { dirtyNodeIds?: string[]; pinnedNodeIds?: string[] };
+			__executionHints?: {
+				dirtyNodeIds?: string[];
+				pinnedNodeIds?: string[];
+				pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+			};
 		};
 		runFrom?: string;
 		runMode?: 'from_selected_onward' | 'selected_only';
