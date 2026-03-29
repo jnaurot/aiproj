@@ -3419,15 +3419,20 @@ async def run_graph(
     try:
         raw_hints = graph.get("__executionHints") if isinstance(graph, dict) else None
         dirty_hint_ids = set()
+        pinned_hint_ids = set()
         if isinstance(raw_hints, dict):
             raw_dirty = raw_hints.get("dirtyNodeIds")
             if isinstance(raw_dirty, list):
                 dirty_hint_ids = {str(nid) for nid in raw_dirty if isinstance(nid, str) and str(nid).strip()}
+            raw_pinned = raw_hints.get("pinnedNodeIds")
+            if isinstance(raw_pinned, list):
+                pinned_hint_ids = {str(nid) for nid in raw_pinned if isinstance(nid, str) and str(nid).strip()}
         plan = compile_plan(
             execution_graph,
             run_from,
             run_mode=run_mode,
             dirty_node_ids=dirty_hint_ids,
+            pinned_node_ids=pinned_hint_ids,
         )
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))

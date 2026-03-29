@@ -23,3 +23,30 @@ def test_compile_plan_dirty_nodes_restricts_full_run_scope():
 def test_compile_plan_dirty_with_root_includes_downstream():
 	plan = compile_plan(_graph(), run_from=None, run_mode=None, dirty_node_ids={"a"})
 	assert set(plan.subgraph) == {"a", "b"}
+
+
+def test_compile_plan_pinned_nodes_become_cache_only_in_full_run():
+	plan = compile_plan(
+		_graph(),
+		run_from=None,
+		run_mode=None,
+		dirty_node_ids=None,
+		pinned_node_ids={"a"},
+	)
+	assert set(plan.subgraph) == {"a", "b", "c", "d"}
+	assert "a" in plan.cache_only_nodes
+	assert "a" not in plan.execute_nodes
+	assert "b" in plan.execute_nodes
+
+
+def test_compile_plan_ignores_pins_not_in_subgraph_for_selected_only():
+	plan = compile_plan(
+		_graph(),
+		run_from="b",
+		run_mode="selected_only",
+		dirty_node_ids=None,
+		pinned_node_ids={"c"},
+	)
+	assert set(plan.subgraph) == {"a", "b"}
+	assert "c" not in plan.cache_only_nodes
+	assert "b" in plan.execute_nodes

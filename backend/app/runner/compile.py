@@ -58,6 +58,7 @@ def compile_plan(
     run_from: Optional[str],
     run_mode: Optional[str] = None,
     dirty_node_ids: Optional[Set[str]] = None,
+    pinned_node_ids: Optional[Set[str]] = None,
 ) -> RunPlan:
     logger.debug("compile_plan_start")
     nodes = graph.get("nodes", [])
@@ -106,6 +107,14 @@ def compile_plan(
                 sub.add(r)
                 sub |= _downstream(r, edges)
         execute_nodes = set(sub)
+    pinned = {
+        nid
+        for nid in (pinned_node_ids or set())
+        if isinstance(nid, str) and nid in sub
+    }
+    if pinned:
+        execute_nodes -= pinned
+        cache_only_nodes |= pinned
 
     # Recompute indegree restricted to subgraph
     indeg2 = {nid: 0 for nid in sub}
