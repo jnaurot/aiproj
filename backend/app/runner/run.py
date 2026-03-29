@@ -455,6 +455,21 @@ def _normalize_consume_mode(raw: Any) -> str:
     return "once"
 
 
+def _coerce_bool(raw: Any, default: bool) -> bool:
+    if raw is None:
+        return bool(default)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = None) -> Dict[str, Any]:
     data = (node.get("data") or {}) if isinstance(node, dict) else {}
     params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
@@ -466,7 +481,8 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
     elif isinstance(params.get("processingPolicy"), dict):
         policy = params.get("processingPolicy") or {}
     consume_mode = _normalize_consume_mode(policy.get("consume_mode") or policy.get("consumeMode") or "once")
-    read_once = bool(policy.get("read_once") or policy.get("readOnce") or consume_mode == "once")
+    read_once_raw = policy.get("read_once") if "read_once" in policy else policy.get("readOnce")
+    read_once = _coerce_bool(read_once_raw, consume_mode == "once")
     try:
         batch_size = max(1, int(policy.get("batch_size") or policy.get("batchSize") or 1))
     except Exception:
@@ -494,7 +510,12 @@ def _node_processing_policy(node: Dict[str, Any], input_handle: Optional[str] = 
                 or handle_policy.get("consumeMode")
                 or consume_mode
             )
-            read_once = bool(handle_policy.get("read_once") or handle_policy.get("readOnce") or consume_mode == "once")
+            handle_read_once_raw = (
+                handle_policy.get("read_once")
+                if "read_once" in handle_policy
+                else handle_policy.get("readOnce")
+            )
+            read_once = _coerce_bool(handle_read_once_raw, consume_mode == "once")
             try:
                 batch_size = max(
                     1,
@@ -7826,6 +7847,47 @@ async def run_graph(
                 return
             if _node_has_ready_work(node_id):
                 ready.append(node_id)
+
+        def _pending_work_depth_by_node(*, streaming_only: bool) -> Dict[str, int]:
+            out: Dict[str, int] = {}
+            for candidate in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
+                if streaming_only:
+                    candidate_policy = _effective_node_runtime_policy(candidate)
+                    candidate_mode = str(candidate_policy.get("consume_mode") or "once")
+                    if candidate_mode not in {"single_item", "batch"}:
+                        continue
+                handle_map = connected_work_edges_by_handle.get(candidate, {}) or {}
+                node_depth = 0
+                for handle, edge_ids in handle_map.items():
+                    for edge_id in edge_ids:
+                        node_depth += max(0, int(queue_registry.depth(str(edge_id), str(handle)) or 0))
+                if node_depth > 0:
+                    out[candidate] = int(node_depth)
+            return out
+
+        def _rebuild_ready_from_state() -> List[str]:
+            rebuilt: List[str] = []
+            for candidate in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
+                if candidate in blocked_descendants:
+                    continue
+                if not deps_released.get(candidate, False):
+                    continue
+                policy = _effective_node_runtime_policy(candidate)
+                consume_mode = str(policy.get("consume_mode") or "once")
+                per_node_max = max(1, int(policy.get("max_inflight") or 1))
+                in_flight_for_node = int(node_inflight_counts.get(candidate, 0))
+                in_ready = ready.count(candidate)
+                if in_flight_for_node + in_ready >= per_node_max:
+                    continue
+                if consume_mode == "once":
+                    if node_started_once.get(candidate, False):
+                        continue
+                elif not _node_has_ready_work(candidate):
+                    continue
+                if candidate not in ready:
+                    ready.append(candidate)
+                    rebuilt.append(candidate)
+            return rebuilt
         await _emit(
             {
                 "type": "log",
@@ -7840,7 +7902,57 @@ async def run_graph(
         )
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "ready"})
 
-        while ready or inflight:
+        while True:
+            if not ready and not inflight:
+                pending_by_node = _pending_work_depth_by_node(streaming_only=True)
+                pending_depth = int(sum(int(v) for v in pending_by_node.values()))
+                if pending_depth <= 0:
+                    break
+                rebuilt = _rebuild_ready_from_state()
+                if rebuilt:
+                    await _emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": (
+                                f"[scheduler] ready rebuild recovered runnable nodes="
+                                f"{','.join(rebuilt)} pending_depth={pending_depth}"
+                            ),
+                        }
+                    )
+                    continue
+                pending_by_node_compact = ",".join(
+                    f"{node_id}:{depth}" for node_id, depth in sorted(pending_by_node.items())
+                )
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": (
+                            "[scheduler] stalled with pending queue and no runnable nodes "
+                            "reason=scheduler_stall_no_runnable_with_pending_queue "
+                            f"ready_count={len(ready)} inflight_count={len(inflight)} "
+                            f"queue_depth_total={pending_depth} "
+                            f"pending_by_node={pending_by_node_compact or '(none)'}"
+                        ),
+                    }
+                )
+                await _emit(
+                    {
+                        "type": "run_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "status": "failed",
+                        "error": "QUEUE_STRANDED_ITEMS",
+                        "errorCode": "QUEUE_STRANDED_ITEMS",
+                    }
+                )
+                await _emit_cache_summary_once()
+                return
             elapsed_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
             if max_runtime_ms > 0 and elapsed_ms > max_runtime_ms:
                 timeout_msg = (
