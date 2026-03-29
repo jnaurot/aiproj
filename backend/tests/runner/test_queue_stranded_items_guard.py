@@ -97,3 +97,11 @@ async def test_pending_queue_without_runnable_node_fails_with_explicit_code(monk
 		and "scheduler_stall_no_runnable_with_pending_queue" in str(evt.get("message") or "")
 		for evt in events
 	)
+	blocked_events = [evt for evt in events if str(evt.get("type") or "") == "node_blocked"]
+	assert blocked_events, "expected node_blocked events to be emitted"
+	assert any(
+		str(evt.get("nodeId") or "") == "b"
+		and str(evt.get("reasonCode") or "") == "WAITING_REQUIRED_INPUT"
+		and "e_cold" in [str(item) for item in (evt.get("missingEdgeIds") or [])]
+		for evt in blocked_events
+	)

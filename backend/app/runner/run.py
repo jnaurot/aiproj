@@ -7489,6 +7489,7 @@ async def run_graph(
         provided_nonwork_edges_by_handle: Dict[str, Dict[str, Dict[str, set[str]]]] = {nid: {} for nid in sub}
         warning_first_emitted_keys: set[str] = set()
         warning_counters: Dict[str, Dict[str, Any]] = {}
+        blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):
@@ -7724,9 +7725,12 @@ async def run_graph(
             }
 
         def _node_has_ready_work(node_id: str) -> bool:
+            return bool(_node_ready_probe(node_id).get("ready", False))
+
+        def _node_ready_probe(node_id: str) -> Dict[str, Any]:
             incoming = _incoming_edge_infos(node_id)
             if not incoming:
-                return True
+                return {"ready": True}
             incoming_by_handle: Dict[str, List[str]] = {}
             for info in incoming:
                 handle = str(info.get("inputHandle") or "in")
@@ -7735,15 +7739,78 @@ async def run_graph(
                     continue
                 incoming_by_handle.setdefault(handle, []).append(edge_id)
             if not incoming_by_handle:
-                return False
-            for handle, edge_ids in incoming_by_handle.items():
-                handle_depth = sum(
-                    max(0, int(queue_registry.depth(str(edge_id), handle) or 0))
+                return {
+                    "ready": False,
+                    "reasonCode": "WAITING_REQUIRED_INPUT",
+                    "plane": "work",
+                    "missingEdgeIds": [],
+                }
+            for handle, edge_ids in sorted(incoming_by_handle.items(), key=lambda item: item[0]):
+                missing_edges = [
+                    str(edge_id)
                     for edge_id in edge_ids
-                )
-                if handle_depth <= 0:
-                    return False
-            return True
+                    if max(0, int(queue_registry.depth(str(edge_id), handle) or 0)) <= 0
+                ]
+                if missing_edges:
+                    return {
+                        "ready": False,
+                        "reasonCode": "WAITING_REQUIRED_INPUT",
+                        "handle": str(handle),
+                        "plane": "work",
+                        "missingEdgeIds": sorted(set(missing_edges)),
+                    }
+            return {"ready": True}
+
+        async def _emit_node_blocked(
+            node_id: str,
+            *,
+            reason_code: str,
+            handle: str = "",
+            plane: str = "",
+            missing_edge_ids: Optional[List[str]] = None,
+            waiting_node_ids: Optional[List[str]] = None,
+            details: Optional[Dict[str, Any]] = None,
+        ) -> None:
+            reason = str(reason_code or "").strip() or "NO_READY_WORK"
+            handle_norm = str(handle or "").strip()
+            plane_norm = str(plane or "").strip().lower()
+            if plane_norm not in {"work", "param", "control"}:
+                plane_norm = ""
+            missing = sorted({str(edge_id).strip() for edge_id in (missing_edge_ids or []) if str(edge_id).strip()})
+            waiting = sorted({str(waiting_id).strip() for waiting_id in (waiting_node_ids or []) if str(waiting_id).strip()})
+            signature = {
+                "reasonCode": reason,
+                "handle": handle_norm,
+                "plane": plane_norm,
+                "missingEdgeIds": tuple(missing),
+                "waitingOnNodeIds": tuple(waiting),
+            }
+            previous = blocked_state_by_node.get(node_id) or {}
+            if previous == signature:
+                return
+            blocked_state_by_node[node_id] = signature
+            evt: Dict[str, Any] = {
+                "type": "node_blocked",
+                "schema_version": 1,
+                "runId": run_id,
+                "at": iso_now(),
+                "nodeId": str(node_id),
+                "reasonCode": reason,
+            }
+            if handle_norm:
+                evt["handle"] = handle_norm
+            if plane_norm:
+                evt["plane"] = plane_norm
+            if missing:
+                evt["missingEdgeIds"] = missing
+            if waiting:
+                evt["waitingOnNodeIds"] = waiting
+            if isinstance(details, dict) and details:
+                evt["details"] = details
+            await _emit(evt)
+
+        def _clear_node_blocked(node_id: str) -> None:
+            blocked_state_by_node.pop(str(node_id), None)
 
         async def _dequeue_work_batch(node_id: str) -> List[Dict[str, Any]]:
             incoming = _incoming_edge_infos(node_id)
@@ -7828,10 +7895,28 @@ async def run_graph(
                 await _emit_handle_satisfaction_if_changed(node_id, handle)
             return out
 
-        def _enqueue_ready_if_possible(node_id: str) -> None:
+        async def _enqueue_ready_if_possible(node_id: str) -> None:
             if node_id in blocked_descendants:
+                await _emit_node_blocked(
+                    node_id,
+                    reason_code="UPSTREAM_NOT_READY",
+                    details={"blockedByBranch": True},
+                )
                 return
             if not deps_released.get(node_id, False):
+                waiting_upstream_nodes = sorted(
+                    {
+                        str((edges.get(str(incoming_edge_id)) or {}).get("source") or "").strip()
+                        for incoming_edge_id in plan.incoming_edges.get(node_id, [])
+                        if not bool(edge_dependency_released.get(str(incoming_edge_id), False))
+                        and str((edges.get(str(incoming_edge_id)) or {}).get("source") or "").strip()
+                    }
+                )
+                await _emit_node_blocked(
+                    node_id,
+                    reason_code="UPSTREAM_NOT_READY",
+                    waiting_node_ids=waiting_upstream_nodes,
+                )
                 return
             policy = _effective_node_runtime_policy(node_id)
             consume_mode = str(policy.get("consume_mode") or "once")
@@ -7839,14 +7924,35 @@ async def run_graph(
             in_flight_for_node = int(node_inflight_counts.get(node_id, 0))
             in_ready = ready.count(node_id)
             if in_flight_for_node + in_ready >= per_node_max:
+                await _emit_node_blocked(
+                    node_id,
+                    reason_code="MAX_INFLIGHT_REACHED",
+                    details={
+                        "inflight": in_flight_for_node,
+                        "readyCount": in_ready,
+                        "maxInflight": per_node_max,
+                    },
+                )
                 return
             if consume_mode == "once":
                 if node_started_once.get(node_id, False):
+                    await _emit_node_blocked(node_id, reason_code="NO_READY_WORK")
                     return
                 ready.append(node_id)
+                _clear_node_blocked(node_id)
                 return
-            if _node_has_ready_work(node_id):
+            probe = _node_ready_probe(node_id)
+            if bool(probe.get("ready", False)):
                 ready.append(node_id)
+                _clear_node_blocked(node_id)
+                return
+            await _emit_node_blocked(
+                node_id,
+                reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
+                handle=str(probe.get("handle") or ""),
+                plane=str(probe.get("plane") or ""),
+                missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+            )
 
         def _pending_work_depth_by_node(*, streaming_only: bool) -> Dict[str, int]:
             out: Dict[str, int] = {}
@@ -7865,12 +7971,30 @@ async def run_graph(
                     out[candidate] = int(node_depth)
             return out
 
-        def _rebuild_ready_from_state() -> List[str]:
+        async def _rebuild_ready_from_state() -> List[str]:
             rebuilt: List[str] = []
             for candidate in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
                 if candidate in blocked_descendants:
+                    await _emit_node_blocked(
+                        candidate,
+                        reason_code="UPSTREAM_NOT_READY",
+                        details={"blockedByBranch": True},
+                    )
                     continue
                 if not deps_released.get(candidate, False):
+                    waiting_upstream_nodes = sorted(
+                        {
+                            str((edges.get(str(incoming_edge_id)) or {}).get("source") or "").strip()
+                            for incoming_edge_id in plan.incoming_edges.get(candidate, [])
+                            if not bool(edge_dependency_released.get(str(incoming_edge_id), False))
+                            and str((edges.get(str(incoming_edge_id)) or {}).get("source") or "").strip()
+                        }
+                    )
+                    await _emit_node_blocked(
+                        candidate,
+                        reason_code="UPSTREAM_NOT_READY",
+                        waiting_node_ids=waiting_upstream_nodes,
+                    )
                     continue
                 policy = _effective_node_runtime_policy(candidate)
                 consume_mode = str(policy.get("consume_mode") or "once")
@@ -7878,15 +8002,35 @@ async def run_graph(
                 in_flight_for_node = int(node_inflight_counts.get(candidate, 0))
                 in_ready = ready.count(candidate)
                 if in_flight_for_node + in_ready >= per_node_max:
+                    await _emit_node_blocked(
+                        candidate,
+                        reason_code="MAX_INFLIGHT_REACHED",
+                        details={
+                            "inflight": in_flight_for_node,
+                            "readyCount": in_ready,
+                            "maxInflight": per_node_max,
+                        },
+                    )
                     continue
                 if consume_mode == "once":
                     if node_started_once.get(candidate, False):
+                        await _emit_node_blocked(candidate, reason_code="NO_READY_WORK")
                         continue
-                elif not _node_has_ready_work(candidate):
-                    continue
+                else:
+                    probe = _node_ready_probe(candidate)
+                    if not bool(probe.get("ready", False)):
+                        await _emit_node_blocked(
+                            candidate,
+                            reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
+                            handle=str(probe.get("handle") or ""),
+                            plane=str(probe.get("plane") or ""),
+                            missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+                        )
+                        continue
                 if candidate not in ready:
                     ready.append(candidate)
                     rebuilt.append(candidate)
+                    _clear_node_blocked(candidate)
             return rebuilt
         await _emit(
             {
@@ -7908,7 +8052,7 @@ async def run_graph(
                 pending_depth = int(sum(int(v) for v in pending_by_node.values()))
                 if pending_depth <= 0:
                     break
-                rebuilt = _rebuild_ready_from_state()
+                rebuilt = await _rebuild_ready_from_state()
                 if rebuilt:
                     await _emit(
                         {
@@ -8003,13 +8147,36 @@ async def run_graph(
                 if int(node_inflight_counts.get(nid, 0)) >= per_node_max:
                     # Per-node inflight cap reached; defer.
                     ready.append(nid)
+                    await _emit_node_blocked(
+                        nid,
+                        reason_code="MAX_INFLIGHT_REACHED",
+                        details={
+                            "inflight": int(node_inflight_counts.get(nid, 0)),
+                            "readyCount": ready.count(nid),
+                            "maxInflight": per_node_max,
+                        },
+                    )
                     break
                 work_batch: List[Dict[str, Any]] = []
                 if consume_mode in {"single_item", "batch"} and plan.incoming_edges.get(nid, []):
-                    if not _node_has_ready_work(nid):
+                    probe = _node_ready_probe(nid)
+                    if not bool(probe.get("ready", False)):
+                        await _emit_node_blocked(
+                            nid,
+                            reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
+                            handle=str(probe.get("handle") or ""),
+                            plane=str(probe.get("plane") or ""),
+                            missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+                        )
                         continue
                     work_batch = await _dequeue_work_batch(nid)
                     if not work_batch:
+                        await _emit_node_blocked(
+                            nid,
+                            reason_code="NO_READY_WORK",
+                            handle="in",
+                            plane="work",
+                        )
                         continue
                 task = asyncio.create_task(
                     _run_with_limits(
@@ -8020,6 +8187,7 @@ async def run_graph(
                 inflight[task] = {"nodeId": nid, "workBatch": work_batch}
                 node_inflight_counts[nid] = int(node_inflight_counts.get(nid, 0)) + 1
                 node_started_once[nid] = True
+                _clear_node_blocked(nid)
 
             if not inflight:
                 await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})
@@ -8122,7 +8290,7 @@ async def run_graph(
                                 "nodeId": node_id,
                             }
                         )
-                        _enqueue_ready_if_possible(node_id)
+                        await _enqueue_ready_if_possible(node_id)
                         await _emit(
                             {
                                 "type": "queue_metrics",
@@ -8286,7 +8454,7 @@ async def run_graph(
                         or (policy_obj.get("rejectFatal") if isinstance(policy_obj, dict) else False)
                     )
                     # Reject is non-error; do not release downstream dependencies from this item.
-                    _enqueue_ready_if_possible(node_id)
+                    await _enqueue_ready_if_possible(node_id)
                     await _emit(
                         {
                             "type": "queue_metrics",
@@ -8342,7 +8510,7 @@ async def run_graph(
                             indeg[nb] = max(0, indeg.get(nb, 0) - 1)
                             if indeg[nb] == 0:
                                 deps_released[nb] = True
-                                _enqueue_ready_if_possible(nb)
+                                await _enqueue_ready_if_possible(nb)
                         continue
                     work_items = await _expand_edge_work_items(
                         source_node_id=node_id,
@@ -8376,9 +8544,9 @@ async def run_graph(
                         indeg[nb] = max(0, indeg.get(nb, 0) - 1)
                         if indeg[nb] == 0:
                             deps_released[nb] = True
-                            _enqueue_ready_if_possible(nb)
+                            await _enqueue_ready_if_possible(nb)
                     await _emit_handle_satisfaction_if_changed(nb, target_handle)
-                _enqueue_ready_if_possible(node_id)
+                await _enqueue_ready_if_possible(node_id)
                 ready.sort(key=lambda n: order_index.get(n, 10**9))
                 await _emit(
                     {

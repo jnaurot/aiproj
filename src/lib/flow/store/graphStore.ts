@@ -1091,6 +1091,19 @@ export type GraphState = {
 				updatedAt?: string;
 			}
 		>;
+		blockedByNode?: Record<
+			string,
+			{
+				nodeId: string;
+				reasonCode: string;
+				handle?: string;
+				plane?: 'work' | 'param' | 'control';
+				missingEdgeIds?: string[];
+				waitingOnNodeIds?: string[];
+				details?: Record<string, unknown>;
+				updatedAt?: string;
+			}
+		>;
 		softFailByNode?: Record<
 			string,
 			{
@@ -1965,6 +1978,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							nodeMetrics: {},
 							runtimeItemMetrics: {},
 							runScoped: undefined,
+							blockedByNode: {},
 							softFailByNode: {}
 						}
 					},
@@ -1997,7 +2011,29 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					lastError: null
 				}
 			};
-			return withGraphMeta(logPush({ ...state, nodeBindings, nodeOutputs }, 'info', 'Node started', evt.nodeId));
+			const blockedByNode =
+				state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
+					? { ...(state.queueRuntime.blockedByNode as Record<string, unknown>) }
+					: {};
+			if (Object.prototype.hasOwnProperty.call(blockedByNode, evt.nodeId)) {
+				delete (blockedByNode as Record<string, unknown>)[evt.nodeId];
+			}
+			return withGraphMeta(
+				logPush(
+					{
+						...state,
+						nodeBindings,
+						nodeOutputs,
+						queueRuntime: {
+							...(state.queueRuntime ?? {}),
+							blockedByNode: blockedByNode as any
+						}
+					},
+					'info',
+					'Node started',
+					evt.nodeId
+				)
+			);
 		}
 		case 'component_started': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
@@ -2284,6 +2320,53 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nodeId
 			);
 		}
+		case 'node_blocked': {
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			if (!nodeId) return state;
+			const reasonCode = String((evt as any)?.reasonCode ?? '').trim() || 'NO_READY_WORK';
+			const handle = String((evt as any)?.handle ?? '').trim();
+			const planeRaw = String((evt as any)?.plane ?? '').trim().toLowerCase();
+			const plane = planeRaw === 'param' || planeRaw === 'control' || planeRaw === 'work' ? planeRaw : undefined;
+			const missingEdgeIds = Array.isArray((evt as any)?.missingEdgeIds)
+				? ((evt as any).missingEdgeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
+				: [];
+			const waitingOnNodeIds = Array.isArray((evt as any)?.waitingOnNodeIds)
+				? ((evt as any).waitingOnNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
+				: [];
+			const details =
+				(evt as any)?.details && typeof (evt as any).details === 'object'
+					? ({ ...((evt as any).details as Record<string, unknown>) } as Record<string, unknown>)
+					: undefined;
+			const previous =
+				(state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
+					? state.queueRuntime.blockedByNode
+					: {}) ?? {};
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					blockedByNode: {
+						...previous,
+						[nodeId]: {
+							nodeId,
+							reasonCode,
+							handle: handle || undefined,
+							plane: plane as any,
+							missingEdgeIds,
+							waitingOnNodeIds,
+							details,
+							updatedAt: String((evt as any)?.at ?? ''),
+						}
+					}
+				}
+			};
+			return logPush(
+				nextState,
+				'info',
+				`[blocked] node=${nodeId} reason=${reasonCode}${handle ? ` handle=${handle}` : ''}`,
+				nodeId
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
@@ -2342,6 +2425,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						(state.queueRuntime?.warningSummary &&
 						typeof state.queueRuntime.warningSummary === 'object'
 							? state.queueRuntime.warningSummary
+							: {}) ?? {},
+					blockedByNode:
+						(state.queueRuntime?.blockedByNode &&
+						typeof state.queueRuntime.blockedByNode === 'object'
+							? state.queueRuntime.blockedByNode
 							: {}) ?? {}
 				}
 			};

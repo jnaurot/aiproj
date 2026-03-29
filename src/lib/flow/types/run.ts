@@ -180,6 +180,26 @@ export type KnownRunEvent =
       upstreamNodeId?: string;
       count: number;
       firstAt?: string;
+    }
+  | {
+      type: "node_blocked";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      nodeId: string;
+      reasonCode:
+        | "WAITING_REQUIRED_INPUT"
+        | "WAITING_REQUIRED_PARAM"
+        | "WAITING_REQUIRED_CONTROL"
+        | "MAX_INFLIGHT_REACHED"
+        | "UPSTREAM_NOT_READY"
+        | "NO_READY_WORK"
+        | "LLM_LEASE_UNAVAILABLE";
+      handle?: string;
+      plane?: "work" | "param" | "control";
+      missingEdgeIds?: string[];
+      waitingOnNodeIds?: string[];
+      details?: Record<string, unknown>;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };
