@@ -568,6 +568,34 @@
 		out.sort((a, b) => `${a.handle}:${a.edgeId}`.localeCompare(`${b.handle}:${b.edgeId}`));
 		return out;
 	})();
+	$: nodeBlockedStatus = (() => {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId) return null as null | Record<string, unknown>;
+		const map =
+			(($graphStore as any)?.queueRuntime?.blockedByNode &&
+			typeof ($graphStore as any).queueRuntime.blockedByNode === 'object'
+				? (($graphStore as any).queueRuntime.blockedByNode as Record<string, unknown>)
+				: null) ?? null;
+		if (!map) return null as null | Record<string, unknown>;
+		const row = map[nodeId];
+		return row && typeof row === 'object' ? (row as Record<string, unknown>) : null;
+	})();
+	$: schedulerSnapshot = (() => {
+		const row =
+			(($graphStore as any)?.queueRuntime?.schedulerSnapshot &&
+			typeof ($graphStore as any).queueRuntime.schedulerSnapshot === 'object'
+				? (($graphStore as any).queueRuntime.schedulerSnapshot as Record<string, unknown>)
+				: null) ?? null;
+		return row;
+	})();
+	$: llmLeaseStatus = (() => {
+		const row =
+			(($graphStore as any)?.queueRuntime?.llmLease &&
+			typeof ($graphStore as any).queueRuntime.llmLease === 'object'
+				? (($graphStore as any).queueRuntime.llmLease as Record<string, unknown>)
+				: null) ?? null;
+		return row;
+	})();
 	let expectedInputSchemaDraftByHandle: Record<string, string> = {};
 	let expectedInputSchemaErrorByHandle: Record<string, string> = {};
 	let expectedInputSchemaNodeId = '';
@@ -1921,6 +1949,71 @@
 						</div>
 					</div>
 				{/each}
+			</div>
+		</div>
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Why Not Running</div>
+			<div class="guidedAssistList">
+				{#if nodeBlockedStatus}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">
+							{String((nodeBlockedStatus as any)?.reasonCode ?? 'NO_READY_WORK')}
+						</div>
+						<div class="guidedAssistDesc">
+							handle {String((nodeBlockedStatus as any)?.handle ?? '-')} | plane {String((nodeBlockedStatus as any)?.plane ?? '-')}
+						</div>
+						{#if Array.isArray((nodeBlockedStatus as any)?.missingEdgeIds) && ((nodeBlockedStatus as any)?.missingEdgeIds as any[]).length > 0}
+							<div class="guidedAssistDesc">
+								missing edges {(((nodeBlockedStatus as any)?.missingEdgeIds as any[]) ?? []).map((item) => String(item)).join(', ')}
+							</div>
+						{/if}
+						{#if Array.isArray((nodeBlockedStatus as any)?.waitingOnNodeIds) && ((nodeBlockedStatus as any)?.waitingOnNodeIds as any[]).length > 0}
+							<div class="guidedAssistDesc">
+								waiting nodes {(((nodeBlockedStatus as any)?.waitingOnNodeIds as any[]) ?? []).map((item) => String(item)).join(', ')}
+							</div>
+						{/if}
+					</div>
+				{:else}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistDesc">No blocked reason recorded for this node in the current run.</div>
+					</div>
+				{/if}
+			</div>
+		</div>
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Scheduler Snapshot</div>
+			<div class="guidedAssistList">
+				{#if schedulerSnapshot}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">
+							stalled {String(Boolean((schedulerSnapshot as any)?.stalled))}
+						</div>
+						<div class="guidedAssistDesc">
+							ready {String((schedulerSnapshot as any)?.readyCount ?? 0)} | inflight {String((schedulerSnapshot as any)?.inflightCount ?? 0)} | pending {String((schedulerSnapshot as any)?.pendingQueueDepth ?? 0)} | runnable {String((schedulerSnapshot as any)?.runnableNodeCount ?? 0)}
+						</div>
+					</div>
+				{:else}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistDesc">No scheduler snapshot received yet.</div>
+					</div>
+				{/if}
+			</div>
+		</div>
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">LLM Lease</div>
+			<div class="guidedAssistList">
+				{#if llmLeaseStatus}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistLabel">state {String((llmLeaseStatus as any)?.state ?? 'released')}</div>
+						<div class="guidedAssistDesc">
+							holder {String((llmLeaseStatus as any)?.holderNodeId ?? '(none)')} | queue {String((llmLeaseStatus as any)?.waitQueueLength ?? 0)} | actor {String((llmLeaseStatus as any)?.nodeId ?? '-')}
+						</div>
+					</div>
+				{:else}
+					<div class="guidedAssistItem">
+						<div class="guidedAssistDesc">No LLM lease telemetry received yet.</div>
+					</div>
+				{/if}
 			</div>
 		</div>
 		{#if nodeQueuePortStats.length > 0}
