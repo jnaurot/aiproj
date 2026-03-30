@@ -5154,9 +5154,9 @@ async function scrollToBottom() {
 	}
 
 	.runMonitorNodeHead {
-		opacity: 0.72;
+		opacity: 1;
 		text-transform: lowercase;
-		color: var(--color-control-text, #e6e6e6);
+		color: var(--color-control-text-muted, #9aa4b2);
 		position: sticky;
 		top: 0;
 		z-index: 2;
