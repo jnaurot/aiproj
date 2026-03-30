@@ -282,7 +282,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeEnvFilter = '';
 	let runtimeEnvRevealSensitive = false;
 	let previousEditingContext: 'graph' | 'component' = 'graph';
-	let logAutoScrollEnabled = true;
+let logAutoScrollEnabled = true;
 	let nodeInspectorCollapsed = false;
 	let environmentCollapsed = false;
 	let runLogsCollapsed = false;
@@ -913,6 +913,16 @@ async function scrollToBottom() {
 		});
 	}
 }
+
+	function isRunLogNearBottom(el: HTMLElement, thresholdPx = 24): boolean {
+		const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
+		return distanceFromBottom <= thresholdPx;
+	}
+
+	function handleRunLogScroll(): void {
+		if (!scrollElement) return;
+		logAutoScrollEnabled = isRunLogNearBottom(scrollElement);
+	}
 
 	async function restoreGraphUiReturnSnapshot(): Promise<void> {
 		const snapshot = graphUiReturnSnapshot;
@@ -3949,7 +3959,7 @@ async function scrollToBottom() {
 						{/each}
 					</div>
 				{/if}
-				<div class="logs" bind:this={scrollElement}>
+				<div class="logs" bind:this={scrollElement} on:scroll={handleRunLogScroll}>
 					{#each filteredLogs as l (l.id)}
 						<div class={`log ${l.level}`}>
 							<span class="ts">{l.ts}</span>
