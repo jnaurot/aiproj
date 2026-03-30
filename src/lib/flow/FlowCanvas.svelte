@@ -257,6 +257,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let splitStartY = 0;
 	let splitPaneAStartPx = 0;
 	let splitPaneBStartPx = 0;
+	let activeInspectorPaneAEl: HTMLElement | null = null;
+	let activeInspectorPaneBEl: HTMLElement | null = null;
+	let activeInspectorPaneANoScrollPx = Number.POSITIVE_INFINITY;
+	let activeInspectorPaneBNoScrollPx = Number.POSITIVE_INFINITY;
 	let splitEnvLogsBypassEnvironment = false;
 	let subtypeError: string | null = null;
 	let subtypeErrorNodeId: string | null = null;
@@ -288,6 +292,35 @@ let logAutoScrollEnabled = true;
 	let runLogsCollapsed = false;
 	let runMonitorNodeFilter: RunMonitorFilter = 'all';
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
+	let runMonitorSlideoutOpen = true;
+	let runMonitorSlideoutWidth = 380;
+	let runMonitorResizeActive = false;
+	let runMonitorResizeStartX = 0;
+	let runMonitorResizeStartWidth = 380;
+	let runMonitorMonitorWeight = 1;
+	let runMonitorEnvWeight = 1;
+	let runMonitorNodesWeight = 1;
+	let runMonitorEdgesWeight = 1;
+	let runMonitorPaneEl: HTMLElement | null = null;
+	let runMonitorEnvPaneEl: HTMLElement | null = null;
+	let runMonitorNodesPaneEl: HTMLElement | null = null;
+	let runMonitorEdgesPaneEl: HTMLElement | null = null;
+	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
+	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
+	let runMonitorSplitStartY = 0;
+	let runMonitorSplitPaneAStartPx = 0;
+	let runMonitorSplitPaneBStartPx = 0;
+	let activeRunMonitorPaneAEl: HTMLElement | null = null;
+	let activeRunMonitorPaneBEl: HTMLElement | null = null;
+	let activeRunMonitorPaneANoScrollPx = Number.POSITIVE_INFINITY;
+	let activeRunMonitorPaneBNoScrollPx = Number.POSITIVE_INFINITY;
+	let inspectorSidebarWidth = 460;
+	let inspectorResizeActive = false;
+	let inspectorResizeStartX = 0;
+	let inspectorResizeStartWidth = 460;
+	let runMonitorPrefsGraphId = '';
+	let runMonitorSectionCollapsed = false;
+	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
@@ -384,6 +417,14 @@ let logAutoScrollEnabled = true;
 			String(row.description ?? '').toLowerCase().includes(q)
 		);
 	});
+	$: {
+		const gid = String($graphStore.graphId ?? '').trim() || 'default';
+		if (gid !== runMonitorPrefsGraphId) {
+			runMonitorPrefsGraphId = gid;
+			loadRunMonitorSlideoutPrefs(gid);
+			loadInspectorSidebarPrefs(gid);
+		}
+	}
 
 	$: selectedId = $selectedNode?.id;
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -2565,6 +2606,7 @@ async function scrollToBottom() {
 			runLogsCollapsed = false;
 			await tick();
 		}
+		const topTargetsLogs = pair === 'top_env' && !environmentPaneEl;
 		splitEnvLogsBypassEnvironment = pair === 'env_logs' && environmentCollapsed;
 		const paneA =
 			pair === 'top_env'
@@ -2572,7 +2614,7 @@ async function scrollToBottom() {
 				: splitEnvLogsBypassEnvironment
 					? inspectorTopPaneEl
 					: environmentPaneEl;
-		const paneB = pair === 'top_env' ? environmentPaneEl : runLogsPaneEl;
+		const paneB = pair === 'top_env' ? (topTargetsLogs ? runLogsPaneEl : environmentPaneEl) : runLogsPaneEl;
 		if (!paneA || !paneB) return;
 		const aRect = paneA.getBoundingClientRect();
 		const bRect = paneB.getBoundingClientRect();
@@ -2580,9 +2622,14 @@ async function scrollToBottom() {
 		if (pairStartPx <= 0) return;
 		const totalWeight =
 			pair === 'top_env'
-				? Math.max(0.001, inspectorTopWeight + environmentWeight)
+				? topTargetsLogs
+					? Math.max(0.001, inspectorTopWeight + runLogsWeight)
+					: Math.max(0.001, inspectorTopWeight + environmentWeight)
 				: Math.max(0.001, environmentWeight + runLogsWeight);
-		const paneAWeight = pair === 'top_env' ? inspectorTopWeight : environmentWeight;
+		const paneAWeight =
+			pair === 'top_env'
+				? inspectorTopWeight
+				: environmentWeight;
 		const paneAFromWeight = (pairStartPx * paneAWeight) / totalWeight;
 		const paneBFromWeight = pairStartPx - paneAFromWeight;
 		const paneAStart = aRect.height > 0 ? aRect.height : paneAFromWeight;
@@ -2590,9 +2637,26 @@ async function scrollToBottom() {
 		const normalizedA = Math.max(0, Math.min(pairStartPx, paneAStart));
 		const normalizedB = Math.max(0, pairStartPx - normalizedA);
 		activeInspectorSplit = pair;
+		activeInspectorPaneAEl = paneA;
+		activeInspectorPaneBEl = paneB;
 		splitStartY = event.clientY;
 		splitPaneAStartPx = normalizedB > 0 ? normalizedA : paneAFromWeight;
 		splitPaneBStartPx = pairStartPx - splitPaneAStartPx;
+		activeInspectorPaneANoScrollPx = estimatePaneNoScrollPx(paneA, splitPaneAStartPx);
+		activeInspectorPaneBNoScrollPx = estimatePaneNoScrollPx(paneB, splitPaneBStartPx);
+	}
+
+	function estimatePaneNoScrollPx(paneEl: HTMLElement | null, paneStartPx: number): number {
+		if (!paneEl || !(paneStartPx > 0)) return Number.POSITIVE_INFINITY;
+		let maxDeficit = Math.max(0, Number(paneEl.scrollHeight || 0) - Number(paneEl.clientHeight || 0));
+		const descendants = paneEl.querySelectorAll<HTMLElement>('*');
+		for (const child of descendants) {
+			const deficit = Math.max(0, Number(child.scrollHeight || 0) - Number(child.clientHeight || 0));
+			if (deficit > maxDeficit) {
+				maxDeficit = deficit;
+			}
+		}
+		return paneStartPx + maxDeficit;
 	}
 
 	function onInspectorSplitMove(event: PointerEvent) {
@@ -2602,13 +2666,44 @@ async function scrollToBottom() {
 		const minPanePx =
 			activeInspectorSplit === 'env_logs' && splitEnvLogsBypassEnvironment ? 64 : 96;
 		const dy = event.clientY - splitStartY;
-		const nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, splitPaneAStartPx + dy));
+		let nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, splitPaneAStartPx + dy));
+		const growingA = nextPaneA > splitPaneAStartPx;
+		const growingB = nextPaneA < splitPaneAStartPx;
+		const paneANoScrollLimit = Math.max(
+			minPanePx,
+			Math.min(
+				pairStartPx - minPanePx,
+				Math.ceil(Number(activeInspectorPaneANoScrollPx))
+			)
+		);
+		const paneBNoScrollLimit = Math.max(
+			minPanePx,
+			Math.min(
+				pairStartPx - minPanePx,
+				Math.ceil(Number(activeInspectorPaneBNoScrollPx))
+			)
+		);
+		if (growingA) {
+			const cap = Math.max(splitPaneAStartPx, paneANoScrollLimit);
+			nextPaneA = Math.min(nextPaneA, cap);
+		} else if (growingB) {
+			const floor = Math.min(splitPaneAStartPx, pairStartPx - paneBNoScrollLimit);
+			nextPaneA = Math.max(nextPaneA, floor);
+		}
+		nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, nextPaneA));
 
 		if (activeInspectorSplit === 'top_env') {
-			const total = inspectorTopWeight + environmentWeight;
-			if (total <= 0) return;
-			inspectorTopWeight = (total * nextPaneA) / pairStartPx;
-			environmentWeight = total - inspectorTopWeight;
+			if (!environmentPaneEl) {
+				const total = inspectorTopWeight + runLogsWeight;
+				if (total <= 0) return;
+				inspectorTopWeight = (total * nextPaneA) / pairStartPx;
+				runLogsWeight = total - inspectorTopWeight;
+			} else {
+				const total = inspectorTopWeight + environmentWeight;
+				if (total <= 0) return;
+				inspectorTopWeight = (total * nextPaneA) / pairStartPx;
+				environmentWeight = total - inspectorTopWeight;
+			}
 		} else {
 			if (splitEnvLogsBypassEnvironment) {
 				const total = inspectorTopWeight + runLogsWeight;
@@ -2626,6 +2721,10 @@ async function scrollToBottom() {
 
 	function onInspectorSplitUp() {
 		activeInspectorSplit = null;
+		activeInspectorPaneAEl = null;
+		activeInspectorPaneBEl = null;
+		activeInspectorPaneANoScrollPx = Number.POSITIVE_INFINITY;
+		activeInspectorPaneBNoScrollPx = Number.POSITIVE_INFINITY;
 		splitEnvLogsBypassEnvironment = false;
 	}
 
@@ -2679,6 +2778,232 @@ async function scrollToBottom() {
 		snapshotInspectorCollapseRestore();
 		if (nodeInspectorCollapsed) nodeInspectorCollapsed = false;
 		rebalanceInspectorForCollapse('logs');
+	}
+
+	function runMonitorOpenStorageKey(graphId: string): string {
+		return `flow.runMonitor.open.${graphId || 'default'}`;
+	}
+
+	function runMonitorWidthStorageKey(graphId: string): string {
+		return `flow.runMonitor.width.${graphId || 'default'}`;
+	}
+
+	function runMonitorSectionSplitStorageKey(graphId: string): string {
+		return `flow.runMonitor.split.section.${graphId || 'default'}`;
+	}
+
+	function runMonitorTableSplitStorageKey(graphId: string): string {
+		return `flow.runMonitor.split.table.${graphId || 'default'}`;
+	}
+
+	function inspectorSidebarWidthStorageKey(graphId: string): string {
+		return `flow.inspector.width.${graphId || 'default'}`;
+	}
+
+	function loadRunMonitorSlideoutPrefs(graphId: string): void {
+		if (typeof window === 'undefined') return;
+		const gid = String(graphId || '').trim() || 'default';
+		try {
+			const openRaw = sessionStorage.getItem(runMonitorOpenStorageKey(gid));
+			if (openRaw === '0' || openRaw === '1') {
+				runMonitorSlideoutOpen = openRaw === '1';
+			}
+			const widthRaw = Number(sessionStorage.getItem(runMonitorWidthStorageKey(gid)));
+			if (Number.isFinite(widthRaw)) {
+				runMonitorSlideoutWidth = Math.min(720, Math.max(300, widthRaw));
+			}
+			const sectionRatioRaw = Number(sessionStorage.getItem(runMonitorSectionSplitStorageKey(gid)));
+			if (Number.isFinite(sectionRatioRaw) && sectionRatioRaw > 0.1 && sectionRatioRaw < 0.9) {
+				runMonitorMonitorWeight = sectionRatioRaw;
+				runMonitorEnvWeight = Math.max(0.001, 1 - sectionRatioRaw);
+			}
+			const tableRatioRaw = Number(sessionStorage.getItem(runMonitorTableSplitStorageKey(gid)));
+			if (Number.isFinite(tableRatioRaw) && tableRatioRaw > 0.1 && tableRatioRaw < 0.9) {
+				runMonitorNodesWeight = tableRatioRaw;
+				runMonitorEdgesWeight = Math.max(0.001, 1 - tableRatioRaw);
+			}
+		} catch {
+			// noop
+		}
+	}
+
+	function loadInspectorSidebarPrefs(graphId: string): void {
+		if (typeof window === 'undefined') return;
+		const gid = String(graphId || '').trim() || 'default';
+		try {
+			const widthRaw = Number(sessionStorage.getItem(inspectorSidebarWidthStorageKey(gid)));
+			if (Number.isFinite(widthRaw)) {
+				inspectorSidebarWidth = Math.min(780, Math.max(340, widthRaw));
+			}
+		} catch {
+			// noop
+		}
+	}
+
+	function persistRunMonitorSlideoutPrefs(): void {
+		if (typeof window === 'undefined') return;
+		const gid = String(runMonitorPrefsGraphId || '').trim() || 'default';
+		try {
+			sessionStorage.setItem(runMonitorOpenStorageKey(gid), runMonitorSlideoutOpen ? '1' : '0');
+			sessionStorage.setItem(runMonitorWidthStorageKey(gid), String(Math.round(runMonitorSlideoutWidth)));
+			const totalSection = Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight);
+			const sectionRatio = Math.min(0.95, Math.max(0.05, runMonitorMonitorWeight / totalSection));
+			sessionStorage.setItem(runMonitorSectionSplitStorageKey(gid), sectionRatio.toFixed(4));
+			const totalTable = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
+			const tableRatio = Math.min(0.95, Math.max(0.05, runMonitorNodesWeight / totalTable));
+			sessionStorage.setItem(runMonitorTableSplitStorageKey(gid), tableRatio.toFixed(4));
+		} catch {
+			// noop
+		}
+	}
+
+	function persistInspectorSidebarPrefs(): void {
+		if (typeof window === 'undefined') return;
+		const gid = String(runMonitorPrefsGraphId || '').trim() || 'default';
+		try {
+			sessionStorage.setItem(inspectorSidebarWidthStorageKey(gid), String(Math.round(inspectorSidebarWidth)));
+		} catch {
+			// noop
+		}
+	}
+
+	function toggleRunMonitorSlideout(): void {
+		runMonitorSlideoutOpen = !runMonitorSlideoutOpen;
+		persistRunMonitorSlideoutPrefs();
+	}
+
+	function beginRunMonitorResize(event: PointerEvent): void {
+		runMonitorResizeActive = true;
+		runMonitorResizeStartX = Number(event.clientX || 0);
+		runMonitorResizeStartWidth = runMonitorSlideoutWidth;
+		window.addEventListener('pointermove', onRunMonitorResizeMove);
+		window.addEventListener('pointerup', endRunMonitorResize);
+	}
+
+	function beginInspectorResize(event: PointerEvent): void {
+		inspectorResizeActive = true;
+		inspectorResizeStartX = Number(event.clientX || 0);
+		inspectorResizeStartWidth = inspectorSidebarWidth;
+		window.addEventListener('pointermove', onInspectorResizeMove);
+		window.addEventListener('pointerup', endInspectorResize);
+	}
+
+	function onInspectorResizeMove(event: PointerEvent): void {
+		if (!inspectorResizeActive) return;
+		const dx = Number(event.clientX || 0) - inspectorResizeStartX;
+		const next = inspectorResizeStartWidth - dx;
+		inspectorSidebarWidth = Math.min(780, Math.max(340, next));
+	}
+
+	function endInspectorResize(): void {
+		if (!inspectorResizeActive) return;
+		inspectorResizeActive = false;
+		window.removeEventListener('pointermove', onInspectorResizeMove);
+		window.removeEventListener('pointerup', endInspectorResize);
+		persistInspectorSidebarPrefs();
+	}
+
+	function onRunMonitorResizeMove(event: PointerEvent): void {
+		if (!runMonitorResizeActive) return;
+		const dx = Number(event.clientX || 0) - runMonitorResizeStartX;
+		const next = runMonitorResizeStartWidth - dx;
+		runMonitorSlideoutWidth = Math.min(720, Math.max(300, next));
+	}
+
+	function endRunMonitorResize(): void {
+		if (!runMonitorResizeActive) return;
+		runMonitorResizeActive = false;
+		window.removeEventListener('pointermove', onRunMonitorResizeMove);
+		window.removeEventListener('pointerup', endRunMonitorResize);
+		persistRunMonitorSlideoutPrefs();
+	}
+
+	function beginRunMonitorSplit(pair: RunMonitorSplitPair, event: PointerEvent): void {
+		const paneA = pair === 'monitor_env' ? runMonitorPaneEl : runMonitorNodesPaneEl;
+		const paneB = pair === 'monitor_env' ? runMonitorEnvPaneEl : runMonitorEdgesPaneEl;
+		if (!paneA || !paneB) return;
+		const aRect = paneA.getBoundingClientRect();
+		const bRect = paneB.getBoundingClientRect();
+		const pairStartPx = aRect.height + bRect.height;
+		if (pairStartPx <= 0) return;
+		const totalWeight =
+			pair === 'monitor_env'
+				? Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight)
+				: Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
+		const paneAWeight = pair === 'monitor_env' ? runMonitorMonitorWeight : runMonitorNodesWeight;
+		const paneAFromWeight = (pairStartPx * paneAWeight) / totalWeight;
+		const paneAStart = aRect.height > 0 ? aRect.height : paneAFromWeight;
+		const normalizedA = Math.max(0, Math.min(pairStartPx, paneAStart));
+		activeRunMonitorSplit = pair;
+		activeRunMonitorPaneAEl = paneA;
+		activeRunMonitorPaneBEl = paneB;
+		runMonitorSplitStartY = event.clientY;
+		runMonitorSplitPaneAStartPx = normalizedA;
+		runMonitorSplitPaneBStartPx = pairStartPx - normalizedA;
+		activeRunMonitorPaneANoScrollPx = estimatePaneNoScrollPx(paneA, runMonitorSplitPaneAStartPx);
+		activeRunMonitorPaneBNoScrollPx = estimatePaneNoScrollPx(paneB, runMonitorSplitPaneBStartPx);
+	}
+
+	function onRunMonitorSplitMove(event: PointerEvent): void {
+		if (!activeRunMonitorSplit) return;
+		const pairStartPx = runMonitorSplitPaneAStartPx + runMonitorSplitPaneBStartPx;
+		if (pairStartPx <= 0) return;
+		const minPanePx = 96;
+		const dy = event.clientY - runMonitorSplitStartY;
+		let nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, runMonitorSplitPaneAStartPx + dy));
+		const growingA = nextPaneA > runMonitorSplitPaneAStartPx;
+		const growingB = nextPaneA < runMonitorSplitPaneAStartPx;
+		const paneANoScrollLimit = Math.max(
+			minPanePx,
+			Math.min(
+				pairStartPx - minPanePx,
+				Math.ceil(Number(activeRunMonitorPaneANoScrollPx))
+			)
+		);
+		const paneBNoScrollLimit = Math.max(
+			minPanePx,
+			Math.min(
+				pairStartPx - minPanePx,
+				Math.ceil(Number(activeRunMonitorPaneBNoScrollPx))
+			)
+		);
+		if (growingA) {
+			const cap = Math.max(runMonitorSplitPaneAStartPx, paneANoScrollLimit);
+			nextPaneA = Math.min(nextPaneA, cap);
+		} else if (growingB) {
+			const floor = Math.min(runMonitorSplitPaneAStartPx, pairStartPx - paneBNoScrollLimit);
+			nextPaneA = Math.max(nextPaneA, floor);
+		}
+		nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, nextPaneA));
+		if (activeRunMonitorSplit === 'monitor_env') {
+			const total = Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight);
+			runMonitorMonitorWeight = (total * nextPaneA) / pairStartPx;
+			runMonitorEnvWeight = Math.max(0.001, total - runMonitorMonitorWeight);
+			return;
+		}
+		const total = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
+		runMonitorNodesWeight = (total * nextPaneA) / pairStartPx;
+		runMonitorEdgesWeight = Math.max(0.001, total - runMonitorNodesWeight);
+	}
+
+	function onRunMonitorSplitUp(): void {
+		if (!activeRunMonitorSplit) return;
+		activeRunMonitorSplit = null;
+		activeRunMonitorPaneAEl = null;
+		activeRunMonitorPaneBEl = null;
+		activeRunMonitorPaneANoScrollPx = Number.POSITIVE_INFINITY;
+		activeRunMonitorPaneBNoScrollPx = Number.POSITIVE_INFINITY;
+		persistRunMonitorSlideoutPrefs();
+	}
+
+	function onGlobalPointerMove(event: PointerEvent): void {
+		onInspectorSplitMove(event);
+		onRunMonitorSplitMove(event);
+	}
+
+	function onGlobalPointerUp(): void {
+		onInspectorSplitUp();
+		onRunMonitorSplitUp();
 	}
 
 	async function refreshWorkspaceEnvironmentPanel(): Promise<void> {
@@ -2793,6 +3118,8 @@ async function scrollToBottom() {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 		if (toastTimer) clearTimeout(toastTimer);
 		endPortTypeLegendDrag();
+		endRunMonitorResize();
+		endInspectorResize();
 		clearLongPressState();
 	});
 
@@ -2915,13 +3242,16 @@ async function scrollToBottom() {
 </script>
 
 <svelte:window
-	on:pointermove={onInspectorSplitMove}
-	on:pointerup={onInspectorSplitUp}
+	on:pointermove={onGlobalPointerMove}
+	on:pointerup={onGlobalPointerUp}
 	on:keydown={onWindowKeyDown}
 	on:resize={clampPortTypeLegendPosition}
 />
 
-<div class="layout">
+<div
+	class="layout"
+	style={`grid-template-columns: 1fr ${inspectorSidebarWidth}px ${runMonitorSlideoutOpen ? `${runMonitorSlideoutWidth}px` : '0px'};`}
+>
 	<div
 		class="flow"
 		role="region"
@@ -3281,6 +3611,12 @@ async function scrollToBottom() {
 	</div>
 
 	<aside class="inspector" bind:this={inspectorPane}>
+		<button
+			type="button"
+			class="inspectorResizeHandle"
+			aria-label="Resize node inspector sidebar"
+			on:pointerdown={beginInspectorResize}
+		></button>
 		<div
 			class="inspectorPane inspectorTop"
 			bind:this={inspectorTopPaneEl}
@@ -3433,6 +3769,14 @@ async function scrollToBottom() {
 									on:click={cycleSelectedPinMode}
 								>
 									{selectedPinPillText}
+								</button>
+								<button
+									type="button"
+									class="pill pinBtn"
+									title={runMonitorSlideoutOpen ? 'Hide Run Monitor slideout' : 'Show Run Monitor slideout'}
+									on:click={toggleRunMonitorSlideout}
+								>
+									Monitor
 								</button>
 								{#if selectedComponentHasUpdate}
 									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
@@ -3690,236 +4034,10 @@ async function scrollToBottom() {
 			{/if}
 		</div>
 		<button
-			type="button"
-			class="inspectorSplitter"
-			aria-label="Resize Node Inspector and Run Monitor panels"
-			on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
-		></button>
-		<div
-			class="inspectorPane inspectorEnv"
-			bind:this={environmentPaneEl}
-			style={environmentCollapsed ? 'flex: 0 0 auto;' : `flex: ${environmentWeight} 1 0;`}
-		>
-			<div class="envPanel">
-				<div class="envPanelHead">
-					<div class="sectionHeadTitle">
-						<h3>Run Monitor</h3>
-						<button
-							type="button"
-							class="tabBtn sectionToggle"
-							title={environmentCollapsed ? 'Expand Run Monitor' : 'Collapse Run Monitor'}
-							on:click={() => (environmentCollapsed = !environmentCollapsed)}
-						>
-							<span class="sectionToggleIcon" aria-hidden="true">{environmentCollapsed ? '?' : '?'}</span>
-						</button>
-					</div>
-				</div>
-				{#if !environmentCollapsed}
-					<div class="envPanelSummary">
-						nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
-					</div>
-					<div class="monitorToolbar">
-						<label class="monitorField">
-							<span>Filter</span>
-							<select bind:value={runMonitorNodeFilter}>
-								<option value="all">All</option>
-								<option value="blocked">Blocked</option>
-								<option value="waiting">Waiting</option>
-								<option value="stalled">Stalled</option>
-							</select>
-						</label>
-						<label class="monitorField">
-							<span>Sort</span>
-							<select bind:value={runMonitorNodeSort}>
-								<option value="depth_desc">Depth desc</option>
-								<option value="depth_asc">Depth asc</option>
-								<option value="pending_desc">Pending desc</option>
-								<option value="pending_asc">Pending asc</option>
-								<option value="label_asc">Label A-Z</option>
-							</select>
-						</label>
-					</div>
-					{#if runMonitorNodeRowsVisible.length === 0}
-						<div class="envProfileEmpty">No monitor rows for current filter.</div>
-					{:else}
-						<div class="runMonitorNodeTable" role="table" aria-label="Run monitor nodes">
-							<div class="runMonitorNodeHead" role="row">
-								<span>node</span>
-								<span>status</span>
-								<span>pending</span>
-								<span>depth</span>
-								<span>blocked</span>
-							</div>
-							{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
-								<button
-									type="button"
-									class="runMonitorNodeRow"
-									role="row"
-									on:click={() => focusNodeFromMonitor(row.nodeId)}
-									title={`Focus ${row.label}`}
-								>
-									<span class="runMonitorNodeName">
-										{row.label}
-										{#if row.isLlmHolder}
-											<span class="mono"> (llm-holder)</span>
-										{:else if row.isLlmWaiting}
-											<span class="mono"> (llm-wait)</span>
-										{/if}
-									</span>
-									<span>{row.status}</span>
-									<span>{row.pendingInputCount}</span>
-									<span>{row.inboundDepth}</span>
-									<span>{row.blockedReasonCode ?? '-'}</span>
-								</button>
-							{/each}
-						</div>
-					{/if}
-					<div class="runMonitorEdgeTable" role="table" aria-label="Run monitor edges">
-						<div class="runMonitorNodeHead" role="row">
-							<span>edge</span>
-							<span>from</span>
-							<span>to</span>
-							<span>depth</span>
-							<span>age</span>
-						</div>
-						{#if runMonitorEdgeRows.length === 0}
-							<div class="envProfileEmpty">No edge telemetry yet.</div>
-						{:else}
-								{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
-									<button
-									type="button"
-									class="runMonitorNodeRow"
-									role="row"
-									on:click={() => focusEdgeFromMonitor(row.sourceNodeId, row.targetNodeId)}
-										title={`Focus ${row.targetLabel}`}
-									>
-										<span>{compactEdgeId(row.edgeId)}:{row.handle}</span>
-										<span>{row.sourceLabel}</span>
-										<span>{row.targetLabel}</span>
-										<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
-									<span>{row.oldestAgeSec === null ? '-' : row.oldestAgeSec.toFixed(1)}</span>
-								</button>
-							{/each}
-							{/if}
-						</div>
-						<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">
-							<div class="runMonitorNodeHead" role="row">
-								<span>run</span>
-								<span>status</span>
-								<span>runtime</span>
-								<span>max q</span>
-								<span>flags</span>
-							</div>
-							{#if runMonitorHistoryRows.length === 0}
-								<div class="envProfileEmpty">No finished runs yet.</div>
-							{:else}
-								{#each runMonitorHistoryRows as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
-									<div class="runMonitorNodeRow" role="row">
-										<span class="mono">{String(row.runId ?? '-')}</span>
-										<span>{String(row.status ?? '-')}</span>
-										<span>{Number(row.runtimeMs ?? 0)}</span>
-										<span>{Number(row.maxPendingQueueDepth ?? 0)}</span>
-										<span>
-											{#if Boolean(row.hadStalledSnapshot ?? false)}
-												stalled
-											{/if}
-											{#if Number(row.blockedEvents ?? 0) > 0}
-												{Boolean(row.hadStalledSnapshot ?? false) ? ' | ' : ''}blocked={Number(row.blockedEvents ?? 0)}
-											{/if}
-											{#if !Boolean(row.hadStalledSnapshot ?? false) && Number(row.blockedEvents ?? 0) === 0}
-												-
-											{/if}
-										</span>
-									</div>
-								{/each}
-							{/if}
-						</div>
-						<div class="runtimeEnvPanel">
-							<div class="runtimeEnvHead">
-								<strong>Runtime Env Vars</strong>
-								<div class="runtimeEnvActions">
-									<button class="tabBtn" on:click={() => void refreshRuntimeEnvPanel()} disabled={runtimeEnvLoading}>
-										{runtimeEnvLoading ? 'Loading...' : 'Reload'}
-									</button>
-									<label class="runtimeEnvToggle">
-										<input
-											type="checkbox"
-											bind:checked={runtimeEnvRevealSensitive}
-											on:change={() => void refreshRuntimeEnvPanel()}
-										/>
-										<span>Reveal sensitive</span>
-									</label>
-								</div>
-							</div>
-							<input
-								class="logFilterInput"
-								placeholder="Filter env vars..."
-								bind:value={runtimeEnvFilter}
-								aria-label="Filter runtime env vars"
-							/>
-							{#if runtimeEnvError}
-								<div class="envProfileError">{runtimeEnvError}</div>
-							{/if}
-							{#if runtimeEnvRows.length === 0}
-								<div class="envProfileEmpty">No runtime env vars available.</div>
-							{:else}
-								<div class="runtimeEnvTable" role="table" aria-label="Runtime env vars">
-									{#each runtimeEnvRows as row (`${row.name}`)}
-										<div class="runtimeEnvRow" role="row">
-											<div class="runtimeEnvMeta">
-												<div class="mono runtimeEnvName">
-													{row.name}
-													{#if row.restartRequired}
-														<span class="runtimeEnvRestart">restart</span>
-													{/if}
-												</div>
-												<div class="runtimeEnvSub">
-													{row.category} | source={row.source}{row.masked ? ' | masked' : ''}
-												</div>
-												<div class="runtimeEnvDesc">{row.description}</div>
-											</div>
-											<div class="runtimeEnvEdit">
-												<input
-													class="runtimeEnvInput"
-													type="text"
-													value={runtimeEnvDraftByName[row.name] ?? ''}
-													disabled={Boolean(runtimeEnvSaving[row.name])}
-													on:input={(event) => {
-														const next = String((event.currentTarget as HTMLInputElement).value ?? '');
-														runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [row.name]: next };
-													}}
-													placeholder={row.masked ? 'masked value' : (row.defaultValue ?? '')}
-												/>
-												<div class="runtimeEnvButtons">
-													<button
-														class="tabBtn"
-														on:click={() => void applyRuntimeEnvVar(row.name)}
-														disabled={Boolean(runtimeEnvSaving[row.name])}
-													>
-														Apply
-													</button>
-													<button
-														class="tabBtn"
-														on:click={() => void unsetRuntimeEnvVar(row.name)}
-														disabled={Boolean(runtimeEnvSaving[row.name])}
-													>
-														Clear
-													</button>
-												</div>
-											</div>
-										</div>
-									{/each}
-								</div>
-							{/if}
-						</div>
-				{/if}
-			</div>
-		</div>
-		<button
-			type="button"
-			class="inspectorSplitter"
-			aria-label="Resize Node Inspector and Run Logs panels"
-			on:pointerdown={(event) => beginInspectorSplit('env_logs', event)}
+			 type="button"
+			 class="inspectorSplitter"
+			 aria-label="Resize Node Inspector and Run Logs panels"
+			 on:pointerdown={(event) => beginInspectorSplit('top_env', event)}
 		></button>
 		<div
 			class="inspectorPane inspectorLogs"
@@ -3981,6 +4099,254 @@ async function scrollToBottom() {
 			{/if}
 		</div>
 		</aside>
+		{#if runMonitorSlideoutOpen}
+			<aside class="runMonitorSlideout" style={`width:${runMonitorSlideoutWidth}px;`}>
+				<button
+					type="button"
+					class="runMonitorResizeHandle"
+					aria-label="Resize Run Monitor panel"
+					on:pointerdown={beginRunMonitorResize}
+				></button>
+				<div class="runMonitorPanel">
+					<div class="runMonitorSections">
+						<div class="runMonitorSectionPane" style={`flex:${runMonitorMonitorWeight} 1 0;`} bind:this={runMonitorPaneEl}>
+							<div class="runtimeEnvHead">
+								<strong>Run Monitor</strong>
+								<div class="runtimeEnvActions">
+									<button
+										type="button"
+										class="pill pinBtn"
+										title={runMonitorSectionCollapsed ? 'Expand monitor section' : 'Collapse monitor section'}
+										on:click={() => (runMonitorSectionCollapsed = !runMonitorSectionCollapsed)}
+									>
+										Monitor
+									</button>
+									<button
+										type="button"
+										class="tabBtn sectionToggle"
+										title="Hide Run Monitor slideout"
+										on:click={toggleRunMonitorSlideout}
+									>
+										<span class="sectionToggleIcon" aria-hidden="true">&lt;</span>
+									</button>
+								</div>
+							</div>
+							{#if !runMonitorSectionCollapsed}
+								<div class="runMonitorMonitorBody">
+									<div class="envPanelSummary">
+										nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
+									</div>
+									<div class="monitorToolbar">
+										<label class="monitorField">
+											<span>Filter</span>
+											<select bind:value={runMonitorNodeFilter}>
+												<option value="all">All</option>
+												<option value="blocked">Blocked</option>
+												<option value="waiting">Waiting</option>
+												<option value="stalled">Stalled</option>
+											</select>
+										</label>
+										<label class="monitorField">
+											<span>Sort</span>
+											<select bind:value={runMonitorNodeSort}>
+												<option value="depth_desc">Depth desc</option>
+												<option value="depth_asc">Depth asc</option>
+												<option value="pending_desc">Pending desc</option>
+												<option value="pending_asc">Pending asc</option>
+												<option value="label_asc">Label A-Z</option>
+											</select>
+										</label>
+									</div>
+									<div class="runMonitorTablesSplit">
+										<div class="runMonitorTablesPane" style={`flex:${runMonitorNodesWeight} 1 0;`} bind:this={runMonitorNodesPaneEl}>
+											{#if runMonitorNodeRowsVisible.length === 0}
+												<div class="envProfileEmpty">No monitor rows for current filter.</div>
+											{:else}
+												<div class="runMonitorNodeTable" role="table" aria-label="Run monitor nodes">
+													<div class="runMonitorNodeHead" role="row">
+														<span>node</span>
+														<span>status</span>
+														<span>pending</span>
+														<span>depth</span>
+														<span>blocked</span>
+													</div>
+													{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
+														<button
+															type="button"
+															class="runMonitorNodeRow"
+															role="row"
+															on:click={() => focusNodeFromMonitor(row.nodeId)}
+															title={`Focus ${row.label}`}
+														>
+															<span class="runMonitorNodeName">
+																{row.label}
+																{#if row.isLlmHolder}
+																	<span class="mono"> (llm-holder)</span>
+																{:else if row.isLlmWaiting}
+																	<span class="mono"> (llm-wait)</span>
+																{/if}
+															</span>
+															<span>{row.status}</span>
+															<span>{row.pendingInputCount}</span>
+															<span>{row.inboundDepth}</span>
+															<span>{row.blockedReasonCode ?? '-'}</span>
+														</button>
+													{/each}
+												</div>
+											{/if}
+										</div>
+										<button
+											type="button"
+											class="runMonitorInnerSplitter"
+											aria-label="Resize monitor nodes and edges sections"
+											on:pointerdown={(event) => beginRunMonitorSplit('nodes_edges', event)}
+										></button>
+										<div class="runMonitorTablesPane" style={`flex:${runMonitorEdgesWeight} 1 0;`} bind:this={runMonitorEdgesPaneEl}>
+											<div class="runMonitorEdgeTable" role="table" aria-label="Run monitor edges">
+												<div class="runMonitorNodeHead" role="row">
+													<span>edge</span>
+													<span>from</span>
+													<span>to</span>
+													<span>depth</span>
+													<span>age</span>
+												</div>
+												{#if runMonitorEdgeRows.length === 0}
+													<div class="envProfileEmpty">No edge telemetry yet.</div>
+												{:else}
+													{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
+														<button
+															type="button"
+															class="runMonitorNodeRow"
+															role="row"
+															on:click={() => focusEdgeFromMonitor(row.sourceNodeId, row.targetNodeId)}
+															title={`Focus ${row.targetLabel}`}
+														>
+															<span>{compactEdgeId(row.edgeId)}:{row.handle}</span>
+															<span>{row.sourceLabel}</span>
+															<span>{row.targetLabel}</span>
+															<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
+															<span>{row.oldestAgeSec === null ? '-' : row.oldestAgeSec.toFixed(1)}</span>
+														</button>
+													{/each}
+												{/if}
+											</div>
+										</div>
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">
+										<div class="runMonitorNodeHead" role="row">
+											<span>run</span>
+											<span>status</span>
+											<span>runtime</span>
+											<span>max q</span>
+											<span>flags</span>
+										</div>
+										{#if runMonitorHistoryRows.length === 0}
+											<div class="envProfileEmpty">No finished runs yet.</div>
+										{:else}
+											{#each runMonitorHistoryRows.slice(0, 8) as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
+												<div class="runMonitorNodeRow" role="row">
+													<span class="mono">{String(row.runId ?? '-')}</span>
+													<span>{String(row.status ?? '-')}</span>
+													<span>{Number(row.runtimeMs ?? 0)}</span>
+													<span>{Number(row.maxPendingQueueDepth ?? 0)}</span>
+													<span>
+														{#if Boolean(row.hadStalledSnapshot ?? false)}
+															stalled
+														{/if}
+														{#if Number(row.blockedEvents ?? 0) > 0}
+															{Boolean(row.hadStalledSnapshot ?? false) ? ' | ' : ''}blocked={Number(row.blockedEvents ?? 0)}
+														{/if}
+														{#if !Boolean(row.hadStalledSnapshot ?? false) && Number(row.blockedEvents ?? 0) === 0}
+															-
+														{/if}
+													</span>
+												</div>
+											{/each}
+										{/if}
+									</div>
+								</div>
+							{:else}
+								<div class="envPanelSummary">Run monitor section is collapsed.</div>
+							{/if}
+						</div>
+
+						{#if !runMonitorSectionCollapsed && !slideoutEnvironmentCollapsed}
+							<button
+								type="button"
+								class="runMonitorInnerSplitter"
+								aria-label="Resize run monitor and environment sections"
+								on:pointerdown={(event) => beginRunMonitorSplit('monitor_env', event)}
+							></button>
+						{/if}
+
+						<div
+							class="runMonitorSectionPane runMonitorEnvSection"
+							class:is-collapsed={slideoutEnvironmentCollapsed}
+							style={`flex:${slideoutEnvironmentCollapsed ? '0 0 auto' : `${runMonitorEnvWeight} 1 0`};`}
+							bind:this={runMonitorEnvPaneEl}
+						>
+							<div class="runtimeEnvHead">
+								<strong>Environment Variables</strong>
+								<div class="runtimeEnvActions">
+									<button
+										type="button"
+										class="pill pinBtn"
+										title={slideoutEnvironmentCollapsed ? 'Expand environment section' : 'Collapse environment section'}
+										on:click={() => (slideoutEnvironmentCollapsed = !slideoutEnvironmentCollapsed)}
+									>
+										Env
+									</button>
+								</div>
+							</div>
+							{#if !slideoutEnvironmentCollapsed}
+								<div class="runtimeEnvPanel">
+									<div class="runtimeEnvHead">
+										<strong>Runtime Env Vars</strong>
+										<div class="runtimeEnvActions">
+											<button class="tabBtn" on:click={() => void refreshRuntimeEnvPanel()} disabled={runtimeEnvLoading}>
+												{runtimeEnvLoading ? 'Loading...' : 'Reload'}
+											</button>
+											<label class="runtimeEnvToggle">
+												<input type="checkbox" bind:checked={runtimeEnvRevealSensitive} on:change={() => void refreshRuntimeEnvPanel()} />
+												<span>Reveal sensitive</span>
+											</label>
+										</div>
+									</div>
+									<input class="logFilterInput" placeholder="Filter env vars..." bind:value={runtimeEnvFilter} aria-label="Filter runtime env vars" />
+									{#if runtimeEnvError}
+										<div class="envProfileError">{runtimeEnvError}</div>
+									{/if}
+									{#if runtimeEnvRows.length === 0}
+										<div class="envProfileEmpty">No runtime env vars available.</div>
+									{:else}
+										<div class="runtimeEnvTable" role="table" aria-label="Runtime env vars">
+											{#each runtimeEnvRows as row (`${row.name}`)}
+												<div class="runtimeEnvRow" role="row">
+													<div class="runtimeEnvMeta">
+														<div class="mono runtimeEnvName">{row.name}{#if row.restartRequired}<span class="runtimeEnvRestart">restart</span>{/if}</div>
+														<div class="runtimeEnvSub">{row.category} | source={row.source}{row.masked ? ' | masked' : ''}</div>
+														<div class="runtimeEnvDesc">{row.description}</div>
+													</div>
+													<div class="runtimeEnvEdit">
+														<input class="runtimeEnvInput" type="text" value={runtimeEnvDraftByName[row.name] ?? ''} disabled={Boolean(runtimeEnvSaving[row.name])} on:input={(event) => { const next = String((event.currentTarget as HTMLInputElement).value ?? ''); runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [row.name]: next }; }} placeholder={row.masked ? 'masked value' : (row.defaultValue ?? '')} />
+														<div class="runtimeEnvButtons">
+															<button class="tabBtn" on:click={() => void applyRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name])}>Apply</button>
+															<button class="tabBtn" on:click={() => void unsetRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name])}>Clear</button>
+														</div>
+													</div>
+												</div>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<div class="envPanelSummary">Environment variables are collapsed.</div>
+							{/if}
+						</div>
+					</div>
+				</div>
+			</aside>
+		{/if}
 	</div>
 
 <style>
@@ -4016,8 +4382,123 @@ async function scrollToBottom() {
 
 	.layout {
 		display: grid;
-		grid-template-columns: 1fr calc(380px + 5ch);
+		grid-template-columns: 1fr 460px;
 		height: 100vh;
+	}
+
+	.runMonitorSlideout {
+		min-width: 0;
+		height: 100vh;
+		border-left: 1px solid var(--color-control-border, #222);
+		background: var(--color-control-bg, #0b0c10);
+		color: var(--color-control-text, #e6e6e6);
+		position: relative;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.runMonitorResizeHandle {
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 8px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: col-resize;
+		z-index: 3;
+	}
+
+	.runMonitorResizeHandle::after {
+		content: '';
+		position: absolute;
+		left: 3px;
+		top: 10px;
+		bottom: 10px;
+		width: 2px;
+		border-radius: 999px;
+		background: var(--color-control-border, #2b3448);
+	}
+
+	.runMonitorResizeHandle:hover::after,
+	.runMonitorResizeHandle:focus::after {
+		background: var(--color-control-border-focus, #3f5c93);
+	}
+
+	.runMonitorResizeHandle:focus {
+		outline: none;
+	}
+
+	.runMonitorPanel {
+		min-height: 0;
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		padding: 10px 10px 12px 14px;
+		overflow: hidden;
+	}
+
+	.runMonitorSections {
+		min-height: 0;
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+	}
+
+	.runMonitorSectionPane {
+		min-height: 96px;
+		min-width: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.runMonitorEnvSection.is-collapsed {
+		min-height: 0;
+		overflow: visible;
+	}
+
+	.runMonitorMonitorBody {
+		min-height: 0;
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.runMonitorEnvSection {
+		border-top: 1px solid var(--color-control-border, #222c3f);
+		padding-top: 8px;
+	}
+
+	.runMonitorInnerSplitter {
+		display: block;
+		width: 100%;
+		height: 4px;
+		padding: 0;
+		border: 0;
+		border-radius: 999px;
+		background: var(--color-control-border, #283044);
+		cursor: row-resize;
+		flex: 0 0 auto;
+		touch-action: none;
+		user-select: none;
+		margin: 6px 0;
+	}
+
+	.runMonitorInnerSplitter:hover,
+	.runMonitorInnerSplitter:focus {
+		background: var(--color-control-border-focus, #3c4d70);
+		outline: none;
+	}
+
+	.runMonitorPanelHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
 	}
 
 	.flow {
@@ -4463,11 +4944,45 @@ async function scrollToBottom() {
 		padding: 12px;
 		background: #0b0c10;
 		color: #e6e6e6;
+		position: relative;
 
 		display: flex;
 		flex-direction: column;
 		height: 100vh;
 		gap: 8px;
+	}
+
+	.inspectorResizeHandle {
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: 8px;
+		padding: 0;
+		border: 0;
+		background: transparent;
+		cursor: col-resize;
+		z-index: 4;
+	}
+
+	.inspectorResizeHandle::after {
+		content: '';
+		position: absolute;
+		left: 3px;
+		top: 10px;
+		bottom: 10px;
+		width: 2px;
+		border-radius: 999px;
+		background: #2b3448;
+	}
+
+	.inspectorResizeHandle:hover::after,
+	.inspectorResizeHandle:focus::after {
+		background: #3f5c93;
+	}
+
+	.inspectorResizeHandle:focus {
+		outline: none;
 	}
 
 	.inspectorPane {
@@ -4540,15 +5055,13 @@ async function scrollToBottom() {
 		align-items: center;
 		gap: 6px;
 		padding: 4px 8px;
+		opacity: 1;
+		font-weight: 600;
 	}
 
 	.sectionToggleIcon {
 		font-size: 11px;
 		opacity: 0.85;
-	}
-
-	.envPanelHead h3 {
-		margin: 0;
 	}
 
 	.envRefreshBtn,
@@ -4561,6 +5074,7 @@ async function scrollToBottom() {
 		margin-top: 6px;
 		font-size: 12px;
 		opacity: 0.85;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.monitorToolbar {
@@ -4580,21 +5094,54 @@ async function scrollToBottom() {
 		width: 100%;
 		padding: 4px 6px;
 		border-radius: 8px;
-		border: 1px solid #2a3655;
-		background: #0c1220;
-		color: #dbe7ff;
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-bg, #0c1220);
+		color: var(--color-control-text, #dbe7ff);
 		font-size: 12px;
 	}
 
 	.runMonitorNodeTable,
-	.runMonitorEdgeTable,
+	.runMonitorEdgeTable {
+		margin-top: 8px;
+		display: grid;
+		gap: 4px;
+		overflow: auto;
+		padding-right: 2px;
+	}
+
+	.runMonitorTablesSplit {
+		min-height: 180px;
+		flex: 1 1 auto;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+	}
+
+	.runMonitorTablesPane {
+		min-height: 96px;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.runMonitorTablesPane .runMonitorNodeTable,
+	.runMonitorTablesPane .runMonitorEdgeTable {
+		margin-top: 8px;
+		max-height: none;
+		height: 100%;
+		flex: 1 1 auto;
+	}
+
+	.runMonitorTablesPane .envProfileEmpty {
+		margin-top: 8px;
+	}
+
 	.runMonitorHistoryTable {
 		margin-top: 8px;
 		display: grid;
 		gap: 4px;
-		max-height: 172px;
-		overflow: auto;
 		padding-right: 2px;
+		overflow: visible;
 	}
 
 	.runMonitorNodeHead,
@@ -4609,19 +5156,20 @@ async function scrollToBottom() {
 	.runMonitorNodeHead {
 		opacity: 0.72;
 		text-transform: lowercase;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.runMonitorNodeRow {
-		border: 1px solid #1c2335;
+		border: 1px solid var(--color-control-border, #1c2335);
 		border-radius: 8px;
 		padding: 6px;
-		background: #0c1220;
-		color: #dbe7ff;
+		background: var(--color-control-option-bg, #0c1220);
+		color: var(--color-control-option-text, #dbe7ff);
 		text-align: left;
 	}
 
 	.runMonitorNodeRow:hover {
-		border-color: #35548c;
+		border-color: var(--color-control-border-focus, #35548c);
 	}
 
 	.runMonitorNodeName {
@@ -4686,8 +5234,12 @@ async function scrollToBottom() {
 
 	.runtimeEnvPanel {
 		margin-top: 10px;
-		display: grid;
+		display: flex;
+		flex-direction: column;
 		gap: 8px;
+		min-height: 0;
+		flex: 1 1 auto;
+		overflow: hidden;
 	}
 
 	.runtimeEnvHead {
@@ -4696,6 +5248,7 @@ async function scrollToBottom() {
 		justify-content: space-between;
 		gap: 8px;
 		font-size: 12px;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.runtimeEnvActions {
@@ -4710,12 +5263,15 @@ async function scrollToBottom() {
 		gap: 6px;
 		font-size: 11px;
 		opacity: 0.85;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.runtimeEnvTable {
 		display: grid;
 		gap: 6px;
-		max-height: 290px;
+		max-height: none;
+		min-height: 0;
+		flex: 1 1 auto;
 		overflow: auto;
 		padding-right: 2px;
 	}
@@ -4724,10 +5280,11 @@ async function scrollToBottom() {
 		display: grid;
 		grid-template-columns: 1.1fr 1.2fr;
 		gap: 8px;
-		border: 1px solid #1c2335;
+		border: 1px solid var(--color-control-border, #1c2335);
 		border-radius: 8px;
 		padding: 8px;
-		background: #0c1220;
+		background: var(--color-control-option-bg, #0c1220);
+		color: var(--color-control-option-text, #dbe7ff);
 	}
 
 	.runtimeEnvMeta {
@@ -4742,12 +5299,14 @@ async function scrollToBottom() {
 		margin-top: 3px;
 		font-size: 11px;
 		opacity: 0.8;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.runtimeEnvDesc {
 		margin-top: 4px;
 		font-size: 11px;
 		opacity: 0.86;
+		color: var(--color-control-text, #e6e6e6);
 	}
 
 	.runtimeEnvEdit {
@@ -4759,9 +5318,9 @@ async function scrollToBottom() {
 		width: 100%;
 		padding: 6px 8px;
 		border-radius: 8px;
-		border: 1px solid #2a3655;
-		background: #0b1323;
-		color: #dbe7ff;
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-bg, #0b1323);
+		color: var(--color-control-text, #dbe7ff);
 		font-size: 12px;
 	}
 
@@ -4872,7 +5431,9 @@ async function scrollToBottom() {
 		font-size: 12px;
 		margin-left: 8px;
 		padding: 3px 8px;
-		border: 1px solid #283044;
+		border: 1px solid var(--color-control-border, #283044);
+		background: var(--color-control-bg, #111522);
+		color: var(--color-control-text, #e6e6e6);
 		border-radius: 999px;
 		display: inline-flex;
 		align-items: center;
