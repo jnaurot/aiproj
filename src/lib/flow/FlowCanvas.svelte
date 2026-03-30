@@ -5157,6 +5157,12 @@ async function scrollToBottom() {
 		opacity: 0.72;
 		text-transform: lowercase;
 		color: var(--color-control-text, #e6e6e6);
+		position: sticky;
+		top: 0;
+		z-index: 2;
+		background-color: var(--color-panel-bg, #081327);
+		box-shadow: 0 1px 0 rgba(99, 147, 255, 0.18);
+		padding: 4px 0;
 	}
 
 	.runMonitorNodeRow {
