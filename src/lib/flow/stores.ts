@@ -32,7 +32,7 @@ export const selectedNode = derived(
 
 export const currentRunId = writable<string | null>(null);
 export const runStatus = writable<
-  "idle" | "running" | "succeeded" | "failed" | "canceled"
+  "idle" | "running" | "pausing" | "paused" | "resuming" | "succeeded" | "failed" | "canceled"
 >("idle");
 export const logs = writable<
   { ts: string; level: string; message: string; nodeId?: string }[]

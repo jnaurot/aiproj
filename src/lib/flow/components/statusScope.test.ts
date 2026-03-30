@@ -57,5 +57,25 @@ describe('buildScopedStatus', () => {
 			unsaved: false
 		});
 	});
-});
 
+	it('renders pausing, paused, and resuming as transitional running tone states', () => {
+		const pausing = buildScopedStatus({
+			editingContext: 'graph',
+			graph: { ...graphBase, runStatus: 'pausing' },
+			component: componentBase
+		});
+		const paused = buildScopedStatus({
+			editingContext: 'graph',
+			graph: { ...graphBase, runStatus: 'paused' },
+			component: componentBase
+		});
+		const resuming = buildScopedStatus({
+			editingContext: 'graph',
+			graph: { ...graphBase, runStatus: 'resuming' },
+			component: componentBase
+		});
+		expect(pausing).toEqual({ statusText: 'Pausing', tone: 'running', unsaved: false });
+		expect(paused).toEqual({ statusText: 'Paused', tone: 'running', unsaved: false });
+		expect(resuming).toEqual({ statusText: 'Resuming', tone: 'running', unsaved: false });
+	});
+});

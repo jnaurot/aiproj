@@ -179,6 +179,34 @@ export async function cancelAllRuns(req?: { graphId?: string; hard?: boolean }) 
 	};
 }
 
+export async function pauseRun(
+	runId: string
+): Promise<{ runId: string; status: string; pauseRequested: boolean }> {
+	const res = await fetch(backendUrl(`/api/runs/${encodeURIComponent(runId)}/pause`), {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' }
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`pauseRun failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as { runId: string; status: string; pauseRequested: boolean };
+}
+
+export async function resumeRun(
+	runId: string
+): Promise<{ runId: string; status: string; resumed: boolean }> {
+	const res = await fetch(backendUrl(`/api/runs/${encodeURIComponent(runId)}/resume`), {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' }
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`resumeRun failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as { runId: string; status: string; resumed: boolean };
+}
+
 export async function acceptNodeParams(req: {
   runId: string;
   nodeId: string;
@@ -253,7 +281,7 @@ export function streamRunEvents(
     if (closed) return;
     try {
       const parsed = JSON.parse(msg.data) as RunEvent;
-      if ((parsed as any)?.type === 'run_finished') terminalSeen = true;
+      if ((parsed as any)?.type === 'run_finished' || (parsed as any)?.type === 'run_paused') terminalSeen = true;
       onEvent(parsed);
     } catch (e) {
       onError(e);

@@ -448,6 +448,55 @@ async def cancel_run(run_id: str, request: Request):
     )
 
 
+@router.post("/{run_id}/pause")
+async def pause_run(run_id: str, request: Request):
+    rt = request.app.state.runtime
+    h = rt.get_run(run_id)
+    if not h:
+        raise HTTPException(404, "Unknown runId")
+    result = await rt.request_pause(run_id)
+    if not result.get("found"):
+        raise HTTPException(404, "Unknown runId")
+    if result.get("pauseRequested"):
+        return {
+            "runId": run_id,
+            "status": result.get("status", "pausing"),
+            "pauseRequested": True,
+        }
+    raise HTTPException(
+        409,
+        detail={
+            "runId": run_id,
+            "status": result.get("status", "unknown"),
+            "pauseRequested": False,
+        },
+    )
+
+
+@router.post("/{run_id}/resume")
+async def resume_run(run_id: str, request: Request):
+    rt = request.app.state.runtime
+    result = await rt.request_resume(run_id)
+    if not result.get("found"):
+        raise HTTPException(404, "Unknown runId")
+    if result.get("resumed"):
+        return {
+            "runId": run_id,
+            "status": result.get("status", "resuming"),
+            "resumed": True,
+        }
+    detail = {
+        "runId": run_id,
+        "status": result.get("status", "unknown"),
+        "resumed": False,
+    }
+    if result.get("errorCode"):
+        detail["errorCode"] = result.get("errorCode")
+    if result.get("details"):
+        detail["details"] = result.get("details")
+    raise HTTPException(409, detail=detail)
+
+
 @router.post("/cancel-all")
 async def cancel_all_runs(req: CancelRunsRequest, request: Request):
     rt = request.app.state.runtime

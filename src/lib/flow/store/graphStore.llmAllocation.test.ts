@@ -63,6 +63,37 @@ describe('graphStore llm allocation UI state', () => {
 		expect(allocated(next)).toEqual(['a']);
 	});
 
+	it('tracks multiple stars when multiple llm leases are acquired', () => {
+		const state = makeState('running');
+		const afterA = __applyRunEventForTest(
+			state,
+			{
+				type: 'llm_lease',
+				runId: 'run-llm',
+				at: '2026-03-29T00:00:01Z',
+				state: 'acquired',
+				nodeId: 'a',
+				holderNodeId: 'a',
+				waitQueueLength: 1
+			} as any,
+			'run-llm'
+		);
+		const afterB = __applyRunEventForTest(
+			afterA as any,
+			{
+				type: 'llm_lease',
+				runId: 'run-llm',
+				at: '2026-03-29T00:00:02Z',
+				state: 'acquired',
+				nodeId: 'b',
+				holderNodeId: 'b',
+				waitQueueLength: 0
+			} as any,
+			'run-llm'
+		);
+		expect(new Set(allocated(afterB))).toEqual(new Set(['a', 'b']));
+	});
+
 	it('clears stars on llm_lease released', () => {
 		const state = makeState('running');
 		const evt: KnownRunEvent = {

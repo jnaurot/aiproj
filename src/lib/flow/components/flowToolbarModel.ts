@@ -1,6 +1,7 @@
 import type { ToolbarMenuItem } from './toolbarMenu';
 
 export type ToolbarEditingContext = 'graph' | 'component';
+export type RunToolbarStatus = 'idle' | 'running' | 'pausing' | 'paused' | 'resuming' | 'succeeded' | 'failed' | 'canceled';
 
 export function buildProjectMenuItems(editingContext: ToolbarEditingContext = 'graph'): ToolbarMenuItem[] {
 	const isComponentContext = editingContext === 'component';
@@ -41,6 +42,21 @@ export function buildRunSelectedMenuItems(hasSelectedNode: boolean): ToolbarMenu
 			disabled: !hasSelectedNode
 		}
 	];
+}
+
+export function pauseResumeToolbarVisibility(runStatus: RunToolbarStatus): {
+	showPause: boolean;
+	showResume: boolean;
+	disablePause: boolean;
+	disableResume: boolean;
+} {
+	const status = String(runStatus ?? '').toLowerCase() as RunToolbarStatus;
+	return {
+		showPause: status === 'running' || status === 'pausing',
+		showResume: status === 'paused' || status === 'resuming',
+		disablePause: status === 'pausing',
+		disableResume: status === 'resuming'
+	};
 }
 
 export type ProjectToolbarHandlers = {

@@ -58,7 +58,9 @@ import {
 	createEventBatcher,
 	createRun,
 	getRun,
+	pauseRun,
 	resolveSourceNode,
+	resumeRun,
 	streamRunEvents
 } from '$lib/flow/client/runs';
 import type { KnownRunEvent } from '$lib/flow/types/run';
@@ -135,7 +137,16 @@ type RunLog = {
 	componentPath?: string[];
 };
 const RUN_IDLE = "idle"
-type RunStatus = typeof RUN_IDLE | 'running' | 'succeeded' | 'failed' | 'canceled' | 'cancelled';
+type RunStatus =
+	| typeof RUN_IDLE
+	| 'running'
+	| 'pausing'
+	| 'paused'
+	| 'resuming'
+	| 'succeeded'
+	| 'failed'
+	| 'canceled'
+	| 'cancelled';
 type GraphLastRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'never_run';
 type AuditContext = {
 	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
@@ -1057,6 +1068,7 @@ export type GraphState = {
 			state: 'waiting' | 'acquired' | 'released';
 			nodeId?: string;
 			holderNodeId?: string | null;
+			activeNodeIds?: string[];
 			waitQueueLength?: number;
 			waitingNodeIds?: string[];
 			updatedAt?: string;
@@ -1594,15 +1606,24 @@ function withGraphMeta(state: GraphState): GraphState {
 
 function applyLlmHolderToNodes(
 	nodes: Node<PipelineNodeData>[],
-	holderNodeId: string | null
+	holderNodeId: string | null | Iterable<string>
 ): Node<PipelineNodeData>[] {
-	const holder = holderNodeId ? String(holderNodeId).trim() : '';
+	const active = new Set<string>();
+	if (typeof holderNodeId === 'string') {
+		const holder = String(holderNodeId ?? '').trim();
+		if (holder) active.add(holder);
+	} else if (holderNodeId && Symbol.iterator in Object(holderNodeId)) {
+		for (const candidate of holderNodeId as Iterable<string>) {
+			const holder = String(candidate ?? '').trim();
+			if (holder) active.add(holder);
+		}
+	}
 	let changed = false;
 	const nextNodes = nodes.map((node) => {
 		const nodeId = String(node.id ?? '');
 		const meta = { ...((node.data as any)?.meta ?? {}) };
 		const currentlyAllocated = Boolean((meta as any).llmAllocated);
-		const shouldAllocate = Boolean(holder) && nodeId === holder;
+		const shouldAllocate = active.has(nodeId);
 		if (currentlyAllocated === shouldAllocate) return node;
 		changed = true;
 		if (shouldAllocate) {
@@ -2198,6 +2219,86 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				)
 			);
 		}
+		case 'run_pause_requested': {
+			return withGraphMeta(logPush({ ...state, runStatus: 'pausing' }, 'info', 'Pause requested'));
+		}
+		case 'run_pausing': {
+			return withGraphMeta(logPush({ ...state, runStatus: 'pausing' }, 'info', 'Run pausing'));
+		}
+		case 'run_paused': {
+			const nodes = applyLlmHolderToNodes(state.nodes, null);
+			const edges = (state.edges ?? []).map((edge) => {
+				const mode = String((edge.data as any)?.mode ?? 'work').trim().toLowerCase();
+				if (mode !== 'work') return edge;
+				const exec = String((edge.data as any)?.exec ?? 'idle').trim().toLowerCase();
+				if (exec !== 'active') return edge;
+				return {
+					...edge,
+					data: {
+						...(edge.data ?? {}),
+						exec: 'idle'
+					}
+				};
+			});
+			return withGraphMeta(
+				logPush(
+					{
+						...state,
+						nodes,
+						edges,
+						runStatus: 'paused'
+					},
+					'info',
+					'Run paused'
+				)
+			);
+		}
+		case 'run_resume_requested':
+		case 'run_resuming': {
+			return withGraphMeta(logPush({ ...state, runStatus: 'resuming' }, 'info', 'Run resuming'));
+		}
+		case 'run_resumed': {
+			const evtMode = ((evt as any).runMode ?? state.activeRunMode) as ActiveRunMode;
+			const evtPlanned = Array.isArray((evt as any).plannedNodeIds)
+				? new Set<string>((evt as any).plannedNodeIds as string[])
+				: state.activeRunNodeSet;
+			return withGraphMeta(
+				logPush(
+					{
+						...state,
+						runStatus: 'running',
+						activeRunId: evt.runId ?? state.activeRunId,
+						activeRunMode: evtMode,
+						activeRunFrom: (evt as any).runFrom ?? state.activeRunFrom,
+						activeRunNodeSet: evtPlanned
+					},
+					'info',
+					'Run resumed'
+				)
+			);
+		}
+		case 'run_resume_failed': {
+			const code = String((evt as any)?.errorCode ?? '').trim();
+			const msg = String((evt as any)?.error ?? '').trim();
+			const details = ((evt as any)?.details ?? null) as Record<string, unknown> | null;
+			const reasonCodes = Array.isArray(details?.reasonCodes)
+				? (details?.reasonCodes as unknown[]).map((value) => String(value ?? '').trim()).filter(Boolean)
+				: [];
+			const nodeIds = Array.isArray(details?.nodeIds)
+				? (details?.nodeIds as unknown[]).map((value) => String(value ?? '').trim()).filter(Boolean)
+				: [];
+			const diagSuffixParts: string[] = [];
+			if (reasonCodes.length > 0) diagSuffixParts.push(`reasons=${reasonCodes.join(',')}`);
+			if (nodeIds.length > 0) diagSuffixParts.push(`nodes=${nodeIds.join(',')}`);
+			const diagSuffix = diagSuffixParts.length > 0 ? ` [${diagSuffixParts.join(' ')}]` : '';
+			return withGraphMeta(
+				logPush(
+					{ ...state, runStatus: 'paused' },
+					'error',
+					`Run resume failed${code ? ` (${code})` : ''}${msg ? `: ${msg}` : ''}${diagSuffix}`
+				)
+			);
+		}
 		case 'run_telemetry': {
 			const previousSummary =
 				(state.queueRuntime?.currentRunSummary &&
@@ -2783,9 +2884,22 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const waitingNodeIds = Array.isArray((evt as any)?.waitingNodeIds)
 				? ((evt as any).waitingNodeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
 				: [];
-			const holderForUi =
-				state.runStatus === 'running' && leaseState === 'acquired' ? holderNodeId : null;
-			const nodes = applyLlmHolderToNodes(state.nodes, holderForUi);
+			const prevActive = Array.isArray((state.queueRuntime?.llmLease as any)?.activeNodeIds)
+				? ((state.queueRuntime?.llmLease as any).activeNodeIds as unknown[])
+						.map((item) => String(item ?? '').trim())
+						.filter(Boolean)
+				: [];
+			const activeNodeIds = new Set<string>(prevActive);
+			if (leaseState === 'acquired' && nodeId) {
+				activeNodeIds.add(nodeId);
+			} else if (leaseState === 'released') {
+				if (nodeId) activeNodeIds.delete(nodeId);
+				if (holderNodeId) activeNodeIds.delete(String(holderNodeId ?? '').trim());
+			}
+			if (state.runStatus !== 'running') {
+				activeNodeIds.clear();
+			}
+			const nodes = applyLlmHolderToNodes(state.nodes, activeNodeIds);
 			const nextState = {
 				...state,
 				nodes,
@@ -2795,6 +2909,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						state: leaseState as 'waiting' | 'acquired' | 'released',
 						nodeId: nodeId || undefined,
 						holderNodeId,
+						activeNodeIds: Array.from(activeNodeIds),
 						waitQueueLength,
 						waitingNodeIds,
 						updatedAt: String((evt as any)?.at ?? '')
@@ -7904,6 +8019,40 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		},
 
+		async pauseActiveRun() {
+			const current = get({ subscribe } as any) as GraphState;
+			const runId = String(current.activeRunId ?? '').trim();
+			if (!runId) return { ok: false, reason: 'missing_run_id' as const };
+			if (current.runStatus !== 'running' && current.runStatus !== 'pausing') {
+				return { ok: false, reason: 'run_not_running' as const };
+			}
+			try {
+				await pauseRun(runId);
+				update((s) => withGraphMeta({ ...s, runStatus: 'pausing' }));
+				return { ok: true as const };
+			} catch (error) {
+				update((s) => logPush(s, 'error', `Pause run failed: ${String(error)}`));
+				return { ok: false as const, reason: 'pause_failed' as const, error: String(error) };
+			}
+		},
+
+		async resumeActiveRun() {
+			const current = get({ subscribe } as any) as GraphState;
+			const runId = String(current.activeRunId ?? '').trim();
+			if (!runId) return { ok: false, reason: 'missing_run_id' as const };
+			if (current.runStatus !== 'paused' && current.runStatus !== 'resuming') {
+				return { ok: false, reason: 'run_not_paused' as const };
+			}
+			try {
+				await resumeRun(runId);
+				update((s) => withGraphMeta({ ...s, runStatus: 'resuming' }));
+				return { ok: true as const };
+			} catch (error) {
+				update((s) => logPush(s, 'error', `Resume run failed: ${String(error)}`));
+				return { ok: false as const, reason: 'resume_failed' as const, error: String(error) };
+			}
+		},
+
 		// ----- clear edges of prior run's status (uses edge highlighting) -----
 		resetRunUi() {
 			update((s) => {
@@ -8843,7 +8992,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		) {
 			// prevent concurrent runs
 			const s0 = get({ subscribe } as any) as GraphState;
-			if (s0.runStatus === 'running') return;
+			if (s0.runStatus === 'running' || s0.runStatus === 'pausing' || s0.runStatus === 'resuming') return;
 
 			// reset UI
 			this.resetRunUi();
@@ -8888,7 +9037,13 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					sseRuntimeStats.fallbackPollAttempts += 1;
 					const snap = await getRun(runId);
 					const status = String((snap as any)?.status ?? '').toLowerCase();
-					if (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'canceled') {
+					if (
+						status === 'succeeded' ||
+						status === 'failed' ||
+						status === 'cancelled' ||
+						status === 'canceled' ||
+						status === 'paused'
+					) {
 						return snap;
 					}
 					await sleep(intervalMs);
@@ -8928,7 +9083,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						subHandle = streamRunEvents(
 							runId,
 							(evt: KnownRunEvent) => {
-								if (evt.type !== 'run_finished') return;
+								if (evt.type !== 'run_finished' && evt.type !== 'run_paused') return;
 								void getRun(runId)
 									.then((snap) => {
 										sseRuntimeStats.sseTerminalCount += 1;
@@ -9037,7 +9192,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								return nextState;
 							}, auditCtx);
 
-							if (evt.type === 'run_finished') {
+							if (evt.type === 'run_finished' || evt.type === 'run_paused') {
 								const current = get({ subscribe } as any) as GraphState;
 								persist(current);
 								void getRun(runId)
@@ -9077,49 +9232,120 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								cur.runStatus === 'succeeded' ||
 								cur.runStatus === 'failed' ||
 								cur.runStatus === 'canceled' ||
-								cur.runStatus === 'cancelled';
+								cur.runStatus === 'cancelled' ||
+								cur.runStatus === 'paused';
 							if (isTerminalForThisRun) {
 								settle();
 								return;
 							}
 							batcher.flush();
 							update((s) =>
-								withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; switching to fallback polling'))
+								withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; reconciling run status'))
 							);
-							void waitForTerminalViaSse(runId, {
-								fallbackIntervalMs: 3000,
-								fallbackMaxAttempts: 120,
-								maxReconnectAttempts: 2,
-								reconnectBackoffMs: 500
-							})
+							void getRun(runId)
 								.then((snap) => {
-									update((s) => hydrateFromRunSnapshot(s, snap.snap), {
-										source: 'hydrate_snapshot',
-										snapshotNodeIds: new Set(Object.keys((snap as any)?.snap?.nodeBindings ?? {}))
-									});
-									update((s) =>
-										withGraphMeta(
-											logPush(
-												{ ...s },
-												'info',
-												`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')}) polls=${sseRuntimeStats.fallbackPollAttempts}`
+									const status = String((snap as any)?.status ?? '').toLowerCase();
+									if (
+										status === 'succeeded' ||
+										status === 'failed' ||
+										status === 'cancelled' ||
+										status === 'canceled' ||
+										status === 'paused'
+									) {
+										update((s) => hydrateFromRunSnapshot(s, snap), {
+											source: 'hydrate_snapshot',
+											snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+										});
+										update((s) =>
+											withGraphMeta(
+												logPush(
+													{ ...s },
+													'info',
+													`Run reconciled via immediate poll (${status})`
+												)
 											)
-										)
-									);
-								})
-								.catch((error) => {
+										);
+										settle();
+										return;
+									}
 									update((s) =>
-										withGraphMeta(
-											logPush(
-												{ ...s, runStatus: 'failed' },
-												'error',
-												`Event stream error and fallback polling failed: ${String(error)}`
-											)
-										)
+										withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; switching to fallback polling'))
 									);
+									void waitForTerminalViaSse(runId, {
+										fallbackIntervalMs: 3000,
+										fallbackMaxAttempts: 120,
+										maxReconnectAttempts: 2,
+										reconnectBackoffMs: 500
+									})
+										.then((snap) => {
+											update((s) => hydrateFromRunSnapshot(s, snap.snap), {
+												source: 'hydrate_snapshot',
+												snapshotNodeIds: new Set(Object.keys((snap as any)?.snap?.nodeBindings ?? {}))
+											});
+											update((s) =>
+												withGraphMeta(
+													logPush(
+														{ ...s },
+														'info',
+														`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')}) polls=${sseRuntimeStats.fallbackPollAttempts}`
+													)
+												)
+											);
+										})
+										.catch((error) => {
+											update((s) =>
+												withGraphMeta(
+													logPush(
+														{ ...s, runStatus: 'failed' },
+														'error',
+														`Event stream error and fallback polling failed: ${String(error)}`
+													)
+												)
+											);
+										})
+										.finally(() => {
+											settle();
+										});
 								})
-								.finally(() => {
-									settle();
+								.catch(() => {
+									update((s) =>
+										withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; switching to fallback polling'))
+									);
+									void waitForTerminalViaSse(runId, {
+										fallbackIntervalMs: 3000,
+										fallbackMaxAttempts: 120,
+										maxReconnectAttempts: 2,
+										reconnectBackoffMs: 500
+									})
+										.then((snap) => {
+											update((s) => hydrateFromRunSnapshot(s, snap.snap), {
+												source: 'hydrate_snapshot',
+												snapshotNodeIds: new Set(Object.keys((snap as any)?.snap?.nodeBindings ?? {}))
+											});
+											update((s) =>
+												withGraphMeta(
+													logPush(
+														{ ...s },
+														'info',
+														`Run finished via ${snap.completionSource} (${String((snap as any)?.snap?.status ?? 'unknown')}) polls=${sseRuntimeStats.fallbackPollAttempts}`
+													)
+												)
+											);
+										})
+										.catch((error) => {
+											update((s) =>
+												withGraphMeta(
+													logPush(
+														{ ...s, runStatus: 'failed' },
+														'error',
+														`Event stream error and fallback polling failed: ${String(error)}`
+													)
+												)
+											);
+										})
+										.finally(() => {
+											settle();
+										});
 								});
 						}
 					);

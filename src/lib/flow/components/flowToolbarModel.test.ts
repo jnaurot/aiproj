@@ -5,6 +5,7 @@ import {
 	buildRunSelectedMenuItems,
 	dispatchAddMenuAction,
 	dispatchProjectMenuAction,
+	pauseResumeToolbarVisibility,
 	routePrimarySaveAction
 } from './flowToolbarModel';
 
@@ -154,5 +155,32 @@ describe('flowToolbarModel', () => {
 		expect(handlers.addTool).toHaveBeenCalledTimes(1);
 		expect(handlers.addComponent).toHaveBeenCalledTimes(1);
 		expect(handlers.addFromPreset).toHaveBeenCalledTimes(1);
+	});
+
+	it('test_toolbar_pause_resume_visibility', () => {
+		expect(pauseResumeToolbarVisibility('running')).toEqual({
+			showPause: true,
+			showResume: false,
+			disablePause: false,
+			disableResume: false
+		});
+		expect(pauseResumeToolbarVisibility('pausing')).toEqual({
+			showPause: true,
+			showResume: false,
+			disablePause: true,
+			disableResume: false
+		});
+		expect(pauseResumeToolbarVisibility('paused')).toEqual({
+			showPause: false,
+			showResume: true,
+			disablePause: false,
+			disableResume: false
+		});
+		expect(pauseResumeToolbarVisibility('resuming')).toEqual({
+			showPause: false,
+			showResume: true,
+			disablePause: false,
+			disableResume: true
+		});
 	});
 });

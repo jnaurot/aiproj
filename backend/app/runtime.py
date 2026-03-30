@@ -11,7 +11,12 @@ from datetime import datetime, timezone
 from .runner.events import EventStore, MemoryEventStore, RunEventBus, SqliteEventStore
 from .runner.artifacts import ArtifactStore, DiskArtifactStore, MemoryArtifactStore
 from .runner.cache import ExecutionCache, SqliteExecutionCache
-from .runner.run import run_graph
+from .runner.run import run_graph, _build_frontier_identity_basis
+from .runner.pause_resume import (
+    validate_pause_snapshot_schema,
+    validate_resume_identity_basis,
+    snapshot_resume_failure_details,
+)
 from .feature_flags import get_feature_flags
 
 logger = logging.getLogger(__name__)
@@ -49,7 +54,9 @@ class RunHandle:
     status: str = "pending"  # pending|running|finished|failed|canceled
     error: Optional[str] = None
     cancel_requested_at: Optional[float] = None
+    pause_requested_at: Optional[float] = None
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+    pause_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     node_status: Dict[str, str] = field(default_factory=dict)   # idle|active|done|error|skipped|blocked|paused
     node_outputs: Dict[str, str] = field(default_factory=dict)  # node_id -> artifact_id
@@ -57,6 +64,7 @@ class RunHandle:
     active_run_planned: set[str] = field(default_factory=set)
     graph: Optional[Dict[str, Any]] = None
     run_telemetry: Dict[str, Any] = field(default_factory=dict)
+    pause_snapshot: Dict[str, Any] = field(default_factory=dict)
     
 class RuntimeManager:
     def __init__(self):
@@ -358,8 +366,8 @@ class RuntimeManager:
         return out
 
     async def recover_unfinished_runs(self) -> Dict[str, Any]:
-        terminal = {"succeeded", "failed", "cancelled", "deleted"}
-        unfinished = {"pending", "running", "cancel_requested"}
+        terminal = {"succeeded", "failed", "cancelled", "deleted", "paused"}
+        unfinished = {"pending", "running", "cancel_requested", "pausing", "resuming"}
         recs = await self.artifact_store.list_runs(include_deleted=True)
         recovered = 0
         scanned = 0
@@ -545,6 +553,265 @@ class RuntimeManager:
             "hardCancelledRunIds": hard_cancelled,
         }
 
+    async def request_pause(self, run_id: str) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if not handle:
+            return {"runId": run_id, "found": False, "pauseRequested": False, "status": "unknown"}
+
+        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        if handle.status in terminal:
+            return {"runId": run_id, "found": True, "pauseRequested": False, "status": handle.status}
+        if handle.status == "paused":
+            return {"runId": run_id, "found": True, "pauseRequested": False, "status": "paused"}
+        if handle.status in {"pausing"} or handle.pause_event.is_set():
+            return {"runId": run_id, "found": True, "pauseRequested": True, "status": "pausing"}
+
+        handle.pause_requested_at = time.time()
+        handle.status = "pausing"
+        handle.pause_event.set()
+        await handle.bus.emit(
+            {
+                "type": "run_pause_requested",
+                "runId": run_id,
+                "at": datetime_from_ts(handle.pause_requested_at),
+            }
+        )
+        return {"runId": run_id, "found": True, "pauseRequested": True, "status": "pausing"}
+
+    def _build_current_resume_identity_basis(
+        self,
+        *,
+        handle: RunHandle,
+        snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        basis = (
+            snapshot.get("frontierValidationBasis")
+            if isinstance(snapshot.get("frontierValidationBasis"), dict)
+            else {}
+        )
+        expected_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+        graph = handle.graph if isinstance(handle.graph, dict) else {}
+        execution_version = str(
+            basis.get("executionVersion")
+            or snapshot.get("executionVersion")
+            or "v1"
+        )
+        node_ids = [str(node_id).strip() for node_id in expected_nodes.keys() if str(node_id).strip()]
+        return _build_frontier_identity_basis(
+            graph=graph,
+            graph_id=str(handle.graph_id or snapshot.get("graphId") or ""),
+            node_ids=node_ids,
+            node_bindings=handle.node_bindings if isinstance(handle.node_bindings, dict) else {},
+            execution_version=execution_version,
+        )
+
+    async def request_resume(self, run_id: str) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        if not handle:
+            snapshot_only = await self.artifact_store.get_run_pause_snapshot(run_id)
+            persisted = await self.artifact_store.get_run(run_id)
+            persisted_status = str((persisted or {}).get("status") or "").strip().lower()
+            if persisted_status != "paused" or not isinstance(snapshot_only, dict):
+                return {"runId": run_id, "found": False, "resumed": False, "status": "unknown"}
+            schema_ok, _schema_errors = validate_pause_snapshot_schema(snapshot_only)
+            if not schema_ok:
+                return {
+                    "runId": run_id,
+                    "found": True,
+                    "resumed": False,
+                    "status": "paused",
+                    "errorCode": "PAUSE_SNAPSHOT_SCHEMA_INVALID",
+                    "details": {"errors": _schema_errors},
+                }
+            handle = self.create_run(run_id)
+            handle.status = "paused"
+            handle.graph_id = str(snapshot_only.get("graphId") or "")
+            handle.graph = snapshot_only.get("graph") if isinstance(snapshot_only.get("graph"), dict) else {"nodes": [], "edges": []}
+            basis = (
+                snapshot_only.get("frontierValidationBasis")
+                if isinstance(snapshot_only.get("frontierValidationBasis"), dict)
+                else {}
+            )
+            basis_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+            node_bindings: Dict[str, Dict[str, Any]] = {}
+            for node_id, node_basis in basis_nodes.items():
+                if not isinstance(node_basis, dict):
+                    continue
+                pair = node_basis.get("binding") if isinstance(node_basis.get("binding"), dict) else {}
+                node_bindings[str(node_id)] = {
+                    "currentExecKey": str(pair.get("currentExecKey") or ""),
+                    "currentArtifactId": str(pair.get("currentArtifactId") or ""),
+                }
+                upstream = (
+                    node_basis.get("upstreamBindings")
+                    if isinstance(node_basis.get("upstreamBindings"), dict)
+                    else {}
+                )
+                for upstream_node_id, upstream_pair in upstream.items():
+                    if not isinstance(upstream_pair, dict):
+                        continue
+                    node_bindings.setdefault(
+                        str(upstream_node_id),
+                        {
+                            "currentExecKey": str(upstream_pair.get("currentExecKey") or ""),
+                            "currentArtifactId": str(upstream_pair.get("currentArtifactId") or ""),
+                        },
+                    )
+            handle.node_bindings = node_bindings
+            self.runs[run_id] = handle
+        if handle.status != "paused":
+            return {"runId": run_id, "found": True, "resumed": False, "status": handle.status}
+
+        snapshot = await self.artifact_store.get_run_pause_snapshot(run_id)
+        if not isinstance(snapshot, dict):
+            await handle.bus.emit(
+                {
+                    "type": "run_resume_failed",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "errorCode": "PAUSE_SNAPSHOT_MISSING",
+                    "error": "No durable pause snapshot available",
+                }
+            )
+            return {
+                "runId": run_id,
+                "found": True,
+                "resumed": False,
+                "status": "paused",
+                "errorCode": "PAUSE_SNAPSHOT_MISSING",
+            }
+
+        schema_ok, schema_errors = validate_pause_snapshot_schema(snapshot)
+        if not schema_ok:
+            details = {"errors": schema_errors}
+            await handle.bus.emit(
+                {
+                    "type": "run_resume_failed",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "errorCode": "PAUSE_SNAPSHOT_SCHEMA_INVALID",
+                    "error": "Pause snapshot schema invalid",
+                    "details": details,
+                }
+            )
+            return {
+                "runId": run_id,
+                "found": True,
+                "resumed": False,
+                "status": "paused",
+                "errorCode": "PAUSE_SNAPSHOT_SCHEMA_INVALID",
+                "details": details,
+            }
+
+        resumability_by_node = (
+            snapshot.get("resumabilityByNode")
+            if isinstance(snapshot.get("resumabilityByNode"), dict)
+            else {}
+        )
+        basis_nodes = (
+            (snapshot.get("frontierValidationBasis") or {}).get("nodes")
+            if isinstance((snapshot.get("frontierValidationBasis") or {}).get("nodes"), dict)
+            else {}
+        )
+        non_safe_nodes = sorted(
+            {
+                str(node_id)
+                for node_id in basis_nodes.keys()
+                if str((resumability_by_node or {}).get(str(node_id), "")).strip()
+                not in {"safe_boundary_resumable", ""}
+            }
+        )
+        if non_safe_nodes:
+            details = {
+                "reasonCodes": ["non_resumable_frontier"],
+                "nodeIds": non_safe_nodes,
+                "mismatches": [
+                    {
+                        "nodeId": node_id,
+                        "reasonCode": "non_resumable_frontier",
+                        "changedFields": ["resumability"],
+                    }
+                    for node_id in non_safe_nodes
+                ],
+            }
+            await handle.bus.emit(
+                {
+                    "type": "run_resume_failed",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "errorCode": "RESUME_NON_RESUMABLE_FRONTIER",
+                    "error": "Paused frontier includes non-resumable nodes",
+                    "details": details,
+                }
+            )
+            return {
+                "runId": run_id,
+                "found": True,
+                "resumed": False,
+                "status": "paused",
+                "errorCode": "RESUME_NON_RESUMABLE_FRONTIER",
+                "details": details,
+            }
+
+        current_basis = self._build_current_resume_identity_basis(handle=handle, snapshot=snapshot)
+        expected_basis = (
+            snapshot.get("frontierValidationBasis")
+            if isinstance(snapshot.get("frontierValidationBasis"), dict)
+            else {}
+        )
+        validation = validate_resume_identity_basis(
+            expected_basis=expected_basis,
+            current_basis=current_basis,
+        )
+        if not bool(validation.get("ok")):
+            details = snapshot_resume_failure_details(validation)
+            await handle.bus.emit(
+                {
+                    "type": "run_resume_failed",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "errorCode": "RESUME_FRONTIER_VALIDATION_FAILED",
+                    "error": "Paused frontier validation failed",
+                    "details": details,
+                }
+            )
+            return {
+                "runId": run_id,
+                "found": True,
+                "resumed": False,
+                "status": "paused",
+                "errorCode": "RESUME_FRONTIER_VALIDATION_FAILED",
+                "details": details,
+            }
+
+        handle.status = "resuming"
+        await handle.bus.emit(
+            {
+                "type": "run_resume_requested",
+                "runId": run_id,
+                "at": datetime_from_ts(time.time()),
+            }
+        )
+        await handle.bus.emit(
+            {
+                "type": "run_resuming",
+                "runId": run_id,
+                "at": datetime_from_ts(time.time()),
+            }
+        )
+        graph = handle.graph if isinstance(handle.graph, dict) else {}
+        run_from = snapshot.get("runFrom")
+        run_mode = str(snapshot.get("runMode") or "").strip() or None
+        await self.start_run(
+            run_id,
+            graph,
+            run_from,
+            run_mode=run_mode,
+            graph_id=handle.graph_id,
+            resume_snapshot=snapshot,
+        )
+        return {"runId": run_id, "found": True, "resumed": True, "status": "resuming"}
+
     async def accept_node_params(
         self,
         *,
@@ -630,7 +897,16 @@ class RuntimeManager:
 
     # ---------- execution ----------
 
-    async def start_run(self, run_id: str, graph, run_from, run_mode: Optional[str] = None, graph_id: Optional[str] = None):
+    async def start_run(
+        self,
+        run_id: str,
+        graph,
+        run_from,
+        run_mode: Optional[str] = None,
+        graph_id: Optional[str] = None,
+        *,
+        resume_snapshot: Optional[Dict[str, Any]] = None,
+    ):
         handle = self.runs[run_id]
         resolved_graph_id = str(graph_id or "").strip()
         if not resolved_graph_id and isinstance(graph, dict):
@@ -644,6 +920,8 @@ class RuntimeManager:
         handle.graph_id = resolved_graph_id
         handle.bus.graph_id = handle.graph_id
         handle.graph = graph
+        handle.cancel_event = asyncio.Event()
+        handle.pause_event = asyncio.Event()
         for n in (graph.get("nodes", []) if isinstance(graph, dict) else []):
             nid = n.get("id")
             if not isinstance(nid, str) or not nid:
@@ -661,8 +939,10 @@ class RuntimeManager:
                 artifact_store=handle.artifact_store,
                 cache=handle.cache,
                 cancel_event=handle.cancel_event,
+                pause_event=handle.pause_event,
                 runtime_ref=self,
                 graph_id=handle.graph_id,
+                resume_snapshot=resume_snapshot,
             )
         )
 
@@ -834,6 +1114,48 @@ class RuntimeManager:
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancel_requested"))
             return
 
+        if t == "run_pause_requested":
+            handle.status = "pausing"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
+            return
+
+        if t == "run_pausing":
+            handle.status = "pausing"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
+            return
+
+        if t == "run_paused":
+            handle.status = "paused"
+            snapshot = ev.get("snapshot") if isinstance(ev.get("snapshot"), dict) else {}
+            handle.pause_snapshot = dict(snapshot or {})
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
+            if isinstance(snapshot, dict) and snapshot:
+                asyncio.create_task(self.artifact_store.upsert_run_pause_snapshot(handle.run_id, snapshot))
+            return
+
+        if t == "run_resume_requested":
+            handle.status = "resuming"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
+            return
+
+        if t == "run_resuming":
+            handle.status = "resuming"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
+            return
+
+        if t == "run_resumed":
+            handle.status = "running"
+            planned = ev.get("plannedNodeIds") or []
+            if isinstance(planned, list):
+                handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
+            return
+
+        if t == "run_resume_failed":
+            handle.status = "paused"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
+            return
+
         if t == "run_cancelled":
             handle.status = "cancelled"
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancelled"))
@@ -843,6 +1165,7 @@ class RuntimeManager:
             handle.status = ev.get("status", "finished")
             handle.active_run_planned = set()
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
+            asyncio.create_task(self.artifact_store.delete_run_pause_snapshot(handle.run_id))
             asyncio.create_task(self._capture_run_experiment_summary(handle))
             return
         

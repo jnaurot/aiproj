@@ -28,6 +28,15 @@ function formatStatus(snapshot: StatusSnapshot): { text: string; tone: HeaderSta
 	if (run === 'running') {
 		return { text: 'Running', tone: 'running' };
 	}
+	if (run === 'pausing') {
+		return { text: 'Pausing', tone: 'running' };
+	}
+	if (run === 'paused') {
+		return { text: 'Paused', tone: 'running' };
+	}
+	if (run === 'resuming') {
+		return { text: 'Resuming', tone: 'running' };
+	}
 	const baseText =
 		last === 'never_run'
 			? 'Never run'
@@ -54,4 +63,3 @@ export function buildScopedStatus(input: ScopedStatusInput): ScopedStatusOutput 
 		unsaved: Boolean(active.unsaved)
 	};
 }
-

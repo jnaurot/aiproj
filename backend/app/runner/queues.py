@@ -201,6 +201,60 @@ class QueueRegistry:
 			"edges": edge_metrics,
 		}
 
+	def snapshot(self) -> Dict[str, Any]:
+		def _safe(value: Any) -> Any:
+			if value is None or isinstance(value, (bool, int, float, str)):
+				return value
+			if isinstance(value, (bytes, bytearray, memoryview)):
+				return bytes(value).decode("utf-8", errors="replace")
+			if isinstance(value, list):
+				return [_safe(v) for v in value]
+			if isinstance(value, tuple):
+				return [_safe(v) for v in value]
+			if isinstance(value, dict):
+				return {str(k): _safe(v) for k, v in value.items()}
+			return str(value)
+		edges: Dict[str, Any] = {}
+		for (edge_id, input_handle), q in self._queues.items():
+			key = f"{edge_id}:{input_handle}"
+			items = [_safe(item) for (_ts, item) in list(q._items)]
+			edges[key] = {
+				"edgeId": edge_id,
+				"inputHandle": input_handle,
+				"items": items,
+				"enqueued": int(q.enqueued),
+				"dequeued": int(q.dequeued),
+				"maxSize": int(q.max_size),
+			}
+		return {
+			"limits": {
+				"perEdgeMax": int(self._limits.per_edge_max),
+				"globalMax": int(self._limits.global_max),
+			},
+			"globalDepth": int(self._global_depth),
+			"edges": edges,
+		}
+
+	def restore(self, snapshot: Dict[str, Any]) -> None:
+		self._queues = {}
+		self._global_depth = 0
+		if not isinstance(snapshot, dict):
+			return
+		edges = snapshot.get("edges") if isinstance(snapshot.get("edges"), dict) else {}
+		for key, payload in edges.items():
+			if not isinstance(payload, dict):
+				continue
+			edge_id = str(payload.get("edgeId") or "").strip()
+			input_handle = str(payload.get("inputHandle") or "in").strip() or "in"
+			if not edge_id:
+				continue
+			queue = self.get_queue(edge_id, input_handle)
+			items = payload.get("items") if isinstance(payload.get("items"), list) else []
+			for item in items:
+				queue._items.append((monotonic(), item))
+				queue._enqueued += 1
+				self._global_depth += 1
+
 
 def next_nonempty_key(
 	keys: list[str],

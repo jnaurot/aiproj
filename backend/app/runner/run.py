@@ -30,6 +30,8 @@ from .artifacts import Artifact, MemoryArtifactStore, RunBindings
 from .cache import ExecutionCache
 from .queues import QueueLimits, QueueRegistry, next_nonempty_key
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
+from .resumability import classify_node_resumability
+from .pause_resume import PAUSE_SNAPSHOT_SCHEMA_VERSION, validate_pause_snapshot_schema
 from .contracts import (
     TABLE_V1,
     canonical_table_columns,
@@ -391,6 +393,10 @@ def _node_runtime_param_mode(node: Dict[str, Any]) -> str:
         if mode in {"read_once", "dynamic"}:
             return mode
     return "read_once"
+
+
+def _node_resumability_class(node: Dict[str, Any]) -> str:
+	return str(classify_node_resumability(node))
 
 
 def _is_node_or_edge_fatal(
@@ -2868,6 +2874,75 @@ def _determinism_env_for_node(kind: str, params: Dict[str, Any]) -> Dict[str, An
     return env
 
 
+def _build_frontier_identity_basis(
+	*,
+	graph: Dict[str, Any],
+	graph_id: str,
+	node_ids: List[str],
+	node_bindings: Dict[str, Dict[str, Any]],
+	execution_version: str,
+) -> Dict[str, Any]:
+	nodes_by_id = node_map(graph if isinstance(graph, dict) else {})
+	edges_by_id = edge_map(graph if isinstance(graph, dict) else {})
+	normalized_nodes: Dict[str, Any] = {}
+	for node_id in sorted({str(nid).strip() for nid in (node_ids or []) if str(nid).strip()}):
+		node = nodes_by_id.get(node_id) or {}
+		data = (node.get("data") or {}) if isinstance(node, dict) else {}
+		kind = str(data.get("kind") or "").strip().lower()
+		params = (data.get("params") or {}) if isinstance(data.get("params"), dict) else {}
+		try:
+			normalized_params = _normalized_params_for_exec_key(kind=kind, node=node, params=params)
+		except Exception:
+			normalized_params = _sanitize_for_fingerprint(dict(params or {}))
+		source_fp = build_source_fingerprint(node, normalized_params) if kind == "source" else None
+		node_state_hash = build_node_state_hash(
+			node=node,
+			params=normalized_params,
+			execution_version=str(execution_version or ""),
+			source_fingerprint=source_fp,
+		)
+		determinism_env = _determinism_env_for_node(kind, normalized_params if isinstance(normalized_params, dict) else params)
+		determinism_env_hash = _determinism_fingerprint(determinism_env)
+		raw_binding = node_bindings.get(node_id) if isinstance(node_bindings, dict) else {}
+		current_exec = str((raw_binding or {}).get("currentExecKey") or "").strip()
+		current_artifact = str((raw_binding or {}).get("currentArtifactId") or "").strip()
+		upstream: Dict[str, Dict[str, str]] = {}
+		for upstream_node in upstream_node_ids(edges_by_id, node_id):
+			upstream_binding = node_bindings.get(str(upstream_node)) if isinstance(node_bindings, dict) else {}
+			upstream[str(upstream_node)] = {
+				"currentExecKey": str((upstream_binding or {}).get("currentExecKey") or "").strip(),
+				"currentArtifactId": str((upstream_binding or {}).get("currentArtifactId") or "").strip(),
+			}
+		normalized_nodes[node_id] = {
+			"nodeId": node_id,
+			"nodeStateHash": node_state_hash,
+			"determinismEnvHash": determinism_env_hash,
+			"binding": {
+				"currentExecKey": current_exec,
+				"currentArtifactId": current_artifact,
+			},
+			"upstreamBindings": upstream,
+			"executionVersion": str(execution_version or ""),
+		}
+	environment_hash = sha256_hex(canonical_json(
+		{
+			"graphId": str(graph_id or ""),
+			"executionVersion": str(execution_version or ""),
+			"nodeEnvHashes": {
+				str(node_id): str((node_data or {}).get("determinismEnvHash") or "")
+				for node_id, node_data in sorted(normalized_nodes.items(), key=lambda kv: str(kv[0]))
+			},
+		}
+	).encode("utf-8"))
+	return {
+		"schemaVersion": 1,
+		"graphId": str(graph_id or ""),
+		"executionVersion": str(execution_version or ""),
+		"environmentHash": environment_hash,
+		"nodes": normalized_nodes,
+	}
+
+
 async def _record_consumers(
     *,
     context: GraphContext,
@@ -3047,8 +3122,10 @@ async def run_graph(
     artifact_store=None, 
     cache=None,
     cancel_event: Optional[asyncio.Event] = None,
+    pause_event: Optional[asyncio.Event] = None,
     runtime_ref: Optional[Any] = None,
     graph_id: Optional[str] = None,
+    resume_snapshot: Optional[Dict[str, Any]] = None,
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
@@ -3112,6 +3189,21 @@ async def run_graph(
 
     async def _emit(evt: Dict[str, Any]) -> None:
         payload = evt
+        payload_type = str(payload.get("type") or "")
+        if payload_type == "control_signal":
+            signal = str(payload.get("signal") or "").strip().lower()
+            node_id = str(payload.get("nodeId") or "").strip()
+            if signal == "llm_acquired" and node_id:
+                active_llm_lease_nodes.add(node_id)
+            elif signal == "llm_released" and node_id:
+                active_llm_lease_nodes.discard(node_id)
+        elif payload_type == "llm_lease":
+            state = str(payload.get("state") or "").strip().lower()
+            node_id = str(payload.get("nodeId") or "").strip()
+            if state == "acquired" and node_id:
+                active_llm_lease_nodes.add(node_id)
+            elif state == "released" and node_id:
+                active_llm_lease_nodes.discard(node_id)
         if isinstance(payload, dict) and str(payload.get("type") or "") == "log":
             component_path = _component_path_for_log_node(payload.get("nodeId"))
             if component_path and "componentPath" not in payload:
@@ -3133,9 +3225,9 @@ async def run_graph(
     max_inflight = _env_int("RUNNER_MAX_CONCURRENCY", 4, minimum=1)
     max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
     max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
-    # Default model concurrency is intentionally conservative (1) for low-VRAM hosts.
+    # Default model concurrency is intentionally conservative (2) for this host profile.
     # Override with RUNNER_MAX_MODEL (or legacy RUNNER_MAX_LLM) to increase later.
-    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 1, minimum=1), minimum=1)
+    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
     node_retry_max_attempts = _env_int_allow_zero("RUNNER_NODE_MAX_RETRIES", 0)
@@ -3169,6 +3261,7 @@ async def run_graph(
     total_cached = 0
     total_succeeded = 0
     total_failed = 0
+    active_llm_lease_nodes: set[str] = set()
 
     async def _emit_run_telemetry_once() -> None:
         nonlocal run_telemetry_emitted
@@ -3463,16 +3556,38 @@ async def run_graph(
                 if nid in component_expansion.internal_to_parent
             }
             planned_node_ids = sorted({*planned_node_ids, *{p for p in parent_ids if p}})
-        await _emit({
-            "type": "run_started",
-            "runId": run_id,
-            "at": iso_now(),
-            "runFrom": run_from,
-            "runMode": effective_run_mode,
-            "plannedNodeIds": planned_node_ids,
-            "pinnedNodeIds": planned_pinned_node_ids,
-            "reproducibility": reproducibility_metadata,
-        })
+        if isinstance(resume_snapshot, dict):
+            await _emit(
+                {
+                    "type": "run_resumed",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "runFrom": run_from,
+                    "runMode": effective_run_mode,
+                    "plannedNodeIds": planned_node_ids,
+                }
+            )
+            await _emit(
+                {
+                    "type": "control_signal",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "signal": "resume",
+                }
+            )
+        else:
+            await _emit(
+                {
+                    "type": "run_started",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "runFrom": run_from,
+                    "runMode": effective_run_mode,
+                    "plannedNodeIds": planned_node_ids,
+                    "pinnedNodeIds": planned_pinned_node_ids,
+                    "reproducibility": reproducibility_metadata,
+                }
+            )
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
@@ -4013,6 +4128,11 @@ async def run_graph(
                         reason="PINNED_TRUSTED_ARTIFACT",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=pinned_artifact_id, status="cached")
+                    _set_authoritative_binding(
+                        node_id,
+                        exec_key=str(pinned_exec_key or ""),
+                        artifact_id=str(pinned_artifact_id or ""),
+                    )
                     await _emit({
                         "type": "node_output",
                         "runId": run_id,
@@ -4342,6 +4462,11 @@ async def run_graph(
                         phase="cache_hit_bind",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
+                    _set_authoritative_binding(
+                        node_id,
+                        exec_key=str(exec_key or ""),
+                        artifact_id=str(cached_artifact_id or ""),
+                    )
                     await _record_consumers(
                         context=context,
                         input_artifact_ids=upstream_ids,
@@ -6083,6 +6208,11 @@ async def run_graph(
                             phase="post_write_bind_transform",
                         )
                         context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
+                        _set_authoritative_binding(
+                            node_id,
+                            exec_key=str(exec_key or ""),
+                            artifact_id=str(committed_artifact_id or ""),
+                        )
 
                         additional_outputs = (
                             res.additional_outputs if isinstance(getattr(res, "additional_outputs", None), dict) else {}
@@ -6228,6 +6358,12 @@ async def run_graph(
                                 artifact_id=committed_output_artifact_id,
                                 status="computed",
                             )
+                            if str(handle or "").strip() == "out":
+                                _set_authoritative_binding(
+                                    node_id,
+                                    exec_key=f"{str(exec_key or '')}::out",
+                                    artifact_id=str(committed_output_artifact_id or ""),
+                                )
                             await _emit(
                                 {
                                     "type": "node_output",
@@ -6969,6 +7105,11 @@ async def run_graph(
                         phase="post_write_bind",
                     )
                     context.bindings.bind(node_id=node_id, artifact_id=committed_artifact_id, status="computed")
+                    _set_authoritative_binding(
+                        node_id,
+                        exec_key=str(exec_key or ""),
+                        artifact_id=str(committed_artifact_id or ""),
+                    )
                     expected_output_error = _expected_output_schema_error(
                         node=n,
                         artifact=artifact,
@@ -7623,6 +7764,11 @@ async def run_graph(
         completed_count = 0
         run_failed = False
         total_soft_failed = 0
+        pause_requested = False
+        run_pausing_emitted = False
+        run_pause_requested_emitted = False
+        run_paused_emitted = False
+        pause_wait_reason_signature = ""
         connected_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         provided_work_edges_by_handle: Dict[str, Dict[str, set[str]]] = {nid: {} for nid in sub}
         handle_satisfaction_state: Dict[str, Dict[str, str]] = {nid: {} for nid in sub}
@@ -7631,6 +7777,326 @@ async def run_graph(
         warning_first_emitted_keys: set[str] = set()
         warning_counters: Dict[str, Dict[str, Any]] = {}
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
+        try:
+            node_resumability_by_id: Dict[str, str] = {
+                str(nid): _node_resumability_class(nodes.get(str(nid), {})) for nid in sub
+            }
+        except Exception as ex:
+            await _emit(
+                {
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "failed",
+                    "errorCode": "RESUMABILITY_DECLARATION_MISSING",
+                    "error": str(ex),
+                }
+            )
+            await _emit_cache_summary_once()
+            return
+
+        authoritative_frontier_bindings: Dict[str, Dict[str, str]] = {}
+        if isinstance(resume_snapshot, dict):
+            basis_seed = (
+                resume_snapshot.get("frontierValidationBasis")
+                if isinstance(resume_snapshot.get("frontierValidationBasis"), dict)
+                else {}
+            )
+            basis_nodes_seed = basis_seed.get("nodes") if isinstance(basis_seed.get("nodes"), dict) else {}
+            for basis_node_id, basis_node in basis_nodes_seed.items():
+                if not isinstance(basis_node, dict):
+                    continue
+                node_key = str(basis_node_id or "").strip()
+                if node_key:
+                    pair = basis_node.get("binding") if isinstance(basis_node.get("binding"), dict) else {}
+                    authoritative_frontier_bindings[node_key] = {
+                        "currentExecKey": str(pair.get("currentExecKey") or "").strip(),
+                        "currentArtifactId": str(pair.get("currentArtifactId") or "").strip(),
+                    }
+                upstream_seed = (
+                    basis_node.get("upstreamBindings")
+                    if isinstance(basis_node.get("upstreamBindings"), dict)
+                    else {}
+                )
+                for upstream_node_id, upstream_pair in upstream_seed.items():
+                    if not isinstance(upstream_pair, dict):
+                        continue
+                    upstream_key = str(upstream_node_id or "").strip()
+                    if not upstream_key:
+                        continue
+                    authoritative_frontier_bindings.setdefault(
+                        upstream_key,
+                        {
+                            "currentExecKey": str(upstream_pair.get("currentExecKey") or "").strip(),
+                            "currentArtifactId": str(upstream_pair.get("currentArtifactId") or "").strip(),
+                        },
+                    )
+
+        def _set_authoritative_binding(node_id: str, *, exec_key: str, artifact_id: str) -> None:
+            node_key = str(node_id or "").strip()
+            if not node_key:
+                return
+            authoritative_frontier_bindings[node_key] = {
+                "currentExecKey": str(exec_key or "").strip(),
+                "currentArtifactId": str(artifact_id or "").strip(),
+            }
+
+        def _snapshot_frontier_validation_basis() -> Dict[str, Any]:
+            frontier_nodes = set(ready)
+            frontier_nodes.update(
+                nid for nid, depth in _pending_work_depth_by_node(streaming_only=False).items() if int(depth) > 0
+            )
+            frontier_nodes.update(nid for nid in sub if not bool(node_started_once.get(nid, False)))
+            basis = _build_frontier_identity_basis(
+                graph=execution_graph,
+                graph_id=str(graph_id or ""),
+                node_ids=sorted(frontier_nodes, key=lambda n: order_index.get(n, 10**9)),
+                node_bindings=authoritative_frontier_bindings,
+                execution_version=str(context.execution_version or ""),
+            )
+            basis_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+            for frontier_node_id, basis_node in basis_nodes.items():
+                if not isinstance(basis_node, dict):
+                    continue
+                awaitable_log = {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": (
+                        "[pause] frontier-capture "
+                        f"node={str(frontier_node_id)} "
+                        f"binding={json.dumps((basis_node.get('binding') or {}), ensure_ascii=False)} "
+                        f"upstream={json.dumps((basis_node.get('upstreamBindings') or {}), ensure_ascii=False)} "
+                        "source=authoritative_frontier_bindings"
+                    ),
+                }
+                # fire-and-forget log emission is acceptable for diagnostics only
+                asyncio.create_task(_emit(awaitable_log))
+            return basis
+
+        def _build_pause_snapshot() -> Dict[str, Any]:
+            started_node_ids = sorted([str(nid) for nid, started in node_started_once.items() if bool(started)])
+            blocked_node_ids = sorted([str(nid) for nid in blocked_descendants])
+            ready_node_ids = sorted([str(nid) for nid in ready], key=lambda n: order_index.get(n, 10**9))
+            return {
+                "schemaVersion": PAUSE_SNAPSHOT_SCHEMA_VERSION,
+                "runId": str(run_id),
+                "graphId": str(graph_id),
+                "graph": copy.deepcopy(execution_graph),
+                "runFrom": run_from,
+                "runMode": effective_run_mode,
+                "lifecycleState": "paused",
+                "executionVersion": str(context.execution_version or ""),
+                "pausedAt": iso_now(),
+                "state": {
+                    "ready": sorted([str(n) for n in ready], key=lambda n: order_index.get(n, 10**9)),
+                    "blockedDescendants": sorted([str(n) for n in blocked_descendants]),
+                    "indeg": {str(k): int(v) for k, v in indeg.items()},
+                    "depsReleased": {str(k): bool(v) for k, v in deps_released.items()},
+                    "edgeDependencyReleased": {str(k): bool(v) for k, v in edge_dependency_released.items()},
+                    "nodeStartedOnce": {str(k): bool(v) for k, v in node_started_once.items()},
+                    "nodeInflightCounts": {str(k): int(v) for k, v in node_inflight_counts.items()},
+                    "providedWorkEdgesByHandle": {
+                        str(nid): {
+                            str(handle): sorted([str(edge_id) for edge_id in edge_ids])
+                            for handle, edge_ids in (handle_map or {}).items()
+                        }
+                        for nid, handle_map in (provided_work_edges_by_handle or {}).items()
+                    },
+                    "providedNonworkEdgesByHandle": {
+                        str(nid): {
+                            str(handle): {
+                                str(plane): sorted([str(edge_id) for edge_id in edge_ids])
+                                for plane, edge_ids in (plane_map or {}).items()
+                            }
+                            for handle, plane_map in (handle_map or {}).items()
+                        }
+                        for nid, handle_map in (provided_nonwork_edges_by_handle or {}).items()
+                    },
+                    "queueRegistry": queue_registry.snapshot() if hasattr(queue_registry, "snapshot") else {},
+                },
+                "completedNodeIds": started_node_ids,
+                "readyNodeIds": ready_node_ids,
+                "blockedNodeIds": blocked_node_ids,
+                "failedNodeIds": sorted([str(nid) for nid in blocked_descendants if str(nid) not in started_node_ids]),
+                "resumabilityByNode": dict(node_resumability_by_id),
+                "nodeCheckpoints": {
+                    str(node_id): {
+                        "started": bool(node_started_once.get(node_id, False)),
+                        "inflightCount": int(node_inflight_counts.get(node_id, 0)),
+                        "resumability": str(node_resumability_by_id.get(str(node_id), "")),
+                    }
+                    for node_id in sorted(sub, key=lambda n: order_index.get(n, 10**9))
+                },
+                "frontierValidationBasis": _snapshot_frontier_validation_basis(),
+                "leaseState": {
+                    "released": True,
+                    "activeLeases": 0,
+                },
+            }
+
+        async def _try_terminalize_pause() -> Optional[str]:
+            nonlocal run_paused_emitted, pause_wait_reason_signature
+            if not pause_requested or run_paused_emitted:
+                return None
+            active_inflight = int(len(inflight))
+            non_resumable_inflight = sorted(
+                {
+                    str((meta or {}).get("nodeId") or "")
+                    for meta in inflight.values()
+                    if str((meta or {}).get("nodeId") or "").strip()
+                    and str(
+                        node_resumability_by_id.get(str((meta or {}).get("nodeId") or "").strip(), "")
+                    )
+                    == "non_resumable"
+                }
+            )
+            active_leases = sorted(str(nid) for nid in active_llm_lease_nodes if str(nid).strip())
+            reasons: list[str] = []
+            if active_inflight > 0:
+                reasons.append(f"active_inflight={active_inflight}")
+            if non_resumable_inflight:
+                reasons.append(f"non_resumable_inflight={','.join(non_resumable_inflight)}")
+            if active_leases:
+                reasons.append(f"active_leases={','.join(active_leases)}")
+            if reasons:
+                signature = "|".join(reasons)
+                if signature != pause_wait_reason_signature:
+                    pause_wait_reason_signature = signature
+                    await _emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": f"[pause] waiting {' '.join(reasons)}",
+                        }
+                    )
+                return None
+
+            snapshot = _build_pause_snapshot()
+            try:
+                await context.artifact_store.upsert_run_pause_snapshot(run_id, snapshot)
+                await context.artifact_store.update_run_status(run_id, "paused")
+            except Exception as ex:
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": f"[pause] terminalization_failed reason=snapshot_persist_failed error={str(ex)}",
+                    }
+                )
+                await _emit(
+                    {
+                        "type": "run_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "status": "failed",
+                        "errorCode": "PAUSE_SNAPSHOT_PERSIST_FAILED",
+                        "error": str(ex),
+                    }
+                )
+                await _emit_cache_summary_once()
+                run_paused_emitted = True
+                return "failed"
+            run_paused_emitted = True
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": (
+                        "[pause] terminalized status=paused "
+                        f"ready={len(ready)} inflight={len(inflight)}"
+                    ),
+                }
+            )
+            await _emit({"type": "run_paused", "runId": run_id, "at": iso_now(), "snapshot": snapshot})
+            await _emit_cache_summary_once()
+            return "paused"
+
+        if isinstance(resume_snapshot, dict):
+            schema_ok, schema_errors = validate_pause_snapshot_schema(resume_snapshot)
+            if not schema_ok:
+                await _emit(
+                    {
+                        "type": "run_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "status": "failed",
+                        "errorCode": "PAUSE_SNAPSHOT_SCHEMA_INVALID",
+                        "error": ";".join(schema_errors),
+                    }
+                )
+                await _emit_cache_summary_once()
+                return
+            state = resume_snapshot.get("state") if isinstance(resume_snapshot.get("state"), dict) else {}
+            ready = [
+                str(nid)
+                for nid in (state.get("ready") if isinstance(state.get("ready"), list) else [])
+                if str(nid or "").strip() and str(nid) in sub
+            ]
+            blocked_descendants = {
+                str(nid)
+                for nid in (state.get("blockedDescendants") if isinstance(state.get("blockedDescendants"), list) else [])
+                if str(nid or "").strip() and str(nid) in sub
+            }
+            indeg_raw = state.get("indeg") if isinstance(state.get("indeg"), dict) else {}
+            for nid in sub:
+                if nid in indeg_raw:
+                    try:
+                        indeg[nid] = max(0, int(indeg_raw.get(nid)))
+                    except Exception:
+                        pass
+            deps_raw = state.get("depsReleased") if isinstance(state.get("depsReleased"), dict) else {}
+            for nid in sub:
+                if nid in deps_raw:
+                    deps_released[nid] = bool(deps_raw.get(nid))
+            edge_deps_raw = state.get("edgeDependencyReleased") if isinstance(state.get("edgeDependencyReleased"), dict) else {}
+            for edge_id in list(edge_dependency_released.keys()):
+                if edge_id in edge_deps_raw:
+                    edge_dependency_released[edge_id] = bool(edge_deps_raw.get(edge_id))
+            started_raw = state.get("nodeStartedOnce") if isinstance(state.get("nodeStartedOnce"), dict) else {}
+            for nid in sub:
+                if nid in started_raw:
+                    node_started_once[nid] = bool(started_raw.get(nid))
+            inflight_counts_raw = state.get("nodeInflightCounts") if isinstance(state.get("nodeInflightCounts"), dict) else {}
+            for nid in sub:
+                if nid in inflight_counts_raw:
+                    try:
+                        node_inflight_counts[nid] = max(0, int(inflight_counts_raw.get(nid)))
+                    except Exception:
+                        node_inflight_counts[nid] = 0
+            provided_work_raw = state.get("providedWorkEdgesByHandle") if isinstance(state.get("providedWorkEdgesByHandle"), dict) else {}
+            for nid, handle_map in provided_work_raw.items():
+                if str(nid) not in sub or not isinstance(handle_map, dict):
+                    continue
+                for handle, edge_ids in handle_map.items():
+                    if not isinstance(edge_ids, list):
+                        continue
+                    provided_work_edges_by_handle.setdefault(str(nid), {}).setdefault(str(handle), set()).update(
+                        str(edge_id) for edge_id in edge_ids if str(edge_id or "").strip()
+                    )
+            provided_nonwork_raw = state.get("providedNonworkEdgesByHandle") if isinstance(state.get("providedNonworkEdgesByHandle"), dict) else {}
+            for nid, handle_map in provided_nonwork_raw.items():
+                if str(nid) not in sub or not isinstance(handle_map, dict):
+                    continue
+                for handle, plane_map in handle_map.items():
+                    if not isinstance(plane_map, dict):
+                        continue
+                    for plane, edge_ids in plane_map.items():
+                        if not isinstance(edge_ids, list):
+                            continue
+                        provided_nonwork_edges_by_handle.setdefault(str(nid), {}).setdefault(str(handle), {}).setdefault(
+                            str(plane), set()
+                        ).update(str(edge_id) for edge_id in edge_ids if str(edge_id or "").strip())
+            queue_state = state.get("queueRegistry") if isinstance(state.get("queueRegistry"), dict) else {}
+            if queue_state and hasattr(queue_registry, "restore"):
+                queue_registry.restore(queue_state)
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):
@@ -8240,10 +8706,62 @@ async def run_graph(
         await _emit_scheduler_snapshot(stalled=False)
 
         while True:
+            if pause_event and pause_event.is_set():
+                pause_requested = True
+                if not run_pause_requested_emitted:
+                    run_pause_requested_emitted = True
+                    if runtime_ref is None:
+                        await _emit({"type": "run_pause_requested", "runId": run_id, "at": iso_now()})
+                if not run_pausing_emitted:
+                    run_pausing_emitted = True
+                    await _emit({"type": "run_pausing", "runId": run_id, "at": iso_now()})
+                    await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})
+                    await _emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": (
+                                "[pause] requested admission_closed=true "
+                                f"ready={len(ready)} inflight={len(inflight)}"
+                            ),
+                        }
+                    )
+                non_resumable_inflight = sorted(
+                    {
+                        str((meta or {}).get("nodeId") or "")
+                        for meta in inflight.values()
+                        if str((meta or {}).get("nodeId") or "").strip()
+                        and str(
+                            node_resumability_by_id.get(str((meta or {}).get("nodeId") or "").strip(), "")
+                        )
+                        == "non_resumable"
+                    }
+                )
+                for blocked_node in non_resumable_inflight:
+                    await _emit(
+                        {
+                            "type": "node_not_resumable",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": blocked_node,
+                            "reasonCode": "NON_RESUMABLE_INFLIGHT",
+                        }
+                    )
+                pause_terminalized = await _try_terminalize_pause()
+                if pause_terminalized in {"paused", "failed"}:
+                    return
             if not ready and not inflight:
                 pending_by_node = _pending_work_depth_by_node(streaming_only=True)
                 pending_depth = int(sum(int(v) for v in pending_by_node.values()))
                 if pending_depth <= 0:
+                    if pause_requested:
+                        pause_terminalized = await _try_terminalize_pause()
+                        if pause_terminalized in {"paused", "failed"}:
+                            return
+                        await asyncio.sleep(0.05)
+                        continue
                     await _emit_scheduler_snapshot(stalled=False)
                     break
                 rebuilt = await _rebuild_ready_from_state()
@@ -8333,7 +8851,7 @@ async def run_graph(
                 await _emit_cache_summary_once()
                 return
 
-            while ready and len(inflight) < max_inflight:
+            while (not pause_requested) and ready and len(inflight) < max_inflight:
                 nid = ready.pop(0)
                 if nid in blocked_descendants:
                     continue
@@ -8384,6 +8902,13 @@ async def run_graph(
                 node_inflight_counts[nid] = int(node_inflight_counts.get(nid, 0)) + 1
                 node_started_once[nid] = True
                 _clear_node_blocked(nid)
+
+            if pause_requested and not inflight:
+                pause_terminalized = await _try_terminalize_pause()
+                if pause_terminalized in {"paused", "failed"}:
+                    return
+                await asyncio.sleep(0.05)
+                continue
 
             if not inflight:
                 await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "pause"})

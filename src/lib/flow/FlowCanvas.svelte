@@ -25,6 +25,7 @@
 		buildProjectMenuItems,
 		dispatchAddMenuAction,
 		dispatchProjectMenuAction,
+		pauseResumeToolbarVisibility,
 		routePrimarySaveAction
 	} from './components/flowToolbarModel';
 	import { getHeaderCachePill, getHeaderNodeStatus } from './components/inspectorCachePill';
@@ -650,6 +651,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: scopedUnsavedChanges = scopedHeaderStatus.unsaved;
 	$: projectMenuItems = buildProjectMenuItems($graphStore.editingContext) satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
+	$: runToolbarControls = pauseResumeToolbarVisibility($graphStore.runStatus as any);
 	$: primarySaveCommandLabel = isComponentEditContext ? 'Save Component Revision' : 'Save Graph';
 	$: saveAsComponentCommandLabel = isComponentEditContext ? 'Save as New Component' : 'Save as Component';
 	$: commandItems = [
@@ -1731,6 +1733,14 @@ async function scrollToBottom() {
 
 	function runFromSelected() {
 		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward', globalCacheMode);
+	}
+
+	function pauseRun() {
+		void graphStore.pauseActiveRun();
+	}
+
+	function resumeRun() {
+		void graphStore.resumeActiveRun();
 	}
 
 	function pinSelectedPerRun() {
@@ -2839,6 +2849,25 @@ async function scrollToBottom() {
 				<button class="runSecondary" on:click={runFromSelected} disabled={!$selectedNode}>
 					Run from selected
 				</button>
+				{#if runToolbarControls.showPause}
+					<button
+						class="runSecondary"
+						on:click={pauseRun}
+						disabled={runToolbarControls.disablePause}
+						title={runToolbarControls.disablePause ? 'Pausing...' : 'Pause current run'}
+					>
+						Pause
+					</button>
+				{:else if runToolbarControls.showResume}
+					<button
+						class="runSecondary"
+						on:click={resumeRun}
+						disabled={runToolbarControls.disableResume}
+						title={runToolbarControls.disableResume ? 'Resuming...' : 'Resume paused run'}
+					>
+						Resume
+					</button>
+				{/if}
 				<button class="runSecondary" on:click={() => graphStore.undo()} disabled={!canUndo} title="Undo (Ctrl+Z)">
 					Undo
 				</button>

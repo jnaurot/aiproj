@@ -15,6 +15,13 @@ from app.runner.metadata import NodeOutput
 
 REQUIRED_BY_TYPE = {
     "run_started": {"runId", "at"},
+    "run_pause_requested": {"runId", "at"},
+    "run_pausing": {"runId", "at"},
+    "run_paused": {"runId", "at"},
+    "run_resume_requested": {"runId", "at"},
+    "run_resuming": {"runId", "at"},
+    "run_resumed": {"runId", "at"},
+    "run_resume_failed": {"runId", "at"},
     "run_finished": {"runId", "at", "status"},
     "node_started": {"runId", "at", "nodeId"},
     "node_finished": {"runId", "at", "nodeId", "status"},
@@ -33,6 +40,7 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "node_cancelled",
     "scheduler_cancelled",
     "run_telemetry",
+    "node_not_resumable",
 }
 
 ALLOWED_CACHE_REASONS = {

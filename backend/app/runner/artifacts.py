@@ -138,6 +138,9 @@ class ArtifactStore(Protocol):
     async def update_run_status(self, run_id: str, status: str) -> None: ...
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]: ...
     async def list_runs(self, include_deleted: bool = False) -> List[Dict[str, Any]]: ...
+    async def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None: ...
+    async def get_run_pause_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]: ...
+    async def delete_run_pause_snapshot(self, run_id: str) -> None: ...
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]: ...
     async def record_consumers(
         self,
@@ -194,6 +197,7 @@ class MemoryArtifactStore:
         self._meta: Dict[str, Artifact] = {}
         self._blob: Dict[str, bytes] = {}
         self._runs: Dict[str, Dict[str, Any]] = {}
+        self._run_pause_snapshots: Dict[str, Dict[str, Any]] = {}
         self._consumers: Dict[str, List[Dict[str, Any]]] = {}
         self._snapshots: Dict[str, Dict[str, Any]] = {}
         self._experiments: Dict[str, Dict[str, Any]] = {}
@@ -350,6 +354,25 @@ class MemoryArtifactStore:
         runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
         return runs
 
+    async def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None:
+        rid = str(run_id or "").strip()
+        if not rid:
+            raise ValueError("run_id is required")
+        self._run_pause_snapshots[rid] = dict(snapshot or {})
+
+    async def get_run_pause_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        snap = self._run_pause_snapshots.get(rid)
+        return dict(snap) if isinstance(snap, dict) else None
+
+    async def delete_run_pause_snapshot(self, run_id: str) -> None:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        self._run_pause_snapshots.pop(rid, None)
+
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         mode = (mode or "soft").lower()
         if mode not in ("soft", "hard"):
@@ -383,6 +406,7 @@ class MemoryArtifactStore:
             if not self._consumers[input_id]:
                 self._consumers.pop(input_id, None)
         run_deleted = (self._runs.pop(run_id, None) is not None) or bool(artifact_ids)
+        self._run_pause_snapshots.pop(str(run_id), None)
         self._experiments.pop(run_id, None)
         return {
             "runDeleted": run_deleted,
@@ -704,6 +728,17 @@ class _SqliteArtifactIndex:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at)")
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS run_pause_snapshots (
+                    run_id TEXT PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_run_pause_snapshots_updated_at ON run_pause_snapshots(updated_at)")
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id TEXT PRIMARY KEY,
                     metadata_json TEXT NOT NULL,
@@ -982,6 +1017,52 @@ class _SqliteArtifactIndex:
             for r in rows
         ]
 
+    def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None:
+        rid = str(run_id or "").strip()
+        if not rid:
+            raise ValueError("run_id is required")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO run_pause_snapshots (run_id, snapshot_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    snapshot_json=excluded.snapshot_json,
+                    updated_at=excluded.updated_at
+                """,
+                (rid, json.dumps(snapshot or {}, ensure_ascii=False), now, now),
+            )
+            self._conn.commit()
+
+    def get_run_pause_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        with self._lock:
+            cur = self._conn.cursor()
+            row = cur.execute(
+                "SELECT snapshot_json FROM run_pause_snapshots WHERE run_id=?",
+                (rid,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            parsed = json.loads(str(row[0] or "{}"))
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+
+    def delete_run_pause_snapshot(self, run_id: str) -> None:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (rid,))
+            self._conn.commit()
+
     def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
         if not isinstance(summary, dict):
             raise ValueError("summary must be a dict")
@@ -1190,6 +1271,7 @@ class _SqliteArtifactIndex:
                     "UPDATE run_experiments SET status='deleted' WHERE run_id=?",
                     (run_id,),
                 )
+                cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (run_id,))
                 changed = cur.rowcount
                 self._conn.commit()
             return {
@@ -1220,6 +1302,7 @@ class _SqliteArtifactIndex:
             artifacts_removed = cur.rowcount
             cur.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
             cur.execute("DELETE FROM run_experiments WHERE run_id=?", (run_id,))
+            cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (run_id,))
             run_deleted = (cur.rowcount > 0) or bool(artifacts_removed)
             self._conn.commit()
 
@@ -1545,6 +1628,15 @@ class DiskArtifactStore:
 
     async def list_runs(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
         return self._index.list_runs(include_deleted=include_deleted)
+
+    async def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None:
+        self._index.upsert_run_pause_snapshot(run_id, snapshot)
+
+    async def get_run_pause_snapshot(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._index.get_run_pause_snapshot(run_id)
+
+    async def delete_run_pause_snapshot(self, run_id: str) -> None:
+        self._index.delete_run_pause_snapshot(run_id)
 
     async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
         self._index.upsert_run_experiment(summary)

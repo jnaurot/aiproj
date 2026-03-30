@@ -1,5 +1,13 @@
 // src/lib/flow/types/run.ts
-export type RunStatus = "idle" | "running" | "succeeded" | "failed" | "canceled";
+export type RunStatus =
+  | "idle"
+  | "running"
+  | "pausing"
+  | "paused"
+  | "resuming"
+  | "succeeded"
+  | "failed"
+  | "canceled";
 
 export type RunRequest = {
   runFrom: string | null; // null = from start
@@ -14,6 +22,27 @@ export type KnownRunEvent =
       runFrom: string | null;
       runMode?: "from_start" | "from_selected_onward" | "selected_only";
       plannedNodeIds?: string[];
+    }
+  | { type: "run_pause_requested"; runId: string; at: string }
+  | { type: "run_pausing"; runId: string; at: string }
+  | { type: "run_paused"; runId: string; at: string; snapshot?: Record<string, unknown> }
+  | { type: "run_resume_requested"; runId: string; at: string }
+  | { type: "run_resuming"; runId: string; at: string }
+  | {
+      type: "run_resumed";
+      runId: string;
+      at: string;
+      runFrom?: string | null;
+      runMode?: "from_start" | "from_selected_onward" | "selected_only";
+      plannedNodeIds?: string[];
+    }
+  | {
+      type: "run_resume_failed";
+      runId: string;
+      at: string;
+      errorCode?: string;
+      error?: string;
+      details?: Record<string, unknown>;
     }
   | { type: "run_finished"; runId: string; at: string; status: RunStatus }
   | { type: "node_started"; runId: string; at: string; nodeId: string }
@@ -229,6 +258,13 @@ export type KnownRunEvent =
       holderNodeId?: string | null;
       waitQueueLength?: number;
       waitingNodeIds?: string[];
+    }
+  | {
+      type: "node_not_resumable";
+      runId: string;
+      at: string;
+      nodeId: string;
+      reasonCode?: string;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };
