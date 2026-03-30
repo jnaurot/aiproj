@@ -320,6 +320,7 @@ let logAutoScrollEnabled = true;
 	let inspectorResizeStartWidth = 460;
 	let runMonitorPrefsGraphId = '';
 	let runMonitorSectionCollapsed = false;
+	let runMonitorShowHistory = false;
 	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
@@ -4234,38 +4235,40 @@ async function scrollToBottom() {
 											</div>
 										</div>
 									</div>
-									<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">
-										<div class="runMonitorNodeHead" role="row">
-											<span>run</span>
-											<span>status</span>
-											<span>runtime</span>
-											<span>max q</span>
-											<span>flags</span>
+									{#if runMonitorShowHistory}
+										<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">
+											<div class="runMonitorNodeHead" role="row">
+												<span>run</span>
+												<span>status</span>
+												<span>runtime</span>
+												<span>max q</span>
+												<span>flags</span>
+											</div>
+											{#if runMonitorHistoryRows.length === 0}
+												<div class="envProfileEmpty">No finished runs yet.</div>
+											{:else}
+												{#each runMonitorHistoryRows.slice(0, 8) as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
+													<div class="runMonitorNodeRow" role="row">
+														<span class="mono">{String(row.runId ?? '-')}</span>
+														<span>{String(row.status ?? '-')}</span>
+														<span>{Number(row.runtimeMs ?? 0)}</span>
+														<span>{Number(row.maxPendingQueueDepth ?? 0)}</span>
+														<span>
+															{#if Boolean(row.hadStalledSnapshot ?? false)}
+																stalled
+															{/if}
+															{#if Number(row.blockedEvents ?? 0) > 0}
+																{Boolean(row.hadStalledSnapshot ?? false) ? ' | ' : ''}blocked={Number(row.blockedEvents ?? 0)}
+															{/if}
+															{#if !Boolean(row.hadStalledSnapshot ?? false) && Number(row.blockedEvents ?? 0) === 0}
+																-
+															{/if}
+														</span>
+													</div>
+												{/each}
+											{/if}
 										</div>
-										{#if runMonitorHistoryRows.length === 0}
-											<div class="envProfileEmpty">No finished runs yet.</div>
-										{:else}
-											{#each runMonitorHistoryRows.slice(0, 8) as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
-												<div class="runMonitorNodeRow" role="row">
-													<span class="mono">{String(row.runId ?? '-')}</span>
-													<span>{String(row.status ?? '-')}</span>
-													<span>{Number(row.runtimeMs ?? 0)}</span>
-													<span>{Number(row.maxPendingQueueDepth ?? 0)}</span>
-													<span>
-														{#if Boolean(row.hadStalledSnapshot ?? false)}
-															stalled
-														{/if}
-														{#if Number(row.blockedEvents ?? 0) > 0}
-															{Boolean(row.hadStalledSnapshot ?? false) ? ' | ' : ''}blocked={Number(row.blockedEvents ?? 0)}
-														{/if}
-														{#if !Boolean(row.hadStalledSnapshot ?? false) && Number(row.blockedEvents ?? 0) === 0}
-															-
-														{/if}
-													</span>
-												</div>
-											{/each}
-										{/if}
-									</div>
+									{/if}
 								</div>
 							{:else}
 								<div class="envPanelSummary">Run monitor section is collapsed.</div>
