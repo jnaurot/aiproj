@@ -34,10 +34,13 @@
 </script>
 
 <BaseNode {id} {data} {selected}>
-	<div style="font-size:12px; opacity:0.85;">Model: {meta.model}</div>
-	{#if llmAllocated}
-		<div style="font-size:12px; color:#facc15; line-height:1; margin-top:2px;">★</div>
-	{/if}
+	<div style="font-size:12px; opacity:0.85; display:flex; align-items:center; gap:4px;">
+		<span>Model:</span>
+		{#if llmAllocated}
+			<span style="color:#facc15; line-height:1;">&#9733;</span>
+		{/if}
+		<span>{meta.model}</span>
+	</div>
 	<div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
 		<span style="font-size:11px; border:1px solid rgba(255,255,255,0.15); border-radius:999px; padding:2px 8px;"
 			>{meta.modelKind}</span
