@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import os
 from typing import Dict
+from .services.runtime_env import get_env
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
+    raw = get_env(name)
     if raw is None:
         return default
     value = str(raw).strip().lower()

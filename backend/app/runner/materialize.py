@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import csv
 import io
-import os
 from typing import Any
 
 from .metadata import GraphContext
+from ..services.runtime_env import get_env
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
-    raw = str(os.getenv(name, "")).strip()
+    raw = str(get_env(name, "") or "").strip()
     if not raw:
         return default
     try:
@@ -20,7 +20,7 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    raw = str(os.getenv(name, "")).strip().lower()
+    raw = str(get_env(name, "") or "").strip().lower()
     if not raw:
         return default
     if raw in {"1", "true", "yes", "on"}:

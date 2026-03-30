@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from app.runner.schemas import LLMParams
+from app.services.runtime_env import get_env
 
 
 def _safe_profile_key(ref: str) -> str:
@@ -15,7 +15,7 @@ def _safe_profile_key(ref: str) -> str:
 
 
 def _env_json_dict(env_key: str) -> Optional[Dict[str, Any]]:
-	raw = os.getenv(env_key)
+	raw = get_env(env_key)
 	if not raw:
 		return None
 	try:
@@ -31,7 +31,7 @@ def _resolve_secret_ref(value: Optional[str]) -> Optional[str]:
 	ref = str(value or "").strip()
 	if not ref:
 		return None
-	env_val = os.getenv(ref)
+	env_val = get_env(ref)
 	if env_val:
 		return env_val
 	return ref

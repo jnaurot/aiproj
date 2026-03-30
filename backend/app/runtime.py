@@ -1,5 +1,4 @@
 import asyncio, time
-import os
 import json
 import traceback
 import logging
@@ -18,6 +17,7 @@ from .runner.pause_resume import (
     snapshot_resume_failure_details,
 )
 from .feature_flags import get_feature_flags
+from .services.runtime_env import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +105,11 @@ class RuntimeManager:
         return m
 
     def _build_storage(self):
-        store_kind = (os.getenv("ARTIFACT_STORE") or "disk").strip().lower()
+        store_kind = str(get_env("ARTIFACT_STORE", "disk") or "disk").strip().lower()
         if store_kind == "memory":
             return MemoryArtifactStore(), ExecutionCache(), MemoryEventStore()
 
-        artifact_dir = Path(os.getenv("ARTIFACT_DIR") or "./data/artifacts").resolve()
+        artifact_dir = Path(str(get_env("ARTIFACT_DIR", "./data/artifacts") or "./data/artifacts")).resolve()
         store = DiskArtifactStore(artifact_dir)
         cache_db = str((artifact_dir / "meta" / "artifacts.sqlite"))
         cache = SqliteExecutionCache(cache_db)
@@ -192,7 +192,7 @@ class RuntimeManager:
             "stack": "".join(traceback.format_stack(limit=12)),
         }
         print("[binding-regression]", payload)
-        strict = os.getenv("RUNTIME_STRICT_STALE_TRANSITIONS", "").strip().lower()
+        strict = str(get_env("RUNTIME_STRICT_STALE_TRANSITIONS", "") or "").strip().lower()
         if strict in {"1", "true", "yes", "on"}:
             raise RuntimeError(f"SUCCEEDED_TO_STALE node={node_id} event={ev.get('type')}")
 
@@ -249,7 +249,7 @@ class RuntimeManager:
             "stack": "".join(traceback.format_stack(limit=12)),
         }
         print("[invalidation-regression]", payload)
-        strict = os.getenv("RUNTIME_STRICT_INVALIDATION_ASSERTS", "").strip().lower()
+        strict = str(get_env("RUNTIME_STRICT_INVALIDATION_ASSERTS", "") or "").strip().lower()
         if strict in {"1", "true", "yes", "on"}:
             raise RuntimeError("SIBLING_STATUS_CHANGED_DURING_INVALIDATION")
 

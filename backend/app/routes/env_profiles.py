@@ -14,6 +14,7 @@ from ..executors.builtin_profiles import (
 	resolve_builtin_environment,
 )
 from ..services.env_installer import EnvInstallError, EnvInstallerService, InstallAudit
+from ..services.runtime_env import clear_env_override, list_env_state, set_env_override
 
 router = APIRouter()
 _INSTALLER = EnvInstallerService()
@@ -76,6 +77,24 @@ class EnvValidateRequest(BaseModel):
 
 class EnvInstallRequest(EnvValidateRequest):
 	pass
+
+
+class EnvVarUpdate(BaseModel):
+	name: str
+	value: Optional[str] = None
+	unset: bool = False
+
+	@field_validator("name")
+	@classmethod
+	def _validate_name(cls, value: str) -> str:
+		name = str(value or "").strip().upper()
+		if not name:
+			raise ValueError("name is required")
+		return name
+
+
+class EnvVarsUpdateRequest(BaseModel):
+	updates: List[EnvVarUpdate]
 
 
 def _audit_to_payload(audit: InstallAudit) -> Dict[str, Any]:
@@ -221,4 +240,45 @@ async def install_env_profile(req: EnvInstallRequest) -> Dict[str, Any]:
 		"installed": len(missing_after) == 0,
 		"missingPackages": missing_after,
 		"audit": _audit_to_payload(install_result.audit),
+	}
+
+
+@router.get("/vars")
+async def list_env_vars(revealSensitive: Optional[bool] = False) -> Dict[str, Any]:
+	return {
+		"schemaVersion": 1,
+		"vars": list_env_state(include_sensitive_values=bool(revealSensitive)),
+	}
+
+
+@router.post("/vars")
+async def set_env_vars(req: EnvVarsUpdateRequest) -> Dict[str, Any]:
+	updated: List[str] = []
+	errors: List[Dict[str, Any]] = []
+	restart_required = False
+	for item in req.updates:
+		name = str(item.name or "").strip().upper()
+		try:
+			if bool(item.unset):
+				clear_env_override(name)
+			else:
+				set_env_override(name, str(item.value or ""))
+			updated.append(name)
+		except Exception as exc:
+			errors.append({"name": name, "message": str(exc)})
+	if errors:
+		raise HTTPException(status_code=422, detail={"code": "ENV_VARS_UPDATE_FAILED", "errors": errors, "updated": updated})
+
+	vars_state = list_env_state(include_sensitive_values=False)
+	by_name = {str(row.get("name") or ""): row for row in vars_state if isinstance(row, dict)}
+	for name in updated:
+		row = by_name.get(name) or {}
+		if bool(row.get("restartRequired")):
+			restart_required = True
+
+	return {
+		"schemaVersion": 1,
+		"updated": sorted(set(updated)),
+		"restartRequired": restart_required,
+		"vars": vars_state,
 	}

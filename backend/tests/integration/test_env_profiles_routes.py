@@ -115,3 +115,62 @@ def test_env_profiles_install_reports_pip_failure(monkeypatch):
 		detail = res.json().get("detail") or {}
 		assert detail.get("code") == "ENV_PROFILE_INSTALL_FAILED"
 		assert (detail.get("audit") or {}).get("attemptId") == "envinst_fail"
+
+
+def test_env_vars_list_contains_supported_runtime_envs(monkeypatch, tmp_path):
+	from app.services import runtime_env as env_mod
+
+	monkeypatch.setattr(env_mod, "_OVERRIDES_PATH", tmp_path / "runtime_env_overrides.json")
+	monkeypatch.setattr(env_mod, "_LOADED", False)
+	monkeypatch.setattr(env_mod, "_OVERRIDES", {})
+	with TestClient(app) as client:
+		res = client.get("/env/vars")
+		assert res.status_code == 200, res.text
+		body = res.json()
+		assert body.get("schemaVersion") == 1
+		rows = body.get("vars") or []
+		assert any((r or {}).get("name") == "RUNNER_MAX_CONCURRENCY" for r in rows)
+		assert any((r or {}).get("name") == "ARTIFACT_STORE" for r in rows)
+
+
+def test_env_vars_set_and_clear_override(monkeypatch, tmp_path):
+	from app.services import runtime_env as env_mod
+
+	monkeypatch.setattr(env_mod, "_OVERRIDES_PATH", tmp_path / "runtime_env_overrides.json")
+	monkeypatch.setattr(env_mod, "_LOADED", False)
+	monkeypatch.setattr(env_mod, "_OVERRIDES", {})
+	with TestClient(app) as client:
+		set_res = client.post(
+			"/env/vars",
+			json={"updates": [{"name": "RUNNER_MAX_CONCURRENCY", "value": "7"}]},
+		)
+		assert set_res.status_code == 200, set_res.text
+		set_body = set_res.json()
+		assert "RUNNER_MAX_CONCURRENCY" in (set_body.get("updated") or [])
+		rows = set_body.get("vars") or []
+		target = next((r for r in rows if (r or {}).get("name") == "RUNNER_MAX_CONCURRENCY"), {})
+		assert target.get("value") == "7"
+		assert target.get("source") == "override"
+
+		clear_res = client.post(
+			"/env/vars",
+			json={"updates": [{"name": "RUNNER_MAX_CONCURRENCY", "unset": True}]},
+		)
+		assert clear_res.status_code == 200, clear_res.text
+		clear_body = clear_res.json()
+		rows2 = clear_body.get("vars") or []
+		target2 = next((r for r in rows2 if (r or {}).get("name") == "RUNNER_MAX_CONCURRENCY"), {})
+		assert target2.get("source") in {"default", "env", "unset"}
+
+
+def test_env_vars_rejects_invalid_key(monkeypatch, tmp_path):
+	from app.services import runtime_env as env_mod
+
+	monkeypatch.setattr(env_mod, "_OVERRIDES_PATH", tmp_path / "runtime_env_overrides.json")
+	monkeypatch.setattr(env_mod, "_LOADED", False)
+	monkeypatch.setattr(env_mod, "_OVERRIDES", {})
+	with TestClient(app) as client:
+		res = client.post("/env/vars", json={"updates": [{"name": "bad-key", "value": "1"}]})
+		assert res.status_code == 422, res.text
+		detail = res.json().get("detail") or {}
+		assert detail.get("code") == "ENV_VARS_UPDATE_FAILED"

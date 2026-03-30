@@ -51,6 +51,7 @@ from ..executors.builtin_profiles import (
     resolve_builtin_environment,
 )
 from ..feature_flags import get_feature_flags
+from ..services.runtime_env import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -2614,7 +2615,7 @@ def _cached_artifact_contract_mismatch(
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
-    raw = str(__import__("os").environ.get(name, "")).strip()
+    raw = str(get_env(name, "") or "").strip()
     if not raw:
         return default
     try:
@@ -2625,7 +2626,7 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
 
 
 def _env_int_allow_zero(name: str, default: int) -> int:
-    raw = str(__import__("os").environ.get(name, "")).strip()
+    raw = str(get_env(name, "") or "").strip()
     if not raw:
         return max(0, int(default))
     try:
@@ -2636,7 +2637,7 @@ def _env_int_allow_zero(name: str, default: int) -> int:
 
 
 def _env_bool(name: str, default: bool) -> bool:
-    raw = str(__import__("os").environ.get(name, "")).strip().lower()
+    raw = str(get_env(name, "") or "").strip().lower()
     if not raw:
         return default
     if raw in {"1", "true", "yes", "on"}:

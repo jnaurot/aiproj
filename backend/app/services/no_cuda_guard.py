@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import importlib.metadata as metadata
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
+from .runtime_env import get_bool_env
 
 
 _SPEC_SPLIT_RE = re.compile(r"[<>=!~\[\]]")
@@ -131,7 +131,7 @@ def ensure_no_cuda_or_raise(
 	check_installed: bool = True,
 	extra_lockfiles: Iterable[Path] | None = None,
 ) -> None:
-	if str(os.getenv("NO_CUDA_GUARD_DISABLED", "")).strip().lower() in {"1", "true", "yes", "on"}:
+	if get_bool_env("NO_CUDA_GUARD_DISABLED", False):
 		return
 
 	violations: List[CudaViolation] = []

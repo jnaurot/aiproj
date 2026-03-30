@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import json
 import base64
-import os
 import threading
 import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -17,6 +16,7 @@ from .llm_ollama import exec_llm_ollama           # new module (suggested)
 from .llm_openai_compat import exec_llm_openai_compat
 from .model_adapters import get_model_adapter
 from .model_policy import normalize_request_policy
+from ..services.runtime_env import get_env
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,8 @@ _MODEL_PROVIDER_LOCK = threading.Lock()
 
 def _provider_cap_value(provider: str) -> int:
     key = str(provider or "").strip().upper().replace("-", "_")
-    specific = os.getenv(f"RUNNER_MAX_MODEL_PROVIDER_{key}")
-    default = os.getenv("RUNNER_MAX_MODEL_PROVIDER", "")
+    specific = get_env(f"RUNNER_MAX_MODEL_PROVIDER_{key}")
+    default = get_env("RUNNER_MAX_MODEL_PROVIDER", "")
     raw = specific if specific not in {None, ""} else default
     if raw in {None, ""}:
         return 0
@@ -108,8 +108,8 @@ def _provider_holder_get(provider: str) -> Optional[str]:
 
 def _provider_acquire_timeout_seconds(provider: str) -> float:
     key = str(provider or "").strip().upper().replace("-", "_")
-    specific = os.getenv(f"RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_{key}")
-    default = os.getenv("RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT", "")
+    specific = get_env(f"RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_{key}")
+    default = get_env("RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT", "")
     raw = specific if specific not in {None, ""} else default
     if raw in {None, ""}:
         return 0.0

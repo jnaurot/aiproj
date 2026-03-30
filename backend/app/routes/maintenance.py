@@ -1,6 +1,5 @@
 import hashlib
 import json
-import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,17 +8,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..runner.artifacts import Artifact
 from ..runner.node_state import build_exec_key, build_node_state_hash
+from ..services.runtime_env import get_bool_env
 
 router = APIRouter()
 
 
 def _maintenance_enabled() -> bool:
-    return (os.getenv("ENABLE_MAINTENANCE_ENDPOINTS") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    return get_bool_env("ENABLE_MAINTENANCE_ENDPOINTS", False)
 
 
 def _iso_now() -> str:

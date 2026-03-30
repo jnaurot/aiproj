@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
+from ..services.runtime_env import get_bool_env
 
 router = APIRouter()
 
 
 def _require_admin_for_promotion(x_model_admin: Optional[str]) -> None:
-	require_admin = (os.getenv("MODEL_REGISTRY_REQUIRE_ADMIN") or "").strip().lower() in {"1", "true", "yes", "on"}
+	require_admin = get_bool_env("MODEL_REGISTRY_REQUIRE_ADMIN", False)
 	if not require_admin:
 		return
 	header_value = str(x_model_admin or "").strip().lower()

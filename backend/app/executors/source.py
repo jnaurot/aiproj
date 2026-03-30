@@ -42,6 +42,7 @@ from ..runner.schemas import (
     SourceWarehouseParams,
     normalize_source_params_frontend,
 )
+from ..services.runtime_env import get_env
 from ..runner.schema_infer import infer_typed_schema_from_sample_profile
 
 logger = logging.getLogger(__name__)
@@ -1428,7 +1429,7 @@ def _resolve_connection_ref(connection_ref: str) -> str:
     if not ref:
         raise ValueError("MISSING_SECRET: connection_ref is empty")
     env_name = ref[4:].strip() if ref.lower().startswith("env:") else ref
-    value = str(os.getenv(env_name, "")).strip()
+    value = str(get_env(env_name, "") or "").strip()
     if not value:
         raise ValueError(f"MISSING_SECRET: connection_ref '{ref}' is not set in environment")
     return value
@@ -1438,7 +1439,7 @@ def _resolve_required_env(ref: str, *, param_path: str) -> str:
     name = str(ref or "").strip()
     if not name:
         raise ValueError(f"MISSING_SECRET: {param_path} is required")
-    value = str(os.getenv(name, "")).strip()
+    value = str(get_env(name, "") or "").strip()
     if not value:
         raise ValueError(f"MISSING_SECRET: {param_path} '{name}' is not set in environment")
     return value
@@ -1460,7 +1461,7 @@ def _validate_table_identifier(table_name: str) -> tuple[Optional[str], str]:
 
 
 def _incremental_state_path() -> Path:
-    raw = str(os.getenv("SOURCE_INCREMENTAL_STATE_FILE") or "./data/source_incremental_state.json").strip()
+    raw = str(get_env("SOURCE_INCREMENTAL_STATE_FILE", "./data/source_incremental_state.json") or "").strip()
     return Path(raw).expanduser().resolve()
 
 
@@ -3016,7 +3017,7 @@ async def _handle_object_store_source(
         data_bytes = str(params.get("mock_text") or "").encode(str(schema.encoding or "utf-8"), errors="replace")
 
     if data_bytes is None:
-        root = str(os.getenv("OBJECT_STORE_MOCK_ROOT", "")).strip()
+        root = str(get_env("OBJECT_STORE_MOCK_ROOT", "") or "").strip()
         key_path = str(schema.key or "").strip()
         candidate_paths: list[Path] = []
         if root:

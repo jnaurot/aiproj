@@ -36,6 +36,11 @@
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
 	import { listEnvProfiles, installEnvProfile, type EnvProfileStatus } from '$lib/flow/client/envProfiles';
 	import {
+		listRuntimeEnvVars,
+		updateRuntimeEnvVars,
+		type RuntimeEnvVar
+	} from '$lib/flow/client/envVars';
+	import {
 		exportGraphPackage,
 		importGraphPackage,
 		type GraphRevisionSummary,
@@ -269,6 +274,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let envProfilesLoading = false;
 	let envProfilesError: string | null = null;
 	let envInstallPendingByProfile: Record<string, boolean> = {};
+	let runtimeEnvVars: RuntimeEnvVar[] = [];
+	let runtimeEnvLoading = false;
+	let runtimeEnvError: string | null = null;
+	let runtimeEnvSaving: Record<string, boolean> = {};
+	let runtimeEnvDraftByName: Record<string, string> = {};
+	let runtimeEnvFilter = '';
+	let runtimeEnvRevealSensitive = false;
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	let nodeInspectorCollapsed = false;
@@ -363,6 +375,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	);
 	$: envProfilesInstalledCount = envProfiles.filter((profile) => Boolean(profile.installed)).length;
 	$: envProfilesMissingCount = envProfiles.filter((profile) => !Boolean(profile.installed)).length;
+	$: runtimeEnvRows = runtimeEnvVars.filter((row) => {
+		const q = String(runtimeEnvFilter ?? '').trim().toLowerCase();
+		if (!q) return true;
+		return (
+			String(row.name ?? '').toLowerCase().includes(q) ||
+			String(row.category ?? '').toLowerCase().includes(q) ||
+			String(row.description ?? '').toLowerCase().includes(q)
+		);
+	});
 
 	$: selectedId = $selectedNode?.id;
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -2684,6 +2705,80 @@ async function scrollToBottom() {
 		}
 	}
 
+	async function refreshRuntimeEnvPanel(): Promise<void> {
+		runtimeEnvLoading = true;
+		runtimeEnvError = null;
+		try {
+			const payload = await listRuntimeEnvVars({ revealSensitive: runtimeEnvRevealSensitive });
+			runtimeEnvVars = Array.isArray(payload.vars) ? payload.vars : [];
+			const nextDrafts: Record<string, string> = {};
+			for (const row of runtimeEnvVars) {
+				const name = String(row?.name ?? '').trim();
+				if (!name) continue;
+				nextDrafts[name] = row.value ?? '';
+			}
+			runtimeEnvDraftByName = nextDrafts;
+		} catch (error) {
+			runtimeEnvError = String((error as Error)?.message ?? error ?? 'Failed to load runtime env vars.');
+			runtimeEnvVars = [];
+		} finally {
+			runtimeEnvLoading = false;
+		}
+	}
+
+	async function applyRuntimeEnvVar(name: string): Promise<void> {
+		const key = String(name ?? '').trim();
+		if (!key) return;
+		runtimeEnvError = null;
+		runtimeEnvSaving = { ...runtimeEnvSaving, [key]: true };
+		try {
+			const value = String(runtimeEnvDraftByName[key] ?? '');
+			const payload = await updateRuntimeEnvVars([{ name: key, value, unset: false }]);
+			runtimeEnvVars = Array.isArray(payload.vars) ? payload.vars : runtimeEnvVars;
+			showToast(
+				payload.restartRequired
+					? `Updated ${key}. Restart required for some settings.`
+					: `Updated ${key}.`,
+				payload.restartRequired ? 'warn' : 'info'
+			);
+		} catch (error) {
+			const message = String((error as Error)?.message ?? error ?? `Failed to update ${key}`);
+			runtimeEnvError = message;
+			showToast(message, 'error');
+		} finally {
+			const next = { ...runtimeEnvSaving };
+			delete next[key];
+			runtimeEnvSaving = next;
+		}
+	}
+
+	async function unsetRuntimeEnvVar(name: string): Promise<void> {
+		const key = String(name ?? '').trim();
+		if (!key) return;
+		runtimeEnvError = null;
+		runtimeEnvSaving = { ...runtimeEnvSaving, [key]: true };
+		try {
+			const payload = await updateRuntimeEnvVars([{ name: key, unset: true }]);
+			runtimeEnvVars = Array.isArray(payload.vars) ? payload.vars : runtimeEnvVars;
+			const row = runtimeEnvVars.find((item) => item.name === key);
+			runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [key]: row?.value ?? '' };
+			showToast(
+				payload.restartRequired
+					? `Cleared override for ${key}. Restart required for some settings.`
+					: `Cleared override for ${key}.`,
+				payload.restartRequired ? 'warn' : 'info'
+			);
+		} catch (error) {
+			const message = String((error as Error)?.message ?? error ?? `Failed to clear ${key}`);
+			runtimeEnvError = message;
+			showToast(message, 'error');
+		} finally {
+			const next = { ...runtimeEnvSaving };
+			delete next[key];
+			runtimeEnvSaving = next;
+		}
+	}
+
 	onDestroy(() => {
 		if (subtypeErrorTimer) clearTimeout(subtypeErrorTimer);
 		if (toastTimer) clearTimeout(toastTimer);
@@ -2711,6 +2806,7 @@ async function scrollToBottom() {
 		} catch (error) {
 			console.warn('Failed to load global cache config', error);
 		}
+		void refreshRuntimeEnvPanel();
 		const draftInfo = getGraphDraftInfo();
 		const hasDraft = Boolean(String(draftInfo.updatedAt ?? '').trim());
 		const draftStamp = String(draftInfo.updatedAt ?? '').trim();
@@ -3728,6 +3824,84 @@ async function scrollToBottom() {
 								{/each}
 							{/if}
 						</div>
+						<div class="runtimeEnvPanel">
+							<div class="runtimeEnvHead">
+								<strong>Runtime Env Vars</strong>
+								<div class="runtimeEnvActions">
+									<button class="tabBtn" on:click={() => void refreshRuntimeEnvPanel()} disabled={runtimeEnvLoading}>
+										{runtimeEnvLoading ? 'Loading...' : 'Reload'}
+									</button>
+									<label class="runtimeEnvToggle">
+										<input
+											type="checkbox"
+											bind:checked={runtimeEnvRevealSensitive}
+											on:change={() => void refreshRuntimeEnvPanel()}
+										/>
+										<span>Reveal sensitive</span>
+									</label>
+								</div>
+							</div>
+							<input
+								class="logFilterInput"
+								placeholder="Filter env vars..."
+								bind:value={runtimeEnvFilter}
+								aria-label="Filter runtime env vars"
+							/>
+							{#if runtimeEnvError}
+								<div class="envProfileError">{runtimeEnvError}</div>
+							{/if}
+							{#if runtimeEnvRows.length === 0}
+								<div class="envProfileEmpty">No runtime env vars available.</div>
+							{:else}
+								<div class="runtimeEnvTable" role="table" aria-label="Runtime env vars">
+									{#each runtimeEnvRows as row (`${row.name}`)}
+										<div class="runtimeEnvRow" role="row">
+											<div class="runtimeEnvMeta">
+												<div class="mono runtimeEnvName">
+													{row.name}
+													{#if row.restartRequired}
+														<span class="runtimeEnvRestart">restart</span>
+													{/if}
+												</div>
+												<div class="runtimeEnvSub">
+													{row.category} | source={row.source}{row.masked ? ' | masked' : ''}
+												</div>
+												<div class="runtimeEnvDesc">{row.description}</div>
+											</div>
+											<div class="runtimeEnvEdit">
+												<input
+													class="runtimeEnvInput"
+													type="text"
+													value={runtimeEnvDraftByName[row.name] ?? ''}
+													disabled={Boolean(runtimeEnvSaving[row.name])}
+													on:input={(event) => {
+														const next = String((event.currentTarget as HTMLInputElement).value ?? '');
+														runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [row.name]: next };
+													}}
+													placeholder={row.masked ? 'masked value' : (row.defaultValue ?? '')}
+												/>
+												<div class="runtimeEnvButtons">
+													<button
+														class="tabBtn"
+														on:click={() => void applyRuntimeEnvVar(row.name)}
+														disabled={Boolean(runtimeEnvSaving[row.name])}
+													>
+														Apply
+													</button>
+													<button
+														class="tabBtn"
+														on:click={() => void unsetRuntimeEnvVar(row.name)}
+														disabled={Boolean(runtimeEnvSaving[row.name])}
+													>
+														Clear
+													</button>
+												</div>
+											</div>
+										</div>
+									{/each}
+								</div>
+							{/if}
+						</div>
 				{/if}
 			</div>
 		</div>
@@ -4498,6 +4672,101 @@ async function scrollToBottom() {
 
 	.envProfileMissing {
 		color: #f2cc60;
+	}
+
+	.runtimeEnvPanel {
+		margin-top: 10px;
+		display: grid;
+		gap: 8px;
+	}
+
+	.runtimeEnvHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 12px;
+	}
+
+	.runtimeEnvActions {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.runtimeEnvToggle {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+		opacity: 0.85;
+	}
+
+	.runtimeEnvTable {
+		display: grid;
+		gap: 6px;
+		max-height: 290px;
+		overflow: auto;
+		padding-right: 2px;
+	}
+
+	.runtimeEnvRow {
+		display: grid;
+		grid-template-columns: 1.1fr 1.2fr;
+		gap: 8px;
+		border: 1px solid #1c2335;
+		border-radius: 8px;
+		padding: 8px;
+		background: #0c1220;
+	}
+
+	.runtimeEnvMeta {
+		min-width: 0;
+	}
+
+	.runtimeEnvName {
+		font-size: 12px;
+	}
+
+	.runtimeEnvSub {
+		margin-top: 3px;
+		font-size: 11px;
+		opacity: 0.8;
+	}
+
+	.runtimeEnvDesc {
+		margin-top: 4px;
+		font-size: 11px;
+		opacity: 0.86;
+	}
+
+	.runtimeEnvEdit {
+		display: grid;
+		gap: 6px;
+	}
+
+	.runtimeEnvInput {
+		width: 100%;
+		padding: 6px 8px;
+		border-radius: 8px;
+		border: 1px solid #2a3655;
+		background: #0b1323;
+		color: #dbe7ff;
+		font-size: 12px;
+	}
+
+	.runtimeEnvButtons {
+		display: inline-flex;
+		gap: 6px;
+	}
+
+	.runtimeEnvRestart {
+		margin-left: 6px;
+		font-size: 10px;
+		padding: 1px 5px;
+		border-radius: 999px;
+		background: #5f4b1a;
+		color: #f6d58a;
 	}
 
 	.card {
