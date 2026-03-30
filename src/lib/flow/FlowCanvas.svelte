@@ -4205,6 +4205,7 @@ async function scrollToBottom() {
 											<div class="runMonitorEdgeTable" role="table" aria-label="Run monitor edges">
 												<div class="runMonitorNodeHead" role="row">
 													<span>edge</span>
+													<span>port</span>
 													<span>from</span>
 													<span>to</span>
 													<span>depth</span>
@@ -4221,7 +4222,8 @@ async function scrollToBottom() {
 															on:click={() => focusEdgeFromMonitor(row.sourceNodeId, row.targetNodeId)}
 															title={`Focus ${row.targetLabel}`}
 														>
-															<span>{compactEdgeId(row.edgeId)}:{row.handle}</span>
+															<span class="runMonitorEdgeId">{compactEdgeId(row.edgeId)}</span>
+															<span class="runMonitorEdgePort">{row.handle}</span>
 															<span>{row.sourceLabel}</span>
 															<span>{row.targetLabel}</span>
 															<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
@@ -5147,10 +5149,21 @@ async function scrollToBottom() {
 	.runMonitorNodeHead,
 	.runMonitorNodeRow {
 		display: grid;
-		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
 		gap: 6px;
 		align-items: center;
 		font-size: 12px;
+	}
+
+	.runMonitorNodeTable .runMonitorNodeHead,
+	.runMonitorNodeTable .runMonitorNodeRow,
+	.runMonitorHistoryTable .runMonitorNodeHead,
+	.runMonitorHistoryTable .runMonitorNodeRow {
+		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
+	}
+
+	.runMonitorEdgeTable .runMonitorNodeHead,
+	.runMonitorEdgeTable .runMonitorNodeRow {
+		grid-template-columns: 1.05fr 0.7fr 1fr 1fr 0.5fr 0.6fr;
 	}
 
 	.runMonitorNodeHead {
@@ -5179,6 +5192,13 @@ async function scrollToBottom() {
 	}
 
 	.runMonitorNodeName {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.runMonitorEdgeId,
+	.runMonitorEdgePort {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
