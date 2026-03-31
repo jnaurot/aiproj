@@ -3785,14 +3785,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 								>
 									{selectedPinPillText}
 								</button>
-								<button
-									type="button"
-									class="pill pinBtn"
-									title={runMonitorSlideoutOpen ? 'Hide Run Monitor slideout' : 'Show Run Monitor slideout'}
-									on:click={toggleRunMonitorSlideout}
-								>
-									Monitor
-								</button>
 								{#if selectedComponentHasUpdate}
 									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
 										update {selectedComponentLatestRevisionId}
