@@ -328,6 +328,12 @@ class ReplayRunRequest(BaseModel):
         return mode
 
 
+class ImportRunPackageRequest(BaseModel):
+    package: Dict[str, Any]
+    runId: Optional[str] = None
+    overwrite: bool = False
+
+
 class MigrateStateMachineRequest(BaseModel):
     runId: Optional[str] = None
     dryRun: bool = True
@@ -576,6 +582,41 @@ async def get_run_contract_diff(
         "runId": run_id,
         "againstRunId": str(againstRunId),
         "contractDiff": result.get("contractDiff") or {},
+    }
+
+
+@router.get("/{run_id}/package/export")
+async def export_run_package(run_id: str, request: Request):
+    rt = request.app.state.runtime
+    try:
+        package = await rt.export_run_package(run_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown runId")
+    return {
+        "schemaVersion": 1,
+        "package": package,
+    }
+
+
+@router.post("/package/import")
+async def import_run_package(req: ImportRunPackageRequest, request: Request):
+    rt = request.app.state.runtime
+    result = await rt.import_run_package(
+        package=req.package,
+        run_id_override=req.runId,
+        overwrite=bool(req.overwrite),
+    )
+    if not result.get("imported"):
+        raise HTTPException(
+            409,
+            detail={
+                "errorCode": result.get("errorCode", "RUN_PACKAGE_IMPORT_FAILED"),
+                "details": result.get("details") or {},
+            },
+        )
+    return {
+        "schemaVersion": 1,
+        **result,
     }
 
 

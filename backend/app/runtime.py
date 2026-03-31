@@ -2,6 +2,7 @@ import asyncio, time
 import json
 import traceback
 import logging
+import hashlib
 from uuid import uuid4
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1148,6 +1149,14 @@ class RuntimeManager:
         if callable(experiment_fn):
             experiment = await experiment_fn(run_id)
             if isinstance(experiment, dict):
+                if isinstance(experiment.get("graph"), dict):
+                    context["graph"] = experiment.get("graph")
+                if str(experiment.get("graphId") or "").strip() and "graphId" not in context:
+                    context["graphId"] = str(experiment.get("graphId") or "").strip()
+                if "runFrom" in experiment and "runFrom" not in context:
+                    context["runFrom"] = experiment.get("runFrom")
+                if str(experiment.get("runMode") or "").strip() and "runMode" not in context:
+                    context["runMode"] = str(experiment.get("runMode") or "").strip()
                 experiment_contract = experiment.get("executionContract")
                 if isinstance(experiment_contract, dict) and experiment_contract:
                     return dict(experiment_contract), context
@@ -1328,6 +1337,162 @@ class RuntimeManager:
             "found": True,
             "replayed": True,
             "status": "running",
+        }
+
+    def _canonical_json(self, value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+
+    def _run_package_checksum(self, package_without_integrity: Dict[str, Any]) -> str:
+        payload = self._canonical_json(package_without_integrity)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    async def export_run_package(self, run_id: str) -> Dict[str, Any]:
+        handle = self.runs.get(run_id)
+        rec = await self.artifact_store.get_run(run_id)
+        if not handle and not rec:
+            raise KeyError(run_id)
+
+        contract, context = await self._load_run_execution_contract(run_id=run_id, handle=handle)
+        events_rows = await self._list_all_run_events(run_id)
+        events = [row.get("payload") for row in events_rows if isinstance(row.get("payload"), dict)]
+        experiment: Dict[str, Any] = {}
+        experiment_fn = getattr(self.artifact_store, "get_run_experiment", None)
+        if callable(experiment_fn):
+            loaded = await experiment_fn(run_id)
+            if isinstance(loaded, dict):
+                experiment = dict(loaded)
+
+        graph = (
+            context.get("graph")
+            if isinstance(context.get("graph"), dict)
+            else (handle.graph if handle and isinstance(handle.graph, dict) else (experiment.get("graph") if isinstance(experiment.get("graph"), dict) else None))
+        )
+        graph_id = (
+            str(context.get("graphId") or "").strip()
+            or (str(handle.graph_id or "").strip() if handle else "")
+            or str((rec or {}).get("graph_id") or "").strip()
+            or str(experiment.get("graphId") or "").strip()
+        )
+        status = str((handle.status if handle else (rec or {}).get("status")) or "unknown")
+        created_at = (
+            datetime_from_ts(handle.created_at)
+            if handle
+            else str((rec or {}).get("created_at") or datetime_from_ts(time.time()))
+        )
+        artifact_refs = (
+            list(experiment.get("artifacts") or [])
+            if isinstance(experiment.get("artifacts"), list)
+            else []
+        )
+        package_core: Dict[str, Any] = {
+            "schemaVersion": 1,
+            "runId": str(run_id),
+            "graphId": graph_id,
+            "status": status,
+            "createdAt": created_at,
+            "runFrom": context.get("runFrom"),
+            "runMode": context.get("runMode"),
+            "graph": graph if isinstance(graph, dict) else None,
+            "executionContract": contract if isinstance(contract, dict) else {},
+            "events": events,
+            "artifactRefs": artifact_refs,
+        }
+        checksum = self._run_package_checksum(package_core)
+        return {
+            **package_core,
+            "integrity": {
+                "algorithm": "sha256",
+                "checksum": checksum,
+            },
+        }
+
+    async def import_run_package(
+        self,
+        *,
+        package: Dict[str, Any],
+        run_id_override: Optional[str] = None,
+        overwrite: bool = False,
+    ) -> Dict[str, Any]:
+        if not isinstance(package, dict):
+            return {"imported": False, "errorCode": "RUN_PACKAGE_INVALID", "details": {"reason": "package_not_object"}}
+        integrity = package.get("integrity") if isinstance(package.get("integrity"), dict) else {}
+        expected_checksum = str(integrity.get("checksum") or "").strip().lower()
+        algo = str(integrity.get("algorithm") or "sha256").strip().lower()
+        package_core = dict(package)
+        package_core.pop("integrity", None)
+        actual_checksum = self._run_package_checksum(package_core)
+        if algo != "sha256" or not expected_checksum or expected_checksum != actual_checksum:
+            return {
+                "imported": False,
+                "errorCode": "RUN_PACKAGE_INTEGRITY_FAILED",
+                "details": {
+                    "algorithm": algo,
+                    "expectedChecksum": expected_checksum,
+                    "actualChecksum": actual_checksum,
+                },
+            }
+
+        source_run_id = str(package.get("runId") or "").strip()
+        if not source_run_id:
+            return {"imported": False, "errorCode": "RUN_PACKAGE_INVALID", "details": {"reason": "missing_run_id"}}
+        target_run_id = str(run_id_override or source_run_id).strip()
+        existing = await self.artifact_store.get_run(target_run_id)
+        if existing and not overwrite:
+            return {"imported": False, "errorCode": "RUN_PACKAGE_CONFLICT", "details": {"runId": target_run_id}}
+
+        status = str(package.get("status") or "unknown")
+        await self.artifact_store.record_run(target_run_id, "pending")
+        await self.artifact_store.update_run_status(target_run_id, status)
+
+        events = package.get("events") if isinstance(package.get("events"), list) else []
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            evt = dict(event)
+            evt["runId"] = target_run_id
+            await self.event_store.append_event(evt)
+
+        experiment_fn = getattr(self.artifact_store, "upsert_run_experiment", None)
+        if callable(experiment_fn):
+            summary = {
+                "runId": target_run_id,
+                "graphId": str(package.get("graphId") or ""),
+                "createdAt": str(package.get("createdAt") or datetime_from_ts(time.time())),
+                "status": status,
+                "executionContract": (
+                    dict(package.get("executionContract"))
+                    if isinstance(package.get("executionContract"), dict)
+                    else {}
+                ),
+                "graph": package.get("graph") if isinstance(package.get("graph"), dict) else None,
+                "runFrom": package.get("runFrom"),
+                "runMode": package.get("runMode"),
+                "artifacts": list(package.get("artifactRefs") or []),
+            }
+            await experiment_fn(summary)
+        snapshot_fn = getattr(self.artifact_store, "upsert_run_pause_snapshot", None)
+        if callable(snapshot_fn):
+            await snapshot_fn(
+                target_run_id,
+                {
+                    "runId": target_run_id,
+                    "graphId": str(package.get("graphId") or ""),
+                    "graph": package.get("graph") if isinstance(package.get("graph"), dict) else None,
+                    "runFrom": package.get("runFrom"),
+                    "runMode": package.get("runMode"),
+                    "executionContract": (
+                        dict(package.get("executionContract"))
+                        if isinstance(package.get("executionContract"), dict)
+                        else {}
+                    ),
+                },
+            )
+
+        return {
+            "imported": True,
+            "runId": target_run_id,
+            "status": status,
+            "sourceRunId": source_run_id,
         }
 
     async def diff_run_execution_contracts(
