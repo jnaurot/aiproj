@@ -188,12 +188,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				: diag?.severity === 'warning'
 					? 'edge-schema-warning'
 					: '';
+		const linkKindClass =
+			String(((e.data as any)?.linkKind ?? (e.data as any)?.link_kind ?? 'data_link')).trim().toLowerCase() ===
+			'control_link'
+				? 'edge-link-control'
+				: '';
 		const title = diag
 			? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
 			: undefined;
 		return {
 			...e,
-			class: `edge edge-${e.data?.exec ?? 'idle'} ${schemaClass}`.trim(),
+			class: `edge edge-${e.data?.exec ?? 'idle'} ${schemaClass} ${linkKindClass}`.trim(),
 			title
 		};
 	});
@@ -4135,6 +4140,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									<div class="envPanelSummary">
 										nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
 									</div>
+									<div class="runMonitorLegend">legend: solid=data/work | dashed teal=control link</div>
 									<div class="monitorToolbar">
 										<label class="monitorField">
 											<span>Filter</span>
@@ -4359,6 +4365,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		stroke: #2f3646;
 		stroke-width: 2;
 	}
+	:global(.edge.edge-link-control path) {
+		stroke: #43c9c2;
+		stroke-dasharray: 6 5;
+	}
 	:global(.edge.edge-active path) {
 		stroke-width: 3.5;
 		stroke: #4b8cff;
@@ -4381,6 +4391,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		to {
 			stroke-dashoffset: -28;
 		}
+	}
+
+	.runMonitorLegend {
+		font-size: 12px;
+		opacity: 0.78;
+		margin-bottom: 6px;
 	}
 
 	.layout {

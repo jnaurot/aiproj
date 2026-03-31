@@ -193,4 +193,30 @@ describe('runMonitorModel', () => {
 		expect(preferredMonitorEdgeFocusNodeId('n_source', '')).toBe('n_source');
 		expect(preferredMonitorEdgeFocusNodeId('', '')).toBe('');
 	});
+
+	it('preserves control-gate blocked reason in monitor rows', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_sink',
+					position: { x: 0, y: 0 },
+					data: { kind: 'tool', label: 'Sink', params: {} }
+				} as any
+			],
+			edges: [],
+			nodeBindings: { n_sink: { status: 'stale' } },
+			queueRuntime: {
+				blockedByNode: {
+					n_sink: {
+						nodeId: 'n_sink',
+						reasonCode: 'CONTROL_GATE_BLOCKED',
+						handle: 'control_gate',
+						plane: 'control'
+					}
+				}
+			}
+		});
+		expect(rows[0]?.blockedReasonCode).toBe('CONTROL_GATE_BLOCKED');
+		expect(rows[0]?.blockedPlane).toBe('control');
+	});
 });
