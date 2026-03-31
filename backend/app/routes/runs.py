@@ -553,6 +553,32 @@ async def replay_run(run_id: str, req: ReplayRunRequest, request: Request):
     raise HTTPException(409, detail=detail)
 
 
+@router.get("/{run_id}/contract-diff")
+async def get_run_contract_diff(
+    run_id: str,
+    request: Request,
+    againstRunId: str = Query(..., min_length=1),
+):
+    rt = request.app.state.runtime
+    result = await rt.diff_run_execution_contracts(run_id=run_id, against_run_id=str(againstRunId))
+    if not result.get("found"):
+        raise HTTPException(
+            404,
+            detail={
+                "runId": run_id,
+                "againstRunId": str(againstRunId),
+                "errorCode": result.get("errorCode", "CONTRACT_MISSING"),
+                "missing": result.get("missing") or {},
+            },
+        )
+    return {
+        "schemaVersion": 1,
+        "runId": run_id,
+        "againstRunId": str(againstRunId),
+        "contractDiff": result.get("contractDiff") or {},
+    }
+
+
 @router.post("/cancel-all")
 async def cancel_all_runs(req: CancelRunsRequest, request: Request):
     rt = request.app.state.runtime

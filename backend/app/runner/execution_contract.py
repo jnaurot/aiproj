@@ -106,6 +106,24 @@ def compare_execution_contracts(
 	expected_contract: Dict[str, Any],
 	current_contract: Dict[str, Any],
 ) -> Dict[str, Any]:
+	def _categories_for_reasons(codes: List[str]) -> List[str]:
+		cats: set[str] = set()
+		for code in codes:
+			key = str(code or "").strip().lower()
+			if key in {"graph_changed"}:
+				cats.add("graph")
+			elif key in {"node_state_changed"}:
+				cats.add("node_params")
+			elif key in {"env_changed"}:
+				cats.add("env")
+			elif key in {"dependency_frontier_changed"}:
+				cats.add("artifact_lineage")
+			elif key in {"execution_version_changed", "contract_version_changed"}:
+				cats.add("engine_version")
+			elif key:
+				cats.add("contract")
+		return sorted(cats)
+
 	expected_ok, expected_errors = validate_execution_contract(expected_contract)
 	current_ok, current_errors = validate_execution_contract(current_contract)
 	if not expected_ok or not current_ok:
@@ -117,6 +135,7 @@ def compare_execution_contracts(
 		return {
 			"ok": False,
 			"reasonCodes": sorted(set(reasons)),
+			"categories": _categories_for_reasons(reasons),
 			"nodeIds": [],
 			"mismatches": [
 				{
@@ -218,9 +237,11 @@ def compare_execution_contracts(
 				}
 			)
 
+	reason_codes_sorted = sorted(reason_codes)
 	return {
 		"ok": len(mismatches) == 0,
-		"reasonCodes": sorted(reason_codes),
+		"reasonCodes": reason_codes_sorted,
+		"categories": _categories_for_reasons(reason_codes_sorted),
 		"nodeIds": sorted({str(item.get("nodeId")) for item in mismatches if _as_str(item.get("nodeId"))}),
 		"mismatches": mismatches,
 	}

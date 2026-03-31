@@ -252,6 +252,7 @@ async def test_resume_failure_returns_structured_reason(monkeypatch):
 	assert isinstance((result.get("details") or {}).get("reasonCodes"), list)
 	assert isinstance((result.get("details") or {}).get("nodeIds"), list)
 	assert isinstance((result.get("details") or {}).get("mismatches"), list)
+	assert isinstance((result.get("details") or {}).get("contractDiff"), dict)
 
 
 @pytest.mark.asyncio

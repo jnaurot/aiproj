@@ -1041,6 +1041,34 @@ class RuntimeManager:
         )
         if not bool(validation.get("ok")):
             details = snapshot_resume_failure_details(validation)
+            expected_contract = (
+                snapshot.get("executionContract")
+                if isinstance(snapshot.get("executionContract"), dict)
+                else None
+            )
+            expected_basis = (
+                snapshot.get("frontierValidationBasis")
+                if isinstance(snapshot.get("frontierValidationBasis"), dict)
+                else {}
+            )
+            expected_contract_obj = (
+                dict(expected_contract)
+                if isinstance(expected_contract, dict)
+                else {
+                    "contractVersion": int(EXECUTION_CONTRACT_VERSION),
+                    "graphId": str(expected_basis.get("graphId") or snapshot.get("graphId") or ""),
+                    "basis": expected_basis,
+                }
+            )
+            current_contract = {
+                "contractVersion": int(expected_contract_obj.get("contractVersion") or EXECUTION_CONTRACT_VERSION),
+                "graphId": str(expected_contract_obj.get("graphId") or current_basis.get("graphId") or ""),
+                "basis": current_basis,
+            }
+            details["contractDiff"] = compare_execution_contracts(
+                expected_contract=expected_contract_obj,
+                current_contract=current_contract,
+            )
             await handle.bus.emit(
                 {
                     "type": "run_resume_failed",
@@ -1274,7 +1302,12 @@ class RuntimeManager:
                 "replayed": False,
                 "status": "unknown",
                 "errorCode": "REPLAY_CONTRACT_VALIDATION_FAILED",
-                "details": validation,
+                "details": {
+                    "reasonCodes": list(validation.get("reasonCodes") or []),
+                    "nodeIds": list(validation.get("nodeIds") or []),
+                    "mismatches": list(validation.get("mismatches") or []),
+                    "contractDiff": validation,
+                },
             }
 
         replay_run_id = str(uuid4())
@@ -1295,6 +1328,43 @@ class RuntimeManager:
             "found": True,
             "replayed": True,
             "status": "running",
+        }
+
+    async def diff_run_execution_contracts(
+        self,
+        *,
+        run_id: str,
+        against_run_id: str,
+    ) -> Dict[str, Any]:
+        left_handle = self.runs.get(run_id)
+        right_handle = self.runs.get(against_run_id)
+        left_contract, _left_context = await self._load_run_execution_contract(run_id=run_id, handle=left_handle)
+        right_contract, _right_context = await self._load_run_execution_contract(
+            run_id=against_run_id,
+            handle=right_handle,
+        )
+        left_found = bool(left_contract)
+        right_found = bool(right_contract)
+        if not left_found or not right_found:
+            return {
+                "found": left_found and right_found,
+                "errorCode": "CONTRACT_MISSING",
+                "runId": run_id,
+                "againstRunId": against_run_id,
+                "missing": {
+                    "runId": not left_found,
+                    "againstRunId": not right_found,
+                },
+            }
+        diff = compare_execution_contracts(
+            expected_contract=dict(left_contract or {}),
+            current_contract=dict(right_contract or {}),
+        )
+        return {
+            "found": True,
+            "runId": run_id,
+            "againstRunId": against_run_id,
+            "contractDiff": diff,
         }
 
     async def accept_node_params(

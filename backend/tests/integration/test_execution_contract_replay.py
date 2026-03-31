@@ -104,6 +104,7 @@ async def test_replay_fails_on_env_hash_change(monkeypatch) -> None:
 	assert result["replayed"] is False
 	assert result["errorCode"] == "REPLAY_CONTRACT_VALIDATION_FAILED"
 	assert "env_changed" in list((result.get("details") or {}).get("reasonCodes") or [])
+	assert isinstance(((result.get("details") or {}).get("contractDiff")), dict)
 
 
 @pytest.mark.asyncio
@@ -127,6 +128,7 @@ async def test_replay_fails_on_execution_version_change(monkeypatch) -> None:
 	assert result["replayed"] is False
 	assert result["errorCode"] == "REPLAY_CONTRACT_VALIDATION_FAILED"
 	assert "execution_version_changed" in list((result.get("details") or {}).get("reasonCodes") or [])
+	assert isinstance(((result.get("details") or {}).get("contractDiff")), dict)
 
 
 @pytest.mark.asyncio
@@ -155,6 +157,7 @@ async def test_replay_fails_on_upstream_binding_change(monkeypatch) -> None:
 	assert result["replayed"] is False
 	assert result["errorCode"] == "REPLAY_CONTRACT_VALIDATION_FAILED"
 	assert "dependency_frontier_changed" in list((result.get("details") or {}).get("reasonCodes") or [])
+	assert isinstance(((result.get("details") or {}).get("contractDiff")), dict)
 
 
 @pytest.mark.asyncio
@@ -185,3 +188,4 @@ async def test_replay_fails_on_node_state_change(monkeypatch) -> None:
 	assert result["replayed"] is False
 	assert result["errorCode"] == "REPLAY_CONTRACT_VALIDATION_FAILED"
 	assert "node_state_changed" in list((result.get("details") or {}).get("reasonCodes") or [])
+	assert isinstance(((result.get("details") or {}).get("contractDiff")), dict)

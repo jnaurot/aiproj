@@ -44,3 +44,22 @@ def test_replay_route_returns_structured_conflict(monkeypatch: pytest.MonkeyPatc
 		body = res.json().get("detail") or {}
 		assert body["replayed"] is False
 		assert body["errorCode"] == "REPLAY_CONTRACT_VALIDATION_FAILED"
+
+
+def test_contract_diff_route_returns_payload(monkeypatch: pytest.MonkeyPatch):
+	with TestClient(app) as client:
+		rt = app.state.runtime
+		async def _fake_diff_run_execution_contracts(**kwargs):
+			return {
+				"found": True,
+				"runId": kwargs.get("run_id"),
+				"againstRunId": kwargs.get("against_run_id"),
+				"contractDiff": {"ok": False, "categories": ["node_params"], "reasonCodes": ["node_state_changed"]},
+			}
+		monkeypatch.setattr(rt, "diff_run_execution_contracts", _fake_diff_run_execution_contracts)
+		res = client.get("/runs/run-a/contract-diff", params={"againstRunId": "run-b"})
+		assert res.status_code == 200, res.text
+		body = res.json()
+		assert body["runId"] == "run-a"
+		assert body["againstRunId"] == "run-b"
+		assert isinstance(body.get("contractDiff"), dict)
