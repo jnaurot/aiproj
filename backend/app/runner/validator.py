@@ -85,6 +85,7 @@ class GraphValidator:
         warnings.extend(type_warnings)
         errors.extend(self._validate_transform_join_arity(graph))
         errors.extend(self._validate_port_declaration_constraints(graph))
+        errors.extend(self._validate_control_plane_safety(graph))
         
         # 3. Schema validation
         errors.extend(self._validate_node_params_schema(graph))
@@ -100,6 +101,146 @@ class GraphValidator:
             errors=errors,
             warnings=warnings
         )
+
+    @staticmethod
+    def _edge_link_kind(edge: Dict[str, Any]) -> str:
+        data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+        raw = str(data.get("linkKind") or data.get("link_kind") or "data_link").strip().lower() or "data_link"
+        if raw not in {"data_link", "control_link"}:
+            return "data_link"
+        return raw
+
+    def _validate_control_plane_safety(self, graph: Dict[str, Any]) -> List[ValidationError]:
+        errors: List[ValidationError] = []
+        edges = graph.get("edges", []) if isinstance(graph.get("edges"), list) else []
+        nodes = {
+            str(node.get("id") or "").strip(): node
+            for node in (graph.get("nodes", []) if isinstance(graph.get("nodes"), list) else [])
+            if isinstance(node, dict) and str(node.get("id") or "").strip()
+        }
+        control_adj: Dict[str, List[str]] = {}
+        control_incoming_ids_by_target_handle: Dict[tuple[str, str], Dict[str, List[str]]] = {}
+        control_incoming_count: Dict[str, int] = {}
+        work_incoming_count: Dict[str, int] = {}
+
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            edge_id = str(edge.get("id") or "").strip()
+            source_id = str(edge.get("source") or "").strip()
+            target_id = str(edge.get("target") or "").strip()
+            if not source_id or not target_id:
+                continue
+            edge_data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+            mode_raw = str(edge_data.get("mode") or "").strip().lower()
+            mode = mode_raw if mode_raw in {"work", "param", "control"} else normalize_edge_mode(edge)
+            link_kind = self._edge_link_kind(edge)
+            if mode == "work":
+                work_incoming_count[target_id] = int(work_incoming_count.get(target_id, 0)) + 1
+            if mode != "control":
+                continue
+            target_handle = str(edge.get("targetHandle") or "control_in").strip() or "control_in"
+            bucket = control_incoming_ids_by_target_handle.setdefault(
+                (target_id, target_handle),
+                {"control_link": [], "legacy_control": []},
+            )
+            if link_kind == "control_link":
+                bucket["control_link"].append(edge_id or f"{source_id}->{target_id}")
+                control_adj.setdefault(source_id, []).append(target_id)
+                control_incoming_count[target_id] = int(control_incoming_count.get(target_id, 0)) + 1
+            else:
+                bucket["legacy_control"].append(edge_id or f"{source_id}->{target_id}")
+
+        for node_id, outs in control_adj.items():
+            control_adj[node_id] = sorted({str(item) for item in outs if str(item).strip()})
+
+        # Conflict rule: do not mix explicit control_link and legacy control-mode links on the same target handle.
+        for (target_id, target_handle), bucket in sorted(control_incoming_ids_by_target_handle.items()):
+            control_link_ids = [str(item) for item in (bucket.get("control_link") or []) if str(item).strip()]
+            legacy_control_ids = [str(item) for item in (bucket.get("legacy_control") or []) if str(item).strip()]
+            if control_link_ids and legacy_control_ids:
+                errors.append(
+                    ValidationError(
+                        code="CONTROL_LINK_CONFLICT",
+                        message=(
+                            "Conflicting control configuration: target handle mixes control_link and legacy control edges."
+                        ),
+                        node_id=target_id,
+                        edge_id=control_link_ids[0],
+                        details={
+                            "targetNodeId": target_id,
+                            "targetHandle": target_handle,
+                            "controlLinkEdgeIds": sorted(control_link_ids),
+                            "legacyControlEdgeIds": sorted(legacy_control_ids),
+                        },
+                    )
+                )
+
+        # Cycle rule on explicit control_link graph.
+        visiting: Set[str] = set()
+        visited: Set[str] = set()
+        stack: List[str] = []
+
+        def _dfs(node_id: str) -> Optional[List[str]]:
+            if node_id in visiting:
+                if node_id in stack:
+                    cycle_start = stack.index(node_id)
+                    return stack[cycle_start:] + [node_id]
+                return [node_id, node_id]
+            if node_id in visited:
+                return None
+            visiting.add(node_id)
+            stack.append(node_id)
+            for child in control_adj.get(node_id, []):
+                cycle = _dfs(child)
+                if cycle:
+                    return cycle
+            stack.pop()
+            visiting.remove(node_id)
+            visited.add(node_id)
+            return None
+
+        for candidate in sorted(control_adj.keys()):
+            cycle = _dfs(candidate)
+            if not cycle:
+                continue
+            errors.append(
+                ValidationError(
+                    code="CONTROL_LINK_CYCLE",
+                    message="Control-link cycle detected; control plane must be acyclic.",
+                    node_id=str(cycle[0] if cycle else candidate),
+                    details={"cyclePath": cycle},
+                )
+            )
+            break
+
+        # Deadlock safety: nodes gated by control_link must still have a work-plane path.
+        for node_id, control_count in sorted(control_incoming_count.items()):
+            if int(control_count) <= 0:
+                continue
+            work_count = int(work_incoming_count.get(node_id, 0))
+            if work_count > 0:
+                continue
+            node_obj = nodes.get(node_id) or {}
+            data = node_obj.get("data") if isinstance(node_obj.get("data"), dict) else {}
+            kind = str(data.get("kind") or "").strip().lower()
+            if kind == "source":
+                continue
+            errors.append(
+                ValidationError(
+                    code="CONTROL_LINK_DEADLOCK_RISK",
+                    message=(
+                        "Node has control_link gating but no work-plane inbound edge; this can deadlock execution."
+                    ),
+                    node_id=node_id,
+                    details={
+                        "nodeId": node_id,
+                        "controlIncomingCount": int(control_count),
+                        "workIncomingCount": int(work_count),
+                    },
+                )
+            )
+        return errors
 
     def _validate_port_runtime_deprecations(self, graph: Dict[str, Any]) -> List[ValidationError]:
         warnings: List[ValidationError] = []
