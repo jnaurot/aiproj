@@ -678,6 +678,14 @@ def _edge_mode(edge: Dict[str, Any]) -> str:
     return mode
 
 
+def _edge_link_kind(edge: Dict[str, Any]) -> str:
+    data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
+    raw = str(data.get("linkKind") or data.get("link_kind") or "data_link").strip().lower() or "data_link"
+    if raw not in {"data_link", "control_link"}:
+        return "data_link"
+    return raw
+
+
 def _build_fair_dequeue_plan(handle_requests: List[Tuple[str, int]]) -> List[str]:
     """Deterministic round-robin handle plan for mixed batch/single-item fan-in."""
     remaining: Dict[str, int] = {}
@@ -8292,7 +8300,7 @@ async def run_graph(
                 }
             )
 
-        def _incoming_edge_infos(node_id: str) -> List[Dict[str, str]]:
+        def _incoming_work_edge_infos(node_id: str) -> List[Dict[str, str]]:
             infos: List[Dict[str, str]] = []
             for incoming_edge_id in plan.incoming_edges.get(node_id, []):
                 incoming_edge = edges.get(incoming_edge_id) or {}
@@ -8307,10 +8315,27 @@ async def run_graph(
             infos.sort(key=lambda item: (item.get("inputHandle") or "", item.get("edgeId") or ""))
             return infos
 
+        def _incoming_control_gate_edge_infos(node_id: str) -> List[Dict[str, str]]:
+            infos: List[Dict[str, str]] = []
+            for incoming_edge_id in plan.incoming_edges.get(node_id, []):
+                incoming_edge = edges.get(incoming_edge_id) or {}
+                if _edge_mode(incoming_edge) != "control":
+                    continue
+                if _edge_link_kind(incoming_edge) != "control_link":
+                    continue
+                infos.append(
+                    {
+                        "edgeId": str(incoming_edge_id),
+                        "inputHandle": str(incoming_edge.get("targetHandle") or "control_in"),
+                    }
+                )
+            infos.sort(key=lambda item: (item.get("inputHandle") or "", item.get("edgeId") or ""))
+            return infos
+
         def _effective_node_runtime_policy(node_id: str) -> Dict[str, Any]:
             node_obj = nodes.get(node_id, {})
             base = _node_processing_policy(node_obj)
-            incoming = _incoming_edge_infos(node_id)
+            incoming = _incoming_work_edge_infos(node_id)
             if not incoming:
                 return base
             merged_mode = str(base.get("consume_mode") or "once")
@@ -8336,24 +8361,25 @@ async def run_graph(
             return bool(_node_ready_probe(node_id).get("ready", False))
 
         def _node_ready_probe(node_id: str) -> Dict[str, Any]:
-            incoming = _incoming_edge_infos(node_id)
-            if not incoming:
+            incoming_work = _incoming_work_edge_infos(node_id)
+            incoming_control = _incoming_control_gate_edge_infos(node_id)
+            if not incoming_work and not incoming_control:
                 return {"ready": True}
-            incoming_by_handle: Dict[str, List[str]] = {}
-            for info in incoming:
+            incoming_work_by_handle: Dict[str, List[str]] = {}
+            for info in incoming_work:
                 handle = str(info.get("inputHandle") or "in")
                 edge_id = str(info.get("edgeId") or "")
                 if not edge_id:
                     continue
-                incoming_by_handle.setdefault(handle, []).append(edge_id)
-            if not incoming_by_handle:
+                incoming_work_by_handle.setdefault(handle, []).append(edge_id)
+            if incoming_work and not incoming_work_by_handle:
                 return {
                     "ready": False,
                     "reasonCode": "WAITING_REQUIRED_INPUT",
                     "plane": "work",
                     "missingEdgeIds": [],
                 }
-            for handle, edge_ids in sorted(incoming_by_handle.items(), key=lambda item: item[0]):
+            for handle, edge_ids in sorted(incoming_work_by_handle.items(), key=lambda item: item[0]):
                 missing_edges = [
                     str(edge_id)
                     for edge_id in edge_ids
@@ -8365,6 +8391,32 @@ async def run_graph(
                         "reasonCode": "WAITING_REQUIRED_INPUT",
                         "handle": str(handle),
                         "plane": "work",
+                        "missingEdgeIds": sorted(set(missing_edges)),
+                    }
+            incoming_control_by_handle: Dict[str, List[str]] = {}
+            for info in incoming_control:
+                handle = str(info.get("inputHandle") or "control_in")
+                edge_id = str(info.get("edgeId") or "")
+                if not edge_id:
+                    continue
+                incoming_control_by_handle.setdefault(handle, []).append(edge_id)
+            for handle, edge_ids in sorted(incoming_control_by_handle.items(), key=lambda item: item[0]):
+                provided_control_edge_ids = (
+                    provided_nonwork_edges_by_handle.get(node_id, {})
+                    .get(str(handle), {})
+                    .get("control", set())
+                ) or set()
+                missing_edges = [
+                    str(edge_id)
+                    for edge_id in edge_ids
+                    if str(edge_id) not in provided_control_edge_ids
+                ]
+                if missing_edges:
+                    return {
+                        "ready": False,
+                        "reasonCode": "CONTROL_GATE_BLOCKED",
+                        "handle": str(handle),
+                        "plane": "control",
                         "missingEdgeIds": sorted(set(missing_edges)),
                     }
             return {"ready": True}
@@ -8472,7 +8524,7 @@ async def run_graph(
             )
 
         async def _dequeue_work_batch(node_id: str) -> List[Dict[str, Any]]:
-            incoming = _incoming_edge_infos(node_id)
+            incoming = _incoming_work_edge_infos(node_id)
             if not incoming:
                 return []
             out: List[Dict[str, Any]] = []

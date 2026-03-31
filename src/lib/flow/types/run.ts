@@ -218,6 +218,7 @@ export type KnownRunEvent =
       nodeId: string;
       reasonCode:
         | "WAITING_REQUIRED_INPUT"
+        | "CONTROL_GATE_BLOCKED"
         | "WAITING_REQUIRED_PARAM"
         | "WAITING_REQUIRED_CONTROL"
         | "MAX_INFLIGHT_REACHED"
