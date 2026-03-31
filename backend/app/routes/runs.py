@@ -311,6 +311,11 @@ class CancelRunsRequest(BaseModel):
     hard: bool = True
 
 
+class MigrateStateMachineRequest(BaseModel):
+    runId: Optional[str] = None
+    dryRun: bool = True
+
+
 class ResolveSourceRequest(BaseModel):
     graphId: str
     graph: Dict[str, Any]
@@ -723,6 +728,17 @@ async def delete_run(
     if not result.get("runDeleted", False):
         raise HTTPException(404, "Unknown runId")
     return result
+
+
+@router.post("/migrations/state-machine")
+async def migrate_state_machine_data(req: MigrateStateMachineRequest, request: Request):
+    rt = request.app.state.runtime
+    report = await rt.migrate_legacy_state_machine_data(run_id=req.runId, dry_run=bool(req.dryRun))
+    return {
+        "ok": True,
+        "operation": "state_machine_migration",
+        "report": report,
+    }
 
 
 @router.delete("/{run_id}/events")

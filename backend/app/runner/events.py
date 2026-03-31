@@ -14,6 +14,7 @@ def _iso_now() -> str:
 class EventStore(Protocol):
     async def append_event(self, evt: Dict[str, Any]) -> int: ...
     async def list_events(self, run_id: str, *, after_id: int = 0, limit: int = 500) -> List[Dict[str, Any]]: ...
+    async def update_event(self, run_id: str, event_id: int, payload: Dict[str, Any]) -> bool: ...
     async def delete_run_events(self, run_id: str) -> int: ...
     async def prune_events(
         self,
@@ -49,6 +50,23 @@ class MemoryEventStore:
         return [
             r for r in self._rows if r["runId"] == run_id and int(r["id"]) > int(after_id)
         ][:lim]
+
+    async def update_event(self, run_id: str, event_id: int, payload: Dict[str, Any]) -> bool:
+        rid = str(run_id or "")
+        target_id = int(event_id)
+        for row in self._rows:
+            if str(row.get("runId") or "") != rid:
+                continue
+            if int(row.get("id") or 0) != target_id:
+                continue
+            cloned = dict(payload or {})
+            row["payload"] = cloned
+            row["type"] = str(cloned.get("type") or row.get("type") or "unknown")
+            row["ts"] = str(cloned.get("at") or row.get("ts") or _iso_now())
+            seq_raw = cloned.get("seq")
+            row["seq"] = int(seq_raw) if isinstance(seq_raw, int) else row.get("seq")
+            return True
+        return False
 
     async def delete_run_events(self, run_id: str) -> int:
         before = len(self._rows)
@@ -191,6 +209,30 @@ class SqliteEventStore:
                 }
             )
         return out
+
+    async def update_event(self, run_id: str, event_id: int, payload: Dict[str, Any]) -> bool:
+        rid = str(run_id or "")
+        eid = int(event_id)
+        cloned = dict(payload or {})
+        etype = str(cloned.get("type") or "unknown")
+        ts = str(cloned.get("at") or _iso_now())
+        payload_json = json.dumps(cloned, ensure_ascii=False, separators=(",", ":"))
+        seq_raw = cloned.get("seq")
+        seq = int(seq_raw) if isinstance(seq_raw, int) else None
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                """
+                UPDATE run_events
+                SET ts=?, seq=?, type=?, payload_json=?
+                WHERE run_id=? AND id=?
+                """,
+                (ts, seq, etype, payload_json, rid, eid),
+            )
+            changed = int(cur.rowcount) > 0
+            if changed:
+                self._conn.commit()
+        return changed
 
     async def delete_run_events(self, run_id: str) -> int:
         with self._lock:

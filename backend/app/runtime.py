@@ -18,6 +18,12 @@ from .runner.pause_resume import (
 )
 from .runner.execution_state import can_transition_node, can_transition_run
 from .runner.invariants import evaluate_runtime_invariants
+from .runner.state_machine_migration import (
+    canonicalize_event_payload,
+    canonicalize_run_status,
+    summarize_migration_report,
+    validate_migrated_event_payload,
+)
 from .feature_flags import get_feature_flags
 from .services.runtime_env import get_env
 
@@ -497,7 +503,20 @@ class RuntimeManager:
         return result
 
     async def list_run_events(self, run_id: str, *, after_id: int = 0, limit: int = 500) -> list[Dict[str, Any]]:
-        return await self.event_store.list_events(run_id, after_id=after_id, limit=limit)
+        rows = await self.event_store.list_events(run_id, after_id=after_id, limit=limit)
+        for row in rows:
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            migrated, changed, _notes = canonicalize_event_payload(payload)
+            if not changed:
+                continue
+            valid, _reason = validate_migrated_event_payload(migrated)
+            if not valid:
+                continue
+            row["payload"] = migrated
+            row["type"] = str(migrated.get("type") or row.get("type") or "unknown")
+        return rows
 
     async def _list_all_run_events(self, run_id: str) -> list[Dict[str, Any]]:
         out: list[Dict[str, Any]] = []
@@ -511,6 +530,109 @@ class RuntimeManager:
             if len(rows) < 2000:
                 break
         return out
+
+    async def migrate_legacy_state_machine_data(
+        self,
+        *,
+        run_id: Optional[str] = None,
+        dry_run: bool = True,
+    ) -> Dict[str, Any]:
+        report: Dict[str, Any] = {
+            "scope": {"runId": run_id},
+            "dryRun": bool(dry_run),
+            "runs": {"scanned": 0, "fixed": 0, "skipped": 0, "details": []},
+            "events": {"scanned": 0, "fixed": 0, "skipped": 0, "details": []},
+            "snapshots": {"scanned": 0, "invalid": 0, "details": []},
+        }
+
+        run_rows = await self.artifact_store.list_runs(include_deleted=True)
+        for rec in run_rows:
+            rid = str(rec.get("run_id") or "")
+            if not rid:
+                continue
+            if run_id and rid != run_id:
+                continue
+            report["runs"]["scanned"] = int(report["runs"]["scanned"]) + 1
+            current_status = str(rec.get("status") or "")
+            outcome = canonicalize_run_status(current_status)
+            if outcome.reason != "ok":
+                report["runs"]["skipped"] = int(report["runs"]["skipped"]) + 1
+                report["runs"]["details"].append(
+                    {"runId": rid, "status": current_status, "action": "skipped", "reason": outcome.reason}
+                )
+                continue
+            if outcome.changed:
+                if not dry_run:
+                    await self.artifact_store.update_run_status(rid, outcome.value)
+                report["runs"]["fixed"] = int(report["runs"]["fixed"]) + 1
+                report["runs"]["details"].append(
+                    {
+                        "runId": rid,
+                        "status": current_status,
+                        "newStatus": outcome.value,
+                        "action": "fixed",
+                    }
+                )
+
+            snap = await self.artifact_store.get_run_pause_snapshot(rid)
+            if isinstance(snap, dict):
+                report["snapshots"]["scanned"] = int(report["snapshots"]["scanned"]) + 1
+                schema_ok, schema_errors = validate_pause_snapshot_schema(snap)
+                if not schema_ok:
+                    report["snapshots"]["invalid"] = int(report["snapshots"]["invalid"]) + 1
+                    report["snapshots"]["details"].append(
+                        {"runId": rid, "action": "invalid_schema", "errors": list(schema_errors or [])}
+                    )
+
+            rows = await self._list_all_run_events(rid)
+            for row in rows:
+                report["events"]["scanned"] = int(report["events"]["scanned"]) + 1
+                event_id = int(row.get("id") or 0)
+                payload = row.get("payload")
+                if not isinstance(payload, dict):
+                    report["events"]["skipped"] = int(report["events"]["skipped"]) + 1
+                    report["events"]["details"].append(
+                        {"runId": rid, "eventId": event_id, "action": "skipped", "reason": "invalid_payload_type"}
+                    )
+                    continue
+                migrated, changed, notes = canonicalize_event_payload(payload)
+                if not changed:
+                    continue
+                valid, reason = validate_migrated_event_payload(migrated)
+                if not valid:
+                    report["events"]["skipped"] = int(report["events"]["skipped"]) + 1
+                    report["events"]["details"].append(
+                        {
+                            "runId": rid,
+                            "eventId": event_id,
+                            "action": "skipped",
+                            "reason": reason,
+                            "notes": notes,
+                        }
+                    )
+                    continue
+                changed_row = True
+                if not dry_run:
+                    changed_row = await self.event_store.update_event(rid, event_id, migrated)
+                if changed_row:
+                    report["events"]["fixed"] = int(report["events"]["fixed"]) + 1
+                    report["events"]["details"].append(
+                        {"runId": rid, "eventId": event_id, "action": "fixed", "notes": notes}
+                    )
+                else:
+                    report["events"]["skipped"] = int(report["events"]["skipped"]) + 1
+                    report["events"]["details"].append(
+                        {
+                            "runId": rid,
+                            "eventId": event_id,
+                            "action": "skipped",
+                            "reason": "event_row_not_found",
+                            "notes": notes,
+                        }
+                    )
+
+        report["summary"] = summarize_migration_report(report)
+        return report
 
     async def recover_unfinished_runs(self) -> Dict[str, Any]:
         terminal = {"succeeded", "failed", "canceled", "deleted", "paused"}
