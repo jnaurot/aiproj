@@ -4367,6 +4367,11 @@ type SchemaField = {
 };
 
 function normalizeSchemaField(raw: unknown): SchemaField | null {
+	if (typeof raw === 'string') {
+		const name = String(raw).trim();
+		if (!name) return null;
+		return { name, type: 'unknown', nullable: true };
+	}
 	if (!raw || typeof raw !== 'object') return null;
 	const name = String((raw as any).name ?? '').trim();
 	if (!name) return null;
@@ -4474,7 +4479,10 @@ function payloadHintToTypedSchema(payloadHint: unknown): { type: TypedSchemaPrim
 		? hint.fields
 		: (Array.isArray(hint.required_fields) ? hint.required_fields : []);
 	if (type !== 'table') {
-		return { type, fields: [] };
+		// Preserve declared JSON keys for authoring-time helpers (for example Transform JSON filter key pickers).
+		// Non-table schemas may still omit fields entirely.
+		const normalizedFields = type === 'json' ? normalizeTypedSchemaFields(rawFields) : [];
+		return { type, fields: normalizedFields };
 	}
 	return { type: 'table', fields: normalizeTypedSchemaFields(rawFields) };
 }
@@ -4491,6 +4499,12 @@ function typedSchemaToPayloadHint(typedSchemaRaw: unknown): Record<string, unkno
 			fields,
 			columns: schemaFieldNames(fields as any)
 		};
+	}
+	if (type === 'json') {
+		const fields = normalizeTypedSchemaFields(Array.isArray(typedSchema.fields) ? typedSchema.fields : []);
+		if (fields.length > 0) {
+			return { type: 'json', fields };
+		}
 	}
 	if (type === 'text') return { type: 'string' };
 	return { type };
