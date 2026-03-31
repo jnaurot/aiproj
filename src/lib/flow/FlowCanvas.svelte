@@ -172,8 +172,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		updateSelectedTitle(titleBeforeEdit);
 	}
 	//end editing stuff
-	$: if ($graphStore.logs && scrollElement && logAutoScrollEnabled) {
-		scrollToBottom();
+	$: {
+		const logCount = Array.isArray($graphStore.logs) ? $graphStore.logs.length : 0;
+		if (scrollElement && logAutoScrollEnabled && logCount > lastObservedLogCount) {
+			void scrollToBottom('auto');
+		}
+		lastObservedLogCount = logCount;
 	}
 
 	$: displayEdges = edges.map((e) => {
@@ -286,7 +290,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeEnvFilter = '';
 	let runtimeEnvRevealSensitive = false;
 	let previousEditingContext: 'graph' | 'component' = 'graph';
-let logAutoScrollEnabled = true;
+	let logAutoScrollEnabled = true;
+	let lastObservedLogCount = 0;
+	let programmaticLogScroll = false;
+	let programmaticLogScrollUnlockHandle: ReturnType<typeof setTimeout> | null = null;
 	let nodeInspectorCollapsed = false;
 	let environmentCollapsed = false;
 	let runLogsCollapsed = false;
@@ -945,16 +952,27 @@ let logAutoScrollEnabled = true;
 		void loadInputArtifactMetadata($graphStore.graphId, inputResolutions);
 	}
 
-async function scrollToBottom() {
-	// Wait for Svelte to finish updating the DOM
-	await tick();
-	if (scrollElement) {
-		scrollElement.scrollTo({
-			top: scrollElement.scrollHeight,
-			behavior: 'smooth' // Remove this for instant jumping
-		});
+	function releaseProgrammaticLogScrollGuard(): void {
+		if (programmaticLogScrollUnlockHandle) {
+			clearTimeout(programmaticLogScrollUnlockHandle);
+			programmaticLogScrollUnlockHandle = null;
+		}
+		programmaticLogScroll = false;
 	}
-}
+
+	async function scrollToBottom(behavior: ScrollBehavior = 'auto') {
+		// Wait for Svelte to finish updating the DOM
+		await tick();
+		if (scrollElement) {
+			programmaticLogScroll = true;
+			if (programmaticLogScrollUnlockHandle) clearTimeout(programmaticLogScrollUnlockHandle);
+			scrollElement.scrollTo({
+				top: scrollElement.scrollHeight,
+				behavior
+			});
+			programmaticLogScrollUnlockHandle = setTimeout(releaseProgrammaticLogScrollGuard, 160);
+		}
+	}
 
 	function isRunLogNearBottom(el: HTMLElement, thresholdPx = 24): boolean {
 		const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight);
@@ -963,6 +981,7 @@ async function scrollToBottom() {
 
 	function handleRunLogScroll(): void {
 		if (!scrollElement) return;
+		if (programmaticLogScroll) return;
 		logAutoScrollEnabled = isRunLogNearBottom(scrollElement);
 	}
 
@@ -980,6 +999,7 @@ async function scrollToBottom() {
 		await setViewport(snapshot.viewport, { duration: 0 });
 		await tick();
 		logAutoScrollEnabled = true;
+		releaseProgrammaticLogScrollGuard();
 	}
 
 	// ---------------------------
