@@ -3,6 +3,7 @@ import json
 import traceback
 import logging
 import hashlib
+import re
 from uuid import uuid4
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1700,6 +1701,18 @@ class RuntimeManager:
             out[key] = float(value)
         return out
 
+    def _percentile(self, values: list[float], p: float) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(float(v) for v in values)
+        if len(ordered) == 1:
+            return float(ordered[0])
+        idx = max(0.0, min(float(p), 100.0)) / 100.0 * float(len(ordered) - 1)
+        lo = int(idx)
+        hi = min(len(ordered) - 1, lo + 1)
+        frac = idx - float(lo)
+        return float(ordered[lo] * (1.0 - frac) + ordered[hi] * frac)
+
     async def _capture_run_experiment_summary(self, handle: RunHandle) -> None:
         upsert_fn = getattr(self.artifact_store, "upsert_run_experiment", None)
         if not callable(upsert_fn):
@@ -1732,6 +1745,9 @@ class RuntimeManager:
         metrics_flat: Dict[str, float] = {}
         profile_ids: set[str] = set()
         locks: set[str] = set()
+        node_latencies_ms: Dict[str, list[float]] = {}
+        queue_depth_trend: list[Dict[str, Any]] = []
+        failure_categories: Dict[str, int] = {}
 
         for artifact_id in artifact_ids:
             try:
@@ -1786,6 +1802,55 @@ class RuntimeManager:
                 for metric_key, metric_value in flattened.items():
                     metrics_flat[f"{node_id}.{metric_key}"] = float(metric_value)
 
+        events = await self._list_all_run_events(str(handle.run_id))
+        queue_re = re.compile(r"depth=(\d+)")
+        for row in events:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            evt_type = str(payload.get("type") or "")
+            if evt_type == "node_finished":
+                node_id = str(payload.get("nodeId") or "").strip()
+                if node_id:
+                    try:
+                        ms = float(payload.get("execution_time_ms") or payload.get("executionTimeMs") or 0.0)
+                    except Exception:
+                        ms = 0.0
+                    node_latencies_ms.setdefault(node_id, []).append(max(0.0, ms))
+                if str(payload.get("status") or "").strip().lower() == "failed":
+                    code = str(payload.get("errorCode") or "node_failed").strip() or "node_failed"
+                    failure_categories[code] = int(failure_categories.get(code, 0)) + 1
+            elif evt_type == "run_finished":
+                if str(payload.get("status") or "").strip().lower() == "failed":
+                    code = str(payload.get("errorCode") or "run_failed").strip() or "run_failed"
+                    failure_categories[code] = int(failure_categories.get(code, 0)) + 1
+            elif evt_type == "log":
+                msg = str(payload.get("message") or "")
+                if "[queue]" in msg and "depth=" in msg:
+                    match = queue_re.search(msg)
+                    if match:
+                        try:
+                            depth = int(match.group(1))
+                        except Exception:
+                            depth = 0
+                        queue_depth_trend.append(
+                            {
+                                "at": str(payload.get("at") or ""),
+                                "depth": int(max(0, depth)),
+                            }
+                        )
+
+        node_latency_summary: Dict[str, Dict[str, float]] = {}
+        for node_id, values in node_latencies_ms.items():
+            if not values:
+                continue
+            vals = [float(v) for v in values]
+            node_latency_summary[str(node_id)] = {
+                "count": float(len(vals)),
+                "avgMs": float(sum(vals) / len(vals)),
+                "p50Ms": float(self._percentile(vals, 50)),
+                "p95Ms": float(self._percentile(vals, 95)),
+                "maxMs": float(max(vals)),
+            }
+
         summary = {
             "runId": str(handle.run_id),
             "graphId": str(handle.graph_id or ""),
@@ -1801,6 +1866,12 @@ class RuntimeManager:
             "environment": {
                 "builtinProfiles": sorted(profile_ids),
                 "locks": sorted(locks),
+            },
+            "analytics": {
+                "runTelemetry": dict(handle.run_telemetry or {}),
+                "nodeLatencyMs": node_latency_summary,
+                "queueDepthTrend": queue_depth_trend[-500:],
+                "failureCategories": dict(failure_categories),
             },
             "artifacts": artifact_refs,
             "artifactIds": artifact_ids,

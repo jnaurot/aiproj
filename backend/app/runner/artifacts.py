@@ -565,13 +565,19 @@ class MemoryArtifactStore:
         graph_id = str(summary.get("graphId") or "").strip()
         created_at = str(summary.get("createdAt") or datetime.now(timezone.utc).isoformat())
         status = str(summary.get("status") or "unknown")
+        metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+        analytics = summary.get("analytics") if isinstance(summary.get("analytics"), dict) else {}
+        metrics_out = dict(metrics)
+        if analytics:
+            metrics_out["__analytics"] = analytics
         self._experiments[run_id] = {
             "runId": run_id,
             "graphId": graph_id,
             "createdAt": created_at,
             "status": status,
             "params": summary.get("params") if isinstance(summary.get("params"), dict) else {},
-            "metrics": summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {},
+            "metrics": metrics_out,
+            "analytics": analytics,
             "environment": summary.get("environment") if isinstance(summary.get("environment"), dict) else {},
             "artifacts": summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else [],
             "artifactIds": summary.get("artifactIds") if isinstance(summary.get("artifactIds"), list) else [],
@@ -582,7 +588,13 @@ class MemoryArtifactStore:
         if not rid:
             return None
         row = self._experiments.get(rid)
-        return dict(row) if isinstance(row, dict) else None
+        if not isinstance(row, dict):
+            return None
+        out = dict(row)
+        if not isinstance(out.get("analytics"), dict):
+            metrics = out.get("metrics") if isinstance(out.get("metrics"), dict) else {}
+            out["analytics"] = metrics.get("__analytics") if isinstance(metrics.get("__analytics"), dict) else {}
+        return out
 
     async def list_run_experiments(
         self,
@@ -598,7 +610,16 @@ class MemoryArtifactStore:
         rows.sort(key=lambda r: str(r.get("createdAt") or ""), reverse=True)
         start = max(0, int(offset))
         end = start + max(1, int(limit))
-        return [dict(r) for r in rows[start:end]]
+        out: List[Dict[str, Any]] = []
+        for row in rows[start:end]:
+            if not isinstance(row, dict):
+                continue
+            rec = dict(row)
+            if not isinstance(rec.get("analytics"), dict):
+                metrics = rec.get("metrics") if isinstance(rec.get("metrics"), dict) else {}
+                rec["analytics"] = metrics.get("__analytics") if isinstance(metrics.get("__analytics"), dict) else {}
+            out.append(rec)
+        return out
 
     def get_memo_stats(self) -> Dict[str, int]:
         return {
@@ -1076,6 +1097,10 @@ class _SqliteArtifactIndex:
         status = str(summary.get("status") or "unknown")
         params = summary.get("params") if isinstance(summary.get("params"), dict) else {}
         metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+        analytics = summary.get("analytics") if isinstance(summary.get("analytics"), dict) else {}
+        metrics_out = dict(metrics)
+        if analytics:
+            metrics_out["__analytics"] = analytics
         environment = summary.get("environment") if isinstance(summary.get("environment"), dict) else {}
         artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), list) else []
         artifact_ids = summary.get("artifactIds") if isinstance(summary.get("artifactIds"), list) else []
@@ -1103,7 +1128,7 @@ class _SqliteArtifactIndex:
                     created_at,
                     status,
                     json.dumps(params, ensure_ascii=False),
-                    json.dumps(metrics, ensure_ascii=False),
+                    json.dumps(metrics_out, ensure_ascii=False),
                     json.dumps(environment, ensure_ascii=False),
                     json.dumps(artifacts, ensure_ascii=False),
                     json.dumps(artifact_ids, ensure_ascii=False),
@@ -1127,13 +1152,16 @@ class _SqliteArtifactIndex:
             ).fetchone()
         if not row:
             return None
+        metrics = json.loads(row[5] or "{}")
+        analytics = metrics.get("__analytics") if isinstance(metrics, dict) and isinstance(metrics.get("__analytics"), dict) else {}
         return {
             "runId": str(row[0]),
             "graphId": str(row[1]),
             "createdAt": str(row[2]),
             "status": str(row[3]),
             "params": json.loads(row[4] or "{}"),
-            "metrics": json.loads(row[5] or "{}"),
+            "metrics": metrics,
+            "analytics": analytics,
             "environment": json.loads(row[6] or "{}"),
             "artifacts": json.loads(row[7] or "[]"),
             "artifactIds": json.loads(row[8] or "[]"),
@@ -1174,6 +1202,8 @@ class _SqliteArtifactIndex:
                 ).fetchall()
         out: List[Dict[str, Any]] = []
         for row in rows:
+            metrics = json.loads(row[5] or "{}")
+            analytics = metrics.get("__analytics") if isinstance(metrics, dict) and isinstance(metrics.get("__analytics"), dict) else {}
             out.append(
                 {
                     "runId": str(row[0]),
@@ -1181,7 +1211,8 @@ class _SqliteArtifactIndex:
                     "createdAt": str(row[2]),
                     "status": str(row[3]),
                     "params": json.loads(row[4] or "{}"),
-                    "metrics": json.loads(row[5] or "{}"),
+                    "metrics": metrics,
+                    "analytics": analytics,
                     "environment": json.loads(row[6] or "{}"),
                     "artifacts": json.loads(row[7] or "[]"),
                     "artifactIds": json.loads(row[8] or "[]"),
