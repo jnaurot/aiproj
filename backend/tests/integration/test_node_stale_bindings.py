@@ -96,7 +96,7 @@ async def test_accept_params_marks_only_node_and_descendants_stale(monkeypatch):
             res = client.get(f"/runs/{run_id}")
             assert res.status_code == 200, res.text
             status = res.json()
-            if status.get("status") in {"succeeded", "failed", "cancelled"}:
+            if status.get("status") in {"succeeded", "failed", "canceled"}:
                 break
             time.sleep(0.05)
         assert status and status.get("status") == "succeeded"
@@ -240,7 +240,7 @@ async def test_accept_params_does_not_create_stale_binding_for_new_downstream_no
             res = client.get(f"/runs/{run_id}")
             assert res.status_code == 200, res.text
             status = res.json()
-            if status.get("status") in {"succeeded", "failed", "cancelled"}:
+            if status.get("status") in {"succeeded", "failed", "canceled"}:
                 break
             time.sleep(0.05)
         assert status and status.get("status") == "succeeded"
@@ -272,3 +272,4 @@ async def test_accept_params_does_not_create_stale_binding_for_new_downstream_no
         assert after.status_code == 200, after.text
         bindings = (after.json().get("nodeBindings") or {})
         assert "tool_new" not in bindings
+

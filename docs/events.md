@@ -52,12 +52,12 @@ Required fields:
 - `run_started`
 - `run_finished`
 - `run_cancel_requested`
-- `run_cancelled`
-- `scheduler_cancelled`
+- `run_canceled`
+- `scheduler_canceled`
 - `node_started`
 - `node_output`
 - `node_finished`
-- `node_cancelled`
+- `node_canceled`
 - `edge_exec`
 - `control_signal`
 - `queue_metrics`

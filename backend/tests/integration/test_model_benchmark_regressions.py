@@ -172,7 +172,7 @@ async def test_model_benchmark_regression_gate(monkeypatch, tmp_path):
 	# 4) cancellation and recovery
 	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _BenchClient(delay_s=0.25))
 	cancel_event = asyncio.Event()
-	cancel_task = asyncio.create_task(_run_once(run_mod, tmp_path, "bench-cancelled", cancel_event=cancel_event))
+	cancel_task = asyncio.create_task(_run_once(run_mod, tmp_path, "bench-canceled", cancel_event=cancel_event))
 	await asyncio.sleep(0.05)
 	cancel_t0 = time.perf_counter()
 	cancel_event.set()
@@ -193,3 +193,4 @@ async def test_model_benchmark_regression_gate(monkeypatch, tmp_path):
 	report_path = tmp_path / "model_benchmark_report.json"
 	report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 	assert report_path.exists()
+

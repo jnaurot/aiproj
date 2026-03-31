@@ -1,4 +1,4 @@
-﻿// src/lib/flow/store/graphStore.ts
+// src/lib/flow/store/graphStore.ts
 import { writable, get, derived } from 'svelte/store';
 import type { Node, Edge } from '@xyflow/svelte';
 
@@ -128,7 +128,7 @@ export type NormalizedNodeBinding = NodeBindingInfo & {
 type EdgeExec = 'idle' | 'active' | 'done';
 type LogLevel = 'info' | 'warn' | 'error';
 type RunLog = {
-	id: number; // âœ… ADD
+	id: number; // ✅ ADD
 	ts: string;
 	level: LogLevel;
 	message: string;
@@ -145,9 +145,8 @@ type RunStatus =
 	| 'resuming'
 	| 'succeeded'
 	| 'failed'
-	| 'canceled'
-	| 'cancelled';
-type GraphLastRunStatus = 'succeeded' | 'failed' | 'cancelled' | 'never_run';
+	| 'canceled';
+type GraphLastRunStatus = 'succeeded' | 'failed' | 'canceled' | 'never_run';
 type AuditContext = {
 	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
 	evt?: KnownRunEvent;
@@ -1019,7 +1018,7 @@ export type GraphState = {
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
 	selectedNodeId: string | null;
-	inspector: InspectorState; // âœ… add this
+	inspector: InspectorState; // ✅ add this
 	logs: RunLog[];
 	runStatus: RunStatus;
 	lastRunStatus: GraphLastRunStatus;
@@ -1592,7 +1591,7 @@ function withGraphMeta(state: GraphState): GraphState {
 	let lastRunStatus = state.lastRunStatus;
 	if (state.runStatus === 'succeeded') lastRunStatus = 'succeeded';
 	if (state.runStatus === 'failed') lastRunStatus = 'failed';
-	if (state.runStatus === 'canceled' || state.runStatus === 'cancelled') lastRunStatus = 'cancelled';
+	if (state.runStatus === 'canceled') lastRunStatus = 'canceled';
 	if (freshness === 'never_run') lastRunStatus = 'never_run';
 	return {
 		...state,
@@ -6726,7 +6725,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								...n,
 								data: {
 									...n.data,
-									sourceKind: nextKind, // âœ… structural
+									sourceKind: nextKind, // ✅ structural
 									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 								}
 							}
@@ -6779,7 +6778,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								...n,
 								data: {
 									...n.data,
-									llmKind: nextKind, // âœ… structural
+									llmKind: nextKind, // ✅ structural
 									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 								}
 							}
@@ -6834,7 +6833,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								...n,
 								data: {
 									...n.data,
-									transformKind: nextKind, // âœ… structural
+									transformKind: nextKind, // ✅ structural
 									meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
 								}
 							}
@@ -9052,7 +9051,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					if (
 						status === 'succeeded' ||
 						status === 'failed' ||
-						status === 'cancelled' ||
 						status === 'canceled' ||
 						status === 'paused'
 					) {
@@ -9244,7 +9242,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 								cur.runStatus === 'succeeded' ||
 								cur.runStatus === 'failed' ||
 								cur.runStatus === 'canceled' ||
-								cur.runStatus === 'cancelled' ||
 								cur.runStatus === 'paused';
 							if (isTerminalForThisRun) {
 								settle();
@@ -9260,7 +9257,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 									if (
 										status === 'succeeded' ||
 										status === 'failed' ||
-										status === 'cancelled' ||
 										status === 'canceled' ||
 										status === 'paused'
 									) {
@@ -9478,14 +9474,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const statuses = await Promise.all(runPromises);
 			const succeeded = statuses.filter((status) => status === 'succeeded').length;
 			const failed = statuses.filter((status) => status === 'failed').length;
-			const cancelled = statuses.filter((status) => status === 'cancelled' || status === 'canceled').length;
-			const aggregateStatus: RunStatus = failed > 0 ? 'failed' : cancelled > 0 ? 'cancelled' : 'succeeded';
+			const canceled = statuses.filter((status) => status === 'canceled').length;
+			const aggregateStatus: RunStatus = failed > 0 ? 'failed' : canceled > 0 ? 'canceled' : 'succeeded';
 			update((s) =>
 				withGraphMeta(
 					logPush(
 						{ ...s, runStatus: aggregateStatus, activeRunId: null },
 						failed > 0 ? 'error' : 'info',
-						`[subgraph summary] total=${componentPlans.length} succeeded=${succeeded} failed=${failed} cancelled=${cancelled} completion_source(sse=${sseRuntimeStats.sseTerminalCount},fallback=${sseRuntimeStats.fallbackTerminalCount}) polls=${sseRuntimeStats.fallbackPollAttempts}`
+						`[subgraph summary] total=${componentPlans.length} succeeded=${succeeded} failed=${failed} canceled=${canceled} completion_source(sse=${sseRuntimeStats.sseTerminalCount},fallback=${sseRuntimeStats.fallbackTerminalCount}) polls=${sseRuntimeStats.fallbackPollAttempts}`
 					)
 				)
 			);
@@ -9586,3 +9582,4 @@ export function __buildNodeSchemaContractSnapshotForTest(
 ): NodeSchemaContractSnapshot {
 	return buildNodeSchemaContractSnapshotInternal(state, nodeId);
 }
+

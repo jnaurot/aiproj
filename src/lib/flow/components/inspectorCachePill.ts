@@ -31,7 +31,7 @@ export function getHeaderNodeStatus(binding: NodeBindingLike | undefined): Heade
 	if (raw === 'running') return 'running';
 	if (raw === 'busy') return 'running';
 	if (raw === 'failed') return 'failed';
-	if (raw === 'cancelled' || raw === 'canceled') return 'canceled';
+	if (raw === 'canceled') return 'canceled';
 	if (raw === 'stale' || binding.isUpToDate === false) return 'stale';
 	if ((raw === 'succeeded_up_to_date' || raw === 'succeeded') && currentArtifactId) return 'succeeded';
 	// Succeeded without current artifact is stale relative to current config.
@@ -65,3 +65,4 @@ export function getHeaderCachePill(
 		title: 'Reused from cache'
 	};
 }
+

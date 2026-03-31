@@ -43,7 +43,7 @@ export function displayStatusFromBinding(binding: NodeBindingLike | null | undef
 	if (raw === 'succeeded_up_to_date' || raw === 'succeeded') return 'succeeded';
 	if (hasArtifact && raw === '') return 'succeeded';
 	if (raw === 'failed') return 'failed';
-	if (raw === 'cancelled' || raw === 'canceled') return 'canceled';
+	if (raw === 'canceled') return 'canceled';
 	if (raw === 'stale') return 'stale';
 	return 'idle';
 }
@@ -354,3 +354,4 @@ export function getStaleFlipNodeIds(
 	}
 	return flipped;
 }
+

@@ -366,7 +366,7 @@ class RuntimeManager:
         return out
 
     async def recover_unfinished_runs(self) -> Dict[str, Any]:
-        terminal = {"succeeded", "failed", "cancelled", "deleted", "paused"}
+        terminal = {"succeeded", "failed", "canceled", "deleted", "paused"}
         unfinished = {"pending", "running", "cancel_requested", "pausing", "resuming"}
         recs = await self.artifact_store.list_runs(include_deleted=True)
         recovered = 0
@@ -409,11 +409,11 @@ class RuntimeManager:
                 )
 
             if status == "cancel_requested":
-                recovered_status = "cancelled"
+                recovered_status = "canceled"
                 reason = "RECOVERED_CANCEL_REQUESTED_ON_STARTUP"
                 await self.event_store.append_event(
                     {
-                        "type": "run_cancelled",
+                        "type": "run_canceled",
                         "runId": run_id,
                         "at": datetime_from_ts(time.time()),
                         "reason": reason,
@@ -488,7 +488,7 @@ class RuntimeManager:
         if not handle:
             return {"runId": run_id, "found": False, "cancelRequested": False, "status": "unknown"}
 
-        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        terminal = {"succeeded", "failed", "canceled", "deleted"}
         if handle.status in terminal:
             return {"runId": run_id, "found": True, "cancelRequested": False, "status": handle.status}
 
@@ -509,10 +509,10 @@ class RuntimeManager:
 
     async def request_cancel_many(self, *, graph_id: Optional[str] = None, hard: bool = False) -> Dict[str, Any]:
         target_graph_id = str(graph_id or "").strip()
-        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        terminal = {"succeeded", "failed", "canceled", "deleted"}
         matched: list[str] = []
         requested: list[str] = []
-        hard_cancelled: list[str] = []
+        hard_canceled: list[str] = []
         already_terminal: list[str] = []
         already_requested: list[str] = []
         for run_id, handle in self.runs.items():
@@ -542,7 +542,7 @@ class RuntimeManager:
                 task = handle.task
                 if task is not None and not task.done():
                     task.cancel()
-                    hard_cancelled.append(run_id)
+                    hard_canceled.append(run_id)
         return {
             "graphId": target_graph_id or None,
             "hard": bool(hard),
@@ -550,7 +550,7 @@ class RuntimeManager:
             "cancelRequestedRunIds": requested,
             "alreadyRequestedRunIds": already_requested,
             "alreadyTerminalRunIds": already_terminal,
-            "hardCancelledRunIds": hard_cancelled,
+            "hardCancelledRunIds": hard_canceled,
         }
 
     async def request_pause(self, run_id: str) -> Dict[str, Any]:
@@ -558,7 +558,7 @@ class RuntimeManager:
         if not handle:
             return {"runId": run_id, "found": False, "pauseRequested": False, "status": "unknown"}
 
-        terminal = {"succeeded", "failed", "cancelled", "deleted"}
+        terminal = {"succeeded", "failed", "canceled", "deleted"}
         if handle.status in terminal:
             return {"runId": run_id, "found": True, "pauseRequested": False, "status": handle.status}
         if handle.status == "paused":
@@ -1156,9 +1156,9 @@ class RuntimeManager:
             asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
             return
 
-        if t == "run_cancelled":
-            handle.status = "cancelled"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancelled"))
+        if t == "run_canceled":
+            handle.status = "canceled"
+            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "canceled"))
             return
 
         if t == "run_finished":
@@ -1215,10 +1215,10 @@ class RuntimeManager:
                     b["cacheValid"] = bool(b.get("currentArtifactId")) and bool(b.get("currentExecKey"))
                     b["staleReason"] = None
                     handle.node_status[nid] = "succeeded_up_to_date"
-                elif status == "cancelled":
-                    b["status"] = "cancelled"
+                elif status == "canceled":
+                    b["status"] = "canceled"
                     b["isUpToDate"] = False
-                    handle.node_status[nid] = "cancelled"
+                    handle.node_status[nid] = "canceled"
                 else:
                     b["status"] = "failed"
                     b["isUpToDate"] = False
@@ -1227,14 +1227,14 @@ class RuntimeManager:
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
-        if t == "node_cancelled":
+        if t == "node_canceled":
             nid = ev.get("nodeId")
             if nid:
                 b = self._binding_for(handle, nid)
                 prev = dict(b)
-                b["status"] = "cancelled"
+                b["status"] = "canceled"
                 b["isUpToDate"] = False
-                handle.node_status[nid] = "cancelled"
+                handle.node_status[nid] = "canceled"
                 self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
@@ -1312,5 +1312,6 @@ class RuntimeManager:
             if nid:
                 handle.node_status[nid] = "active"
             return
+
 
 

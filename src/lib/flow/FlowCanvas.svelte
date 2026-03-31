@@ -4687,7 +4687,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		opacity: 0.98;
 	}
 
-	.graphStatus-cancelled {
+	.graphStatus-canceled {
 		color: var(--color-status-warning);
 		opacity: 0.98;
 	}
@@ -5796,3 +5796,4 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 </style>
+

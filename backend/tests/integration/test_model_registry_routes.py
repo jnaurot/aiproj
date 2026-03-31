@@ -36,7 +36,7 @@ def _wait_run_finished(client: TestClient, run_id: str) -> dict:
 		res = client.get(f"/runs/{run_id}")
 		assert res.status_code == 200, res.text
 		status = res.json()
-		if status.get("status") in {"succeeded", "failed", "cancelled"}:
+		if status.get("status") in {"succeeded", "failed", "canceled"}:
 			break
 		time.sleep(0.05)
 	assert status is not None
@@ -195,3 +195,4 @@ def test_model_registry_promotion_requires_admin_when_enabled(monkeypatch):
 			json={"toStage": "baseline"},
 		)
 		assert allowed.status_code == 200, allowed.text
+

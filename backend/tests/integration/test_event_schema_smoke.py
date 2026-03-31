@@ -36,9 +36,9 @@ REQUIRED_BY_TYPE = {
 
 ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "run_cancel_requested",
-    "run_cancelled",
-    "node_cancelled",
-    "scheduler_cancelled",
+    "run_canceled",
+    "node_canceled",
+    "scheduler_canceled",
     "run_telemetry",
     "node_not_resumable",
 }

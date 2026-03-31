@@ -22,10 +22,10 @@ async def _wait_for_node_running(rt: RuntimeManager, run_id: str, node_id: str, 
 
 
 @pytest.mark.asyncio
-async def test_cancel_run_is_idempotent_and_marks_cancelled(monkeypatch, tmp_path):
+async def test_cancel_run_is_idempotent_and_marks_canceled(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
 
-    async def _slow_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+    async def _slow_exec_tool(run_id, node, context, upstream_artifact_ids=None, **kwargs):
         await asyncio.sleep(2.0)
         return NodeOutput(
             status="succeeded",
@@ -74,26 +74,26 @@ async def test_cancel_run_is_idempotent_and_marks_cancelled(monkeypatch, tmp_pat
 
     await rt.get_run(run_id).task
     h = rt.get_run(run_id)
-    assert h.status == "cancelled"
+    assert h.status == "canceled"
 
     events = await rt.list_run_events(run_id, after_id=0, limit=5000)
     event_types = [e["type"] for e in events]
     assert "run_cancel_requested" in event_types
-    assert "run_cancelled" in event_types
+    assert "run_canceled" in event_types
     assert "run_finished" in event_types
     finished_payloads = [e["payload"] for e in events if e["type"] == "run_finished"]
-    assert finished_payloads and finished_payloads[-1].get("status") == "cancelled"
+    assert finished_payloads and finished_payloads[-1].get("status") == "canceled"
 
 
 @pytest.mark.asyncio
 async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
 
-    async def _slow_exec_source(run_id, node, context, upstream_artifact_ids=None):
+    async def _slow_exec_source(run_id, node, context, upstream_artifact_ids=None, **kwargs):
         await asyncio.sleep(2.0)
         return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="source")
 
-    async def _fast_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+    async def _fast_exec_tool(run_id, node, context, upstream_artifact_ids=None, **kwargs):
         return NodeOutput(
             status="succeeded",
             metadata=None,
@@ -140,11 +140,11 @@ async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path)
     await rt.get_run(run_id).task
 
     h = rt.get_run(run_id)
-    assert h.status == "cancelled"
+    assert h.status == "canceled"
     events = await rt.list_run_events(run_id, after_id=0, limit=5000)
     event_types = [e["type"] for e in events]
     assert "run_cancel_requested" in event_types
-    assert "run_cancelled" in event_types
+    assert "run_canceled" in event_types
 
     level2_starts = [
         e for e in events if e["type"] == "node_started" and e["payload"].get("nodeId") == "tool_l2"
@@ -153,14 +153,16 @@ async def test_cancel_during_level1_prevents_level2_start(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_cancel_inflight_llm_emits_node_cancelled_and_no_artifact(monkeypatch, tmp_path):
+async def test_cancel_inflight_llm_emits_node_canceled_and_no_artifact(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
+    llm_started = asyncio.Event()
 
-    async def _fast_exec_source(run_id, node, context, upstream_artifact_ids=None):
+    async def _fast_exec_source(run_id, node, context, upstream_artifact_ids=None, **kwargs):
         return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello")
 
-    async def _slow_exec_llm(run_id, node, context, upstream_artifact_ids=None):
-        await asyncio.sleep(2.0)
+    async def _slow_exec_llm(run_id, node, context, upstream_artifact_ids=None, **kwargs):
+        llm_started.set()
+        await asyncio.sleep(60.0)
         return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="llm output")
 
     monkeypatch.setattr(run_mod, "exec_source", _fast_exec_source)
@@ -202,18 +204,19 @@ async def test_cancel_inflight_llm_emits_node_cancelled_and_no_artifact(monkeypa
     run_id = "run-cancel-llm"
     rt.create_run(run_id)
     await rt.start_run(run_id, graph, run_from=None, graph_id="graph-cancel-llm")
-    await _wait_for_node_running(rt, run_id, "llm_1")
+    await asyncio.wait_for(llm_started.wait(), timeout=4.0)
     await rt.request_cancel(run_id)
     await rt.get_run(run_id).task
 
     events = await rt.list_run_events(run_id, after_id=0, limit=5000)
-    llm_cancelled = [
-        e for e in events if e["type"] == "node_cancelled" and e["payload"].get("nodeId") == "llm_1"
+    llm_canceled = [
+        e for e in events if e["type"] == "node_canceled" and e["payload"].get("nodeId") == "llm_1"
     ]
-    assert llm_cancelled
+    assert llm_canceled
 
     llm_outputs = [
         e for e in events if e["type"] == "node_output" and e["payload"].get("nodeId") == "llm_1"
     ]
     assert not llm_outputs
     assert "llm_1" not in rt.get_run(run_id).node_outputs
+

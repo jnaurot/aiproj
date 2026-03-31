@@ -69,7 +69,7 @@ async def test_public_response_schema_versions_and_required_fields(monkeypatch):
             res = client.get(f"/runs/{run_id}")
             assert res.status_code == 200, res.text
             status = res.json()
-            if status.get("status") in {"succeeded", "failed", "cancelled"}:
+            if status.get("status") in {"succeeded", "failed", "canceled"}:
                 break
             time.sleep(0.05)
 
@@ -175,7 +175,7 @@ async def test_create_run_without_runmode_or_runfrom_executes_full_graph(monkeyp
             res = client.get(f"/runs/{run_id}")
             assert res.status_code == 200, res.text
             status = res.json()
-            if status.get("status") in {"succeeded", "failed", "cancelled"}:
+            if status.get("status") in {"succeeded", "failed", "canceled"}:
                 break
             time.sleep(0.05)
 
@@ -221,3 +221,4 @@ async def test_create_run_requires_graph_id(monkeypatch):
     with TestClient(app) as client:
         create = client.post("/runs", json={"graph": graph})
         assert create.status_code == 422
+

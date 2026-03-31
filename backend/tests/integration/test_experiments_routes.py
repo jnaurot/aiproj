@@ -78,7 +78,7 @@ async def test_experiment_tracking_and_run_compare(monkeypatch):
 			res = client.get(f"/runs/{run_id}")
 			assert res.status_code == 200, res.text
 			status = res.json()
-			if status.get("status") in {"succeeded", "failed", "cancelled"}:
+			if status.get("status") in {"succeeded", "failed", "canceled"}:
 				break
 			time.sleep(0.05)
 		assert status is not None
@@ -136,3 +136,4 @@ async def test_experiment_tracking_and_run_compare(monkeypatch):
 			and float(row.get("delta") or 0.0) == pytest.approx(0.1)
 			for row in deltas
 		)
+

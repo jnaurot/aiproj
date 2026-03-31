@@ -154,7 +154,7 @@ def test_resolve_source_exec_key_and_cache_hit_by_snapshot(monkeypatch, tmp_path
 		for _ in range(200):
 			st = client.get(f"/runs/{run_id}")
 			assert st.status_code == 200
-			if st.json().get("status") in {"succeeded", "failed", "cancelled"}:
+			if st.json().get("status") in {"succeeded", "failed", "canceled"}:
 				break
 			time.sleep(0.01)
 		assert st.json().get("status") == "succeeded"
@@ -264,3 +264,4 @@ async def test_source_file_node_uses_snapshot_id_and_caches(monkeypatch, tmp_pat
 		and e.get("decision") == "cache_hit"
 		for e in events_2
 	)
+

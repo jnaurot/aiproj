@@ -1,4 +1,4 @@
-export type HeaderStatusTone = 'running' | 'succeeded' | 'failed' | 'cancelled' | 'never_run';
+export type HeaderStatusTone = 'running' | 'succeeded' | 'failed' | 'canceled' | 'never_run';
 
 export type StatusSnapshot = {
 	runStatus: string;
@@ -40,7 +40,7 @@ function formatStatus(snapshot: StatusSnapshot): { text: string; tone: HeaderSta
 	const baseText =
 		last === 'never_run'
 			? 'Never run'
-			: `${last === 'cancelled' ? 'Cancelled' : last.charAt(0).toUpperCase() + last.slice(1)}${
+			: `${last === 'canceled' ? 'Canceled' : last.charAt(0).toUpperCase() + last.slice(1)}${
 					freshness === 'stale' ? ` + Needs rerun${staleCount > 0 ? ` (${staleCount} stale)` : ''}` : ''
 				}`;
 	const tone: HeaderStatusTone =
@@ -48,8 +48,8 @@ function formatStatus(snapshot: StatusSnapshot): { text: string; tone: HeaderSta
 			? 'succeeded'
 			: last === 'failed'
 			? 'failed'
-			: last === 'cancelled'
-			? 'cancelled'
+			: last === 'canceled'
+			? 'canceled'
 			: 'never_run';
 	return { text: baseText, tone };
 }
@@ -63,3 +63,4 @@ export function buildScopedStatus(input: ScopedStatusInput): ScopedStatusOutput 
 		unsaved: Boolean(active.unsaved)
 	};
 }
+

@@ -80,7 +80,7 @@ async def test_dataset_version_lineage_and_lookup_route(monkeypatch):
 			res = client.get(f"/runs/{run_id}")
 			assert res.status_code == 200, res.text
 			status = res.json()
-			if status.get("status") in {"succeeded", "failed", "cancelled"}:
+			if status.get("status") in {"succeeded", "failed", "canceled"}:
 				break
 			time.sleep(0.05)
 		assert status is not None
@@ -118,3 +118,4 @@ async def test_dataset_version_lineage_and_lookup_route(monkeypatch):
 		assert dataset_body.get("datasetVersionId") == tool_artifact_id
 		assert dataset_body.get("artifactId") == tool_artifact_id
 		assert (dataset_body.get("lineage") or {}).get("parentArtifactIds") == [source_artifact_id]
+

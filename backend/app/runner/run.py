@@ -7149,21 +7149,21 @@ async def run_graph(
 
             except asyncio.CancelledError:
                 await _emit({
-                    "type": "node_cancelled",
+                    "type": "node_canceled",
                     "runId": run_id,
                     "at": iso_now(),
                     "nodeId": node_id,
-                    "status": "cancelled",
+                    "status": "canceled",
                 })
                 await _emit({
                     "type": "node_finished",
                     "runId": run_id,
                     "at": iso_now(),
                     "nodeId": node_id,
-                    "status": "cancelled",
+                    "status": "canceled",
                     "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),
                 })
-                return {"ok": False, "cached": False, "cancelled": True}
+                return {"ok": False, "cached": False, "canceled": True}
             except Exception as ex:
                 traceback.print_exc()
                 error_message = str(ex)
@@ -7594,11 +7594,11 @@ async def run_graph(
                             "runId": run_id,
                             "at": iso_now(),
                             "nodeId": node_id,
-                            "status": "cancelled",
+                            "status": "canceled",
                             "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                         })
-                        await _component_mark_node_finish(node_id, ok=False, error="cancelled")
-                        return {"ok": False, "cached": False, "cancelled": True}
+                        await _component_mark_node_finish(node_id, ok=False, error="canceled")
+                        return {"ok": False, "cached": False, "canceled": True}
                     except Exception as ex:
                         await _emit({
                             "type": "log",
@@ -7667,11 +7667,11 @@ async def run_graph(
                                 "runId": run_id,
                                 "at": iso_now(),
                                 "nodeId": node_id,
-                                "status": "cancelled",
+                                "status": "canceled",
                                 "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - t0) * 1000.0),
                             })
-                            await _component_mark_node_finish(node_id, ok=False, error="cancelled")
-                            return {"ok": False, "cached": False, "cancelled": True}
+                            await _component_mark_node_finish(node_id, ok=False, error="canceled")
+                            return {"ok": False, "cached": False, "canceled": True}
                         except Exception as ex:
                             await _emit({
                                 "type": "log",
@@ -8832,23 +8832,23 @@ async def run_graph(
                 await _emit_cache_summary_once()
                 return
             if cancel_event and cancel_event.is_set():
-                cancelled_tasks = 0
+                canceled_tasks = 0
                 for task in list(inflight.keys()):
                     if not task.done():
                         task.cancel()
-                        cancelled_tasks += 1
+                        canceled_tasks += 1
                 await _emit(
                     {
-                        "type": "scheduler_cancelled",
+                        "type": "scheduler_canceled",
                         "runId": run_id,
                         "at": iso_now(),
                         "scheduled": completed_count + len(inflight),
-                        "inflightCancelled": cancelled_tasks,
+                        "inflightCancelled": canceled_tasks,
                         "completedBeforeCancel": completed_count,
                     }
                 )
-                await _emit({"type": "run_cancelled", "runId": run_id, "at": iso_now()})
-                await _emit({"type": "run_finished", "runId": run_id, "at": iso_now(), "status": "cancelled"})
+                await _emit({"type": "run_canceled", "runId": run_id, "at": iso_now()})
+                await _emit({"type": "run_finished", "runId": run_id, "at": iso_now(), "status": "canceled"})
                 await _emit_cache_summary_once()
                 return
 
@@ -8930,13 +8930,13 @@ async def run_graph(
                 try:
                     result = task.result()
                 except asyncio.CancelledError:
-                    result = {"ok": False, "cached": False, "cancelled": True}
+                    result = {"ok": False, "cached": False, "canceled": True}
                 except Exception as ex:
                     raise ex
                 ok = bool(result.get("ok"))
                 cached = bool(result.get("cached"))
-                cancelled = bool(result.get("cancelled"))
-                if cancelled:
+                canceled = bool(result.get("canceled"))
+                if canceled:
                     total_failed += 1
                     run_failed = True
                 elif cached:
@@ -9408,7 +9408,7 @@ async def run_graph(
         await _emit_cache_summary_once()
     except asyncio.CancelledError:
         await _emit({
-            "type": "run_cancelled",
+            "type": "run_canceled",
             "runId": run_id,
             "at": iso_now(),
         })
@@ -9416,7 +9416,7 @@ async def run_graph(
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "cancelled"
+            "status": "canceled"
         })
         await _emit_cache_summary_once()
         return
@@ -9436,5 +9436,6 @@ async def run_graph(
             "status": "failed"
         })
         await _emit_cache_summary_once()
+
 
 
