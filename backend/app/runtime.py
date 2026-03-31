@@ -254,6 +254,23 @@ class RuntimeManager:
             )
             return False
         handle.status = decision.target
+        try:
+            asyncio.create_task(
+                handle.bus.emit(
+                    {
+                        "type": "state_transition",
+                        "runId": str(handle.run_id),
+                        "entity": "run",
+                        "entityId": str(handle.run_id),
+                        "source": source,
+                        "target": decision.target,
+                        "reason": str(reason),
+                        "at": datetime_from_ts(time.time()),
+                    }
+                )
+            )
+        except Exception:
+            logger.exception("failed_to_emit_state_transition")
         self._run_invariants(handle, trigger=f"run_status:{reason}")
         return True
 
@@ -272,6 +289,23 @@ class RuntimeManager:
             )
             return False
         handle.node_status[node_id] = decision.target
+        try:
+            asyncio.create_task(
+                handle.bus.emit(
+                    {
+                        "type": "state_transition",
+                        "runId": str(handle.run_id),
+                        "entity": "node",
+                        "entityId": str(node_id),
+                        "source": source,
+                        "target": decision.target,
+                        "reason": str(reason),
+                        "at": datetime_from_ts(time.time()),
+                    }
+                )
+            )
+        except Exception:
+            logger.exception("failed_to_emit_state_transition")
         self._run_invariants(handle, trigger=f"node_status:{reason}")
         return True
 

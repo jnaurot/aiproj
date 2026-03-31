@@ -54,6 +54,7 @@ Required fields:
 - `run_cancel_requested`
 - `run_canceled`
 - `scheduler_canceled`
+- `state_transition`
 - `state_transition_violation`
 - `state_invariant_violation`
 - `invariant_summary`

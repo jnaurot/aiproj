@@ -797,6 +797,32 @@ async def stream_events(
             return
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
+
+@router.get("/{run_id}/transitions")
+async def list_state_transitions(
+    run_id: str,
+    request: Request,
+    after_id: int = Query(default=0, ge=0),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    rt = request.app.state.runtime
+    handle = rt.get_run(run_id)
+    rec = await rt.artifact_store.get_run(run_id)
+    if not handle and not rec:
+        raise HTTPException(404, "Unknown runId")
+
+    rows = await rt.list_run_events(run_id, after_id=after_id, limit=limit)
+    transition_types = {"state_transition", "state_transition_violation"}
+    transition_rows = [row for row in rows if str(row.get("type") or "") in transition_types]
+    next_after_id = transition_rows[-1]["id"] if transition_rows else after_id
+    return {
+        "runId": run_id,
+        "afterId": after_id,
+        "limit": limit,
+        "events": transition_rows,
+        "nextAfterId": next_after_id,
+    }
+
 @router.get("/artifacts/{artifact_id}")
 async def get_artifact(artifact_id: str, request: Request, graphId: str = Query(...)):
     rt = request.app.state.runtime
