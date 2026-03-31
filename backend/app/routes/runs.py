@@ -311,6 +311,23 @@ class CancelRunsRequest(BaseModel):
     hard: bool = True
 
 
+class ReplayRunRequest(BaseModel):
+    graph: Optional[Dict[str, Any]] = None
+    graphId: Optional[str] = None
+    runFrom: Optional[str] = None
+    runMode: Optional[str] = None
+
+    @field_validator("runMode")
+    @classmethod
+    def validate_run_mode(cls, v):
+        if v is None:
+            return v
+        mode = str(v).strip().lower()
+        if mode not in {"from_selected_onward", "selected_only"}:
+            raise ValueError("runMode must be 'from_selected_onward' or 'selected_only'")
+        return mode
+
+
 class MigrateStateMachineRequest(BaseModel):
     runId: Optional[str] = None
     dryRun: bool = True
@@ -494,6 +511,40 @@ async def resume_run(run_id: str, request: Request):
         "runId": run_id,
         "status": result.get("status", "unknown"),
         "resumed": False,
+    }
+    if result.get("errorCode"):
+        detail["errorCode"] = result.get("errorCode")
+    if result.get("details"):
+        detail["details"] = result.get("details")
+    raise HTTPException(409, detail=detail)
+
+
+@router.post("/{run_id}/replay")
+async def replay_run(run_id: str, req: ReplayRunRequest, request: Request):
+    rt = request.app.state.runtime
+    canonical_graph: Optional[Dict[str, Any]] = None
+    if isinstance(req.graph, dict):
+        canonical_graph, _ = canonicalize_graph_payload(req.graph)
+    result = await rt.request_replay(
+        source_run_id=run_id,
+        graph=canonical_graph,
+        run_from=req.runFrom,
+        run_mode=req.runMode,
+        graph_id=req.graphId,
+    )
+    if not result.get("found"):
+        raise HTTPException(404, "Unknown runId")
+    if result.get("replayed"):
+        return {
+            "sourceRunId": run_id,
+            "runId": result.get("runId"),
+            "status": result.get("status", "running"),
+            "replayed": True,
+        }
+    detail = {
+        "sourceRunId": run_id,
+        "status": result.get("status", "unknown"),
+        "replayed": False,
     }
     if result.get("errorCode"):
         detail["errorCode"] = result.get("errorCode")

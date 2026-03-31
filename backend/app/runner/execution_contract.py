@@ -76,3 +76,151 @@ def validate_execution_contract(contract: Dict[str, Any]) -> Tuple[bool, List[st
 		errors.extend(basis_errors)
 	return len(errors) == 0, errors
 
+
+def _normalize_binding_pair(raw: Any) -> Dict[str, str]:
+	pair = raw if _is_dict(raw) else {}
+	return {
+		"currentExecKey": _as_str(pair.get("currentExecKey")),
+		"currentArtifactId": _as_str(pair.get("currentArtifactId")),
+	}
+
+
+def _normalize_basis_node(raw: Any) -> Dict[str, Any]:
+	node = raw if _is_dict(raw) else {}
+	upstream_raw = node.get("upstreamBindings") if _is_dict(node.get("upstreamBindings")) else {}
+	upstream: Dict[str, Dict[str, str]] = {}
+	for upstream_node_id, pair in upstream_raw.items():
+		upstream[str(upstream_node_id)] = _normalize_binding_pair(pair)
+	return {
+		"nodeId": _as_str(node.get("nodeId")),
+		"nodeStateHash": _as_str(node.get("nodeStateHash")),
+		"determinismEnvHash": _as_str(node.get("determinismEnvHash")),
+		"binding": _normalize_binding_pair(node.get("binding")),
+		"upstreamBindings": upstream,
+		"executionVersion": _as_str(node.get("executionVersion")),
+	}
+
+
+def compare_execution_contracts(
+	*,
+	expected_contract: Dict[str, Any],
+	current_contract: Dict[str, Any],
+) -> Dict[str, Any]:
+	expected_ok, expected_errors = validate_execution_contract(expected_contract)
+	current_ok, current_errors = validate_execution_contract(current_contract)
+	if not expected_ok or not current_ok:
+		reasons: List[str] = []
+		if not expected_ok:
+			reasons.extend([f"expected_contract_invalid:{err}" for err in expected_errors])
+		if not current_ok:
+			reasons.extend([f"current_contract_invalid:{err}" for err in current_errors])
+		return {
+			"ok": False,
+			"reasonCodes": sorted(set(reasons)),
+			"nodeIds": [],
+			"mismatches": [
+				{
+					"nodeId": None,
+					"reasonCode": "execution_contract_invalid",
+					"changedFields": ["contract"],
+					"expected": expected_contract if _is_dict(expected_contract) else {},
+					"actual": current_contract if _is_dict(current_contract) else {},
+				}
+			],
+		}
+
+	mismatches: List[Dict[str, Any]] = []
+	reason_codes: set[str] = set()
+
+	expected_basis = expected_contract.get("basis") if _is_dict(expected_contract.get("basis")) else {}
+	current_basis = current_contract.get("basis") if _is_dict(current_contract.get("basis")) else {}
+
+	def _add_global_mismatch(reason_code: str, field: str, expected_value: Any, current_value: Any) -> None:
+		reason_codes.add(reason_code)
+		mismatches.append(
+			{
+				"nodeId": None,
+				"reasonCode": reason_code,
+				"changedFields": [field],
+				"expected": {field: expected_value},
+				"actual": {field: current_value},
+			}
+		)
+
+	if int(expected_contract.get("contractVersion") or 0) != int(current_contract.get("contractVersion") or 0):
+		_add_global_mismatch(
+			"contract_version_changed",
+			"contractVersion",
+			int(expected_contract.get("contractVersion") or 0),
+			int(current_contract.get("contractVersion") or 0),
+		)
+	if _as_str(expected_contract.get("graphId")) != _as_str(current_contract.get("graphId")):
+		_add_global_mismatch(
+			"graph_changed",
+			"graphId",
+			_as_str(expected_contract.get("graphId")),
+			_as_str(current_contract.get("graphId")),
+		)
+	if _as_str(expected_basis.get("graphId")) != _as_str(current_basis.get("graphId")):
+		_add_global_mismatch(
+			"graph_changed",
+			"basis.graphId",
+			_as_str(expected_basis.get("graphId")),
+			_as_str(current_basis.get("graphId")),
+		)
+	if _as_str(expected_basis.get("executionVersion")) != _as_str(current_basis.get("executionVersion")):
+		_add_global_mismatch(
+			"execution_version_changed",
+			"basis.executionVersion",
+			_as_str(expected_basis.get("executionVersion")),
+			_as_str(current_basis.get("executionVersion")),
+		)
+	if _as_str(expected_basis.get("environmentHash")) != _as_str(current_basis.get("environmentHash")):
+		_add_global_mismatch(
+			"env_changed",
+			"basis.environmentHash",
+			_as_str(expected_basis.get("environmentHash")),
+			_as_str(current_basis.get("environmentHash")),
+		)
+
+	expected_nodes = expected_basis.get("nodes") if _is_dict(expected_basis.get("nodes")) else {}
+	current_nodes = current_basis.get("nodes") if _is_dict(current_basis.get("nodes")) else {}
+	for node_id, raw_expected in expected_nodes.items():
+		node_key = str(node_id)
+		expected_node = _normalize_basis_node(raw_expected)
+		current_node = _normalize_basis_node(current_nodes.get(node_key))
+		changed_fields: List[str] = []
+		node_reason_codes: set[str] = set()
+		if expected_node["nodeStateHash"] != current_node["nodeStateHash"]:
+			changed_fields.append("nodeStateHash")
+			node_reason_codes.add("node_state_changed")
+		if expected_node["determinismEnvHash"] != current_node["determinismEnvHash"]:
+			changed_fields.append("determinismEnvHash")
+			node_reason_codes.add("env_changed")
+		if expected_node["executionVersion"] and expected_node["executionVersion"] != current_node["executionVersion"]:
+			changed_fields.append("executionVersion")
+			node_reason_codes.add("execution_version_changed")
+		if expected_node["binding"] != current_node["binding"]:
+			changed_fields.append("binding")
+			node_reason_codes.add("dependency_frontier_changed")
+		if expected_node["upstreamBindings"] != current_node["upstreamBindings"]:
+			changed_fields.append("upstreamBindings")
+			node_reason_codes.add("dependency_frontier_changed")
+		if changed_fields:
+			reason_codes.update(node_reason_codes)
+			mismatches.append(
+				{
+					"nodeId": node_key,
+					"reasonCode": sorted(node_reason_codes)[0] if node_reason_codes else "execution_contract_changed",
+					"changedFields": changed_fields,
+					"expected": expected_node,
+					"actual": current_node,
+				}
+			)
+
+	return {
+		"ok": len(mismatches) == 0,
+		"reasonCodes": sorted(reason_codes),
+		"nodeIds": sorted({str(item.get("nodeId")) for item in mismatches if _as_str(item.get("nodeId"))}),
+		"mismatches": mismatches,
+	}

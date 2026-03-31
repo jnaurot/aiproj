@@ -2,6 +2,7 @@ import asyncio, time
 import json
 import traceback
 import logging
+from uuid import uuid4
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -15,6 +16,11 @@ from .runner.pause_resume import (
     validate_pause_snapshot_schema,
     validate_resume_identity_basis,
     snapshot_resume_failure_details,
+)
+from .runner.execution_contract import (
+    validate_execution_contract,
+    compare_execution_contracts,
+    EXECUTION_CONTRACT_VERSION,
 )
 from .runner.execution_state import can_transition_node, can_transition_run
 from .runner.invariants import evaluate_runtime_invariants
@@ -1081,6 +1087,215 @@ class RuntimeManager:
             resume_snapshot=snapshot,
         )
         return {"runId": run_id, "found": True, "resumed": True, "status": "resuming"}
+
+    async def _load_run_execution_contract(
+        self,
+        *,
+        run_id: str,
+        handle: Optional[RunHandle],
+    ) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        context: Dict[str, Any] = {}
+        if handle and isinstance(handle.graph, dict):
+            context["graph"] = handle.graph
+        if handle and str(handle.graph_id or "").strip():
+            context["graphId"] = str(handle.graph_id or "").strip()
+        if handle and isinstance(handle.execution_contract, dict) and handle.execution_contract:
+            return dict(handle.execution_contract), context
+
+        snapshot = await self.artifact_store.get_run_pause_snapshot(run_id)
+        if isinstance(snapshot, dict):
+            if isinstance(snapshot.get("graph"), dict):
+                context["graph"] = snapshot.get("graph")
+            if str(snapshot.get("graphId") or "").strip():
+                context["graphId"] = str(snapshot.get("graphId") or "").strip()
+            if "runFrom" in snapshot:
+                context["runFrom"] = snapshot.get("runFrom")
+            if str(snapshot.get("runMode") or "").strip():
+                context["runMode"] = str(snapshot.get("runMode") or "").strip()
+            snapshot_contract = snapshot.get("executionContract")
+            if isinstance(snapshot_contract, dict) and snapshot_contract:
+                return dict(snapshot_contract), context
+
+        experiment_fn = getattr(self.artifact_store, "get_run_experiment", None)
+        if callable(experiment_fn):
+            experiment = await experiment_fn(run_id)
+            if isinstance(experiment, dict):
+                experiment_contract = experiment.get("executionContract")
+                if isinstance(experiment_contract, dict) and experiment_contract:
+                    return dict(experiment_contract), context
+
+        rows = await self._list_all_run_events(run_id)
+        for row in reversed(rows):
+            payload = row.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            t = str(payload.get("type") or "")
+            if t not in {"run_started", "run_resumed"}:
+                continue
+            evt_contract = payload.get("executionContract")
+            if isinstance(evt_contract, dict) and evt_contract:
+                if str(payload.get("graphId") or "").strip() and "graphId" not in context:
+                    context["graphId"] = str(payload.get("graphId") or "").strip()
+                if "runFrom" in payload and "runFrom" not in context:
+                    context["runFrom"] = payload.get("runFrom")
+                if str(payload.get("runMode") or "").strip() and "runMode" not in context:
+                    context["runMode"] = str(payload.get("runMode") or "").strip()
+                return dict(evt_contract), context
+        return None, context
+
+    def _build_current_contract_for_expected(
+        self,
+        *,
+        graph: Dict[str, Any],
+        graph_id: str,
+        expected_contract: Dict[str, Any],
+        node_bindings: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        expected_basis = expected_contract.get("basis") if isinstance(expected_contract.get("basis"), dict) else {}
+        expected_nodes = expected_basis.get("nodes") if isinstance(expected_basis.get("nodes"), dict) else {}
+        node_ids = [str(node_id).strip() for node_id in expected_nodes.keys() if str(node_id).strip()]
+        execution_version = str(get_env("RUNNER_EXECUTION_VERSION", "v1") or "v1").strip() or "v1"
+        basis = _build_frontier_identity_basis(
+            graph=graph,
+            graph_id=graph_id,
+            node_ids=node_ids,
+            node_bindings=node_bindings if isinstance(node_bindings, dict) else {},
+            execution_version=execution_version,
+        )
+        return {
+            "contractVersion": int(EXECUTION_CONTRACT_VERSION),
+            "graphId": str(graph_id or ""),
+            "basis": basis,
+        }
+
+    def _bindings_from_expected_contract(self, contract: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+        basis = contract.get("basis") if isinstance(contract.get("basis"), dict) else {}
+        nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+        out: Dict[str, Dict[str, str]] = {}
+        for node_id, raw_node in nodes.items():
+            if not isinstance(raw_node, dict):
+                continue
+            node_key = str(node_id or "").strip()
+            if not node_key:
+                continue
+            binding = raw_node.get("binding") if isinstance(raw_node.get("binding"), dict) else {}
+            out[node_key] = {
+                "currentExecKey": str(binding.get("currentExecKey") or "").strip(),
+                "currentArtifactId": str(binding.get("currentArtifactId") or "").strip(),
+            }
+            upstream = raw_node.get("upstreamBindings") if isinstance(raw_node.get("upstreamBindings"), dict) else {}
+            for upstream_node_id, pair in upstream.items():
+                if not isinstance(pair, dict):
+                    continue
+                upstream_key = str(upstream_node_id or "").strip()
+                if not upstream_key:
+                    continue
+                out.setdefault(
+                    upstream_key,
+                    {
+                        "currentExecKey": str(pair.get("currentExecKey") or "").strip(),
+                        "currentArtifactId": str(pair.get("currentArtifactId") or "").strip(),
+                    },
+                )
+        return out
+
+    async def request_replay(
+        self,
+        *,
+        source_run_id: str,
+        graph: Optional[Dict[str, Any]] = None,
+        run_from: Any = None,
+        run_mode: Optional[str] = None,
+        graph_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        source_handle = self.runs.get(source_run_id)
+        source_contract, source_context = await self._load_run_execution_contract(
+            run_id=source_run_id,
+            handle=source_handle,
+        )
+        if not isinstance(source_contract, dict):
+            persisted = await self.artifact_store.get_run(source_run_id)
+            return {
+                "sourceRunId": source_run_id,
+                "found": bool(persisted or source_handle),
+                "replayed": False,
+                "status": "unknown",
+                "errorCode": "REPLAY_CONTRACT_MISSING",
+            }
+        contract_ok, contract_errors = validate_execution_contract(source_contract)
+        if not contract_ok:
+            return {
+                "sourceRunId": source_run_id,
+                "found": True,
+                "replayed": False,
+                "status": "unknown",
+                "errorCode": "REPLAY_CONTRACT_INVALID",
+                "details": {"errors": contract_errors},
+            }
+
+        replay_graph = graph if isinstance(graph, dict) else source_context.get("graph")
+        if not isinstance(replay_graph, dict):
+            return {
+                "sourceRunId": source_run_id,
+                "found": True,
+                "replayed": False,
+                "status": "unknown",
+                "errorCode": "REPLAY_GRAPH_MISSING",
+            }
+        expected_graph_id = str(source_contract.get("graphId") or "").strip()
+        resolved_graph_id = (
+            str(graph_id or "").strip()
+            or str(source_context.get("graphId") or "").strip()
+            or expected_graph_id
+        )
+        if not resolved_graph_id:
+            resolved_graph_id = f"graph:replay:{source_run_id}"
+
+        node_bindings: Dict[str, Dict[str, Any]]
+        if source_handle and isinstance(source_handle.node_bindings, dict):
+            node_bindings = dict(source_handle.node_bindings)
+        else:
+            node_bindings = self._bindings_from_expected_contract(source_contract)
+
+        current_contract = self._build_current_contract_for_expected(
+            graph=replay_graph,
+            graph_id=resolved_graph_id,
+            expected_contract=source_contract,
+            node_bindings=node_bindings,
+        )
+        validation = compare_execution_contracts(
+            expected_contract=source_contract,
+            current_contract=current_contract,
+        )
+        if not bool(validation.get("ok")):
+            return {
+                "sourceRunId": source_run_id,
+                "found": True,
+                "replayed": False,
+                "status": "unknown",
+                "errorCode": "REPLAY_CONTRACT_VALIDATION_FAILED",
+                "details": validation,
+            }
+
+        replay_run_id = str(uuid4())
+        replay_handle = self.create_run(replay_run_id)
+        replay_handle.execution_contract = dict(current_contract)
+        resolved_run_mode = str(run_mode or source_context.get("runMode") or "").strip() or None
+        resolved_run_from = run_from if run_from is not None else source_context.get("runFrom")
+        await self.start_run(
+            replay_run_id,
+            replay_graph,
+            resolved_run_from,
+            run_mode=resolved_run_mode,
+            graph_id=resolved_graph_id,
+        )
+        return {
+            "sourceRunId": source_run_id,
+            "runId": replay_run_id,
+            "found": True,
+            "replayed": True,
+            "status": "running",
+        }
 
     async def accept_node_params(
         self,
