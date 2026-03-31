@@ -1,3 +1,5 @@
+import { projectNodeDisplayState, type NodeBindingProjectionInput } from '$lib/flow/store/displayState';
+
 type NodeOutputInfoLike = {
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
@@ -25,18 +27,7 @@ function outputCacheLabel(nodeOut: NodeOutputInfoLike | undefined): 'cached' | '
 }
 
 export function getHeaderNodeStatus(binding: NodeBindingLike | undefined): HeaderNodeStatus {
-	if (!binding) return 'idle';
-	const raw = String(binding.status ?? '').toLowerCase();
-	const currentArtifactId = binding.current?.artifactId ?? binding.currentArtifactId ?? null;
-	if (raw === 'running') return 'running';
-	if (raw === 'busy') return 'running';
-	if (raw === 'failed') return 'failed';
-	if (raw === 'canceled') return 'canceled';
-	if (raw === 'stale' || binding.isUpToDate === false) return 'stale';
-	if ((raw === 'succeeded_up_to_date' || raw === 'succeeded') && currentArtifactId) return 'succeeded';
-	// Succeeded without current artifact is stale relative to current config.
-	if (raw === 'succeeded_up_to_date' || raw === 'succeeded') return 'stale';
-	return 'idle';
+	return projectNodeDisplayState(binding as NodeBindingProjectionInput | undefined, binding?.status) as HeaderNodeStatus;
 }
 
 export function getHeaderCachePill(

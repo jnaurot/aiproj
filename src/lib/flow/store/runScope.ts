@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/svelte';
 
 import type { NodeStatus, PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
+import { projectNodeDisplayState, type NodeBindingProjectionInput } from './displayState';
 
 export type ActiveRunMode = 'from_start' | 'from_selected_onward' | 'selected_only';
 
@@ -27,25 +28,7 @@ export function isBindingStale(binding: NodeBindingLike | null | undefined): boo
 }
 
 export function displayStatusFromBinding(binding: NodeBindingLike | null | undefined): NodeStatus {
-	if (!binding) return 'idle';
-	const currentArtifactId = binding.current?.artifactId ?? binding.currentArtifactId;
-	const lastArtifactId = binding.last?.artifactId ?? binding.lastArtifactId;
-	const currentExecKey = binding.current?.execKey ?? binding.currentExecKey;
-	const lastExecKey = binding.last?.execKey ?? binding.lastExecKey;
-	const hasArtifact = Boolean(currentArtifactId || lastArtifactId);
-	const raw = String(binding.status ?? '').toLowerCase();
-	if (raw === 'running') return 'running';
-	if (raw === 'busy') return 'busy';
-	if (isBindingStale(binding)) return 'stale';
-	if (typeof currentExecKey === 'string' && typeof lastExecKey === 'string' && currentExecKey !== lastExecKey) {
-		return 'stale';
-	}
-	if (raw === 'succeeded_up_to_date' || raw === 'succeeded') return 'succeeded';
-	if (hasArtifact && raw === '') return 'succeeded';
-	if (raw === 'failed') return 'failed';
-	if (raw === 'canceled') return 'canceled';
-	if (raw === 'stale') return 'stale';
-	return 'idle';
+	return projectNodeDisplayState(binding as NodeBindingProjectionInput | undefined, binding?.status);
 }
 
 function descendantIds(
