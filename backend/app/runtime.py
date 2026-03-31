@@ -16,6 +16,7 @@ from .runner.pause_resume import (
     validate_resume_identity_basis,
     snapshot_resume_failure_details,
 )
+from .runner.execution_state import can_transition_node, can_transition_run
 from .feature_flags import get_feature_flags
 from .services.runtime_env import get_env
 
@@ -162,6 +163,72 @@ class RuntimeManager:
             handle.node_bindings[node_id] = b
         return b
 
+    def _emit_state_transition_violation(
+        self,
+        *,
+        handle: RunHandle,
+        entity: str,
+        entity_id: str | None,
+        source: str,
+        target: str,
+        reason: str,
+        code: str,
+    ) -> None:
+        payload = {
+            "type": "state_transition_violation",
+            "runId": str(handle.run_id),
+            "entity": str(entity),
+            "entityId": str(entity_id or ""),
+            "source": str(source),
+            "target": str(target),
+            "reason": str(reason),
+            "code": str(code),
+            "message": (
+                f"STATE_TRANSITION_VIOLATION entity={entity} entity_id={entity_id or ''} "
+                f"source={source} target={target} reason={reason} code={code}"
+            ),
+            "at": datetime_from_ts(time.time()),
+        }
+        logger.error(payload["message"])
+        try:
+            asyncio.create_task(handle.bus.emit(payload))
+        except Exception:
+            logger.exception("failed_to_emit_state_transition_violation")
+
+    def _set_run_status(self, handle: RunHandle, target: str, *, reason: str) -> bool:
+        source = str(handle.status or "").strip().lower() or "pending"
+        decision = can_transition_run(source, target)
+        if not decision.ok:
+            self._emit_state_transition_violation(
+                handle=handle,
+                entity="run",
+                entity_id=handle.run_id,
+                source=source,
+                target=target,
+                reason=reason,
+                code=decision.reason,
+            )
+            return False
+        handle.status = decision.target
+        return True
+
+    def _set_node_status(self, handle: RunHandle, node_id: str, target: str, *, reason: str) -> bool:
+        source = str(handle.node_status.get(node_id) or "idle").strip().lower() or "idle"
+        decision = can_transition_node(source, target)
+        if not decision.ok:
+            self._emit_state_transition_violation(
+                handle=handle,
+                entity="node",
+                entity_id=node_id,
+                source=source,
+                target=target,
+                reason=reason,
+                code=decision.reason,
+            )
+            return False
+        handle.node_status[node_id] = decision.target
+        return True
+
     def _log_stale_regression(
         self,
         *,
@@ -300,7 +367,7 @@ class RuntimeManager:
             b["currentRunId"] = None
             b["currentExecKey"] = None
             b["staleReason"] = reason if nid == node_id else "UPSTREAM_CHANGED"
-            handle.node_status[nid] = "stale"
+            self._set_node_status(handle, nid, "stale", reason=f"invalidate_node:{reason}")
             handle.node_outputs.pop(nid, None)
             invalidated.add(nid)
         self._debug_assert_sibling_status_unchanged(
@@ -496,7 +563,7 @@ class RuntimeManager:
             return {"runId": run_id, "found": True, "cancelRequested": True, "status": "cancel_requested"}
 
         handle.cancel_requested_at = time.time()
-        handle.status = "cancel_requested"
+        self._set_run_status(handle, "cancel_requested", reason="request_cancel")
         handle.cancel_event.set()
         await handle.bus.emit(
             {
@@ -528,7 +595,7 @@ class RuntimeManager:
                 already_requested.append(run_id)
             else:
                 handle.cancel_requested_at = time.time()
-                handle.status = "cancel_requested"
+                self._set_run_status(handle, "cancel_requested", reason="request_cancel_many")
                 handle.cancel_event.set()
                 await handle.bus.emit(
                     {
@@ -567,7 +634,7 @@ class RuntimeManager:
             return {"runId": run_id, "found": True, "pauseRequested": True, "status": "pausing"}
 
         handle.pause_requested_at = time.time()
-        handle.status = "pausing"
+        self._set_run_status(handle, "pausing", reason="request_pause")
         handle.pause_event.set()
         await handle.bus.emit(
             {
@@ -624,7 +691,7 @@ class RuntimeManager:
                     "details": {"errors": _schema_errors},
                 }
             handle = self.create_run(run_id)
-            handle.status = "paused"
+            self._set_run_status(handle, "paused", reason="request_resume:rehydrate_snapshot")
             handle.graph_id = str(snapshot_only.get("graphId") or "")
             handle.graph = snapshot_only.get("graph") if isinstance(snapshot_only.get("graph"), dict) else {"nodes": [], "edges": []}
             basis = (
@@ -784,7 +851,7 @@ class RuntimeManager:
                 "details": details,
             }
 
-        handle.status = "resuming"
+        self._set_run_status(handle, "resuming", reason="request_resume")
         await handle.bus.emit(
             {
                 "type": "run_resume_requested",
@@ -1102,71 +1169,75 @@ class RuntimeManager:
 
         # run lifecycle
         if t == "run_started":
-            handle.status = "running"
+            changed = self._set_run_status(handle, "running", reason="event:run_started")
             planned = ev.get("plannedNodeIds") or []
             if isinstance(planned, list):
                 handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
+            if changed:
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return
 
         if t == "run_cancel_requested":
-            handle.status = "cancel_requested"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancel_requested"))
+            if self._set_run_status(handle, "cancel_requested", reason="event:run_cancel_requested"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "cancel_requested"))
             return
 
         if t == "run_pause_requested":
-            handle.status = "pausing"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
+            if self._set_run_status(handle, "pausing", reason="event:run_pause_requested"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
             return
 
         if t == "run_pausing":
-            handle.status = "pausing"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
+            if self._set_run_status(handle, "pausing", reason="event:run_pausing"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
             return
 
         if t == "run_paused":
-            handle.status = "paused"
+            changed = self._set_run_status(handle, "paused", reason="event:run_paused")
             snapshot = ev.get("snapshot") if isinstance(ev.get("snapshot"), dict) else {}
             handle.pause_snapshot = dict(snapshot or {})
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
-            if isinstance(snapshot, dict) and snapshot:
-                asyncio.create_task(self.artifact_store.upsert_run_pause_snapshot(handle.run_id, snapshot))
+            if changed:
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
+                if isinstance(snapshot, dict) and snapshot:
+                    asyncio.create_task(self.artifact_store.upsert_run_pause_snapshot(handle.run_id, snapshot))
             return
 
         if t == "run_resume_requested":
-            handle.status = "resuming"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
+            if self._set_run_status(handle, "resuming", reason="event:run_resume_requested"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
             return
 
         if t == "run_resuming":
-            handle.status = "resuming"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
+            if self._set_run_status(handle, "resuming", reason="event:run_resuming"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
             return
 
         if t == "run_resumed":
-            handle.status = "running"
+            changed = self._set_run_status(handle, "running", reason="event:run_resumed")
             planned = ev.get("plannedNodeIds") or []
             if isinstance(planned, list):
                 handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
+            if changed:
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return
 
         if t == "run_resume_failed":
-            handle.status = "paused"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
+            if self._set_run_status(handle, "paused", reason="event:run_resume_failed"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
             return
 
         if t == "run_canceled":
-            handle.status = "canceled"
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "canceled"))
+            if self._set_run_status(handle, "canceled", reason="event:run_canceled"):
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "canceled"))
             return
 
         if t == "run_finished":
-            handle.status = ev.get("status", "finished")
-            handle.active_run_planned = set()
-            asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
-            asyncio.create_task(self.artifact_store.delete_run_pause_snapshot(handle.run_id))
-            asyncio.create_task(self._capture_run_experiment_summary(handle))
+            next_status = str(ev.get("status", "failed") or "failed").strip().lower()
+            if self._set_run_status(handle, next_status, reason="event:run_finished"):
+                handle.active_run_planned = set()
+                asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
+                asyncio.create_task(self.artifact_store.delete_run_pause_snapshot(handle.run_id))
+                asyncio.create_task(self._capture_run_experiment_summary(handle))
             return
         
         if t == "run_telemetry":
@@ -1179,10 +1250,10 @@ class RuntimeManager:
             if nid:
                 b = self._binding_for(handle, nid)
                 prev = dict(b)
-                b["status"] = "running"
-                handle.node_status[nid] = "running"
-                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
-                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
+                if self._set_node_status(handle, nid, "running", reason="event:node_started"):
+                    b["status"] = "running"
+                    self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
+                    self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         if t == "node_finished":
@@ -1207,22 +1278,22 @@ class RuntimeManager:
                 b = self._binding_for(handle, nid)
                 prev = dict(b)
                 if status == "succeeded":
-                    b["status"] = "succeeded_up_to_date"
-                    # Container/alias nodes (e.g. component parent nodes) may not emit
-                    # node_output directly, but a succeeded finish still means their
-                    # current state is up-to-date for this run.
-                    b["isUpToDate"] = True
-                    b["cacheValid"] = bool(b.get("currentArtifactId")) and bool(b.get("currentExecKey"))
-                    b["staleReason"] = None
-                    handle.node_status[nid] = "succeeded_up_to_date"
+                    if self._set_node_status(handle, nid, "succeeded_up_to_date", reason="event:node_finished"):
+                        b["status"] = "succeeded_up_to_date"
+                        # Container/alias nodes (e.g. component parent nodes) may not emit
+                        # node_output directly, but a succeeded finish still means their
+                        # current state is up-to-date for this run.
+                        b["isUpToDate"] = True
+                        b["cacheValid"] = bool(b.get("currentArtifactId")) and bool(b.get("currentExecKey"))
+                        b["staleReason"] = None
                 elif status == "canceled":
-                    b["status"] = "canceled"
-                    b["isUpToDate"] = False
-                    handle.node_status[nid] = "canceled"
+                    if self._set_node_status(handle, nid, "canceled", reason="event:node_finished"):
+                        b["status"] = "canceled"
+                        b["isUpToDate"] = False
                 else:
-                    b["status"] = "failed"
-                    b["isUpToDate"] = False
-                    handle.node_status[nid] = "failed"
+                    if self._set_node_status(handle, nid, "failed", reason="event:node_finished"):
+                        b["status"] = "failed"
+                        b["isUpToDate"] = False
                 self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
                 self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
@@ -1232,11 +1303,11 @@ class RuntimeManager:
             if nid:
                 b = self._binding_for(handle, nid)
                 prev = dict(b)
-                b["status"] = "canceled"
-                b["isUpToDate"] = False
-                handle.node_status[nid] = "canceled"
-                self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
-                self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
+                if self._set_node_status(handle, nid, "canceled", reason="event:node_canceled"):
+                    b["status"] = "canceled"
+                    b["isUpToDate"] = False
+                    self._log_binding_update(handle=handle, node_id=nid, event_type=t, prev=prev, nxt=b)
+                    self._log_stale_regression(handle=handle, node_id=nid, prev=prev, nxt=b, ev=ev)
             return
 
         if t == "cache_decision":
@@ -1298,19 +1369,19 @@ class RuntimeManager:
         if t == "node_blocked":
             nid = ev.get("nodeId")
             if nid:
-                handle.node_status[nid] = "blocked"
+                self._set_node_status(handle, nid, "blocked", reason="event:node_blocked")
             return
 
         if t == "node_paused":
             nid = ev.get("nodeId")
             if nid:
-                handle.node_status[nid] = "paused"
+                self._set_node_status(handle, nid, "paused", reason="event:node_paused")
             return
 
         if t == "node_resumed":
             nid = ev.get("nodeId")
             if nid:
-                handle.node_status[nid] = "active"
+                self._set_node_status(handle, nid, "active", reason="event:node_resumed")
             return
 
 
