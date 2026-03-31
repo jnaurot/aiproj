@@ -7786,6 +7786,7 @@ async def run_graph(
         warning_first_emitted_keys: set[str] = set()
         warning_counters: Dict[str, Dict[str, Any]] = {}
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
+        control_gate_state_by_node: Dict[str, Dict[str, Any]] = {}
         try:
             node_resumability_by_id: Dict[str, str] = {
                 str(nid): _node_resumability_class(nodes.get(str(nid), {})) for nid in sub
@@ -8469,7 +8470,53 @@ async def run_graph(
                 evt["details"] = details
             await _emit(evt)
 
-        def _clear_node_blocked(node_id: str) -> None:
+        def _has_control_gate_edges(node_id: str) -> bool:
+            return len(_incoming_control_gate_edge_infos(node_id)) > 0
+
+        async def _emit_control_gate_state(
+            node_id: str,
+            *,
+            state: str,
+            handle: str = "",
+            reason_code: str = "",
+            missing_edge_ids: Optional[List[str]] = None,
+        ) -> None:
+            node_id_norm = str(node_id or "").strip()
+            if not node_id_norm:
+                return
+            state_norm = str(state or "").strip().lower()
+            if state_norm not in {"blocked", "open"}:
+                return
+            handle_norm = str(handle or "").strip()
+            reason_norm = str(reason_code or "").strip()
+            missing = sorted({str(edge_id).strip() for edge_id in (missing_edge_ids or []) if str(edge_id).strip()})
+            signature = {
+                "state": state_norm,
+                "handle": handle_norm,
+                "reasonCode": reason_norm,
+                "missingEdgeIds": tuple(missing),
+            }
+            previous = control_gate_state_by_node.get(node_id_norm) or {}
+            if previous == signature:
+                return
+            control_gate_state_by_node[node_id_norm] = signature
+            evt: Dict[str, Any] = {
+                "type": "control_gate_state",
+                "schema_version": 1,
+                "runId": run_id,
+                "at": iso_now(),
+                "nodeId": node_id_norm,
+                "state": state_norm,
+            }
+            if handle_norm:
+                evt["handle"] = handle_norm
+            if reason_norm:
+                evt["reasonCode"] = reason_norm
+            if missing:
+                evt["missingEdgeIds"] = missing
+            await _emit(evt)
+
+        async def _clear_node_blocked(node_id: str) -> None:
             blocked_state_by_node.pop(str(node_id), None)
 
         async def _emit_scheduler_snapshot(*, stalled: bool = False) -> None:
@@ -8650,13 +8697,23 @@ async def run_graph(
                     await _emit_node_blocked(node_id, reason_code="NO_READY_WORK")
                     return
                 ready.append(node_id)
-                _clear_node_blocked(node_id)
+                await _clear_node_blocked(node_id)
                 return
             probe = _node_ready_probe(node_id)
             if bool(probe.get("ready", False)):
                 ready.append(node_id)
-                _clear_node_blocked(node_id)
+                if _has_control_gate_edges(node_id):
+                    await _emit_control_gate_state(node_id, state="open")
+                await _clear_node_blocked(node_id)
                 return
+            if str(probe.get("reasonCode") or "").strip() == "CONTROL_GATE_BLOCKED":
+                await _emit_control_gate_state(
+                    node_id,
+                    state="blocked",
+                    handle=str(probe.get("handle") or ""),
+                    reason_code="CONTROL_GATE_BLOCKED",
+                    missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+                )
             await _emit_node_blocked(
                 node_id,
                 reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
@@ -8730,6 +8787,14 @@ async def run_graph(
                 else:
                     probe = _node_ready_probe(candidate)
                     if not bool(probe.get("ready", False)):
+                        if str(probe.get("reasonCode") or "").strip() == "CONTROL_GATE_BLOCKED":
+                            await _emit_control_gate_state(
+                                candidate,
+                                state="blocked",
+                                handle=str(probe.get("handle") or ""),
+                                reason_code="CONTROL_GATE_BLOCKED",
+                                missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+                            )
                         await _emit_node_blocked(
                             candidate,
                             reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
@@ -8741,7 +8806,9 @@ async def run_graph(
                 if candidate not in ready:
                     ready.append(candidate)
                     rebuilt.append(candidate)
-                    _clear_node_blocked(candidate)
+                    if _has_control_gate_edges(candidate):
+                        await _emit_control_gate_state(candidate, state="open")
+                    await _clear_node_blocked(candidate)
             return rebuilt
         await _emit(
             {
@@ -8928,6 +8995,14 @@ async def run_graph(
                 if consume_mode in {"single_item", "batch"} and plan.incoming_edges.get(nid, []):
                     probe = _node_ready_probe(nid)
                     if not bool(probe.get("ready", False)):
+                        if str(probe.get("reasonCode") or "").strip() == "CONTROL_GATE_BLOCKED":
+                            await _emit_control_gate_state(
+                                nid,
+                                state="blocked",
+                                handle=str(probe.get("handle") or ""),
+                                reason_code="CONTROL_GATE_BLOCKED",
+                                missing_edge_ids=list(probe.get("missingEdgeIds") or []),
+                            )
                         await _emit_node_blocked(
                             nid,
                             reason_code=str(probe.get("reasonCode") or "NO_READY_WORK"),
@@ -8954,7 +9029,9 @@ async def run_graph(
                 inflight[task] = {"nodeId": nid, "workBatch": work_batch}
                 node_inflight_counts[nid] = int(node_inflight_counts.get(nid, 0)) + 1
                 node_started_once[nid] = True
-                _clear_node_blocked(nid)
+                if _has_control_gate_edges(nid):
+                    await _emit_control_gate_state(nid, state="open")
+                await _clear_node_blocked(nid)
 
             if pause_requested and not inflight:
                 pause_terminalized = await _try_terminalize_pause()

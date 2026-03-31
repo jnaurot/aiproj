@@ -232,6 +232,17 @@ export type KnownRunEvent =
       details?: Record<string, unknown>;
     }
   | {
+      type: "control_gate_state";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      nodeId: string;
+      state: "blocked" | "open";
+      handle?: string;
+      reasonCode?: string;
+      missingEdgeIds?: string[];
+    }
+  | {
       type: "scheduler_snapshot";
       schema_version?: number;
       runId: string;

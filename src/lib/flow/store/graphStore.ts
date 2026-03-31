@@ -2715,6 +2715,18 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nodeId
 			);
 		}
+		case 'control_gate_state': {
+			const nodeId = String((evt as any)?.nodeId ?? '').trim();
+			const gateState = String((evt as any)?.state ?? '').trim().toLowerCase() || 'blocked';
+			const reasonCode = String((evt as any)?.reasonCode ?? '').trim();
+			const handle = String((evt as any)?.handle ?? '').trim();
+			return logPush(
+				state,
+				gateState === 'open' ? 'info' : 'warn',
+				`[control-gate] node=${nodeId || '(unknown)'} state=${gateState}${reasonCode ? ` reason=${reasonCode}` : ''}${handle ? ` handle=${handle}` : ''}`,
+				nodeId || undefined
+			);
+		}
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
