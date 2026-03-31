@@ -135,3 +135,13 @@ When there is ambiguity, prefer these rules over ad-hoc assumptions.
 2. If a new rule conflicts with an older rule, update this file and mark old rule superseded.
 3. Keep rule text concrete and testable.
 
+## Hidden Items
+
+Use this list for UI items intentionally hidden for now (possible future restore).
+
+1. `Show Guided DS/ML` restore pill in the inspector sidebar is hidden.
+2. `Ctrl+K` pill in the status bar is hidden.
+
+## Toolbar Placement Rules
+
+1. `Monitor` pill is placed in the status bar add-actions area, immediately to the right of `+ Add`.

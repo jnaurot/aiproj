@@ -3356,9 +3356,6 @@ async function scrollToBottom() {
 			</div>
 
 			<div class="toolbarZone addActions">
-				<button class="commandEntry" on:click={toggleCommandPalette} aria-label="Open command palette">
-					Ctrl+K
-				</button>
 				<ToolbarMenu
 					label="+ Add"
 					items={addMenuItems}
@@ -3366,6 +3363,14 @@ async function scrollToBottom() {
 					align="right"
 					menuAriaLabel="Add node actions"
 				/>
+				<button
+					type="button"
+					class="runSecondary"
+					title={runMonitorSlideoutOpen ? 'Hide Run Monitor slideout' : 'Show Run Monitor slideout'}
+					on:click={toggleRunMonitorSlideout}
+				>
+					Monitor
+				</button>
 			</div>
 		</div>
 		{#if commandPaletteOpen}
@@ -3624,18 +3629,7 @@ async function scrollToBottom() {
 			style={nodeInspectorCollapsed ? 'flex: 0 0 auto;' : `flex: ${inspectorTopWeight} 1 0;`}
 		>
 			<!-- <h3>Inspector</h3> -->
-			{#if guidedDsmlDismissed}
-				<div class="guidedRestoreRow">
-					<button
-						type="button"
-						class="tabBtn"
-						aria-label="Show guided DS/ML panel"
-						on:click={() => (guidedDsmlDismissed = false)}
-					>
-						Show Guided DS/ML
-					</button>
-				</div>
-			{:else}
+			{#if !guidedDsmlDismissed}
 				<div class="card guidedCard" role="region" aria-label="Guided workflow recommendations">
 					<div class="guidedHead">
 						<b>Guided DS/ML</b>
@@ -4114,14 +4108,6 @@ async function scrollToBottom() {
 							<div class="runtimeEnvHead">
 								<strong>Run Monitor</strong>
 								<div class="runtimeEnvActions">
-									<button
-										type="button"
-										class="pill pinBtn"
-										title={runMonitorSectionCollapsed ? 'Expand monitor section' : 'Collapse monitor section'}
-										on:click={() => (runMonitorSectionCollapsed = !runMonitorSectionCollapsed)}
-									>
-										Monitor
-									</button>
 									<button
 										type="button"
 										class="tabBtn sectionToggle"
