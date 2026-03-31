@@ -15,8 +15,6 @@ from .runner.cache import ExecutionCache, SqliteExecutionCache
 from .runner.run import run_graph, _build_frontier_identity_basis
 from .runner.pause_resume import (
     validate_pause_snapshot_schema,
-    validate_resume_identity_basis,
-    snapshot_resume_failure_details,
 )
 from .runner.execution_contract import (
     validate_execution_contract,
@@ -1031,45 +1029,41 @@ class RuntimeManager:
             }
 
         current_basis = self._build_current_resume_identity_basis(handle=handle, snapshot=snapshot)
+        expected_contract = (
+            snapshot.get("executionContract")
+            if isinstance(snapshot.get("executionContract"), dict)
+            else None
+        )
         expected_basis = (
             snapshot.get("frontierValidationBasis")
             if isinstance(snapshot.get("frontierValidationBasis"), dict)
             else {}
         )
-        validation = validate_resume_identity_basis(
-            expected_basis=expected_basis,
-            current_basis=current_basis,
-        )
-        if not bool(validation.get("ok")):
-            details = snapshot_resume_failure_details(validation)
-            expected_contract = (
-                snapshot.get("executionContract")
-                if isinstance(snapshot.get("executionContract"), dict)
-                else None
-            )
-            expected_basis = (
-                snapshot.get("frontierValidationBasis")
-                if isinstance(snapshot.get("frontierValidationBasis"), dict)
-                else {}
-            )
-            expected_contract_obj = (
-                dict(expected_contract)
-                if isinstance(expected_contract, dict)
-                else {
-                    "contractVersion": int(EXECUTION_CONTRACT_VERSION),
-                    "graphId": str(expected_basis.get("graphId") or snapshot.get("graphId") or ""),
-                    "basis": expected_basis,
-                }
-            )
-            current_contract = {
-                "contractVersion": int(expected_contract_obj.get("contractVersion") or EXECUTION_CONTRACT_VERSION),
-                "graphId": str(expected_contract_obj.get("graphId") or current_basis.get("graphId") or ""),
-                "basis": current_basis,
+        expected_contract_obj = (
+            dict(expected_contract)
+            if isinstance(expected_contract, dict)
+            else {
+                "contractVersion": int(EXECUTION_CONTRACT_VERSION),
+                "graphId": str(expected_basis.get("graphId") or snapshot.get("graphId") or ""),
+                "basis": expected_basis,
             }
-            details["contractDiff"] = compare_execution_contracts(
-                expected_contract=expected_contract_obj,
-                current_contract=current_contract,
-            )
+        )
+        current_contract = {
+            "contractVersion": int(expected_contract_obj.get("contractVersion") or EXECUTION_CONTRACT_VERSION),
+            "graphId": str(expected_contract_obj.get("graphId") or current_basis.get("graphId") or ""),
+            "basis": current_basis,
+        }
+        contract_diff = compare_execution_contracts(
+            expected_contract=expected_contract_obj,
+            current_contract=current_contract,
+        )
+        if not bool(contract_diff.get("ok")):
+            details = {
+                "reasonCodes": list(contract_diff.get("reasonCodes") or []),
+                "nodeIds": list(contract_diff.get("nodeIds") or []),
+                "mismatches": list(contract_diff.get("mismatches") or []),
+                "contractDiff": contract_diff,
+            }
             await handle.bus.emit(
                 {
                     "type": "run_resume_failed",

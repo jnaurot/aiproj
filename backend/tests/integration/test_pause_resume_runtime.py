@@ -6,7 +6,7 @@ import pytest
 
 from app.runtime import RuntimeManager
 from app.runner.run import _build_frontier_identity_basis
-from app.runner.pause_resume import validate_resume_identity_basis
+from app.runner.execution_contract import compare_execution_contracts
 
 
 def _make_graph() -> Dict[str, Any]:
@@ -76,12 +76,12 @@ async def test_resume_validation_uses_full_identity_basis(monkeypatch):
 
 	captured: Dict[str, Any] = {}
 
-	def _fake_validate_resume_identity_basis(*, expected_basis, current_basis):
-		captured["expected"] = expected_basis
-		captured["current"] = current_basis
+	def _fake_compare_execution_contracts(*, expected_contract, current_contract):
+		captured["expected"] = expected_contract
+		captured["current"] = current_contract
 		return {"ok": False, "reasonCodes": ["node_state_changed"], "nodeIds": ["n2"], "mismatches": []}
 
-	monkeypatch.setattr("app.runtime.validate_resume_identity_basis", _fake_validate_resume_identity_basis)
+	monkeypatch.setattr("app.runtime.compare_execution_contracts", _fake_compare_execution_contracts)
 	await rt.artifact_store.upsert_run_pause_snapshot(
 		run_id,
 		_make_snapshot(run_id=run_id, graph_id="graph-full-basis", graph=graph, basis=basis),
@@ -91,9 +91,10 @@ async def test_resume_validation_uses_full_identity_basis(monkeypatch):
 	assert result["errorCode"] == "RESUME_FRONTIER_VALIDATION_FAILED"
 	assert isinstance(captured.get("expected"), dict)
 	assert isinstance(captured.get("current"), dict)
-	assert isinstance(((captured["current"] or {}).get("nodes") or {}).get("n2"), dict)
-	assert str(((captured["current"]["nodes"]["n2"] or {}).get("nodeStateHash") or "")).strip() != ""
-	assert str(((captured["current"]["nodes"]["n2"] or {}).get("determinismEnvHash") or "")).strip() != ""
+	basis = (captured["current"] or {}).get("basis") if isinstance((captured["current"] or {}).get("basis"), dict) else {}
+	assert isinstance((basis.get("nodes") or {}).get("n2"), dict)
+	assert str((((basis.get("nodes") or {}).get("n2") or {}).get("nodeStateHash") or "")).strip() != ""
+	assert str((((basis.get("nodes") or {}).get("n2") or {}).get("determinismEnvHash") or "")).strip() != ""
 
 
 @pytest.mark.asyncio
@@ -304,37 +305,51 @@ async def test_snapshot_load_validates_schema(monkeypatch):
 	assert result["errorCode"] == "PAUSE_SNAPSHOT_SCHEMA_INVALID"
 
 
-def test_resume_fails_only_on_real_frontier_change_not_snapshot_bug():
-	expected_basis = {
+def test_resume_contract_compare_fails_on_frontier_binding_change():
+	expected_contract = {
+		"contractVersion": 1,
 		"graphId": "graph-x",
-		"executionVersion": "v1",
-		"nodes": {
-			"n1": {
-				"nodeId": "n1",
-				"nodeStateHash": "hash-a",
-				"determinismEnvHash": "env-a",
-				"binding": {"currentExecKey": "", "currentArtifactId": ""},
-				"upstreamBindings": {"u1": {"currentExecKey": "", "currentArtifactId": ""}},
-				"executionVersion": "v1",
-			}
+		"basis": {
+			"schemaVersion": 1,
+			"graphId": "graph-x",
+			"executionVersion": "v1",
+			"environmentHash": "env-hash",
+			"nodes": {
+				"n1": {
+					"nodeId": "n1",
+					"nodeStateHash": "hash-a",
+					"determinismEnvHash": "env-a",
+					"binding": {"currentExecKey": "", "currentArtifactId": ""},
+					"upstreamBindings": {"u1": {"currentExecKey": "", "currentArtifactId": ""}},
+					"executionVersion": "v1",
+				}
+			},
 		},
 	}
-	current_basis = {
+	current_contract = {
+		"contractVersion": 1,
 		"graphId": "graph-x",
-		"executionVersion": "v1",
-		"nodes": {
-			"n1": {
-				"nodeId": "n1",
-				"nodeStateHash": "hash-a",
-				"determinismEnvHash": "env-a",
-				"binding": {"currentExecKey": "exec-real", "currentArtifactId": "art-real"},
-				"upstreamBindings": {"u1": {"currentExecKey": "exec-up", "currentArtifactId": "art-up"}},
-				"executionVersion": "v1",
-			}
+		"basis": {
+			"schemaVersion": 1,
+			"graphId": "graph-x",
+			"executionVersion": "v1",
+			"environmentHash": "env-hash",
+			"nodes": {
+				"n1": {
+					"nodeId": "n1",
+					"nodeStateHash": "hash-a",
+					"determinismEnvHash": "env-a",
+					"binding": {"currentExecKey": "exec-real", "currentArtifactId": "art-real"},
+					"upstreamBindings": {"u1": {"currentExecKey": "exec-up", "currentArtifactId": "art-up"}},
+					"executionVersion": "v1",
+				}
+			},
 		},
 	}
-	validation = validate_resume_identity_basis(expected_basis=expected_basis, current_basis=current_basis)
+	validation = compare_execution_contracts(
+		expected_contract=expected_contract,
+		current_contract=current_contract,
+	)
 	assert validation["ok"] is False
 	reasons = set(validation.get("reasonCodes") or [])
-	assert "snapshot_binding_empty_mismatch" in reasons
-	assert "snapshot_upstream_binding_empty_mismatch" in reasons
+	assert "dependency_frontier_changed" in reasons
