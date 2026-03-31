@@ -17,6 +17,7 @@ from .runner.pause_resume import (
     snapshot_resume_failure_details,
 )
 from .runner.execution_state import can_transition_node, can_transition_run
+from .runner.invariants import evaluate_runtime_invariants
 from .feature_flags import get_feature_flags
 from .services.runtime_env import get_env
 
@@ -66,6 +67,8 @@ class RunHandle:
     graph: Optional[Dict[str, Any]] = None
     run_telemetry: Dict[str, Any] = field(default_factory=dict)
     pause_snapshot: Dict[str, Any] = field(default_factory=dict)
+    invariant_violations_seen: set[str] = field(default_factory=set)
+    invariant_violations_count: int = 0
     
 class RuntimeManager:
     def __init__(self):
@@ -195,6 +198,47 @@ class RuntimeManager:
         except Exception:
             logger.exception("failed_to_emit_state_transition_violation")
 
+    def _run_invariants(self, handle: RunHandle, *, trigger: str) -> None:
+        violations = evaluate_runtime_invariants(
+            run_status=handle.status,
+            node_status=handle.node_status,
+            run_telemetry=handle.run_telemetry,
+        )
+        if not violations:
+            return
+        strict = str(get_env("RUNTIME_INVARIANTS_STRICT", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+        for violation in violations:
+            key = f"{violation.code}|{','.join(violation.node_ids)}|{handle.status}"
+            if key in handle.invariant_violations_seen:
+                continue
+            handle.invariant_violations_seen.add(key)
+            handle.invariant_violations_count = int(handle.invariant_violations_count or 0) + 1
+            payload = {
+                "type": "state_invariant_violation",
+                "runId": str(handle.run_id),
+                "code": str(violation.code),
+                "message": str(violation.message),
+                "severity": str(violation.severity),
+                "nodeIds": list(violation.node_ids),
+                "trigger": str(trigger),
+                "at": datetime_from_ts(time.time()),
+            }
+            logger.error(
+                "STATE_INVARIANT_VIOLATION run_id=%s code=%s trigger=%s nodes=%s",
+                handle.run_id,
+                violation.code,
+                trigger,
+                ",".join(violation.node_ids),
+            )
+            try:
+                asyncio.create_task(handle.bus.emit(payload))
+            except Exception:
+                logger.exception("failed_to_emit_state_invariant_violation")
+            if strict:
+                raise RuntimeError(
+                    f"STATE_INVARIANT_VIOLATION run_id={handle.run_id} code={violation.code} trigger={trigger}"
+                )
+
     def _set_run_status(self, handle: RunHandle, target: str, *, reason: str) -> bool:
         source = str(handle.status or "").strip().lower() or "pending"
         decision = can_transition_run(source, target)
@@ -210,6 +254,7 @@ class RuntimeManager:
             )
             return False
         handle.status = decision.target
+        self._run_invariants(handle, trigger=f"run_status:{reason}")
         return True
 
     def _set_node_status(self, handle: RunHandle, node_id: str, target: str, *, reason: str) -> bool:
@@ -227,6 +272,7 @@ class RuntimeManager:
             )
             return False
         handle.node_status[node_id] = decision.target
+        self._run_invariants(handle, trigger=f"node_status:{reason}")
         return True
 
     def _log_stale_regression(
@@ -1238,10 +1284,22 @@ class RuntimeManager:
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))
                 asyncio.create_task(self.artifact_store.delete_run_pause_snapshot(handle.run_id))
                 asyncio.create_task(self._capture_run_experiment_summary(handle))
+                asyncio.create_task(
+                    handle.bus.emit(
+                        {
+                            "type": "invariant_summary",
+                            "runId": str(handle.run_id),
+                            "status": str(handle.status),
+                            "violations": int(handle.invariant_violations_count or 0),
+                            "at": datetime_from_ts(time.time()),
+                        }
+                    )
+                )
             return
         
         if t == "run_telemetry":
             handle.run_telemetry = dict(ev)
+            self._run_invariants(handle, trigger="run_telemetry")
             return
 
         # node lifecycle

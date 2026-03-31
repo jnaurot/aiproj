@@ -55,6 +55,8 @@ Required fields:
 - `run_canceled`
 - `scheduler_canceled`
 - `state_transition_violation`
+- `state_invariant_violation`
+- `invariant_summary`
 - `node_started`
 - `node_output`
 - `node_finished`

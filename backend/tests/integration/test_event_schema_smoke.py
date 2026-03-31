@@ -40,6 +40,8 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "node_canceled",
     "scheduler_canceled",
     "state_transition_violation",
+    "state_invariant_violation",
+    "invariant_summary",
     "run_telemetry",
     "node_not_resumable",
 }
