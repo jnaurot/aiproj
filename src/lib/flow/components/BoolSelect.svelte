@@ -20,9 +20,9 @@
 		width: 100%;
 		border-radius: 8px;
 		padding: 6px 8px;
-		background: #0b0c10;
-		color: #e6e6e6;
-		border: 1px solid #283044;
+		background: var(--color-control-bg);
+		color: var(--color-control-text);
+		border: 1px solid var(--color-control-border);
 		margin-top: 6px;
 	}
 	label {

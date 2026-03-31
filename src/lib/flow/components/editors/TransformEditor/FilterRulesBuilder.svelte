@@ -277,12 +277,20 @@ export let onRemoveGroup: (() => void) | null = null;
 	.select,
 	.input {
 		width: 100%;
-		background: rgba(255, 255, 255, 0.04);
-		color: inherit;
-		border: 1px solid rgba(255, 255, 255, 0.16);
+		background: var(--color-control-bg);
+		color: var(--color-control-text);
+		border: 1px solid var(--color-control-border);
 		border-radius: 8px;
 		padding: 6px 8px;
 		font-size: 12px;
+	}
+	.select option {
+		background: Canvas !important;
+		color: CanvasText !important;
+	}
+	.select option:disabled {
+		background: Canvas !important;
+		color: GrayText !important;
 	}
 	.opSelect {
 		min-width: 96px;

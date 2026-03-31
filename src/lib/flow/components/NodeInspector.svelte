@@ -13,6 +13,7 @@
 	import { ToolEditorByProvider } from '$lib/flow/components/editors/ToolEditor/ToolEditor';
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 	import ComponentEditor from '$lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { getArtifactMetaUrl, getArtifactPreviewUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
@@ -118,6 +119,45 @@
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
 	$: schemaProps = buildTransformSchemaProps(transformKind as TransformKind, inputSchemas);
+
+	const consumeModeOptions: ThemedSelectOption[] = [
+		{ value: 'once', label: 'once' },
+		{ value: 'single_item', label: 'single_item' },
+		{ value: 'batch', label: 'batch' }
+	];
+
+	const directionOptions: ThemedSelectOption[] = [
+		{ value: 'in', label: 'in' },
+		{ value: 'out', label: 'out' }
+	];
+
+	const planeOptions: ThemedSelectOption[] = [
+		{ value: 'work', label: 'work' },
+		{ value: 'param', label: 'param' },
+		{ value: 'control', label: 'control' }
+	];
+
+	const cardinalityOptions: ThemedSelectOption[] = [
+		{ value: 'many', label: 'many' },
+		{ value: 'one', label: 'one' }
+	];
+
+	const overflowOptions: ThemedSelectOption[] = [
+		{ value: 'block', label: 'block' },
+		{ value: 'spill', label: 'spill' },
+		{ value: 'error', label: 'error' }
+	];
+
+	const arbitrationOptions: ThemedSelectOption[] = [
+		{ value: 'fifo', label: 'fifo (default)' },
+		{ value: 'round_robin', label: 'round_robin (preview)' }
+	];
+
+	const itemModeOptions: ThemedSelectOption[] = [
+		{ value: 'artifact', label: 'artifact' },
+		{ value: 'json_items', label: 'json_items' },
+		{ value: 'table_rows', label: 'table_rows' }
+	];
 	$: schemaContract = selectedNode
 		? __buildNodeSchemaContractSnapshotForTest($graphStore as any, selectedNode.id)
 		: { nodeId: '', status: 'clean', edges: [] as NodeSchemaContractEdge[] };
@@ -1726,34 +1766,31 @@
 			<div class="assistActionRow">
 				<label class="guidedToggle">
 					<span>consume</span>
-					<select
+					<ThemedSelect
 						value={nodeProcessingPolicy.consume_mode}
-						on:change={(event) =>
+						options={consumeModeOptions}
+						ariaLabel="Node consume mode"
+						onValueChange={(next) =>
 							updateNodeProcessingPolicy({
-								consume_mode: (event.currentTarget as HTMLSelectElement).value as
-									| 'once'
-									| 'single_item'
-									| 'batch'
-							})}
-					>
-						<option value="once">once</option>
-						<option value="single_item">single_item</option>
-						<option value="batch">batch</option>
-					</select>
-				</label>
-				<label class="guidedToggle">
-					<span>batch size</span>
-					<input
-						type="number"
-						min="1"
-						step="1"
-						value={String(nodeProcessingPolicy.batch_size)}
-						on:change={(event) =>
-							updateNodeProcessingPolicy({
-								batch_size: Math.max(1, Number((event.currentTarget as HTMLInputElement).value || '1'))
+								consume_mode: next as 'once' | 'single_item' | 'batch'
 							})}
 					/>
 				</label>
+				{#if nodeProcessingPolicy.consume_mode === 'batch'}
+					<label class="guidedToggle">
+						<span>batch size</span>
+						<input
+							type="number"
+							min="1"
+							step="1"
+							value={String(nodeProcessingPolicy.batch_size)}
+							on:change={(event) =>
+								updateNodeProcessingPolicy({
+									batch_size: Math.max(1, Number((event.currentTarget as HTMLInputElement).value || '1'))
+								})}
+						/>
+					</label>
+				{/if}
 				<label class="guidedToggle">
 					<span>max inflight</span>
 					<input
@@ -1767,17 +1804,6 @@
 							})}
 					/>
 				</label>
-				<label class="guidedToggle schemaEdgeFatal">
-					<input
-						type="checkbox"
-						checked={Boolean(nodeProcessingPolicy.read_once)}
-						on:change={(event) =>
-							updateNodeProcessingPolicy({
-								read_once: (event.currentTarget as HTMLInputElement).checked
-							})}
-					/>
-					<span>read once</span>
-				</label>
 			</div>
 			{#if expectedInputHandles.length > 0}
 				<div class="guidedAssistList">
@@ -1787,37 +1813,34 @@
 							<div class="assistActionRow">
 								<label class="guidedToggle">
 									<span>consume</span>
-									<select
+									<ThemedSelect
 										value={nodeProcessingPolicyByHandle[handleSummary.handle]?.consume_mode ?? nodeProcessingPolicy.consume_mode}
-										on:change={(event) =>
+										options={consumeModeOptions}
+										ariaLabel={`Consume mode for handle ${handleSummary.handle}`}
+										onValueChange={(next) =>
 											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
-												consume_mode: (event.currentTarget as HTMLSelectElement).value as
-													| 'once'
-													| 'single_item'
-													| 'batch'
-											})}
-									>
-										<option value="once">once</option>
-										<option value="single_item">single_item</option>
-										<option value="batch">batch</option>
-									</select>
-								</label>
-								<label class="guidedToggle">
-									<span>batch</span>
-									<input
-										type="number"
-										min="1"
-										step="1"
-										value={String(nodeProcessingPolicyByHandle[handleSummary.handle]?.batch_size ?? nodeProcessingPolicy.batch_size)}
-										on:change={(event) =>
-											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
-												batch_size: Math.max(
-													1,
-													Number((event.currentTarget as HTMLInputElement).value || '1')
-												)
+												consume_mode: next as 'once' | 'single_item' | 'batch'
 											})}
 									/>
 								</label>
+								{#if (nodeProcessingPolicyByHandle[handleSummary.handle]?.consume_mode ?? nodeProcessingPolicy.consume_mode) === 'batch'}
+									<label class="guidedToggle">
+										<span>batch</span>
+										<input
+											type="number"
+											min="1"
+											step="1"
+											value={String(nodeProcessingPolicyByHandle[handleSummary.handle]?.batch_size ?? nodeProcessingPolicy.batch_size)}
+											on:change={(event) =>
+												updateNodeProcessingPolicyForHandle(handleSummary.handle, {
+													batch_size: Math.max(
+														1,
+														Number((event.currentTarget as HTMLInputElement).value || '1')
+													)
+												})}
+										/>
+									</label>
+								{/if}
 								<label class="guidedToggle">
 									<span>inflight</span>
 									<input
@@ -1834,20 +1857,6 @@
 											})}
 									/>
 								</label>
-								<label class="guidedToggle schemaEdgeFatal">
-									<input
-										type="checkbox"
-										checked={Boolean(
-											nodeProcessingPolicyByHandle[handleSummary.handle]?.read_once ??
-												nodeProcessingPolicy.read_once
-										)}
-										on:change={(event) =>
-											updateNodeProcessingPolicyForHandle(handleSummary.handle, {
-												read_once: (event.currentTarget as HTMLInputElement).checked
-											})}
-									/>
-									<span>read once</span>
-								</label>
 							</div>
 						</div>
 					{/each}
@@ -1857,16 +1866,19 @@
 		<div class="guidedAssistCard">
 			<div class="guidedAssistHead">Port Declarations</div>
 			<div class="assistActionRow">
-				<select bind:value={newPortDirection}>
-					<option value="in">in</option>
-					<option value="out">out</option>
-				</select>
+				<ThemedSelect
+					value={newPortDirection}
+					options={directionOptions}
+					ariaLabel="New port direction"
+					onValueChange={(next) => (newPortDirection = next as 'in' | 'out')}
+				/>
 				<input type="text" placeholder="handle (e.g. param_filters)" bind:value={newPortHandle} />
-				<select bind:value={newPortPlane}>
-					<option value="work">work</option>
-					<option value="param">param</option>
-					<option value="control">control</option>
-				</select>
+				<ThemedSelect
+					value={newPortPlane}
+					options={planeOptions}
+					ariaLabel="New port plane"
+					onValueChange={(next) => (newPortPlane = next as 'work' | 'param' | 'control')}
+				/>
 				<button type="button" class="small" on:click={addPortDeclaration}>Add</button>
 			</div>
 			<div class="guidedAssistList">
@@ -1874,30 +1886,24 @@
 					<div class="guidedAssistItem">
 						<div class="guidedAssistLabel">in.{handle}</div>
 						<div class="assistActionRow">
-							<select
+							<ThemedSelect
 								value={String((decl as any)?.plane ?? 'work')}
-								on:change={(event) =>
+								options={planeOptions}
+								ariaLabel={`Input port plane ${handle}`}
+								onValueChange={(next) =>
 									updatePortDeclaration('in', handle, {
-										plane: (event.currentTarget as HTMLSelectElement).value as
-											| 'work'
-											| 'param'
-											| 'control'
+										plane: next as 'work' | 'param' | 'control'
 									})}
-							>
-								<option value="work">work</option>
-								<option value="param">param</option>
-								<option value="control">control</option>
-							</select>
-							<select
+							/>
+							<ThemedSelect
 								value={String((decl as any)?.cardinality ?? 'many')}
-								on:change={(event) =>
+								options={cardinalityOptions}
+								ariaLabel={`Input port cardinality ${handle}`}
+								onValueChange={(next) =>
 									updatePortDeclaration('in', handle, {
-										cardinality: (event.currentTarget as HTMLSelectElement).value as 'one' | 'many'
+										cardinality: next as 'one' | 'many'
 									})}
-							>
-								<option value="many">many</option>
-								<option value="one">one</option>
-							</select>
+							/>
 							<label class="guidedToggle">
 								<input
 									type="checkbox"
@@ -1919,30 +1925,24 @@
 					<div class="guidedAssistItem">
 						<div class="guidedAssistLabel">out.{handle}</div>
 						<div class="assistActionRow">
-							<select
+							<ThemedSelect
 								value={String((decl as any)?.plane ?? 'work')}
-								on:change={(event) =>
+								options={planeOptions}
+								ariaLabel={`Output port plane ${handle}`}
+								onValueChange={(next) =>
 									updatePortDeclaration('out', handle, {
-										plane: (event.currentTarget as HTMLSelectElement).value as
-											| 'work'
-											| 'param'
-											| 'control'
+										plane: next as 'work' | 'param' | 'control'
 									})}
-							>
-								<option value="work">work</option>
-								<option value="param">param</option>
-								<option value="control">control</option>
-							</select>
-							<select
+							/>
+							<ThemedSelect
 								value={String((decl as any)?.cardinality ?? 'many')}
-								on:change={(event) =>
+								options={cardinalityOptions}
+								ariaLabel={`Output port cardinality ${handle}`}
+								onValueChange={(next) =>
 									updatePortDeclaration('out', handle, {
-										cardinality: (event.currentTarget as HTMLSelectElement).value as 'one' | 'many'
+										cardinality: next as 'one' | 'many'
 									})}
-							>
-								<option value="many">many</option>
-								<option value="one">one</option>
-							</select>
+							/>
 							<button type="button" class="small danger" on:click={() => removePortDeclaration('out', handle)}>
 								Remove
 							</button>
@@ -2223,20 +2223,15 @@
 								<div class="schemaEdgeConfig">
 									<label>
 										<span>mode</span>
-										<select
+										<ThemedSelect
 											value={edgeRuntimeConfig.mode}
-											on:change={(event) =>
+											options={planeOptions}
+											ariaLabel={`Edge mode ${edge.edgeId}`}
+											onValueChange={(next) =>
 												patchEdgeRuntimeConfig(edge.edgeId, {
-													mode: (event.currentTarget as HTMLSelectElement).value as
-														| 'work'
-														| 'param'
-														| 'control'
+													mode: next as 'work' | 'param' | 'control'
 												})}
-										>
-											<option value="work">work</option>
-											<option value="param">param</option>
-											<option value="control">control</option>
-										</select>
+										/>
 									</label>
 									<label>
 										<span>queue.max</span>
@@ -2258,58 +2253,45 @@
 									</label>
 									<label>
 										<span>overflow</span>
-										<select
+										<ThemedSelect
 											value={edgeRuntimeConfig.queue.overflow}
-											on:change={(event) =>
+											options={overflowOptions}
+											ariaLabel={`Edge overflow ${edge.edgeId}`}
+											onValueChange={(next) =>
 												patchEdgeRuntimeConfig(edge.edgeId, {
 													queue: {
-														overflow: (event.currentTarget as HTMLSelectElement).value as
-															| 'block'
-															| 'spill'
-															| 'error'
+														overflow: next as 'block' | 'spill' | 'error'
 													}
 												})}
-										>
-											<option value="block">block</option>
-											<option value="spill">spill</option>
-											<option value="error">error</option>
-										</select>
+										/>
 									</label>
 									<label>
 										<span>arbitration</span>
-										<select
+										<ThemedSelect
 											value={edgeRuntimeConfig.queue.policy}
-											on:change={(event) =>
+											options={arbitrationOptions}
+											ariaLabel={`Edge arbitration ${edge.edgeId}`}
+											onValueChange={(next) =>
 												patchEdgeRuntimeConfig(edge.edgeId, {
 													queue: {
-														policy: (event.currentTarget as HTMLSelectElement).value as
-															| 'fifo'
-															| 'round_robin'
+														policy: next as 'fifo' | 'round_robin'
 													}
 												})}
-										>
-											<option value="fifo">fifo (default)</option>
-											<option value="round_robin">round_robin (preview)</option>
-										</select>
+										/>
 									</label>
 									<label>
 										<span>item mode</span>
-										<select
+										<ThemedSelect
 											value={edgeRuntimeConfig.work.item_mode}
-											on:change={(event) =>
+											options={itemModeOptions}
+											ariaLabel={`Edge item mode ${edge.edgeId}`}
+											onValueChange={(next) =>
 												patchEdgeRuntimeConfig(edge.edgeId, {
 													work: {
-														item_mode: (event.currentTarget as HTMLSelectElement).value as
-															| 'artifact'
-															| 'json_items'
-															| 'table_rows'
+														item_mode: next as 'artifact' | 'json_items' | 'table_rows'
 													}
 												})}
-										>
-											<option value="artifact">artifact</option>
-											<option value="json_items">json_items</option>
-											<option value="table_rows">table_rows</option>
-										</select>
+										/>
 									</label>
 									<label>
 										<span>max items</span>
@@ -2451,8 +2433,13 @@
 	}
 
 	:global(.nodeInspectorTheme .v select option) {
-		background: var(--ni-control-bg);
-		color: var(--ni-control-text);
+		background: Canvas !important;
+		color: CanvasText !important;
+	}
+
+	:global(.nodeInspectorTheme .v select option:disabled) {
+		background: Canvas !important;
+		color: GrayText !important;
 	}
 
 	.schemaAssist {
@@ -2780,7 +2767,7 @@
 		font-size: 11px;
 	}
 
-	.schemaEdgeConfig select,
+	.schemaEdgeConfig :global(.themedSelect),
 	.schemaEdgeConfig input[type='number'] {
 		width: 100%;
 	}

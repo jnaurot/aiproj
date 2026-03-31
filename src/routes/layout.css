@@ -6,7 +6,6 @@
 	background: var(--color-control-bg);
 	color: var(--color-control-text);
 	border-color: var(--color-control-border);
-	-webkit-text-fill-color: var(--color-control-text);
 	caret-color: var(--color-control-text);
 	transition:
 		background-color 120ms ease,
@@ -29,14 +28,14 @@
 	background: var(--color-control-disabled-bg);
 	color: var(--color-control-disabled-text);
 	border-color: var(--color-control-disabled-border);
-	-webkit-text-fill-color: var(--color-control-disabled-text);
 	cursor: not-allowed;
 }
 
 :global(select option),
 :global(select optgroup) {
-	background: var(--color-control-option-bg);
-	color: var(--color-control-option-text);
+	/* Native popup lists are OS-rendered on some platforms; system colors keep contrast readable. */
+	background: Canvas !important;
+	color: CanvasText !important;
 }
 
 :global(select option:hover) {
@@ -45,26 +44,11 @@
 
 :global(select option:checked),
 :global(select option:focus) {
-	background: var(--color-control-option-selected-bg);
-	color: var(--color-control-option-text);
+	background: Highlight !important;
+	color: HighlightText !important;
 }
 
-:global(:root[data-theme='dark'] select) {
-	color-scheme: dark;
+:global(select option:disabled) {
+	color: GrayText !important;
 }
 
-:global(:root[data-theme='light'] select) {
-	color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-	:global(:root:not([data-theme]) select) {
-		color-scheme: dark;
-	}
-}
-
-@media (prefers-color-scheme: light) {
-	:global(:root:not([data-theme]) select) {
-		color-scheme: light;
-	}
-}

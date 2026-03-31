@@ -7698,7 +7698,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					consume_mode: nextMode as 'once' | 'single_item' | 'batch',
 					batch_size: Math.max(1, Number(patch.batch_size ?? existing.batch_size ?? 1)),
 					max_inflight: Math.max(1, Number(patch.max_inflight ?? existing.max_inflight ?? 1)),
-					read_once: Boolean(patch.read_once ?? existing.read_once ?? existing.readOnce ?? false),
+					read_once: nextMode === 'once',
 					...(patch.on_error ? { on_error: patch.on_error } : {})
 				};
 				const nodes = s.nodes.map((n) =>
@@ -7755,9 +7755,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						1,
 						Number(patch.max_inflight ?? existingHandle.max_inflight ?? existing.max_inflight ?? 1)
 					),
-					read_once: Boolean(
-						patch.read_once ?? existingHandle.read_once ?? existingHandle.readOnce ?? existing.read_once ?? false
-					)
+					read_once: nextMode === 'once'
 				};
 				const nextPolicy = {
 					...(existing as Record<string, any>),

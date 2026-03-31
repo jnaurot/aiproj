@@ -2,6 +2,10 @@
 
 This file provides guidance to agents when working with code in this repository.
 
+## Persistent Rules Store
+- Additional persistent product/runtime/UX rules are maintained in `docs/RULES_STORE.md`.
+- Agents should load and follow `docs/RULES_STORE.md` for session-persistent collaboration rules.
+
 ## Project-Specific Conventions
 
 ### Code Style

@@ -251,8 +251,8 @@
 	}
 
 	.operationSelect option {
-		background: #0b1220;
-		color: #e5edff;
+		background: var(--color-control-option-bg);
+		color: var(--color-control-option-text);
 	}
 
 	.includedLibsBlock {
