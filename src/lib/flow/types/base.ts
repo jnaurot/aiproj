@@ -28,6 +28,7 @@ export type EdgeExecState =
   | "active"
   | "done";
 export type EdgeMode = "work" | "param" | "control";
+export type EdgeLinkKind = "data_link" | "control_link";
 export type PortPlane = "work" | "param" | "control";
 export type PortDirection = "in" | "out";
 export type PortCardinality = "one" | "many";
@@ -96,6 +97,7 @@ export type BaseNodeData<K extends NodeKind, P> = {
 /** ✅ This is what lives inside edge.data */
 export interface PipelineEdgeData extends Record<string, any> {
   exec: EdgeExecState; // make required to simplify runtime state
+  linkKind?: EdgeLinkKind;
   mode?: EdgeMode;
   fatal?: boolean;
   queue?: {

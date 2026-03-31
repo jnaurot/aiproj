@@ -600,8 +600,21 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		tgt_node = node_map.get(tgt_id)
 		src_kind = str((_node_data(src_node).get("kind") if src_node else "") or "").strip().lower()
 		edge_data = next_edge.get("data") if isinstance(next_edge.get("data"), dict) else {}
+		raw_link_kind = str(edge_data.get("linkKind") or edge_data.get("link_kind") or "data_link").strip().lower() or "data_link"
+		if raw_link_kind not in {"data_link", "control_link"}:
+			raw_link_kind = "data_link"
+			notes.append(
+				{
+					"code": "EDGE_LINK_KIND_DEFAULTED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": "Edge link kind defaulted to data_link",
+				}
+			)
+		edge_data["linkKind"] = raw_link_kind
 		raw_mode = str(edge_data.get("mode") or "").strip().lower()
 		inferred_mode = _infer_edge_mode_from_handles(next_edge)
+		if raw_link_kind == "control_link":
+			inferred_mode = "control"
 		normalized_mode = raw_mode or inferred_mode
 		if normalized_mode not in {"work", "param", "control"}:
 			normalized_mode = inferred_mode
@@ -618,6 +631,15 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 					"code": "EDGE_MODE_INFERRED",
 					"edgeId": str(next_edge.get("id") or ""),
 					"message": f"Inferred edge mode '{normalized_mode}' from handles",
+				}
+			)
+		if raw_link_kind == "control_link" and normalized_mode != "control":
+			normalized_mode = "control"
+			notes.append(
+				{
+					"code": "EDGE_LINK_KIND_MODE_NORMALIZED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": "Control-link edge mode normalized to 'control'.",
 				}
 			)
 		edge_data["mode"] = normalized_mode

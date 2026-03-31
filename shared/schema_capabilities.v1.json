@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "edgeModes": ["work", "param", "control"],
+  "edgeKinds": ["data_link", "control_link"],
   "workItemModes": ["artifact", "json_items", "table_rows"],
   "processingPolicies": {
     "consumeModes": ["once", "single_item", "batch"],

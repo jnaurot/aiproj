@@ -5327,7 +5327,15 @@ function inferEdgeModeFromHandles(edge: Edge<PipelineEdgeData>): 'work' | 'param
 	return 'work';
 }
 
+function normalizeEdgeLinkKind(edge: Edge<PipelineEdgeData>): 'data_link' | 'control_link' {
+	const rawKind = String((edge.data as any)?.linkKind ?? (edge.data as any)?.link_kind ?? '')
+		.trim()
+		.toLowerCase();
+	return rawKind === 'control_link' ? 'control_link' : 'data_link';
+}
+
 function normalizeEdgeMode(edge: Edge<PipelineEdgeData>): 'work' | 'param' | 'control' {
+	if (normalizeEdgeLinkKind(edge) === 'control_link') return 'control';
 	const rawMode = String((edge.data as any)?.mode ?? '').trim().toLowerCase();
 	if (rawMode === 'work' || rawMode === 'param' || rawMode === 'control') {
 		return rawMode;
@@ -7067,6 +7075,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					data: {
 						...(edge.data ?? { exec: 'idle' as const }),
 						exec: edge.data?.exec ?? 'idle',
+						linkKind: normalizeEdgeLinkKind(edge),
 						mode: nextMode as any,
 						fatal: Boolean(patch.fatal ?? (edge.data as any)?.fatal ?? false),
 						queue: nextQueue,
@@ -7449,6 +7458,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					data: {
 						...(edge.data ?? {}),
 						exec: edge.data?.exec ?? 'idle',
+						linkKind: normalizeEdgeLinkKind(edgeForValidation as any),
 						mode: edgeMode,
 						fatal: Boolean((edge.data as any)?.fatal ?? false),
 						queue: {
@@ -7557,7 +7567,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				target: adapterNodeId,
 				sourceHandle,
 				targetHandle: 'in',
-				data: { exec: 'idle', mode: 'work' as any }
+				data: { exec: 'idle', linkKind: 'data_link', mode: 'work' as any }
 			} as Edge<PipelineEdgeData>);
 			if (!incomingRes.ok) {
 				this.deleteNode(adapterNodeId);
@@ -7573,7 +7583,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				target,
 				sourceHandle: 'out',
 				targetHandle,
-				data: { exec: 'idle', mode: 'work' as any }
+				data: { exec: 'idle', linkKind: 'data_link', mode: 'work' as any }
 			} as Edge<PipelineEdgeData>);
 			if (!outgoingRes.ok) {
 				if (incomingRes.id) this.deleteEdge(incomingRes.id);
