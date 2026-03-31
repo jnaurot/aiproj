@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+from .execution_contract import validate_execution_contract
 
 
 PAUSE_SNAPSHOT_SCHEMA_VERSION = 2
@@ -77,6 +78,12 @@ def validate_pause_snapshot_schema(snapshot: Dict[str, Any]) -> Tuple[bool, List
 			active = -1
 		if active != 0:
 			errors.append("lease_active_count_nonzero")
+	execution_contract = snapshot.get("executionContract")
+	if _is_dict(execution_contract):
+		contract_ok, contract_errors = validate_execution_contract(execution_contract)
+		if not contract_ok:
+			for err in contract_errors:
+				errors.append(f"execution_contract_invalid:{err}")
 	return len(errors) == 0, errors
 
 

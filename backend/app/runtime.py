@@ -73,6 +73,7 @@ class RunHandle:
     graph: Optional[Dict[str, Any]] = None
     run_telemetry: Dict[str, Any] = field(default_factory=dict)
     pause_snapshot: Dict[str, Any] = field(default_factory=dict)
+    execution_contract: Dict[str, Any] = field(default_factory=dict)
     invariant_violations_seen: set[str] = field(default_factory=set)
     invariant_violations_count: int = 0
     
@@ -1346,6 +1347,11 @@ class RuntimeManager:
             "graphId": str(handle.graph_id or ""),
             "createdAt": datetime_from_ts(handle.created_at),
             "status": str(handle.status or "unknown"),
+            "executionContract": (
+                dict(handle.execution_contract)
+                if isinstance(handle.execution_contract, dict)
+                else {}
+            ),
             "params": {"nodes": params_by_node},
             "metrics": {"byNode": metrics_by_node, "flat": metrics_flat},
             "environment": {
@@ -1375,6 +1381,9 @@ class RuntimeManager:
             planned = ev.get("plannedNodeIds") or []
             if isinstance(planned, list):
                 handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
+            contract = ev.get("executionContract")
+            if isinstance(contract, dict):
+                handle.execution_contract = dict(contract)
             if changed:
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return
@@ -1398,6 +1407,9 @@ class RuntimeManager:
             changed = self._set_run_status(handle, "paused", reason="event:run_paused")
             snapshot = ev.get("snapshot") if isinstance(ev.get("snapshot"), dict) else {}
             handle.pause_snapshot = dict(snapshot or {})
+            snapshot_contract = snapshot.get("executionContract") if isinstance(snapshot, dict) else None
+            if isinstance(snapshot_contract, dict):
+                handle.execution_contract = dict(snapshot_contract)
             if changed:
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "paused"))
                 if isinstance(snapshot, dict) and snapshot:
@@ -1419,6 +1431,9 @@ class RuntimeManager:
             planned = ev.get("plannedNodeIds") or []
             if isinstance(planned, list):
                 handle.active_run_planned = {str(x) for x in planned if isinstance(x, str) and x}
+            contract = ev.get("executionContract")
+            if isinstance(contract, dict):
+                handle.execution_contract = dict(contract)
             if changed:
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "running"))
             return

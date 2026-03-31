@@ -32,6 +32,10 @@ from .queues import QueueLimits, QueueRegistry, next_nonempty_key
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .resumability import classify_node_resumability
 from .pause_resume import PAUSE_SNAPSHOT_SCHEMA_VERSION, validate_pause_snapshot_schema
+from .execution_contract import (
+    EXECUTION_CONTRACT_VERSION,
+    validate_execution_contract,
+)
 from .contracts import (
     TABLE_V1,
     canonical_table_columns,
@@ -2952,6 +2956,28 @@ def _build_frontier_identity_basis(
 	}
 
 
+def _build_execution_contract(
+	*,
+	graph: Dict[str, Any],
+	graph_id: str,
+	node_ids: List[str],
+	node_bindings: Dict[str, Dict[str, Any]],
+	execution_version: str,
+) -> Dict[str, Any]:
+	basis = _build_frontier_identity_basis(
+		graph=graph,
+		graph_id=graph_id,
+		node_ids=node_ids,
+		node_bindings=node_bindings,
+		execution_version=execution_version,
+	)
+	return {
+		"contractVersion": int(EXECUTION_CONTRACT_VERSION),
+		"graphId": str(graph_id or ""),
+		"basis": basis,
+	}
+
+
 async def _record_consumers(
     *,
     context: GraphContext,
@@ -3565,6 +3591,40 @@ async def run_graph(
                 if nid in component_expansion.internal_to_parent
             }
             planned_node_ids = sorted({*planned_node_ids, *{p for p in parent_ids if p}})
+        runtime_handle_bindings: Dict[str, Dict[str, Any]] = {}
+        if runtime_ref is not None:
+            try:
+                run_handle = (runtime_ref.runs or {}).get(run_id) if hasattr(runtime_ref, "runs") else None
+                raw_bindings = (run_handle.node_bindings if run_handle is not None else None)
+                if isinstance(raw_bindings, dict):
+                    runtime_handle_bindings = {
+                        str(node_id): (dict(payload) if isinstance(payload, dict) else {})
+                        for node_id, payload in raw_bindings.items()
+                        if str(node_id).strip()
+                    }
+            except Exception:
+                runtime_handle_bindings = {}
+        execution_contract = _build_execution_contract(
+            graph=execution_graph,
+            graph_id=graph_id,
+            node_ids=planned_node_ids,
+            node_bindings=runtime_handle_bindings,
+            execution_version=str(context.execution_version or ""),
+        )
+        contract_ok, contract_errors = validate_execution_contract(execution_contract)
+        if not contract_ok:
+            await _emit(
+                {
+                    "type": "run_finished",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "status": "failed",
+                    "errorCode": "EXECUTION_CONTRACT_INVALID",
+                    "error": ";".join(str(item) for item in contract_errors if str(item).strip()),
+                }
+            )
+            await _emit_cache_summary_once()
+            return
         if isinstance(resume_snapshot, dict):
             await _emit(
                 {
@@ -3574,6 +3634,7 @@ async def run_graph(
                     "runFrom": run_from,
                     "runMode": effective_run_mode,
                     "plannedNodeIds": planned_node_ids,
+                    "executionContract": execution_contract,
                 }
             )
             await _emit(
@@ -3595,6 +3656,7 @@ async def run_graph(
                     "plannedNodeIds": planned_node_ids,
                     "pinnedNodeIds": planned_pinned_node_ids,
                     "reproducibility": reproducibility_metadata,
+                    "executionContract": execution_contract,
                 }
             )
         nodes = node_map(execution_graph)
@@ -7886,6 +7948,12 @@ async def run_graph(
             return basis
 
         def _build_pause_snapshot() -> Dict[str, Any]:
+            frontier_basis = _snapshot_frontier_validation_basis()
+            execution_contract = {
+                "contractVersion": int(EXECUTION_CONTRACT_VERSION),
+                "graphId": str(graph_id),
+                "basis": frontier_basis,
+            }
             started_node_ids = sorted([str(nid) for nid, started in node_started_once.items() if bool(started)])
             blocked_node_ids = sorted([str(nid) for nid in blocked_descendants])
             ready_node_ids = sorted([str(nid) for nid in ready], key=lambda n: order_index.get(n, 10**9))
@@ -7939,7 +8007,8 @@ async def run_graph(
                     }
                     for node_id in sorted(sub, key=lambda n: order_index.get(n, 10**9))
                 },
-                "frontierValidationBasis": _snapshot_frontier_validation_basis(),
+                "frontierValidationBasis": frontier_basis,
+                "executionContract": execution_contract,
                 "leaseState": {
                     "released": True,
                     "activeLeases": 0,

@@ -22,6 +22,7 @@ export type KnownRunEvent =
       runFrom: string | null;
       runMode?: "from_start" | "from_selected_onward" | "selected_only";
       plannedNodeIds?: string[];
+      executionContract?: Record<string, unknown>;
     }
   | { type: "run_pause_requested"; runId: string; at: string }
   | { type: "run_pausing"; runId: string; at: string }
@@ -35,6 +36,7 @@ export type KnownRunEvent =
       runFrom?: string | null;
       runMode?: "from_start" | "from_selected_onward" | "selected_only";
       plannedNodeIds?: string[];
+      executionContract?: Record<string, unknown>;
     }
   | {
       type: "run_resume_failed";
