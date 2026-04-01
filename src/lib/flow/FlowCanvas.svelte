@@ -2182,6 +2182,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return 'adaptiveSeverity adaptiveSeverity-low';
 	}
 
+	function regressionSeverity(alert: RegressionAlert): 'low' | 'medium' | 'high' {
+		const type = String(alert?.type ?? '').trim().toLowerCase();
+		if (type.includes('latency')) {
+			const pct = Math.abs(Number(alert?.driftPct ?? 0));
+			if (pct >= 75) return 'high';
+			if (pct >= 35) return 'medium';
+			return 'low';
+		}
+		const delta = Math.abs(Number(alert?.delta ?? 0));
+		if (delta >= 5) return 'high';
+		if (delta >= 2) return 'medium';
+		return 'low';
+	}
+
 	function selectTrendPointDrilldown(point: ExperimentNodeTrendPoint): void {
 		const nodeId = String(point?.nodeId ?? '').trim();
 		if (nodeId) {
@@ -5473,7 +5487,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													on:click={() => selectRegressionAlertDrilldown(alert, index)}
 													title="Focus alert node"
 												>
-													<span>{alert.reasonCode || alert.type || '-'}</span>
+													<span>
+														{alert.reasonCode || alert.type || '-'}
+														<span class={adaptiveSeverityClass(regressionSeverity(alert))}>
+															{regressionSeverity(alert)}
+														</span>
+													</span>
 													<span>{alert.nodeId || alert.errorCode || '-'}</span>
 													<span>{Number.isFinite(Number(alert.baseline)) ? Number(alert.baseline).toFixed(1) : '-'}</span>
 													<span>{Number.isFinite(Number(alert.current)) ? Number(alert.current).toFixed(1) : '-'}</span>
@@ -5492,6 +5511,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										{#if selectedRegressionAlert}
 											<div class="envPanelSummary">
 												selected={selectedRegressionAlert.reasonCode || selectedRegressionAlert.type || '-'} | node={selectedRegressionAlert.nodeId || '-'} | metric={selectedRegressionAlert.metric || '-'}
+												| severity=
+												<span class={adaptiveSeverityClass(regressionSeverity(selectedRegressionAlert))}>
+													{regressionSeverity(selectedRegressionAlert)}
+												</span>
 											</div>
 											<div class="envPanelSummary mono">
 												baseline={Number.isFinite(Number(selectedRegressionAlert.baseline)) ? Number(selectedRegressionAlert.baseline).toFixed(3) : '-'} | current={Number.isFinite(Number(selectedRegressionAlert.current)) ? Number(selectedRegressionAlert.current).toFixed(3) : '-'} | driftPct={Number.isFinite(Number(selectedRegressionAlert.driftPct)) ? Number(selectedRegressionAlert.driftPct).toFixed(3) : '-'} | delta={Number.isFinite(Number(selectedRegressionAlert.delta)) ? Number(selectedRegressionAlert.delta).toFixed(3) : '-'}
