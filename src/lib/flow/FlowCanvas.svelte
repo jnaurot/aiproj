@@ -2042,6 +2042,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runLogFilter = errorCode;
 	}
 
+	function selectTransitionEventDrilldown(event: RunTransitionEvent): void {
+		const entity = String(event?.payload?.entity ?? '').trim().toLowerCase();
+		const entityId = String(event?.payload?.entityId ?? '').trim();
+		if (entity === 'node' && entityId) {
+			focusNodeFromMonitor(entityId);
+			return;
+		}
+		if (entity === 'run') {
+			const runId = String(event?.runId ?? '').trim();
+			if (runId) runLogFilter = runId;
+		}
+	}
+
 	function selectRegressionHistoryPair(index: number): void {
 		const pair = pickRunMonitorRegressionPairFromHistory(runMonitorHistoryRows as any, index);
 		if (!pair.runId || !pair.baselineRunId) return;
@@ -4937,13 +4950,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envProfileEmpty">No state transition events for selected run.</div>
 										{:else}
 											{#each runMonitorTransitionsVisible as event (`${event.id}:${event.at}:${event.type}`)}
-												<div class="runMonitorNodeRow" role="row">
+												<button
+													type="button"
+													class="runMonitorNodeRow"
+													role="row"
+													on:click={() => selectTransitionEventDrilldown(event)}
+													title="Focus node transitions or filter run logs by run id"
+												>
 													<span>{event.type}</span>
 													<span>{String(event.payload?.entity ?? '-')}:{String(event.payload?.entityId ?? '-')}</span>
 													<span>{String(event.payload?.source ?? '-')}</span>
 													<span>{String(event.payload?.target ?? '-')}</span>
 													<span>{String(event.payload?.reason ?? event.payload?.code ?? '-')}</span>
-												</div>
+												</button>
 											{/each}
 										{/if}
 									</div>
