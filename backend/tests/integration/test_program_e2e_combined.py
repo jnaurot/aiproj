@@ -122,7 +122,20 @@ async def test_e2e_combined_control_adaptive_replay(monkeypatch) -> None:
 
 	events = await rt.list_run_events(run_id, after_id=0, limit=2000)
 	assert any(str(evt.get("type") or "") == "control_gate_state" for evt in events), "expected control gate diagnostics"
-	assert any(str(evt.get("type") or "") == "scheduler_adaptive_decision" for evt in events), "expected adaptive decisions"
+	adaptive_events = [evt for evt in events if str(evt.get("type") or "") == "scheduler_adaptive_decision"]
+	assert adaptive_events, "expected adaptive decisions"
+	def _payload_field(evt: Dict[str, Any], field: str) -> Any:
+		if field in evt:
+			return evt.get(field)
+		payload = evt.get("payload")
+		if isinstance(payload, dict):
+			return payload.get(field)
+		return None
+
+	assert any(str(_payload_field(evt, "mode") or "").strip() in {"off", "observe", "enforce"} for evt in adaptive_events)
+	assert all(isinstance(_payload_field(evt, "effectiveCaps"), dict) for evt in adaptive_events)
+	assert all(str(_payload_field(evt, "modeSource") or "") in {"env", "run_override"} for evt in adaptive_events)
+	assert not [evt for evt in events if str(evt.get("type") or "") == "state_invariant_violation"]
 
 	# Ensure replay compares against the same authoritative binding basis captured
 	# in the contract snapshot for this unchanged-run scenario.
