@@ -36,7 +36,6 @@
 	import type {
 		ExperimentFailureTaxonomyItem,
 		ExperimentNodeTrendPoint,
-		RunTransitionEvent,
 		ExperimentSlaBreach,
 		RegressionAlert
 	} from '$lib/flow/client/runs';
@@ -97,8 +96,10 @@ import {
 		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
 		buildRunMonitorNodeRows,
+		buildRunMonitorTransitionRows,
 		filterRunMonitorAdaptiveDecisionRows,
 		filterAndSortRunMonitorNodes,
+		filterRunMonitorTransitionRows,
 		pickRunMonitorRegressionPairFromHistory,
 		preferredMonitorEdgeFocusNodeId,
 		resolveRunMonitorRegressionPair,
@@ -108,6 +109,8 @@ import {
 		type RunMonitorFilter,
 		type RunMonitorRegressionPair,
 		type RunMonitorSort,
+		type RunMonitorTransitionFilter,
+		type RunMonitorTransitionRow,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
 
@@ -391,14 +394,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
-	let runMonitorTransitions: RunTransitionEvent[] = [];
-	let runMonitorTransitionsVisible: RunTransitionEvent[] = [];
+	let runMonitorTransitions: RunMonitorTransitionRow[] = [];
+	let runMonitorTransitionsVisible: RunMonitorTransitionRow[] = [];
 	let runMonitorTransitionsLoading = false;
 	let runMonitorTransitionsError: string | null = null;
 	let runMonitorTransitionRunId = '';
 	let runMonitorTransitionsRefreshKey = '';
 	let runMonitorTransitionsAutoKey = '';
-	let runMonitorTransitionFilter: 'all' | 'run' | 'node' | 'violations' = 'all';
+	let runMonitorTransitionFilter: RunMonitorTransitionFilter = 'all';
 	let runMonitorAnalyticsLoading = false;
 	let runMonitorAnalyticsError: string | null = null;
 	let runMonitorAnalyticsRefreshKey = '';
@@ -788,14 +791,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorTransitions = [];
 		runMonitorTransitionsError = null;
 	}
-	$: runMonitorTransitionsVisible = runMonitorTransitions.filter((event) => {
-		const entity = String(event?.payload?.entity ?? '').trim().toLowerCase();
-		const type = String(event?.type ?? '').trim().toLowerCase();
-		if (runMonitorTransitionFilter === 'run') return entity === 'run';
-		if (runMonitorTransitionFilter === 'node') return entity === 'node';
-		if (runMonitorTransitionFilter === 'violations') return type === 'state_transition_violation';
-		return true;
-	});
+	$: runMonitorTransitionsVisible = filterRunMonitorTransitionRows(
+		runMonitorTransitions,
+		runMonitorTransitionFilter
+	);
 	$: runMonitorTrendNodeOptions = runMonitorNodeRows
 		.map((row) => ({ id: String(row.nodeId ?? '').trim(), label: String(row.label ?? '').trim() }))
 		.filter((row) => row.id.length > 0)
@@ -2042,9 +2041,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runLogFilter = errorCode;
 	}
 
-	function selectTransitionEventDrilldown(event: RunTransitionEvent): void {
-		const entity = String(event?.payload?.entity ?? '').trim().toLowerCase();
-		const entityId = String(event?.payload?.entityId ?? '').trim();
+	function selectTransitionEventDrilldown(event: RunMonitorTransitionRow): void {
+		const entity = String(event?.entity ?? '').trim().toLowerCase();
+		const entityId = String(event?.entityId ?? '').trim();
 		if (entity === 'node' && entityId) {
 			focusNodeFromMonitor(entityId);
 			return;
@@ -2144,7 +2143,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				afterId: 0,
 				limit: 200
 			});
-			runMonitorTransitions = Array.isArray(res.events) ? res.events.slice(-50).reverse() : [];
+			runMonitorTransitions = buildRunMonitorTransitionRows(
+				Array.isArray(res.events) ? res.events.slice(-200) : []
+			).slice(0, 50);
 		} catch (error) {
 			runMonitorTransitions = [];
 			runMonitorTransitionsError = String(error ?? 'Failed to load transition history');
@@ -4958,10 +4959,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													title="Focus node transitions or filter run logs by run id"
 												>
 													<span>{event.type}</span>
-													<span>{String(event.payload?.entity ?? '-')}:{String(event.payload?.entityId ?? '-')}</span>
-													<span>{String(event.payload?.source ?? '-')}</span>
-													<span>{String(event.payload?.target ?? '-')}</span>
-													<span>{String(event.payload?.reason ?? event.payload?.code ?? '-')}</span>
+													<span>{event.entity || '-'}:{event.entityId || '-'}</span>
+													<span>{event.source || '-'}</span>
+													<span>{event.target || '-'}</span>
+													<span>{event.reasonCode || '-'}</span>
 												</button>
 											{/each}
 										{/if}

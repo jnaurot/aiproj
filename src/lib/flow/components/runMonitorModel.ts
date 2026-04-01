@@ -125,6 +125,20 @@ export type RunMonitorTrendSparkline = {
 export type RunMonitorAdaptiveModeFilter = 'all' | 'off' | 'observe' | 'enforce';
 export type RunMonitorAdaptiveSeverityFilter = 'all' | 'low' | 'medium' | 'high';
 export type RunMonitorRegressionPair = { runId: string; baselineRunId: string };
+export type RunMonitorTransitionFilter = 'all' | 'run' | 'node' | 'violations';
+
+export type RunMonitorTransitionRow = {
+	id: number;
+	runId: string;
+	type: string;
+	at: string;
+	entity: string;
+	entityId: string;
+	source: string;
+	target: string;
+	reasonCode: string;
+	isViolation: boolean;
+};
 
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
@@ -648,4 +662,43 @@ export function pickRunMonitorRegressionPairFromHistory(
 	const baselineRunId = _historyRunId(rows[idx + 1]);
 	if (!runId || !baselineRunId) return { runId: '', baselineRunId: '' };
 	return { runId, baselineRunId };
+}
+
+export function buildRunMonitorTransitionRows(events: unknown[]): RunMonitorTransitionRow[] {
+	return (Array.isArray(events) ? events : [])
+		.map((eventRaw) => {
+			const event = asRecord(eventRaw);
+			const payload = asRecord(event.payload);
+			const type = String(event.type ?? '').trim();
+			return {
+				id: Number(event.id ?? 0),
+				runId: String(event.runId ?? '').trim(),
+				type,
+				at: String(event.at ?? '').trim(),
+				entity: String(payload.entity ?? '').trim().toLowerCase(),
+				entityId: String(payload.entityId ?? '').trim(),
+				source: String(payload.source ?? '').trim(),
+				target: String(payload.target ?? '').trim(),
+				reasonCode: String(payload.reason ?? payload.code ?? '').trim(),
+				isViolation: type.toLowerCase() === 'state_transition_violation'
+			} as RunMonitorTransitionRow;
+		})
+		.filter((row) => row.type.length > 0)
+		.sort((a, b) => {
+			if (Number.isFinite(a.id) && Number.isFinite(b.id) && a.id !== b.id) return b.id - a.id;
+			return String(b.at ?? '').localeCompare(String(a.at ?? ''));
+		});
+}
+
+export function filterRunMonitorTransitionRows(
+	rows: RunMonitorTransitionRow[],
+	filter: RunMonitorTransitionFilter
+): RunMonitorTransitionRow[] {
+	const mode = String(filter ?? 'all').trim().toLowerCase();
+	return (Array.isArray(rows) ? rows : []).filter((row) => {
+		if (mode === 'run') return row.entity === 'run';
+		if (mode === 'node') return row.entity === 'node';
+		if (mode === 'violations') return row.isViolation;
+		return true;
+	});
 }
