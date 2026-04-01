@@ -364,6 +364,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	};
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
+	let runMonitorAdaptiveChangedOnly = false;
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -773,7 +774,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorAdaptiveRowsVisible = filterRunMonitorAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows,
 		runMonitorAdaptiveModeFilter,
-		runMonitorAdaptiveSeverityFilter
+		runMonitorAdaptiveSeverityFilter,
+		runMonitorAdaptiveChangedOnly
 	);
 	$: runMonitorAdaptiveDecisionSummary = summarizeAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows
@@ -4774,6 +4776,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<option value="high">high</option>
 												</select>
 											</label>
+											<label class="monitorField monitorField-inline">
+												<span>Changed only</span>
+												<input type="checkbox" bind:checked={runMonitorAdaptiveChangedOnly} />
+											</label>
 										</div>
 										<div class="runMonitorNodeHead runMonitorAdaptiveTimelineHead" role="row">
 											<span>time</span>
@@ -6228,6 +6234,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		display: grid;
 		gap: 4px;
 		font-size: 11px;
+	}
+
+	.monitorField-inline {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding-top: 14px;
+	}
+
+	.monitorField-inline input[type='checkbox'] {
+		width: 14px;
+		height: 14px;
 	}
 
 	.monitorField select {

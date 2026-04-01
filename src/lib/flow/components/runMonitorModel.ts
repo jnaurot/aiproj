@@ -678,7 +678,8 @@ export function buildTrendSparkline(
 export function filterRunMonitorAdaptiveDecisionRows(
 	rows: RunMonitorAdaptiveDecisionRow[],
 	modeFilter: RunMonitorAdaptiveModeFilter,
-	severityFilter: RunMonitorAdaptiveSeverityFilter
+	severityFilter: RunMonitorAdaptiveSeverityFilter,
+	changedOnly: boolean = false
 ): RunMonitorAdaptiveDecisionRow[] {
 	const mode = String(modeFilter ?? 'all').trim().toLowerCase();
 	const severity = String(severityFilter ?? 'all').trim().toLowerCase();
@@ -687,7 +688,20 @@ export function filterRunMonitorAdaptiveDecisionRows(
 		const rowSeverity = String(row?.explanation?.severity ?? '').trim().toLowerCase();
 		if (mode !== 'all' && rowMode !== mode) return false;
 		if (severity !== 'all' && rowSeverity !== severity) return false;
-		return true;
+		if (!Boolean(changedOnly)) return true;
+		const diff = row?.diffFromPrevious;
+		if (!diff || typeof diff !== 'object') return false;
+		const capDelta = diff.capDelta && typeof diff.capDelta === 'object' ? diff.capDelta : {};
+		const hasCapDelta = Object.keys(capDelta).length > 0;
+		const reasonsAdded = Array.isArray(diff.reasonsAdded) ? diff.reasonsAdded : [];
+		const reasonsRemoved = Array.isArray(diff.reasonsRemoved) ? diff.reasonsRemoved : [];
+		return Boolean(
+			diff.modeChanged ||
+				Number(diff.scoreDelta ?? 0) !== 0 ||
+				hasCapDelta ||
+				reasonsAdded.length > 0 ||
+				reasonsRemoved.length > 0
+		);
 	});
 }
 
