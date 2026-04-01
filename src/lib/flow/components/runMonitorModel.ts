@@ -122,6 +122,9 @@ export type RunMonitorTrendSparkline = {
 	pointsCount: number;
 };
 
+export type RunMonitorAdaptiveModeFilter = 'all' | 'off' | 'observe' | 'enforce';
+export type RunMonitorAdaptiveSeverityFilter = 'all' | 'low' | 'medium' | 'high';
+
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
 
@@ -590,4 +593,20 @@ export function buildTrendSparkline(
 		deltaPct,
 		pointsCount: normalized.length
 	};
+}
+
+export function filterRunMonitorAdaptiveDecisionRows(
+	rows: RunMonitorAdaptiveDecisionRow[],
+	modeFilter: RunMonitorAdaptiveModeFilter,
+	severityFilter: RunMonitorAdaptiveSeverityFilter
+): RunMonitorAdaptiveDecisionRow[] {
+	const mode = String(modeFilter ?? 'all').trim().toLowerCase();
+	const severity = String(severityFilter ?? 'all').trim().toLowerCase();
+	return (Array.isArray(rows) ? rows : []).filter((row) => {
+		const rowMode = String(row?.mode ?? '').trim().toLowerCase();
+		const rowSeverity = String(row?.explanation?.severity ?? '').trim().toLowerCase();
+		if (mode !== 'all' && rowMode !== mode) return false;
+		if (severity !== 'all' && rowSeverity !== severity) return false;
+		return true;
+	});
 }

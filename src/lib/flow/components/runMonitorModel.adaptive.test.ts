@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildRunMonitorAdaptiveDecisionRows,
 	buildTrendSparkline,
-	explainAdaptiveDecision
+	explainAdaptiveDecision,
+	filterRunMonitorAdaptiveDecisionRows
 } from './runMonitorModel';
 
 describe('runMonitorModel adaptive decision rows', () => {
@@ -80,5 +81,36 @@ describe('runMonitorModel adaptive decision rows', () => {
 		expect(Number(spark?.pointsCount ?? 0)).toBe(3);
 		expect((spark?.points ?? []).length).toBe(3);
 		expect(Number(spark?.baselines?.firstValueY ?? 0)).toBeGreaterThanOrEqual(0);
+	});
+
+	it('filters adaptive decision rows by mode and severity', () => {
+		const rows = buildRunMonitorAdaptiveDecisionRows({
+			adaptiveDecisions: [
+				{
+					at: '2026-03-31T00:00:01.000Z',
+					runId: 'run_1',
+					mode: 'observe',
+					enforced: false,
+					reasons: ['recovery'],
+					changedCaps: {},
+					effectiveCaps: { global: 4, model: 1 }
+				},
+				{
+					at: '2026-03-31T00:00:02.000Z',
+					runId: 'run_1',
+					mode: 'enforce',
+					enforced: true,
+					reasons: ['queue_depth_high', 'failure_rate_high'],
+					changedCaps: { global: { from: 4, to: 2 } },
+					effectiveCaps: { global: 2, model: 1 }
+				}
+			]
+		});
+		const enforceOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'enforce', 'all');
+		expect(enforceOnly).toHaveLength(1);
+		expect(enforceOnly[0]?.mode).toBe('enforce');
+		const lowOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'low');
+		expect(lowOnly.length).toBeGreaterThanOrEqual(1);
+		expect(lowOnly.every((row) => row.explanation.severity === 'low')).toBe(true);
 	});
 });

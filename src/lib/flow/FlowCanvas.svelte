@@ -95,9 +95,12 @@ import {
 		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
 		buildRunMonitorNodeRows,
+		filterRunMonitorAdaptiveDecisionRows,
 		filterAndSortRunMonitorNodes,
 		preferredMonitorEdgeFocusNodeId,
 		type RunMonitorAdaptiveDecisionRow,
+		type RunMonitorAdaptiveModeFilter,
+		type RunMonitorAdaptiveSeverityFilter,
 		type RunMonitorFilter,
 		type RunMonitorSort,
 		type RunMonitorTrendSparkline
@@ -338,8 +341,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAdaptiveDecisionSelectedKey = '';
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
-	let runMonitorAdaptiveModeFilter: 'all' | 'off' | 'observe' | 'enforce' = 'all';
-	let runMonitorAdaptiveSeverityFilter: 'all' | 'low' | 'medium' | 'high' = 'all';
+	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
+	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -728,18 +731,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (index < 0) return null;
 		return runMonitorAdaptiveDecisionRows[index + 1] ?? null;
 	})();
-	$: runMonitorAdaptiveRowsVisible = runMonitorAdaptiveDecisionRows.filter((row) => {
-		if (runMonitorAdaptiveModeFilter !== 'all' && String(row.mode ?? '').trim() !== runMonitorAdaptiveModeFilter) {
-			return false;
-		}
-		if (
-			runMonitorAdaptiveSeverityFilter !== 'all' &&
-			String(row.explanation?.severity ?? '').trim() !== runMonitorAdaptiveSeverityFilter
-		) {
-			return false;
-		}
-		return true;
-	});
+	$: runMonitorAdaptiveRowsVisible = filterRunMonitorAdaptiveDecisionRows(
+		runMonitorAdaptiveDecisionRows,
+		runMonitorAdaptiveModeFilter,
+		runMonitorAdaptiveSeverityFilter
+	);
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
