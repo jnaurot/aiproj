@@ -45,6 +45,42 @@ class _BadJsonClient:
 		return _Resp()
 
 
+class _GoodJsonStreamResponse:
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb):
+		return False
+
+	def raise_for_status(self):
+		return None
+
+	async def aiter_lines(self):
+		yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"}}]}'
+		yield "data: [DONE]"
+
+
+class _GoodJsonClient:
+	async def __aenter__(self):
+		return self
+
+	async def __aexit__(self, exc_type, exc, tb):
+		return False
+
+	def stream(self, method, url, json=None, headers=None):
+		return _GoodJsonStreamResponse()
+
+	async def post(self, url, json=None, headers=None):
+		class _Resp:
+			def raise_for_status(self):
+				return None
+
+			def json(self):
+				return {"choices": [{"message": {"content": "{\"ok\":true}"}}]}
+
+		return _Resp()
+
+
 async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
 	return NodeOutput(
 		status="succeeded",
@@ -104,6 +140,19 @@ def _graph():
 	}
 
 
+def _graph_with_debug(*, enabled: bool, log_input_preview: bool, output_mode: str = "text"):
+	graph = _graph()
+	params = graph["nodes"][1]["data"]["params"]
+	params["output_mode"] = output_mode
+	if output_mode == "json":
+		params["output_schema"] = {"type": "object"}
+	params["debug"] = {
+		"enabled": enabled,
+		"log_input_preview": log_input_preview,
+	}
+	return graph
+
+
 @pytest.mark.asyncio
 async def test_model_runtime_hardening_structured_error_and_no_model_debug_prints(monkeypatch, tmp_path, capsys):
 	run_mod = importlib.import_module("app.runner.run")
@@ -140,3 +189,108 @@ async def test_model_runtime_hardening_structured_error_and_no_model_debug_print
 	assert "[run_graph] LLM upstream_ids" not in stdout
 	assert "[ollama] node_id:" not in stdout
 	assert "IN COMPILE_PLAN" not in stdout
+
+
+@pytest.mark.asyncio
+async def test_model_runtime_no_stdout_debug_prints_in_success_path(monkeypatch, tmp_path, capsys):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _GoodJsonClient())
+
+	events = []
+	artifact_root = tmp_path / "artifacts-hardening-success"
+	await run_mod.run_graph(
+		run_id="run-model-hardening-success",
+		graph=_graph_with_debug(enabled=False, log_input_preview=False, output_mode="json"),
+		run_from=None,
+		bus=RunEventBus("run-model-hardening-success", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-model-hardening-success",
+	)
+
+	finished = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "model_1"]
+	assert finished and finished[-1].get("status") == "succeeded"
+
+	stdout = capsys.readouterr().out
+	assert "LLM EXEC raw_params" not in stdout
+	assert "[VALIDATOR] LLM NODE RAW" not in stdout
+	assert "[SCHEMAS] LLM params BEFORE normalize" not in stdout
+
+
+@pytest.mark.asyncio
+async def test_model_runtime_no_stdout_debug_prints_in_failure_path(monkeypatch, tmp_path, capsys):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _BadJsonClient())
+
+	events = []
+	artifact_root = tmp_path / "artifacts-hardening-failure"
+	await run_mod.run_graph(
+		run_id="run-model-hardening-failure",
+		graph=_graph_with_debug(enabled=False, log_input_preview=False, output_mode="json"),
+		run_from=None,
+		bus=RunEventBus("run-model-hardening-failure", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-model-hardening-failure",
+	)
+
+	finished = [e for e in events if e.get("type") == "node_finished" and e.get("nodeId") == "model_1"]
+	assert finished and finished[-1].get("status") == "failed"
+
+	stdout = capsys.readouterr().out
+	assert "LLM EXEC raw_params" not in stdout
+	assert "[VALIDATOR] LLM NODE RAW" not in stdout
+	assert "[SCHEMAS] LLM params BEFORE normalize" not in stdout
+
+
+@pytest.mark.asyncio
+async def test_model_debug_logs_only_when_debug_flags_enabled(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	openai_mod = importlib.import_module("app.executors.llm_openai_compat")
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(openai_mod.httpx, "AsyncClient", lambda *args, **kwargs: _GoodJsonClient())
+
+	artifact_root = tmp_path / "artifacts-hardening-debug"
+	events_off = []
+	await run_mod.run_graph(
+		run_id="run-model-hardening-debug-off",
+		graph=_graph_with_debug(enabled=False, log_input_preview=False, output_mode="json"),
+		run_from=None,
+		bus=RunEventBus("run-model-hardening-debug-off", on_emit=lambda evt: events_off.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root / "off"),
+		cache=SqliteExecutionCache(str(artifact_root / "off" / "meta" / "artifacts.sqlite")),
+		graph_id="graph-model-hardening-debug-off",
+	)
+
+	events_on = []
+	await run_mod.run_graph(
+		run_id="run-model-hardening-debug-on",
+		graph=_graph_with_debug(enabled=True, log_input_preview=True, output_mode="json"),
+		run_from=None,
+		bus=RunEventBus("run-model-hardening-debug-on", on_emit=lambda evt: events_on.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root / "on"),
+		cache=SqliteExecutionCache(str(artifact_root / "on" / "meta" / "artifacts.sqlite")),
+		graph_id="graph-model-hardening-debug-on",
+	)
+
+	debug_logs_off = [
+		evt
+		for evt in events_off
+		if str(evt.get("type") or "") == "log"
+		and "LLM debug input excerpt" in str(evt.get("message") or "")
+	]
+	debug_logs_on = [
+		evt
+		for evt in events_on
+		if str(evt.get("type") or "") == "log"
+		and "LLM debug input excerpt" in str(evt.get("message") or "")
+	]
+	assert debug_logs_off == []
+	assert debug_logs_on

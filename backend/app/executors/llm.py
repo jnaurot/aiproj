@@ -21,8 +21,6 @@ from ..services.runtime_env import get_env
 
 logger = logging.getLogger(__name__)
 
-# print("[exec_llm] has bus?", hasattr(context, "bus"), type(context.bus))
-
 
 _MODEL_PROVIDER_SEMAPHORES: Dict[str, asyncio.Semaphore] = {}
 _MODEL_PROVIDER_CAPS: Dict[str, int] = {}
