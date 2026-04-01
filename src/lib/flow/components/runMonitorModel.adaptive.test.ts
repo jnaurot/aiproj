@@ -40,6 +40,8 @@ describe('runMonitorModel adaptive decision rows', () => {
 		expect(['low', 'medium', 'high']).toContain(rows[0]?.explanation?.severity);
 		expect(rows[0]?.changedCaps?.global).toEqual({ from: 4, to: 3 });
 		expect(rows[1]?.mode).toBe('observe');
+		expect(rows[0]?.diffFromPrevious?.modeChanged).toBe(true);
+		expect(rows[0]?.diffFromPrevious?.scoreDelta).not.toBe(0);
 	});
 
 	it('scores pressure + enforced decisions higher than low-signal observe events', () => {
@@ -70,5 +72,7 @@ describe('runMonitorModel adaptive decision rows', () => {
 		expect(spark).not.toBeNull();
 		expect(String(spark?.path ?? '')).toContain('M ');
 		expect(Number(spark?.pointsCount ?? 0)).toBe(3);
+		expect((spark?.points ?? []).length).toBe(3);
+		expect(Number(spark?.baselines?.firstValueY ?? 0)).toBeGreaterThanOrEqual(0);
 	});
 });

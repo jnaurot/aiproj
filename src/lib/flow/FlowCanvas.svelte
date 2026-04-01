@@ -369,6 +369,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendNodeId = '';
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
 	let runMonitorTrendSparkline: RunMonitorTrendSparkline | null = null;
+	let runMonitorTrendHoverIndex = -1;
+	let runMonitorTrendHoverPoint:
+		| { x: number; y: number; value: number; createdAt: string }
+		| null = null;
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
@@ -759,6 +763,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		})),
 		{ width: 520, height: 88 }
 	);
+	$: runMonitorTrendHoverPoint =
+		runMonitorTrendSparkline &&
+		runMonitorTrendHoverIndex >= 0 &&
+		runMonitorTrendHoverIndex < runMonitorTrendSparkline.points.length
+			? runMonitorTrendSparkline.points[runMonitorTrendHoverIndex]
+			: null;
 	$: if (!runMonitorRegressionPair.runId || !runMonitorRegressionPair.baselineRunId) {
 		runMonitorRegressionAlerts = [];
 		runMonitorRegressionError = null;
@@ -1931,6 +1941,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return 'adaptiveSeverity adaptiveSeverity-low';
 	}
 
+	function onTrendSparklineMove(event: PointerEvent): void {
+		if (!runMonitorTrendSparkline || runMonitorTrendSparkline.points.length === 0) {
+			runMonitorTrendHoverIndex = -1;
+			return;
+		}
+		const target = event.currentTarget as SVGSVGElement | null;
+		if (!target) return;
+		const rect = target.getBoundingClientRect();
+		if (rect.width <= 0) return;
+		const px = Math.max(0, Math.min(rect.width, Number(event.clientX || 0) - rect.left));
+		const normalizedX = (px / rect.width) * runMonitorTrendSparkline.width;
+		let bestIndex = 0;
+		let bestDistance = Number.POSITIVE_INFINITY;
+		for (let index = 0; index < runMonitorTrendSparkline.points.length; index += 1) {
+			const distance = Math.abs(runMonitorTrendSparkline.points[index].x - normalizedX);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestIndex = index;
+			}
+		}
+		runMonitorTrendHoverIndex = bestIndex;
+	}
+
 	async function refreshRunMonitorRegressions(
 		runId?: string | null,
 		baselineRunId?: string | null
@@ -2000,6 +2033,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				})
 			]);
 			runMonitorTrendPoints = Array.isArray(trendRes.points) ? trendRes.points.slice(-20) : [];
+			runMonitorTrendHoverIndex = -1;
 			runMonitorSlaBreaches = Array.isArray(slaRes.breaches) ? slaRes.breaches.slice(0, 20) : [];
 			runMonitorFailureTaxonomy = Array.isArray(failureRes.taxonomy)
 				? failureRes.taxonomy.slice(0, 20)
@@ -4486,11 +4520,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</div>
 									</div>
 									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">
-										<div class="runMonitorNodeHead" role="row">
+										<div class="runMonitorNodeHead runMonitorAdaptiveTimelineHead" role="row">
 											<span>time</span>
 											<span>mode</span>
 											<span>score</span>
 											<span>changed</span>
+											<span>diff</span>
 											<span>effective caps</span>
 											<span>reasons</span>
 										</div>
@@ -4500,7 +4535,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{#each runMonitorAdaptiveDecisionRows.slice(0, 20) as row (`${row.at}:${row.runId}`)}
 												<button
 													type="button"
-													class="runMonitorNodeRow"
+													class="runMonitorNodeRow runMonitorAdaptiveTimelineRow"
 													role="row"
 													on:click={() =>
 														(runMonitorAdaptiveDecisionSelectedKey = `${row.at}:${row.runId}`)}
@@ -4520,6 +4555,25 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															{Object.entries(row.changedCaps)
 																.map(([key, delta]) => `${key}:${delta.from}->${delta.to}`)
 																.join(' | ')}
+														{/if}
+													</span>
+													<span>
+														{#if row.diffFromPrevious}
+															{row.diffFromPrevious.scoreDelta >= 0 ? '+' : ''}{row.diffFromPrevious.scoreDelta}
+															{#if row.diffFromPrevious.modeChanged}
+																| mode
+															{/if}
+															{#if Object.keys(row.diffFromPrevious.capDelta).length > 0}
+																| caps={Object.keys(row.diffFromPrevious.capDelta).length}
+															{/if}
+															{#if row.diffFromPrevious.reasonsAdded.length > 0}
+																| +r={row.diffFromPrevious.reasonsAdded.length}
+															{/if}
+															{#if row.diffFromPrevious.reasonsRemoved.length > 0}
+																| -r={row.diffFromPrevious.reasonsRemoved.length}
+															{/if}
+														{:else}
+															-
 														{/if}
 													</span>
 													<span class="mono">
@@ -4693,14 +4747,51 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														class="runMonitorSparkline"
 														viewBox={`0 0 ${runMonitorTrendSparkline.width} ${runMonitorTrendSparkline.height}`}
 														preserveAspectRatio="none"
+														role="img"
 														aria-label="Node metric trend sparkline"
+														on:pointermove={onTrendSparklineMove}
+														on:pointerleave={() => (runMonitorTrendHoverIndex = -1)}
 													>
 														<polyline
 															points={`0,${runMonitorTrendSparkline.height} ${runMonitorTrendSparkline.width},${runMonitorTrendSparkline.height}`}
 															class="runMonitorSparklineBase"
 														/>
+														<line
+															x1="0"
+															y1={runMonitorTrendSparkline.baselines.firstValueY}
+															x2={runMonitorTrendSparkline.width}
+															y2={runMonitorTrendSparkline.baselines.firstValueY}
+															class="runMonitorSparklineBaseline runMonitorSparklineBaseline-first"
+														/>
+														<line
+															x1="0"
+															y1={runMonitorTrendSparkline.baselines.meanValueY}
+															x2={runMonitorTrendSparkline.width}
+															y2={runMonitorTrendSparkline.baselines.meanValueY}
+															class="runMonitorSparklineBaseline runMonitorSparklineBaseline-mean"
+														/>
 														<path d={runMonitorTrendSparkline.path} class="runMonitorSparklinePath"></path>
+														{#if runMonitorTrendHoverPoint}
+															<line
+																x1={runMonitorTrendHoverPoint.x}
+																y1="0"
+																x2={runMonitorTrendHoverPoint.x}
+																y2={runMonitorTrendSparkline.height}
+																class="runMonitorSparklineHoverGuide"
+															/>
+															<circle
+																cx={runMonitorTrendHoverPoint.x}
+																cy={runMonitorTrendHoverPoint.y}
+																r="3.5"
+																class="runMonitorSparklineHoverPoint"
+															/>
+														{/if}
 													</svg>
+													{#if runMonitorTrendHoverPoint}
+														<div class="runMonitorSparklineTooltip mono">
+															{runMonitorTrendHoverPoint.createdAt || '-'} | value={runMonitorTrendHoverPoint.value.toFixed(1)}
+														</div>
+													{/if}
 													<div class="runMonitorSparklineFoot mono">
 														min={runMonitorTrendSparkline.minValue.toFixed(1)} | max={runMonitorTrendSparkline.maxValue.toFixed(1)} | points={runMonitorTrendSparkline.pointsCount}
 													</div>
@@ -5712,6 +5803,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		grid-template-columns: 1.05fr 0.7fr 1fr 1fr 0.5fr 0.6fr;
 	}
 
+	.runMonitorAdaptiveTimelineHead,
+	.runMonitorAdaptiveTimelineRow {
+		grid-template-columns: 1.2fr 0.9fr 0.55fr 1.25fr 1.15fr 1.2fr 1.4fr;
+	}
+
 	.runMonitorNodeHead {
 		opacity: 1;
 		text-transform: lowercase;
@@ -5800,10 +5896,41 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		stroke-width: 1;
 	}
 
+	.runMonitorSparklineBaseline {
+		stroke-width: 1.1;
+		stroke-dasharray: 4 3;
+	}
+
+	.runMonitorSparklineBaseline-first {
+		stroke: rgba(107, 209, 150, 0.85);
+	}
+
+	.runMonitorSparklineBaseline-mean {
+		stroke: rgba(245, 210, 120, 0.85);
+	}
+
 	.runMonitorSparklinePath {
 		fill: none;
 		stroke: #63a0ff;
 		stroke-width: 2;
+	}
+
+	.runMonitorSparklineHoverGuide {
+		stroke: rgba(190, 218, 255, 0.85);
+		stroke-width: 1;
+		stroke-dasharray: 2 3;
+	}
+
+	.runMonitorSparklineHoverPoint {
+		fill: #9dcbff;
+		stroke: #0b1323;
+		stroke-width: 1.1;
+	}
+
+	.runMonitorSparklineTooltip {
+		font-size: 11px;
+		opacity: 0.9;
+		color: var(--color-control-text, #dbe7ff);
 	}
 
 	.runMonitorSparklineFoot {

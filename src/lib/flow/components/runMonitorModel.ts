@@ -90,12 +90,29 @@ export type RunMonitorAdaptiveDecisionRow = {
 		severity: 'low' | 'medium' | 'high';
 		signals: string[];
 	};
+	diffFromPrevious?: {
+		modeChanged: boolean;
+		scoreDelta: number;
+		capDelta: Record<string, { from: number; to: number }>;
+		reasonsAdded: string[];
+		reasonsRemoved: string[];
+	};
 };
 
 export type RunMonitorTrendSparkline = {
 	path: string;
 	width: number;
 	height: number;
+	points: Array<{
+		x: number;
+		y: number;
+		value: number;
+		createdAt: string;
+	}>;
+	baselines: {
+		firstValueY: number;
+		meanValueY: number;
+	};
 	minValue: number;
 	maxValue: number;
 	lastValue: number;
@@ -366,7 +383,7 @@ export function buildRunMonitorAdaptiveDecisionRows(
 		}
 		return out;
 	};
-	return rows
+	const projected = rows
 		.map((raw) => {
 			const row = asRecord(raw);
 			const inputs =
@@ -402,6 +419,32 @@ export function buildRunMonitorAdaptiveDecisionRows(
 		})
 		.filter((row) => row.runId.length > 0)
 		.sort((a, b) => b.at.localeCompare(a.at));
+	for (let index = 0; index < projected.length; index += 1) {
+		const current = projected[index];
+		const previous = projected[index + 1];
+		if (!previous) continue;
+		const capDelta: Record<string, { from: number; to: number }> = {};
+		for (const key of Array.from(
+			new Set([...Object.keys(current.effectiveCaps), ...Object.keys(previous.effectiveCaps)])
+		)) {
+			const from = Number(previous.effectiveCaps[key] ?? NaN);
+			const to = Number(current.effectiveCaps[key] ?? NaN);
+			if (!Number.isFinite(from) || !Number.isFinite(to) || from === to) continue;
+			capDelta[key] = { from, to };
+		}
+		const prevReasons = new Set(previous.reasons.map((reason) => reason.toLowerCase()));
+		const currentReasons = new Set(current.reasons.map((reason) => reason.toLowerCase()));
+		const reasonsAdded = Array.from(currentReasons).filter((reason) => !prevReasons.has(reason));
+		const reasonsRemoved = Array.from(prevReasons).filter((reason) => !currentReasons.has(reason));
+		current.diffFromPrevious = {
+			modeChanged: String(current.mode ?? '') !== String(previous.mode ?? ''),
+			scoreDelta: Number(current.explanation.score ?? 0) - Number(previous.explanation.score ?? 0),
+			capDelta,
+			reasonsAdded,
+			reasonsRemoved
+		};
+	}
+	return projected;
 }
 
 export function explainAdaptiveDecision(input: {
@@ -498,17 +541,29 @@ export function buildTrendSparkline(
 		const ratio = (value - minValue) / range;
 		return height - ratio * height;
 	};
-	const path = normalized
-		.map((point, index) => `${index === 0 ? 'M' : 'L'} ${(index * stepX).toFixed(2)} ${toY(point.value).toFixed(2)}`)
+	const projectedPoints = normalized.map((point, index) => ({
+		x: Number((index * stepX).toFixed(2)),
+		y: Number(toY(point.value).toFixed(2)),
+		value: point.value,
+		createdAt: point.createdAt
+	}));
+	const path = projectedPoints
+		.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
 		.join(' ');
 	const firstValue = normalized[0].value;
 	const lastValue = normalized[normalized.length - 1].value;
+	const meanValue = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 	const deltaValue = lastValue - firstValue;
 	const deltaPct = firstValue === 0 ? null : (deltaValue / firstValue) * 100.0;
 	return {
 		path,
 		width,
 		height,
+		points: projectedPoints,
+		baselines: {
+			firstValueY: Number(toY(firstValue).toFixed(2)),
+			meanValueY: Number(toY(meanValue).toFixed(2))
+		},
 		minValue,
 		maxValue,
 		lastValue,
