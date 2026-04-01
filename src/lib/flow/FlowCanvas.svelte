@@ -368,6 +368,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		byMode: {},
 		bySeverity: { low: 0, medium: 0, high: 0 }
 	};
+	let runMonitorAdaptiveSparklineRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveSparkline: RunMonitorTrendSparkline | null = null;
 	let runMonitorAdaptiveHoverIndex = -1;
 	let runMonitorAdaptiveHoverPoint:
@@ -826,15 +827,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorAdaptiveDecisionSummary = summarizeAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows
 	);
+	$: runMonitorAdaptiveSparklineRows = runMonitorAdaptiveRowsVisible.slice(0, 60).slice().reverse();
 	$: runMonitorAdaptiveSparkline = buildTrendSparkline(
-		runMonitorAdaptiveRowsVisible
-			.slice(0, 60)
-			.slice()
-			.reverse()
-			.map((row) => ({
-				createdAt: String(row.at ?? ''),
-				value: Number(row.explanation.score ?? NaN)
-			})),
+		runMonitorAdaptiveSparklineRows.map((row) => ({
+			createdAt: String(row.at ?? ''),
+			value: Number(row.explanation.score ?? NaN)
+		})),
 		{ width: 520, height: 72 }
 	);
 	$: runMonitorAdaptiveHoverPoint =
@@ -2332,6 +2330,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			}
 		}
 		runMonitorAdaptiveHoverIndex = bestIndex;
+	}
+
+	function focusAdaptiveSparklineHoverPoint(): void {
+		const index = Number(runMonitorAdaptiveHoverIndex ?? -1);
+		if (index < 0 || index >= runMonitorAdaptiveSparklineRows.length) return;
+		const row = runMonitorAdaptiveSparklineRows[index];
+		if (!row) return;
+		selectAdaptiveDecisionDrilldown(row);
 	}
 
 	async function refreshRunMonitorRegressions(
@@ -5139,6 +5145,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<div class="runMonitorSparklineTooltip mono">
 														{runMonitorAdaptiveHoverPoint.createdAt || '-'} | score={runMonitorAdaptiveHoverPoint.value.toFixed(1)}
 													</div>
+													<button
+														type="button"
+														class="tabBtn"
+														on:click={focusAdaptiveSparklineHoverPoint}
+														title="Focus the hovered adaptive decision point"
+													>
+														Focus point
+													</button>
 												{/if}
 												<div class="runMonitorSparklineFoot mono">
 													min={runMonitorAdaptiveSparkline.minValue.toFixed(1)}
