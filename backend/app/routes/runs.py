@@ -351,6 +351,44 @@ class ResolveSourceRequest(BaseModel):
     params: Optional[Dict[str, Any]] = None
 
 
+def _resolve_source_config_error(source_kind: str, params: Dict[str, Any]) -> Optional[str]:
+    sk = str(source_kind or "").strip().lower()
+    p = dict(params or {})
+    if sk == "api":
+        if not str(p.get("url") or "").strip():
+            return "api.url is required"
+        return None
+    if sk == "database":
+        has_conn = bool(str(p.get("connection_ref") or p.get("connection_string") or "").strip())
+        has_query = bool(str(p.get("query") or p.get("table_name") or "").strip())
+        if not has_conn:
+            return "database connection_ref or connection_string is required"
+        if not has_query:
+            return "database query or table_name is required"
+        return None
+    if sk == "warehouse":
+        has_conn = bool(str(p.get("connection_ref") or p.get("connection_string") or "").strip())
+        has_query = bool(str(p.get("query") or "").strip())
+        if not has_conn:
+            return "warehouse connection_ref or connection_string is required"
+        if not has_query:
+            return "warehouse query is required"
+        return None
+    if sk == "object_store":
+        if not str(p.get("bucket") or "").strip():
+            return "object_store bucket is required"
+        if not str(p.get("key") or "").strip():
+            return "object_store key is required"
+        return None
+    if sk == "file":
+        has_snapshot = bool(str(p.get("snapshot_id") or p.get("snapshotId") or "").strip())
+        has_path = bool(str(p.get("filename") or p.get("file_path") or "").strip())
+        if not has_snapshot and not has_path:
+            return "file source requires snapshotId/snapshot_id or filename/file_path"
+        return None
+    return f"unsupported sourceKind '{source_kind}'"
+
+
 class DbSchemaRequest(BaseModel):
     connectionRef: str
 
@@ -688,18 +726,29 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
 
     kind = str(((target.get("data") or {}).get("kind")) or "")
     source_kind = str(((target.get("data") or {}).get("sourceKind")) or "file")
-    if kind != "source" or source_kind != "file":
-        raise HTTPException(400, "resolve/source supports source:file nodes only")
+    if kind != "source":
+        raise HTTPException(400, detail={"errorCode": "SOURCE_RESOLVE_INVALID_NODE", "message": "resolve/source requires a source node"})
 
     params_raw = dict(((target.get("data") or {}).get("params")) or {})
     if isinstance(req.params, dict):
         params_raw.update(req.params)
+    params_raw["source_type"] = source_kind
 
     normalized = _normalized_params_for_exec_key(
         kind="source",
         node=target,
         params=params_raw,
     )
+    resolve_config_error = _resolve_source_config_error(source_kind, normalized)
+    if resolve_config_error:
+        raise HTTPException(
+            400,
+            detail={
+                "errorCode": "SOURCE_RESOLVE_CONFIG_INVALID",
+                "message": resolve_config_error,
+                "sourceKind": source_kind,
+            },
+        )
     source_cache_enabled = bool(normalized.get("cache_enabled", True))
     runtime_cache_mode = (
         request.app.state.runtime.get_global_cache_mode()
@@ -744,10 +793,11 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
             }
 
     print(
-        "[resolve-source] graphId=%s nodeId=%s snapshotId=%s global_cache_mode=%s cache_enabled=%s exec_key=%s artifact=%s"
+        "[resolve-source] graphId=%s nodeId=%s sourceKind=%s snapshotId=%s global_cache_mode=%s cache_enabled=%s exec_key=%s artifact=%s"
         % (
             graph_id,
             str(req.nodeId),
+            source_kind,
             str(normalized.get("snapshot_id") or ""),
             str(runtime_cache_mode),
             str(source_cache_enabled).lower(),
@@ -758,11 +808,16 @@ async def resolve_source_node(req: ResolveSourceRequest, request: Request):
     return {
         "graphId": graph_id,
         "nodeId": str(req.nodeId),
+        "sourceKind": source_kind,
         "execKey": exec_key,
         "artifactId": artifact_id,
         "cacheHit": bool(artifact_id),
         "artifact": artifact_meta,
         "snapshotId": normalized.get("snapshot_id"),
+        "resolutionMeta": {
+            "runtimeCacheMode": str(runtime_cache_mode),
+            "sourceCacheEnabled": bool(source_cache_enabled),
+        },
     }
 
 
