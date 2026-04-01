@@ -2020,6 +2020,8 @@ def _contract_details(
     missing_columns: Optional[list[str]] = None,
     expected: Optional[Dict[str, Any]] = None,
     actual: Optional[Dict[str, Any]] = None,
+    op: Optional[str] = None,
+    param_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     # Canonical, stable shape for deterministic errors/tests.
     details: Dict[str, Any] = {
@@ -2027,6 +2029,10 @@ def _contract_details(
         "expected": expected or {},
         "actual": actual or {},
     }
+    if str(op or "").strip():
+        details["op"] = str(op).strip()
+    if str(param_path or "").strip():
+        details["paramPath"] = str(param_path).strip()
     return details
 
 
@@ -6013,6 +6019,8 @@ async def run_graph(
                                     "Transform expression invalid: derive expression rejected by engine",
                                     code="EXPR_INVALID",
                                     details=_contract_details(
+                                        op="derive",
+                                        param_path="params.derive.columns",
                                         expected={"op": "derive", "engine": "duckdb"},
                                         actual={"engineError": str(transform_ex)[:500]},
                                     ),
