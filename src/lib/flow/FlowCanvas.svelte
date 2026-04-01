@@ -418,6 +418,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSectionCollapsed = false;
 	let runMonitorShowHistory = false;
 	let runMonitorAdaptiveModeOverride: 'default' | 'off' | 'observe' | 'enforce' = 'default';
+	let runMonitorAdaptiveEnvMode: 'off' | 'observe' | 'enforce' = 'off';
+	let runMonitorAdaptiveEffectiveMode: 'off' | 'observe' | 'enforce' = 'off';
 	let runMonitorRegressionAlerts: RegressionAlert[] = [];
 	let runMonitorRegressionLoading = false;
 	let runMonitorRegressionError: string | null = null;
@@ -573,6 +575,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			String(row.description ?? '').toLowerCase().includes(q)
 		);
 	});
+	$: {
+		const envModeRaw = String(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'RUNNER_ADAPTIVE_MODE')?.value ??
+				'off'
+		)
+			.trim()
+			.toLowerCase();
+		if (envModeRaw === 'observe' || envModeRaw === 'enforce') {
+			runMonitorAdaptiveEnvMode = envModeRaw;
+		} else {
+			runMonitorAdaptiveEnvMode = 'off';
+		}
+		runMonitorAdaptiveEffectiveMode =
+			runMonitorAdaptiveModeOverride === 'default'
+				? runMonitorAdaptiveEnvMode
+				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
+	}
 	$: {
 		const gid = String($graphStore.graphId ?? '').trim() || 'default';
 		if (gid !== runMonitorPrefsGraphId) {
@@ -5007,6 +5026,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									</div>
 									<div class="envPanelSummary">
 										adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
+										| env={runMonitorAdaptiveEnvMode}
+										| effective={runMonitorAdaptiveEffectiveMode}
 										{#if runMonitorAdaptiveDecisionRows.length > 0}
 											| last decision mode={runMonitorAdaptiveDecisionRows[0]?.mode ?? '-'}{runMonitorAdaptiveDecisionRows[0]?.enforced ? ' (enforced)' : ''}
 										{/if}
