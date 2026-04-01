@@ -279,6 +279,21 @@ export type KnownRunEvent =
       at: string;
       nodeId: string;
       reasonCode?: string;
+    }
+  | {
+      type: "scheduler_adaptive_decision";
+      schema_version?: number;
+      runId: string;
+      at: string;
+      mode: "off" | "observe" | "enforce" | string;
+      enforced?: boolean;
+      inputs?: Record<string, unknown>;
+      reasons?: string[];
+      hardCaps?: Record<string, number>;
+      minCaps?: Record<string, number>;
+      proposedCaps?: Record<string, number>;
+      effectiveCaps?: Record<string, number>;
+      changedCaps?: Record<string, { from: number; to: number }>;
     };
 
 export type UnknownRunEvent = { type: string;[key: string]: unknown };

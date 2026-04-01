@@ -36,6 +36,11 @@ from .execution_contract import (
     EXECUTION_CONTRACT_VERSION,
     validate_execution_contract,
 )
+from .adaptive_scheduler import (
+    AdaptiveInputs,
+    apply_adaptive_policy,
+    normalize_mode as normalize_adaptive_mode,
+)
 from .contracts import (
     TABLE_V1,
     canonical_table_columns,
@@ -2659,6 +2664,17 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    raw = str(get_env(name, "") or "").strip()
+    if not raw:
+        return max(float(minimum), float(default))
+    try:
+        val = float(raw)
+    except Exception:
+        return max(float(minimum), float(default))
+    return max(float(minimum), float(val))
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -3265,6 +3281,32 @@ async def run_graph(
     max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
+    adaptive_mode = normalize_adaptive_mode(get_env("RUNNER_ADAPTIVE_MODE", "off"))
+    adaptive_eval_interval_ms = _env_int("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", 500, minimum=100)
+    adaptive_cooldown_ms = _env_int("RUNNER_ADAPTIVE_COOLDOWN_MS", 1000, minimum=0)
+    adaptive_hard_caps = {
+        "global": int(max_inflight),
+        "source": int(max_source),
+        "transform": int(max_transform),
+        "model": int(max_model),
+        "tool": int(max_tool),
+    }
+    adaptive_min_caps = {
+        "global": _env_int("RUNNER_ADAPTIVE_MIN_GLOBAL", 1, minimum=1),
+        "source": _env_int("RUNNER_ADAPTIVE_MIN_SOURCE", 1, minimum=1),
+        "transform": _env_int("RUNNER_ADAPTIVE_MIN_TRANSFORM", 1, minimum=1),
+        "model": _env_int("RUNNER_ADAPTIVE_MIN_MODEL", 1, minimum=1),
+        "tool": _env_int("RUNNER_ADAPTIVE_MIN_TOOL", 1, minimum=1),
+    }
+    adaptive_config = {
+        "queue_high": _env_int("RUNNER_ADAPTIVE_QUEUE_HIGH", 32, minimum=1),
+        "queue_low": _env_int("RUNNER_ADAPTIVE_QUEUE_LOW", 4, minimum=0),
+        "latency_high_ms": _env_float("RUNNER_ADAPTIVE_LATENCY_HIGH_MS", 1200.0, minimum=1.0),
+        "failure_high": _env_float("RUNNER_ADAPTIVE_FAILURE_HIGH", 0.25, minimum=0.0),
+        "lease_wait_high_ms": _env_float("RUNNER_ADAPTIVE_LEASE_WAIT_HIGH_MS", 800.0, minimum=0.0),
+        "step_down": _env_int("RUNNER_ADAPTIVE_STEP_DOWN", 1, minimum=1),
+        "step_up": _env_int("RUNNER_ADAPTIVE_STEP_UP", 1, minimum=1),
+    }
     node_retry_max_attempts = _env_int_allow_zero("RUNNER_NODE_MAX_RETRIES", 0)
     node_retry_backoff_ms = _env_int_allow_zero("RUNNER_NODE_RETRY_BACKOFF_MS", 0)
     reproducibility_metadata = {
@@ -3285,6 +3327,14 @@ async def run_graph(
                 "model": int(max_model),
                 "llm": int(max_llm),
                 "tool": int(max_tool),
+            },
+            "adaptiveScheduling": {
+                "mode": str(adaptive_mode),
+                "evalIntervalMs": int(adaptive_eval_interval_ms),
+                "cooldownMs": int(adaptive_cooldown_ms),
+                "hardCaps": dict(adaptive_hard_caps),
+                "minCaps": dict(adaptive_min_caps),
+                "policy": dict(adaptive_config),
             },
             "retryPolicy": {
                 "maxAttempts": int(node_retry_max_attempts),
@@ -7835,6 +7885,10 @@ async def run_graph(
         completed_count = 0
         run_failed = False
         total_soft_failed = 0
+        adaptive_caps_current: Dict[str, int] = dict(adaptive_hard_caps)
+        adaptive_caps_enforced: Dict[str, int] = dict(adaptive_hard_caps)
+        adaptive_last_eval_t = 0.0
+        adaptive_last_apply_t = 0.0
         pause_requested = False
         run_pausing_emitted = False
         run_pause_requested_emitted = False
@@ -7849,6 +7903,57 @@ async def run_graph(
         warning_counters: Dict[str, Dict[str, Any]] = {}
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
         control_gate_state_by_node: Dict[str, Dict[str, Any]] = {}
+
+        def _kind_cap_key(raw_kind: Any) -> str:
+            kind_value = str(raw_kind or "").strip().lower()
+            if kind_value in {"source", "transform", "tool"}:
+                return kind_value
+            if kind_value in {"llm", "model"}:
+                return "model"
+            return "global"
+
+        def _inflight_counts_by_cap_key() -> Dict[str, int]:
+            counts = {"global": 0, "source": 0, "transform": 0, "model": 0, "tool": 0}
+            for meta in inflight.values():
+                if not isinstance(meta, dict):
+                    continue
+                node_id = str(meta.get("nodeId") or "").strip()
+                if not node_id:
+                    continue
+                node_obj = nodes.get(node_id) if isinstance(nodes.get(node_id), dict) else {}
+                node_kind = (node_obj.get("data") or {}).get("kind") if isinstance(node_obj, dict) else ""
+                cap_key = _kind_cap_key(node_kind)
+                counts["global"] += 1
+                counts[cap_key] = int(counts.get(cap_key, 0)) + 1
+            return counts
+
+        def _avg_runtime_latency_ms() -> float:
+            values: List[float] = []
+            for metric in node_runtime_metrics.values():
+                if not isinstance(metric, dict):
+                    continue
+                value = metric.get("runTimeMs")
+                if isinstance(value, (int, float)):
+                    values.append(float(value))
+            if not values:
+                return 0.0
+            return float(sum(values) / max(1, len(values)))
+
+        def _avg_model_wait_ms() -> float:
+            values: List[float] = []
+            for node_id, metric in node_runtime_metrics.items():
+                if not isinstance(metric, dict):
+                    continue
+                node_obj = nodes.get(str(node_id)) if isinstance(nodes.get(str(node_id)), dict) else {}
+                node_kind = (node_obj.get("data") or {}).get("kind") if isinstance(node_obj, dict) else ""
+                if _kind_cap_key(node_kind) != "model":
+                    continue
+                value = metric.get("inputWaitMs")
+                if isinstance(value, (int, float)):
+                    values.append(float(value))
+            if not values:
+                return 0.0
+            return float(sum(values) / max(1, len(values)))
         try:
             node_resumability_by_id: Dict[str, str] = {
                 str(nid): _node_resumability_class(nodes.get(str(nid), {})) for nid in sub
@@ -8894,7 +8999,76 @@ async def run_graph(
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "ready"})
         await _emit_scheduler_snapshot(stalled=False)
 
+        async def _evaluate_adaptive_caps() -> None:
+            nonlocal adaptive_last_eval_t, adaptive_last_apply_t, adaptive_caps_current, adaptive_caps_enforced
+            if adaptive_mode == "off":
+                adaptive_caps_current = dict(adaptive_hard_caps)
+                adaptive_caps_enforced = dict(adaptive_hard_caps)
+                return
+            now = asyncio.get_running_loop().time()
+            interval_s = max(0.1, float(adaptive_eval_interval_ms) / 1000.0)
+            cooldown_s = max(0.0, float(adaptive_cooldown_ms) / 1000.0)
+            if (now - adaptive_last_eval_t) < interval_s:
+                return
+            adaptive_last_eval_t = now
+            queue_depth = int(queue_registry.metrics().get("depth") or 0)
+            completed_total = int(total_succeeded + total_failed + total_soft_failed)
+            failure_rate = float(total_failed + total_soft_failed) / float(max(1, completed_total))
+            decision = apply_adaptive_policy(
+                current_caps=adaptive_caps_current,
+                hard_caps=adaptive_hard_caps,
+                min_caps=adaptive_min_caps,
+                inputs=AdaptiveInputs(
+                    queue_depth=queue_depth,
+                    ready_count=len(ready),
+                    avg_latency_ms=_avg_runtime_latency_ms(),
+                    failure_rate=failure_rate,
+                    lease_wait_ms=_avg_model_wait_ms(),
+                ),
+                config=adaptive_config,
+            )
+            adaptive_caps_current = dict(decision.get("nextCaps") or adaptive_caps_current)
+            if adaptive_mode == "observe":
+                adaptive_caps_enforced = dict(adaptive_hard_caps)
+            else:
+                if (now - adaptive_last_apply_t) >= cooldown_s:
+                    adaptive_caps_enforced = dict(adaptive_caps_current)
+                    adaptive_last_apply_t = now
+            changed_caps = decision.get("changedCaps") if isinstance(decision.get("changedCaps"), dict) else {}
+            if not changed_caps:
+                return
+            await _emit(
+                {
+                    "type": "scheduler_adaptive_decision",
+                    "schema_version": 1,
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "mode": str(adaptive_mode),
+                    "enforced": bool(adaptive_mode == "enforce"),
+                    "inputs": dict(decision.get("inputs") or {}),
+                    "reasons": list(decision.get("reasons") or []),
+                    "hardCaps": dict(adaptive_hard_caps),
+                    "minCaps": dict(adaptive_min_caps),
+                    "proposedCaps": dict(adaptive_caps_current),
+                    "effectiveCaps": dict(adaptive_caps_enforced),
+                    "changedCaps": changed_caps,
+                }
+            )
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": (
+                        f"[adaptive] mode={adaptive_mode} changed={','.join(sorted(changed_caps.keys()))} "
+                        f"effective_caps={adaptive_caps_enforced}"
+                    ),
+                }
+            )
+
         while True:
+            await _evaluate_adaptive_caps()
             if pause_event and pause_event.is_set():
                 pause_requested = True
                 if not run_pause_requested_emitted:
@@ -9040,9 +9214,32 @@ async def run_graph(
                 await _emit_cache_summary_once()
                 return
 
-            while (not pause_requested) and ready and len(inflight) < max_inflight:
+            dispatch_budget = len(ready)
+            while (not pause_requested) and ready and len(inflight) < int(adaptive_caps_enforced.get("global", max_inflight)):
+                if dispatch_budget <= 0:
+                    break
+                dispatch_budget -= 1
                 nid = ready.pop(0)
                 if nid in blocked_descendants:
+                    continue
+                node_obj = nodes.get(nid) if isinstance(nodes.get(nid), dict) else {}
+                node_kind = (node_obj.get("data") or {}).get("kind") if isinstance(node_obj, dict) else ""
+                cap_key = _kind_cap_key(node_kind)
+                kind_inflight = int(_inflight_counts_by_cap_key().get(cap_key, 0))
+                kind_cap = int(adaptive_caps_enforced.get(cap_key, adaptive_hard_caps.get(cap_key, 1)))
+                if kind_inflight >= kind_cap:
+                    ready.append(nid)
+                    await _emit_node_blocked(
+                        nid,
+                        reason_code="MAX_INFLIGHT_REACHED",
+                        details={
+                            "inflight": int(kind_inflight),
+                            "readyCount": ready.count(nid),
+                            "maxInflight": int(kind_cap),
+                            "adaptive": bool(adaptive_mode == "enforce"),
+                            "capKey": str(cap_key),
+                        },
+                    )
                     continue
                 policy = _effective_node_runtime_policy(nid)
                 consume_mode = str(policy.get("consume_mode") or "once")

@@ -39,6 +39,7 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "run_canceled",
     "node_canceled",
     "scheduler_canceled",
+    "scheduler_adaptive_decision",
     "state_transition",
     "state_transition_violation",
     "state_invariant_violation",
