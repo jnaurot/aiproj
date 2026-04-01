@@ -2734,8 +2734,34 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const gateState = String((evt as any)?.state ?? '').trim().toLowerCase() || 'blocked';
 			const reasonCode = String((evt as any)?.reasonCode ?? '').trim();
 			const handle = String((evt as any)?.handle ?? '').trim();
+			const previousGates =
+				(state.queueRuntime && typeof state.queueRuntime === 'object'
+					? ((state.queueRuntime as any).controlGatesByNode ?? {})
+					: {}) ?? {};
+			const gateRecord =
+				nodeId
+					? {
+							nodeId,
+							state: gateState,
+							reasonCode: reasonCode || undefined,
+							handle: handle || undefined,
+							updatedAt: String((evt as any)?.at ?? '')
+						}
+					: undefined;
+			const nextState = gateRecord
+				? {
+						...state,
+						queueRuntime: {
+							...(state.queueRuntime ?? {}),
+							controlGatesByNode: {
+								...previousGates,
+								[nodeId]: gateRecord
+							}
+						}
+					}
+				: state;
 			return logPush(
-				state,
+				nextState,
 				gateState === 'open' ? 'info' : 'warn',
 				`[control-gate] node=${nodeId || '(unknown)'} state=${gateState}${reasonCode ? ` reason=${reasonCode}` : ''}${handle ? ` handle=${handle}` : ''}`,
 				nodeId || undefined
