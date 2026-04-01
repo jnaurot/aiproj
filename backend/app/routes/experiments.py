@@ -692,6 +692,7 @@ async def regression_detection(
 	runId: str = Query(..., min_length=1),
 	baselineRunId: Optional[str] = Query(default=None),
 	alertType: str = Query(default="all"),
+	severity: str = Query(default="all"),
 	sort: str = Query(default="default"),
 	limit: int = Query(default=100, ge=1, le=2000),
 	offset: int = Query(default=0, ge=0),
@@ -701,6 +702,9 @@ async def regression_detection(
 	alert_type = str(alertType or "all").strip().lower()
 	if alert_type not in {"all", "latency", "failure"}:
 		raise HTTPException(400, "alertType must be one of: all, latency, failure")
+	severity_filter = str(severity or "all").strip().lower()
+	if severity_filter not in {"all", "low", "medium", "high"}:
+		raise HTTPException(400, "severity must be one of: all, low, medium, high")
 	sort_mode = str(sort or "default").strip().lower()
 	if sort_mode not in {"default", "impact_desc", "impact_asc"}:
 		raise HTTPException(400, "sort must be one of: default, impact_desc, impact_asc")
@@ -782,6 +786,26 @@ async def regression_detection(
 			return abs(float(row.get("driftPct") or 0.0))
 		return abs(float(row.get("delta") or 0.0))
 
+	def _severity_for_alert(row: Dict[str, Any]) -> str:
+		if str(row.get("type") or "").strip().lower() == "latency_regression":
+			pct = abs(float(row.get("driftPct") or 0.0))
+			if pct >= 75.0:
+				return "high"
+			if pct >= 35.0:
+				return "medium"
+			return "low"
+		delta = abs(float(row.get("delta") or 0.0))
+		if delta >= 5.0:
+			return "high"
+		if delta >= 2.0:
+			return "medium"
+		return "low"
+
+	for row in alerts:
+		row["severity"] = _severity_for_alert(row)
+	if severity_filter != "all":
+		alerts = [row for row in alerts if str(row.get("severity") or "") == severity_filter]
+
 	if sort_mode == "impact_desc":
 		alerts.sort(
 			key=lambda row: (
@@ -812,6 +836,7 @@ async def regression_detection(
 		"runId": str(runId),
 		"baselineRunId": str(baseline.get("runId") or ""),
 		"alertType": alert_type,
+		"severity": severity_filter,
 		"sort": sort_mode,
 		"limit": int(limit),
 		"offset": int(offset),

@@ -142,6 +142,7 @@ export async function getRun(runId: string) {
 export type RegressionAlert = {
 	type: 'latency_regression' | 'failure_regression' | string;
 	reasonCode: string;
+	severity?: 'low' | 'medium' | 'high' | string;
 	nodeId?: string;
 	errorCode?: string;
 	metric?: string;
@@ -234,6 +235,7 @@ export async function getExperimentRegressions(params: {
 	runId: string;
 	baselineRunId?: string | null;
 	alertType?: 'all' | 'latency' | 'failure';
+	severity?: 'all' | 'low' | 'medium' | 'high';
 	sort?: 'default' | 'impact_desc' | 'impact_asc';
 	limit?: number;
 	offset?: number;
@@ -245,6 +247,8 @@ export async function getExperimentRegressions(params: {
 	if (params.baselineRunId) qs.set('baselineRunId', String(params.baselineRunId).trim());
 	if (params.alertType && ['all', 'latency', 'failure'].includes(String(params.alertType)))
 		qs.set('alertType', String(params.alertType));
+	if (params.severity && ['all', 'low', 'medium', 'high'].includes(String(params.severity)))
+		qs.set('severity', String(params.severity));
 	if (params.sort && ['default', 'impact_desc', 'impact_asc'].includes(String(params.sort)))
 		qs.set('sort', String(params.sort));
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Math.max(1, Number(params.limit))));
@@ -263,6 +267,7 @@ export async function getExperimentRegressions(params: {
 		runId: string;
 		baselineRunId: string;
 		alertType?: 'all' | 'latency' | 'failure';
+		severity?: 'all' | 'low' | 'medium' | 'high';
 		sort?: 'default' | 'impact_desc' | 'impact_asc';
 		limit?: number;
 		offset?: number;

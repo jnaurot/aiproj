@@ -432,6 +432,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionBaselineOverride = '';
 	let runMonitorRegressionAutoKey = '';
 	let runMonitorRegressionTypeFilter: 'all' | 'latency' | 'failure' = 'all';
+	let runMonitorRegressionSeverityFilter: 'all' | 'low' | 'medium' | 'high' = 'all';
 	let runMonitorRegressionSort: 'default' | 'impact_desc' | 'impact_asc' = 'default';
 	let runMonitorRegressionSelectedIndex = -1;
 	let selectedRegressionAlert: RegressionAlert | null = null;
@@ -933,7 +934,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			);
 		}
 	}
-	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}|${runMonitorRegressionSort}`;
+	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}|${runMonitorRegressionSeverityFilter}|${runMonitorRegressionSort}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
 		runMonitorRegressionPair.runId &&
@@ -2184,6 +2185,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function regressionSeverity(alert: RegressionAlert): 'low' | 'medium' | 'high' {
+		const explicit = String(alert?.severity ?? '').trim().toLowerCase();
+		if (explicit === 'high' || explicit === 'medium' || explicit === 'low') {
+			return explicit;
+		}
 		const type = String(alert?.type ?? '').trim().toLowerCase();
 		if (type.includes('latency')) {
 			const pct = Math.abs(Number(alert?.driftPct ?? 0));
@@ -2433,6 +2438,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				runId: resolvedRunId,
 				baselineRunId: resolvedBaselineRunId,
 				alertType: runMonitorRegressionTypeFilter,
+				severity: runMonitorRegressionSeverityFilter,
 				sort: runMonitorRegressionSort,
 				limit: 50,
 				offset: 0,
@@ -5456,6 +5462,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												</select>
 											</label>
 											<label class="monitorField">
+												<span>Severity</span>
+												<select bind:value={runMonitorRegressionSeverityFilter}>
+													<option value="all">all</option>
+													<option value="high">high</option>
+													<option value="medium">medium</option>
+													<option value="low">low</option>
+												</select>
+											</label>
+											<label class="monitorField">
 												<span>Sort</span>
 												<select bind:value={runMonitorRegressionSort}>
 													<option value="default">default</option>
@@ -5465,7 +5480,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											</label>
 										</div>
 										<div class="envPanelSummary">
-											run={runMonitorRegressionRunId || runMonitorRegressionPair.runId || '-'} | baseline={runMonitorRegressionBaselineRunId || runMonitorRegressionPair.baselineRunId || '-'} | filter={runMonitorRegressionTypeFilter}
+											run={runMonitorRegressionRunId || runMonitorRegressionPair.runId || '-'} | baseline={runMonitorRegressionBaselineRunId || runMonitorRegressionPair.baselineRunId || '-'} | filter={runMonitorRegressionTypeFilter} | severity={runMonitorRegressionSeverityFilter}
 										</div>
 										<div class="runMonitorNodeHead" role="row">
 											<span>type</span>

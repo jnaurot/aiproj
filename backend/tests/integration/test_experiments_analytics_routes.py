@@ -136,6 +136,7 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		alerts = regressions_body.get("alerts") or []
 		assert any(str(alert.get("reasonCode") or "") == "LATENCY_DRIFT" for alert in alerts)
 		assert any(str(alert.get("reasonCode") or "") == "FAILURE_DRIFT" for alert in alerts)
+		assert all(str(alert.get("severity") or "") in {"low", "medium", "high"} for alert in alerts)
 
 		regressions_sorted = client.get(
 			"/experiments/regressions",
@@ -185,6 +186,21 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		assert failure_alerts
 		assert all(str(alert.get("type") or "") == "failure_regression" for alert in failure_alerts)
 
+		regressions_high_only = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"severity": "high",
+				"latencyDriftPct": 20,
+				"failureDriftAbs": 1,
+			},
+		)
+		assert regressions_high_only.status_code == 200, regressions_high_only.text
+		high_alerts = regressions_high_only.json().get("alerts") or []
+		assert high_alerts
+		assert all(str(alert.get("severity") or "") == "high" for alert in high_alerts)
+
 		regressions_invalid_type = client.get(
 			"/experiments/regressions",
 			params={
@@ -204,6 +220,16 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert regressions_invalid_sort.status_code == 400, regressions_invalid_sort.text
+
+		regressions_invalid_severity = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"severity": "bogus",
+			},
+		)
+		assert regressions_invalid_severity.status_code == 400, regressions_invalid_severity.text
 
 		adaptive_decisions = client.get(
 			"/experiments/adaptive/decisions",
