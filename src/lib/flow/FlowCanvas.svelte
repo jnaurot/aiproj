@@ -382,6 +382,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionRunOverride = '';
 	let runMonitorRegressionBaselineOverride = '';
 	let runMonitorRegressionAutoKey = '';
+	let runMonitorRegressionSelectedIndex = -1;
+	let selectedRegressionAlert: RegressionAlert | null = null;
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
@@ -766,6 +768,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runId: runMonitorRegressionRunOverride,
 		baselineRunId: runMonitorRegressionBaselineOverride
 	});
+	$: selectedRegressionAlert =
+		runMonitorRegressionSelectedIndex >= 0 &&
+		runMonitorRegressionSelectedIndex < runMonitorRegressionAlerts.length
+			? runMonitorRegressionAlerts[runMonitorRegressionSelectedIndex]
+			: null;
 	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
@@ -829,6 +836,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorRegressionError = null;
 		runMonitorRegressionRunId = runMonitorRegressionPair.runId;
 		runMonitorRegressionBaselineRunId = runMonitorRegressionPair.baselineRunId;
+		runMonitorRegressionSelectedIndex = -1;
 	}
 	$: canUndo = Boolean($graphStore) && graphStore.canUndo();
 	$: canRedo = Boolean($graphStore) && graphStore.canRedo();
@@ -2023,7 +2031,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
-	function selectRegressionAlertDrilldown(alert: RegressionAlert): void {
+	function selectRegressionAlertDrilldown(alert: RegressionAlert, index?: number): void {
+		if (Number.isInteger(index) && Number(index) >= 0) {
+			runMonitorRegressionSelectedIndex = Number(index);
+		}
 		const nodeId = String(alert?.nodeId ?? '').trim();
 		if (!nodeId) return;
 		runMonitorTrendNodeId = nodeId;
@@ -2113,12 +2124,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				failureDriftAbs: 1
 			});
 			runMonitorRegressionAlerts = Array.isArray(res.alerts) ? res.alerts : [];
+			if (runMonitorRegressionAlerts.length === 0) {
+				runMonitorRegressionSelectedIndex = -1;
+			} else if (
+				runMonitorRegressionSelectedIndex < 0 ||
+				runMonitorRegressionSelectedIndex >= runMonitorRegressionAlerts.length
+			) {
+				runMonitorRegressionSelectedIndex = 0;
+			}
 			runMonitorRegressionRunId = String(res.runId ?? resolvedRunId).trim();
 			runMonitorRegressionBaselineRunId = String(
 				res.baselineRunId ?? resolvedBaselineRunId
 			).trim();
 		} catch (error) {
 			runMonitorRegressionAlerts = [];
+			runMonitorRegressionSelectedIndex = -1;
 			runMonitorRegressionRunId = resolvedRunId;
 			runMonitorRegressionBaselineRunId = resolvedBaselineRunId;
 			runMonitorRegressionError = String(error ?? 'Failed to load regression alerts');
@@ -4897,9 +4917,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{#each runMonitorRegressionAlerts as alert, index (`${alert.reasonCode}:${alert.nodeId ?? alert.errorCode ?? ''}:${index}`)}
 												<button
 													type="button"
-													class="runMonitorNodeRow"
+													class={`runMonitorNodeRow ${
+														index === runMonitorRegressionSelectedIndex
+															? 'runMonitorNodeRow-highlighted'
+															: ''
+													}`}
 													role="row"
-													on:click={() => selectRegressionAlertDrilldown(alert)}
+													on:click={() => selectRegressionAlertDrilldown(alert, index)}
 													title="Focus alert node"
 												>
 													<span>{alert.reasonCode || alert.type || '-'}</span>
@@ -4917,6 +4941,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													</span>
 												</button>
 											{/each}
+										{/if}
+										{#if selectedRegressionAlert}
+											<div class="envPanelSummary">
+												selected={selectedRegressionAlert.reasonCode || selectedRegressionAlert.type || '-'} | node={selectedRegressionAlert.nodeId || '-'} | metric={selectedRegressionAlert.metric || '-'}
+											</div>
+											<div class="envPanelSummary mono">
+												baseline={Number.isFinite(Number(selectedRegressionAlert.baseline)) ? Number(selectedRegressionAlert.baseline).toFixed(3) : '-'} | current={Number.isFinite(Number(selectedRegressionAlert.current)) ? Number(selectedRegressionAlert.current).toFixed(3) : '-'} | driftPct={Number.isFinite(Number(selectedRegressionAlert.driftPct)) ? Number(selectedRegressionAlert.driftPct).toFixed(3) : '-'} | delta={Number.isFinite(Number(selectedRegressionAlert.delta)) ? Number(selectedRegressionAlert.delta).toFixed(3) : '-'}
+											</div>
+											<div class="envPanelSummary">
+												thresholdPct={Number.isFinite(Number(selectedRegressionAlert.thresholdPct)) ? Number(selectedRegressionAlert.thresholdPct).toFixed(3) : '-'} | thresholdAbs={Number.isFinite(Number(selectedRegressionAlert.thresholdAbs)) ? Number(selectedRegressionAlert.thresholdAbs).toFixed(3) : '-'} | errorCode={selectedRegressionAlert.errorCode || '-'}
+											</div>
 										{/if}
 									</div>
 									<div class="runMonitorHistoryTable" role="table" aria-label="State transition audit trail">
