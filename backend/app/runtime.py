@@ -1967,6 +1967,9 @@ class RuntimeManager:
 
         if t == "run_finished":
             next_status = str(ev.get("status", "failed") or "failed").strip().lower()
+            contract = ev.get("executionContract")
+            if isinstance(contract, dict):
+                handle.execution_contract = dict(contract)
             if self._set_run_status(handle, next_status, reason="event:run_finished"):
                 handle.active_run_planned = set()
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))

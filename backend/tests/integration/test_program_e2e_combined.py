@@ -143,36 +143,16 @@ async def test_e2e_combined_control_adaptive_replay(monkeypatch) -> None:
 	assert isinstance(analytics.get("nodeLatencyMs"), dict)
 	assert isinstance(analytics.get("queueDepthTrend"), list)
 
-	# Ensure replay compares against the same authoritative binding basis captured
-	# in the contract snapshot for this unchanged-run scenario.
-	basis_nodes = ((handle.execution_contract or {}).get("basis") or {}).get("nodes") or {}
-	normalized_bindings: Dict[str, Dict[str, Any]] = {}
-	for node_id, node_basis in basis_nodes.items():
-		if not isinstance(node_basis, dict):
-			continue
-		binding = node_basis.get("binding") if isinstance(node_basis.get("binding"), dict) else {}
-		exec_key = str(binding.get("execKey") or "").strip()
-		artifact_id = str(binding.get("artifactId") or "").strip()
-		if exec_key or artifact_id:
-			normalized_bindings[str(node_id)] = {"currentExecKey": exec_key, "currentArtifactId": artifact_id}
-	if normalized_bindings:
-		handle.node_bindings = normalized_bindings
-
 	replay_result = await rt.request_replay(source_run_id=run_id)
-	if bool(replay_result.get("replayed")):
-		replay_run_id = str(replay_result.get("runId") or "")
-		assert replay_run_id
-		await rt.get_run(replay_run_id).task
-		assert str(rt.get_run(replay_run_id).status or "") == "succeeded"
-		replay_events = await rt.list_run_events(replay_run_id, after_id=0, limit=2000)
-		assert any(str(evt.get("type") or "") == "control_gate_state" for evt in replay_events)
-		replay_experiment = await rt.artifact_store.get_run_experiment(replay_run_id)
-		assert isinstance(replay_experiment, dict)
-		assert str(replay_experiment.get("graphId") or "") == "graph-program-e2e-combined"
-		replay_analytics = replay_experiment.get("analytics") if isinstance(replay_experiment.get("analytics"), dict) else {}
-		assert isinstance(replay_analytics.get("nodeLatencyMs"), dict)
-	else:
-		assert str(replay_result.get("errorCode") or "") == "REPLAY_CONTRACT_VALIDATION_FAILED"
-		details = replay_result.get("details") if isinstance(replay_result.get("details"), dict) else {}
-		assert isinstance(details.get("contractDiff"), dict)
-		assert list(details.get("reasonCodes") or [])
+	assert bool(replay_result.get("replayed")) is True, replay_result
+	replay_run_id = str(replay_result.get("runId") or "")
+	assert replay_run_id
+	await rt.get_run(replay_run_id).task
+	assert str(rt.get_run(replay_run_id).status or "") == "succeeded"
+	replay_events = await rt.list_run_events(replay_run_id, after_id=0, limit=2000)
+	assert any(str(evt.get("type") or "") == "control_gate_state" for evt in replay_events)
+	replay_experiment = await rt.artifact_store.get_run_experiment(replay_run_id)
+	assert isinstance(replay_experiment, dict)
+	assert str(replay_experiment.get("graphId") or "") == "graph-program-e2e-combined"
+	replay_analytics = replay_experiment.get("analytics") if isinstance(replay_experiment.get("analytics"), dict) else {}
+	assert isinstance(replay_analytics.get("nodeLatencyMs"), dict)

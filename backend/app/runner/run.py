@@ -9796,13 +9796,21 @@ async def run_graph(
             ),
         })
         await _emit_cache_summary_once()
+        final_execution_contract = _build_execution_contract(
+            graph=execution_graph,
+            graph_id=graph_id,
+            node_ids=planned_node_ids,
+            node_bindings=authoritative_frontier_bindings,
+            execution_version=str(context.execution_version or ""),
+        )
 
         if run_failed or total_failed > 0:
             await _emit({
                 "type": "run_finished",
                 "runId": run_id,
                 "at": iso_now(),
-                "status": "failed"
+                "status": "failed",
+                "executionContract": final_execution_contract,
             })
             await _emit_cache_summary_once()
             return
@@ -9811,7 +9819,8 @@ async def run_graph(
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "succeeded"
+            "status": "succeeded",
+            "executionContract": final_execution_contract,
         })
         await _emit_cache_summary_once()
     except asyncio.CancelledError:
