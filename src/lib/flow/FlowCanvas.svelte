@@ -2269,6 +2269,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
+	function selectAdaptiveDecisionDrilldown(row: RunMonitorAdaptiveDecisionRow): void {
+		const key = `${row.at}:${row.runId}`;
+		runMonitorAdaptiveDecisionSelectedKey = key;
+		const runId = String(row.runId ?? '').trim();
+		if (runId) runLogFilter = runId;
+	}
+
 	function selectRegressionHistoryPair(index: number): void {
 		const pair = pickRunMonitorRegressionPairFromHistory(runMonitorHistoryRows as any, index);
 		if (!pair.runId || !pair.baselineRunId) return;
@@ -5148,9 +5155,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													type="button"
 													class="runMonitorNodeRow runMonitorAdaptiveTimelineRow"
 													role="row"
-													on:click={() =>
-														(runMonitorAdaptiveDecisionSelectedKey = `${row.at}:${row.runId}`)}
-													title="Select adaptive decision details"
+													on:click={() => selectAdaptiveDecisionDrilldown(row)}
+													title="Select adaptive decision details and filter logs by run"
 												>
 													<span class="mono">{row.at || '-'}</span>
 													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
