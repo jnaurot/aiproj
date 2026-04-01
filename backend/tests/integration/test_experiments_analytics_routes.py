@@ -100,3 +100,13 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		failure_alerts = regressions_failure_only.json().get("alerts") or []
 		assert failure_alerts
 		assert all(str(alert.get("type") or "") == "failure_regression" for alert in failure_alerts)
+
+		regressions_invalid_type = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"alertType": "bogus",
+			},
+		)
+		assert regressions_invalid_type.status_code == 400, regressions_invalid_type.text
