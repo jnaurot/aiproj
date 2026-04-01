@@ -679,15 +679,18 @@ export function filterRunMonitorAdaptiveDecisionRows(
 	rows: RunMonitorAdaptiveDecisionRow[],
 	modeFilter: RunMonitorAdaptiveModeFilter,
 	severityFilter: RunMonitorAdaptiveSeverityFilter,
-	changedOnly: boolean = false
+	changedOnly: boolean = false,
+	minScore: number = 0
 ): RunMonitorAdaptiveDecisionRow[] {
 	const mode = String(modeFilter ?? 'all').trim().toLowerCase();
 	const severity = String(severityFilter ?? 'all').trim().toLowerCase();
+	const normalizedMinScore = Math.max(0, Number(minScore ?? 0));
 	return (Array.isArray(rows) ? rows : []).filter((row) => {
 		const rowMode = String(row?.mode ?? '').trim().toLowerCase();
 		const rowSeverity = String(row?.explanation?.severity ?? '').trim().toLowerCase();
 		if (mode !== 'all' && rowMode !== mode) return false;
 		if (severity !== 'all' && rowSeverity !== severity) return false;
+		if (Number(row?.explanation?.score ?? 0) < normalizedMinScore) return false;
 		if (!Boolean(changedOnly)) return true;
 		const diff = row?.diffFromPrevious;
 		if (!diff || typeof diff !== 'object') return false;

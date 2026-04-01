@@ -119,6 +119,9 @@ describe('runMonitorModel adaptive decision rows', () => {
 		const changedOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', true);
 		expect(changedOnly.length).toBeGreaterThanOrEqual(1);
 		expect(changedOnly.every((row) => Boolean(row.diffFromPrevious))).toBe(true);
+		const highScoreOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', false, 60);
+		expect(highScoreOnly).toHaveLength(1);
+		expect(highScoreOnly[0]?.mode).toBe('enforce');
 	});
 
 	it('resolves regression pair using valid override or latest history fallback', () => {

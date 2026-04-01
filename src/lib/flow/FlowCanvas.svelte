@@ -371,6 +371,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorAdaptiveChangedOnly = false;
+	let runMonitorAdaptiveMinScore = 0;
 	let runMonitorAdaptiveDataSource: 'live' | 'history' = 'live';
 	let runMonitorAdaptiveHistoryRowsRaw: ExperimentAdaptiveDecision[] = [];
 	let runMonitorAdaptiveHistorySort: 'created_desc' | 'created_asc' | 'impact_desc' = 'created_desc';
@@ -801,11 +802,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: selectedAdaptiveDecisionComponents = buildAdaptiveComponentBreakdown(
 		selectedAdaptiveDecision?.explanation?.components ?? []
 	);
+	$: runMonitorAdaptiveMinScore = Math.max(
+		0,
+		Math.min(100, Number.isFinite(Number(runMonitorAdaptiveMinScore)) ? Number(runMonitorAdaptiveMinScore) : 0)
+	);
 	$: runMonitorAdaptiveRowsVisible = filterRunMonitorAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows,
 		runMonitorAdaptiveModeFilter,
 		runMonitorAdaptiveSeverityFilter,
-		runMonitorAdaptiveChangedOnly
+		runMonitorAdaptiveChangedOnly,
+		runMonitorAdaptiveMinScore
 	);
 	$: runMonitorAdaptiveDecisionSummary = summarizeAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows
@@ -4904,6 +4910,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<label class="monitorField monitorField-inline">
 												<span>Changed only</span>
 												<input type="checkbox" bind:checked={runMonitorAdaptiveChangedOnly} />
+											</label>
+											<label class="monitorField">
+												<span>Min score</span>
+												<input
+													type="number"
+													min="0"
+													max="100"
+													step="1"
+													bind:value={runMonitorAdaptiveMinScore}
+												/>
 											</label>
 										</div>
 										<div class="runMonitorNodeHead runMonitorAdaptiveTimelineHead" role="row">
