@@ -889,6 +889,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorAdaptiveRowsVisible = filterRunMonitorAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows,
 		runMonitorAdaptiveModeFilter,
+		runMonitorAdaptiveModeSourceFilter,
 		runMonitorAdaptiveSeverityFilter,
 		runMonitorAdaptiveChangedOnly,
 		runMonitorAdaptiveMinScore

@@ -110,18 +110,21 @@ describe('runMonitorModel adaptive decision rows', () => {
 				}
 			]
 		});
-		const enforceOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'enforce', 'all');
+		const enforceOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'enforce', 'all', 'all');
 		expect(enforceOnly).toHaveLength(1);
 		expect(enforceOnly[0]?.mode).toBe('enforce');
-		const lowOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'low');
+		const lowOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', 'low');
 		expect(lowOnly.length).toBeGreaterThanOrEqual(1);
 		expect(lowOnly.every((row) => row.explanation.severity === 'low')).toBe(true);
-		const changedOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', true);
+		const changedOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', 'all', true);
 		expect(changedOnly.length).toBeGreaterThanOrEqual(1);
 		expect(changedOnly.every((row) => Boolean(row.diffFromPrevious))).toBe(true);
-		const highScoreOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', false, 60);
+		const highScoreOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'all', 'all', false, 60);
 		expect(highScoreOnly).toHaveLength(1);
 		expect(highScoreOnly[0]?.mode).toBe('enforce');
+		const envOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'env', 'all');
+		expect(envOnly.length).toBeGreaterThanOrEqual(1);
+		expect(envOnly.every((row) => (row.modeSource || 'env') === 'env')).toBe(true);
 	});
 
 	it('resolves regression pair using valid override or latest history fallback', () => {
