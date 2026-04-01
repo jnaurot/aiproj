@@ -22,7 +22,11 @@ def test_resolve_source_all_kinds_returns_normalized_envelope():
 			_base_source_node("src_file", "file", {"snapshotId": "a" * 64, "file_format": "txt"}),
 			_base_source_node("src_db", "database", {"connection_ref": "conn:db", "query": "select 1"}),
 			_base_source_node("src_api", "api", {"url": "https://example.com", "method": "GET"}),
-			_base_source_node("src_obj", "object_store", {"bucket": "demo", "key": "data.txt", "file_format": "txt"}),
+			_base_source_node(
+				"src_obj",
+				"object_store",
+				{"bucket": "demo", "key": "data.txt", "file_format": "txt", "connection_ref": "conn:obj"},
+			),
 			_base_source_node("src_wh", "warehouse", {"connection_ref": "conn:warehouse", "query": "select 1"}),
 		],
 		"edges": [],
@@ -70,4 +74,3 @@ def test_resolve_source_missing_required_params_returns_400():
 		assert isinstance(body.get("detail"), dict)
 		assert str((body.get("detail") or {}).get("errorCode") or "") == "SOURCE_RESOLVE_CONFIG_INVALID"
 		assert str((body.get("detail") or {}).get("sourceKind") or "") == "api"
-

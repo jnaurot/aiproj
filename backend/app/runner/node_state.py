@@ -338,6 +338,7 @@ def build_source_fingerprint(node: Dict[str, Any], params: Dict[str, Any]) -> Di
         fp.update(
             {
                 "provider": p.get("provider"),
+                "object_store_mode": p.get("object_store_mode") or "provider",
                 "connection_ref": p.get("connection_ref"),
                 "bucket": p.get("bucket"),
                 "key": p.get("key"),

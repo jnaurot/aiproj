@@ -608,6 +608,7 @@ class SourceAPIParams(NodeParamSchema):
 
 class SourceObjectStoreParams(NodeParamSchema):
     provider: Literal["s3", "azure_blob", "gcs"] = "s3"
+    object_store_mode: Literal["provider", "mock"] = "provider"
     connection_ref: Optional[str] = None
     bucket: Optional[str] = None
     key: Optional[str] = None
@@ -662,6 +663,8 @@ class SourceObjectStoreParams(NodeParamSchema):
             errors.append("bucket is required")
         if not self.key:
             errors.append("key is required")
+        if self.object_store_mode == "provider" and not self.connection_ref:
+            errors.append("connection_ref is required in provider mode")
         return errors
 
 

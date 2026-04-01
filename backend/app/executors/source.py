@@ -88,6 +88,10 @@ def _source_error_code_for_exception(exc: Exception) -> str:
         return "SOURCE_NOT_FOUND"
     if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError, csv.Error)):
         return "SOURCE_PARSE_FAILED"
+    if isinstance(exc, PermissionError):
+        return "SOURCE_AUTH_FAILED"
+    if isinstance(exc, ConnectionError):
+        return "SOURCE_CONNECTION_FAILED"
     if isinstance(exc, getattr(pd.errors, "ParserError", tuple())):
         return "SOURCE_PARSE_FAILED"
     if isinstance(exc, ImportError):
@@ -107,6 +111,8 @@ def _source_error_code_for_exception(exc: Exception) -> str:
     if "unknown source_type" in lower:
         return "SOURCE_CONFIG_INVALID"
     if "requires sqlalchemy" in lower or "connection_string or connection_ref required" in lower:
+        return "SOURCE_CONFIG_INVALID"
+    if "requires connection_ref" in lower:
         return "SOURCE_CONFIG_INVALID"
     if "not found" in lower:
         return "SOURCE_NOT_FOUND"
@@ -3070,6 +3076,7 @@ async def _handle_object_store_source(
 ) -> NodeOutput:
     schema = SourceObjectStoreParams.model_validate(params)
     output_mode = forced_output_mode or _default_file_output_mode(str(schema.file_format))
+    object_store_mode = str(getattr(schema, "object_store_mode", "provider") or "provider").strip().lower()
 
     await bus.emit(
         {
@@ -3077,33 +3084,49 @@ async def _handle_object_store_source(
             "runId": run_id,
             "at": _iso_now(),
             "level": "info",
-            "message": f"object_store: provider={schema.provider} bucket={schema.bucket} key={schema.key}",
+            "message": (
+                f"object_store: mode={object_store_mode} provider={schema.provider} "
+                f"bucket={schema.bucket} key={schema.key}"
+            ),
             "nodeId": node_id,
         }
     )
 
-    data_bytes: Optional[bytes] = None
-    if isinstance(params.get("mock_text"), str):
-        data_bytes = str(params.get("mock_text") or "").encode(str(schema.encoding or "utf-8"), errors="replace")
+    if object_store_mode not in {"provider", "mock"}:
+        raise ValueError("object_store_mode must be one of: provider, mock")
 
-    if data_bytes is None:
-        root = str(get_env("OBJECT_STORE_MOCK_ROOT", "") or "").strip()
-        key_path = str(schema.key or "").strip()
-        candidate_paths: list[Path] = []
-        if root:
-            candidate_paths.append(Path(root) / str(schema.bucket or "") / key_path)
-        candidate_paths.append(Path(key_path))
-        for path in candidate_paths:
-            try:
-                if path.exists() and path.is_file():
-                    data_bytes = path.read_bytes()
-                    break
-            except Exception:
-                continue
-    if data_bytes is None:
-        raise FileNotFoundError(
-            f"Object not found for bucket/key ({schema.bucket}/{schema.key}). Set OBJECT_STORE_MOCK_ROOT or provide mock_text."
-        )
+    data_bytes: Optional[bytes] = None
+    fetch_elapsed_ms: Optional[float] = None
+
+    if object_store_mode == "provider":
+        if not str(schema.connection_ref or "").strip():
+            raise ValueError("object_store provider mode requires connection_ref")
+        started = time.perf_counter()
+        data_bytes = _download_object_store_provider_bytes(schema=schema)
+        fetch_elapsed_ms = max(0.0, (time.perf_counter() - started) * 1000.0)
+    else:
+        if isinstance(params.get("mock_text"), str):
+            data_bytes = str(params.get("mock_text") or "").encode(str(schema.encoding or "utf-8"), errors="replace")
+
+        if data_bytes is None:
+            root = str(get_env("OBJECT_STORE_MOCK_ROOT", "") or "").strip()
+            key_path = str(schema.key or "").strip()
+            candidate_paths: list[Path] = []
+            if root:
+                candidate_paths.append(Path(root) / str(schema.bucket or "") / key_path)
+            candidate_paths.append(Path(key_path))
+            for path in candidate_paths:
+                try:
+                    if path.exists() and path.is_file():
+                        data_bytes = path.read_bytes()
+                        break
+                except Exception:
+                    continue
+        if data_bytes is None:
+            raise FileNotFoundError(
+                f"Object not found for bucket/key ({schema.bucket}/{schema.key}). "
+                "Set OBJECT_STORE_MOCK_ROOT or provide mock_text."
+            )
 
     rows: Optional[list[dict[str, Any]]] = None
     text_data: Optional[str] = None
@@ -3181,6 +3204,7 @@ async def _handle_object_store_source(
             "provider": schema.provider,
             "bucket": schema.bucket,
             "key": schema.key,
+            "object_store_mode": object_store_mode,
             **({"table_columns": table_columns} if output_mode == "table" and isinstance(table_columns, list) else {}),
         },
         source_observability=_build_source_observability(
@@ -3194,9 +3218,123 @@ async def _handle_object_store_source(
                 else None
             ),
             partition_count=1,
+            execution_ms=fetch_elapsed_ms,
         ),
     )
+    source_obs = metadata.data_schema.get("source_observability") if isinstance(metadata.data_schema, dict) else None
+    if isinstance(source_obs, dict):
+        source_obs.update(
+            {
+                "provider": str(schema.provider),
+                "bucket": str(schema.bucket or ""),
+                "key": str(schema.key or ""),
+                "bytes_read": len(data_bytes),
+                "fetch_elapsed_ms": float(fetch_elapsed_ms) if isinstance(fetch_elapsed_ms, (float, int)) else None,
+                "object_store_mode": object_store_mode,
+            }
+        )
     return NodeOutput(status="succeeded", data=data, metadata=metadata, execution_time_ms=0.0)
+
+
+def _download_object_store_provider_bytes(schema: SourceObjectStoreParams) -> bytes:
+    provider = str(schema.provider or "").strip().lower()
+    ref = str(schema.connection_ref or "").strip()
+    connection_value = _resolve_connection_ref(ref)
+    if provider == "s3":
+        return _download_object_store_s3(schema=schema, connection_value=connection_value)
+    if provider == "azure_blob":
+        return _download_object_store_azure_blob(schema=schema, connection_value=connection_value)
+    if provider == "gcs":
+        return _download_object_store_gcs(schema=schema, connection_value=connection_value)
+    raise ValueError(f"Unsupported object_store provider: {provider}")
+
+
+def _download_object_store_s3(*, schema: SourceObjectStoreParams, connection_value: str) -> bytes:
+    try:
+        import boto3  # type: ignore
+        from botocore.exceptions import ClientError, NoCredentialsError  # type: ignore
+    except Exception as exc:
+        raise ImportError("Object store provider s3 requires boto3") from exc
+
+    client_kwargs: Dict[str, Any] = {}
+    raw = str(connection_value or "").strip()
+    if raw.startswith("{"):
+        try:
+            cfg = json.loads(raw)
+        except Exception:
+            cfg = {}
+        if isinstance(cfg, dict):
+            for key in ("aws_access_key_id", "aws_secret_access_key", "aws_session_token", "region_name", "endpoint_url"):
+                if key in cfg and cfg.get(key):
+                    client_kwargs[key] = cfg.get(key)
+    s3 = boto3.client("s3", **client_kwargs)
+    buffer = io.BytesIO()
+    try:
+        s3.download_fileobj(str(schema.bucket), str(schema.key), buffer)
+    except NoCredentialsError as exc:
+        raise PermissionError("S3 authentication failed (missing credentials)") from exc
+    except ClientError as exc:
+        code = str((((exc.response or {}).get("Error") or {}).get("Code")) or "").strip()
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            raise FileNotFoundError(f"S3 object not found: {schema.bucket}/{schema.key}") from exc
+        if code in {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"}:
+            raise PermissionError(f"S3 authentication/authorization failed: {code}") from exc
+        raise ConnectionError(f"S3 download failed: {code or 'unknown_error'}") from exc
+    return buffer.getvalue()
+
+
+def _download_object_store_azure_blob(*, schema: SourceObjectStoreParams, connection_value: str) -> bytes:
+    try:
+        from azure.core.exceptions import ClientAuthenticationError, HttpResponseError, ResourceNotFoundError  # type: ignore
+        from azure.storage.blob import BlobServiceClient  # type: ignore
+    except Exception as exc:
+        raise ImportError("Object store provider azure_blob requires azure-storage-blob") from exc
+
+    try:
+        service = BlobServiceClient.from_connection_string(str(connection_value))
+        client = service.get_blob_client(container=str(schema.bucket), blob=str(schema.key))
+        return bytes(client.download_blob().readall())
+    except ResourceNotFoundError as exc:
+        raise FileNotFoundError(f"Azure blob not found: {schema.bucket}/{schema.key}") from exc
+    except ClientAuthenticationError as exc:
+        raise PermissionError("Azure blob authentication failed") from exc
+    except HttpResponseError as exc:
+        status = int(getattr(exc, "status_code", 0) or 0)
+        if status in {401, 403}:
+            raise PermissionError(f"Azure blob authentication/authorization failed: {status}") from exc
+        if status == 404:
+            raise FileNotFoundError(f"Azure blob not found: {schema.bucket}/{schema.key}") from exc
+        raise ConnectionError(f"Azure blob download failed: {status or 'unknown_status'}") from exc
+
+
+def _download_object_store_gcs(*, schema: SourceObjectStoreParams, connection_value: str) -> bytes:
+    try:
+        from google.api_core.exceptions import Forbidden, GoogleAPICallError, NotFound, Unauthorized  # type: ignore
+        from google.cloud import storage  # type: ignore
+    except Exception as exc:
+        raise ImportError("Object store provider gcs requires google-cloud-storage") from exc
+
+    client = None
+    raw = str(connection_value or "").strip()
+    if raw.startswith("{"):
+        try:
+            service_account_info = json.loads(raw)
+        except Exception as exc:
+            raise ValueError("Invalid GCS service account JSON in connection_ref") from exc
+        if isinstance(service_account_info, dict):
+            client = storage.Client.from_service_account_info(service_account_info)
+    if client is None:
+        client = storage.Client()
+    try:
+        bucket = client.bucket(str(schema.bucket))
+        blob = bucket.blob(str(schema.key))
+        return bytes(blob.download_as_bytes())
+    except NotFound as exc:
+        raise FileNotFoundError(f"GCS object not found: {schema.bucket}/{schema.key}") from exc
+    except (Unauthorized, Forbidden) as exc:
+        raise PermissionError("GCS authentication/authorization failed") from exc
+    except GoogleAPICallError as exc:
+        raise ConnectionError("GCS download failed") from exc
 
 
 async def _handle_warehouse_source(

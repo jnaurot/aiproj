@@ -375,6 +375,11 @@ def _resolve_source_config_error(source_kind: str, params: Dict[str, Any]) -> Op
             return "warehouse query is required"
         return None
     if sk == "object_store":
+        mode = str(p.get("object_store_mode") or "provider").strip().lower()
+        if mode not in {"provider", "mock"}:
+            return "object_store object_store_mode must be provider or mock"
+        if mode == "provider" and not str(p.get("connection_ref") or "").strip():
+            return "object_store connection_ref is required in provider mode"
         if not str(p.get("bucket") or "").strip():
             return "object_store bucket is required"
         if not str(p.get("key") or "").strip():

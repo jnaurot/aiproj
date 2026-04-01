@@ -1717,6 +1717,7 @@ async def test_source_object_store_mock_text_succeeds():
 			"sourceKind": "object_store",
 			"params": {
 				"provider": "s3",
+				"object_store_mode": "mock",
 				"bucket": "demo",
 				"key": "rows.csv",
 				"file_format": "csv",
@@ -1730,6 +1731,230 @@ async def test_source_object_store_mock_text_succeeds():
 	assert len(result.data) == 2
 	assert isinstance(result.metadata.data_schema.get("source_observability"), dict)
 	assert result.metadata.data_schema.get("source_observability", {}).get("source_kind") == "object_store"
+
+
+@pytest.mark.asyncio
+async def test_object_store_provider_mode_requires_connection_ref():
+	node = {
+		"id": "n_obj_provider_missing_ref",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "provider",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+			},
+		},
+	}
+	result = await exec_source("run_obj_provider_missing_ref", node, _ctx())
+	payload = _error_payload(result)
+	assert payload.get("errorCode") == "SOURCE_CONFIG_INVALID"
+	assert "connection_ref" in str(payload.get("message") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_object_store_provider_mode_disallows_local_fallback(monkeypatch, tmp_path):
+	mock_root = tmp_path / "mock"
+	(mock_root / "demo").mkdir(parents=True, exist_ok=True)
+	(mock_root / "demo" / "rows.csv").write_text("id,name\n1,alice\n", encoding="utf-8")
+	monkeypatch.setenv("OBJECT_STORE_MOCK_ROOT", str(mock_root))
+	monkeypatch.setenv("OBJ_CONN_TEST", '{"region_name":"us-east-1"}')
+
+	called = {"provider": 0}
+
+	def _fail_provider(*_args, **_kwargs):
+		called["provider"] += 1
+		raise FileNotFoundError("provider fetch miss")
+
+	monkeypatch.setattr(source_mod, "_download_object_store_provider_bytes", _fail_provider)
+
+	node = {
+		"id": "n_obj_provider_no_local_fallback",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "provider",
+				"connection_ref": "OBJ_CONN_TEST",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+			},
+		},
+	}
+	result = await exec_source("run_obj_provider_no_local_fallback", node, _ctx())
+	payload = _error_payload(result)
+	assert called["provider"] == 1
+	assert payload.get("errorCode") == "SOURCE_NOT_FOUND"
+	assert "provider fetch miss" in str(payload.get("message") or "")
+
+
+@pytest.mark.asyncio
+async def test_object_store_mock_mode_uses_mock_text():
+	node = {
+		"id": "n_obj_store_mock_mode_text",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "mock",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+				"mock_text": "id,name\n1,alice\n2,bob\n",
+			},
+		},
+	}
+	result = await exec_source("run_obj_store_mock_mode_text", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+	obs = (result.metadata.data_schema or {}).get("source_observability") or {}
+	assert obs.get("object_store_mode") == "mock"
+
+
+@pytest.mark.asyncio
+async def test_object_store_mock_mode_uses_mock_root(monkeypatch, tmp_path):
+	mock_root = tmp_path / "mock_root"
+	(mock_root / "demo").mkdir(parents=True, exist_ok=True)
+	(mock_root / "demo" / "rows.csv").write_text("id,name\n1,alice\n2,bob\n", encoding="utf-8")
+	monkeypatch.setenv("OBJECT_STORE_MOCK_ROOT", str(mock_root))
+	node = {
+		"id": "n_obj_store_mock_mode_root",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "mock",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+			},
+		},
+	}
+	result = await exec_source("run_obj_store_mock_mode_root", node, _ctx())
+	assert result.status == "succeeded"
+	assert isinstance(result.data, list)
+	assert len(result.data) == 2
+
+
+def test_object_store_s3_adapter_download_success(monkeypatch):
+	monkeypatch.setenv("OBJ_S3_CONN", '{"region_name":"us-east-1"}')
+
+	def _stub(*_args, **_kwargs):
+		return b"id,name\n1,alice\n"
+
+	monkeypatch.setattr(source_mod, "_download_object_store_s3", _stub)
+	schema = source_mod.SourceObjectStoreParams.model_validate(
+		{
+			"provider": "s3",
+			"object_store_mode": "provider",
+			"connection_ref": "OBJ_S3_CONN",
+			"bucket": "demo",
+			"key": "rows.csv",
+			"file_format": "csv",
+		}
+	)
+	out = source_mod._download_object_store_provider_bytes(schema=schema)
+	assert out.startswith(b"id,name")
+
+
+def test_object_store_azure_blob_adapter_download_success(monkeypatch):
+	monkeypatch.setenv("OBJ_AZ_CONN", "UseDevelopmentStorage=true")
+
+	def _stub(*_args, **_kwargs):
+		return b'{"ok":true}'
+
+	monkeypatch.setattr(source_mod, "_download_object_store_azure_blob", _stub)
+	schema = source_mod.SourceObjectStoreParams.model_validate(
+		{
+			"provider": "azure_blob",
+			"object_store_mode": "provider",
+			"connection_ref": "OBJ_AZ_CONN",
+			"bucket": "demo",
+			"key": "obj.json",
+			"file_format": "json",
+		}
+	)
+	out = source_mod._download_object_store_provider_bytes(schema=schema)
+	assert out == b'{"ok":true}'
+
+
+def test_object_store_gcs_adapter_download_success(monkeypatch):
+	monkeypatch.setenv("OBJ_GCS_CONN", '{"type":"service_account"}')
+
+	def _stub(*_args, **_kwargs):
+		return b"hello"
+
+	monkeypatch.setattr(source_mod, "_download_object_store_gcs", _stub)
+	schema = source_mod.SourceObjectStoreParams.model_validate(
+		{
+			"provider": "gcs",
+			"object_store_mode": "provider",
+			"connection_ref": "OBJ_GCS_CONN",
+			"bucket": "demo",
+			"key": "obj.txt",
+			"file_format": "txt",
+		}
+	)
+	out = source_mod._download_object_store_provider_bytes(schema=schema)
+	assert out == b"hello"
+
+
+@pytest.mark.asyncio
+async def test_object_store_provider_not_found_error_code(monkeypatch):
+	monkeypatch.setenv("OBJ_CONN_NOTFOUND", '{"region_name":"us-east-1"}')
+	monkeypatch.setattr(
+		source_mod,
+		"_download_object_store_provider_bytes",
+		lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("missing object")),
+	)
+	node = {
+		"id": "n_obj_store_provider_not_found",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "provider",
+				"connection_ref": "OBJ_CONN_NOTFOUND",
+				"bucket": "demo",
+				"key": "missing.csv",
+				"file_format": "csv",
+			},
+		},
+	}
+	result = await exec_source("run_obj_provider_not_found", node, _ctx())
+	payload = _error_payload(result)
+	assert payload.get("errorCode") == "SOURCE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_object_store_provider_auth_error_code(monkeypatch):
+	monkeypatch.setenv("OBJ_CONN_AUTH", '{"region_name":"us-east-1"}')
+	monkeypatch.setattr(
+		source_mod,
+		"_download_object_store_provider_bytes",
+		lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("denied")),
+	)
+	node = {
+		"id": "n_obj_store_provider_auth",
+		"data": {
+			"sourceKind": "object_store",
+			"params": {
+				"provider": "s3",
+				"object_store_mode": "provider",
+				"connection_ref": "OBJ_CONN_AUTH",
+				"bucket": "demo",
+				"key": "rows.csv",
+				"file_format": "csv",
+			},
+		},
+	}
+	result = await exec_source("run_obj_provider_auth", node, _ctx())
+	payload = _error_payload(result)
+	assert payload.get("errorCode") == "SOURCE_AUTH_FAILED"
 
 
 @pytest.mark.asyncio
