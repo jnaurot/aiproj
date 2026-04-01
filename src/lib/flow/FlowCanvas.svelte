@@ -33,7 +33,9 @@
 	import { buildScopedStatus } from './components/statusScope';
 	import { parseComponentExitDecision } from './components/componentExitGuard';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
+	import type { RegressionAlert } from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
+	import { getExperimentRegressions } from '$lib/flow/client/runs';
 	import { listEnvProfiles, installEnvProfile, type EnvProfileStatus } from '$lib/flow/client/envProfiles';
 	import {
 		listRuntimeEnvVars,
@@ -337,6 +339,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSectionCollapsed = false;
 	let runMonitorShowHistory = false;
 	let runMonitorAdaptiveModeOverride: 'default' | 'off' | 'observe' | 'enforce' = 'default';
+	let runMonitorRegressionAlerts: RegressionAlert[] = [];
+	let runMonitorRegressionLoading = false;
+	let runMonitorRegressionError: string | null = null;
+	let runMonitorRegressionRunId = '';
+	let runMonitorRegressionBaselineRunId = '';
+	let runMonitorRegressionRefreshKey = '';
+	let runMonitorRegressionPair: { runId: string; baselineRunId: string } = {
+		runId: '',
+		baselineRunId: ''
+	};
+	let runMonitorRegressionAutoKey = '';
 	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
@@ -668,6 +681,31 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		.slice()
 		.reverse()
 		.slice(0, 20);
+	$: runMonitorRegressionPair = (() => {
+		if (runMonitorHistoryRows.length < 2) return { runId: '', baselineRunId: '' };
+		return {
+			runId: String(runMonitorHistoryRows[0]?.runId ?? '').trim(),
+			baselineRunId: String(runMonitorHistoryRows[1]?.runId ?? '').trim()
+		};
+	})();
+	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}`;
+	$: if (
+		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
+		runMonitorRegressionPair.runId &&
+		runMonitorRegressionPair.baselineRunId
+	) {
+		runMonitorRegressionRefreshKey = runMonitorRegressionAutoKey;
+		void refreshRunMonitorRegressions(
+			runMonitorRegressionPair.runId,
+			runMonitorRegressionPair.baselineRunId
+		);
+	}
+	$: if (!runMonitorRegressionPair.runId || !runMonitorRegressionPair.baselineRunId) {
+		runMonitorRegressionAlerts = [];
+		runMonitorRegressionError = null;
+		runMonitorRegressionRunId = runMonitorRegressionPair.runId;
+		runMonitorRegressionBaselineRunId = runMonitorRegressionPair.baselineRunId;
+	}
 	$: canUndo = Boolean($graphStore) && graphStore.canUndo();
 	$: canRedo = Boolean($graphStore) && graphStore.canRedo();
 	$: if (previousEditingContext !== $graphStore.editingContext) {
@@ -1825,6 +1863,43 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (!raw) return '';
 		if (raw.length <= 8) return raw;
 		return `${raw.slice(0, 8)}...`;
+	}
+
+	async function refreshRunMonitorRegressions(
+		runId?: string | null,
+		baselineRunId?: string | null
+	): Promise<void> {
+		const resolvedRunId = String(runId ?? '').trim();
+		const resolvedBaselineRunId = String(baselineRunId ?? '').trim();
+		if (!resolvedRunId || !resolvedBaselineRunId) {
+			runMonitorRegressionAlerts = [];
+			runMonitorRegressionError = null;
+			runMonitorRegressionRunId = resolvedRunId;
+			runMonitorRegressionBaselineRunId = resolvedBaselineRunId;
+			return;
+		}
+		runMonitorRegressionLoading = true;
+		runMonitorRegressionError = null;
+		try {
+			const res = await getExperimentRegressions({
+				runId: resolvedRunId,
+				baselineRunId: resolvedBaselineRunId,
+				latencyDriftPct: 25,
+				failureDriftAbs: 1
+			});
+			runMonitorRegressionAlerts = Array.isArray(res.alerts) ? res.alerts : [];
+			runMonitorRegressionRunId = String(res.runId ?? resolvedRunId).trim();
+			runMonitorRegressionBaselineRunId = String(
+				res.baselineRunId ?? resolvedBaselineRunId
+			).trim();
+		} catch (error) {
+			runMonitorRegressionAlerts = [];
+			runMonitorRegressionRunId = resolvedRunId;
+			runMonitorRegressionBaselineRunId = resolvedBaselineRunId;
+			runMonitorRegressionError = String(error ?? 'Failed to load regression alerts');
+		} finally {
+			runMonitorRegressionLoading = false;
+		}
 	}
 
 	async function resetRunUi() {
@@ -4215,6 +4290,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											</select>
 										</label>
 									</div>
+									<div class="envPanelSummary">
+										adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
+										{#if runMonitorAdaptiveDecisionRows.length > 0}
+											| last decision mode={runMonitorAdaptiveDecisionRows[0]?.mode ?? '-'}{runMonitorAdaptiveDecisionRows[0]?.enforced ? ' (enforced)' : ''}
+										{/if}
+									</div>
 									<div class="runMonitorTablesSplit">
 										<div class="runMonitorTablesPane" style={`flex:${runMonitorNodesWeight} 1 0;`} bind:this={runMonitorNodesPaneEl}>
 											{#if runMonitorNodeRowsVisible.length === 0}
@@ -4330,6 +4411,62 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															-
 														{:else}
 															{row.reasons.join(', ')}
+														{/if}
+													</span>
+												</div>
+											{/each}
+										{/if}
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="Regression detection alerts">
+										<div class="runtimeEnvHead">
+											<strong>Regression Alerts</strong>
+											<div class="runtimeEnvActions">
+												<button
+													type="button"
+													class="tabBtn"
+													on:click={() =>
+														void refreshRunMonitorRegressions(
+															runMonitorRegressionPair.runId,
+															runMonitorRegressionPair.baselineRunId
+														)}
+													disabled={
+														runMonitorRegressionLoading ||
+														!runMonitorRegressionPair.runId ||
+														!runMonitorRegressionPair.baselineRunId
+													}
+												>
+													{runMonitorRegressionLoading ? 'Loading...' : 'Reload'}
+												</button>
+											</div>
+										</div>
+										<div class="envPanelSummary">
+											run={runMonitorRegressionRunId || runMonitorRegressionPair.runId || '-'} | baseline={runMonitorRegressionBaselineRunId || runMonitorRegressionPair.baselineRunId || '-'}
+										</div>
+										<div class="runMonitorNodeHead" role="row">
+											<span>type</span>
+											<span>target</span>
+											<span>baseline</span>
+											<span>current</span>
+											<span>drift</span>
+										</div>
+										{#if runMonitorRegressionError}
+											<div class="envProfileError">{runMonitorRegressionError}</div>
+										{:else if runMonitorRegressionAlerts.length === 0}
+											<div class="envProfileEmpty">No regression alerts for the latest completed runs.</div>
+										{:else}
+											{#each runMonitorRegressionAlerts as alert, index (`${alert.reasonCode}:${alert.nodeId ?? alert.errorCode ?? ''}:${index}`)}
+												<div class="runMonitorNodeRow" role="row">
+													<span>{alert.reasonCode || alert.type || '-'}</span>
+													<span>{alert.nodeId || alert.errorCode || '-'}</span>
+													<span>{Number.isFinite(Number(alert.baseline)) ? Number(alert.baseline).toFixed(1) : '-'}</span>
+													<span>{Number.isFinite(Number(alert.current)) ? Number(alert.current).toFixed(1) : '-'}</span>
+													<span>
+														{#if Number.isFinite(Number(alert.driftPct))}
+															{Number(alert.driftPct).toFixed(1)}%
+														{:else if Number.isFinite(Number(alert.delta))}
+															{Number(alert.delta)}
+														{:else}
+															-
 														{/if}
 													</span>
 												</div>

@@ -139,6 +139,46 @@ export async function getRun(runId: string) {
   };
 }
 
+export type RegressionAlert = {
+	type: 'latency_regression' | 'failure_regression' | string;
+	reasonCode: string;
+	nodeId?: string;
+	errorCode?: string;
+	metric?: string;
+	baseline?: number;
+	current?: number;
+	driftPct?: number;
+	thresholdPct?: number;
+	delta?: number;
+	thresholdAbs?: number;
+};
+
+export async function getExperimentRegressions(params: {
+	runId: string;
+	baselineRunId?: string | null;
+	latencyDriftPct?: number;
+	failureDriftAbs?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('runId', String(params.runId ?? '').trim());
+	if (params.baselineRunId) qs.set('baselineRunId', String(params.baselineRunId).trim());
+	if (Number.isFinite(Number(params.latencyDriftPct)))
+		qs.set('latencyDriftPct', String(Number(params.latencyDriftPct)));
+	if (Number.isFinite(Number(params.failureDriftAbs)))
+		qs.set('failureDriftAbs', String(Math.max(0, Number(params.failureDriftAbs))));
+	const res = await fetch(backendUrl(`/api/experiments/regressions?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentRegressions failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		runId: string;
+		baselineRunId: string;
+		alerts: RegressionAlert[];
+	};
+}
+
 export async function cancelRun(
 	runId: string,
 	options?: { hard?: boolean }
