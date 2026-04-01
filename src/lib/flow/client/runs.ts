@@ -283,12 +283,20 @@ export async function getRunTransitions(params: {
 	runId: string;
 	afterId?: number;
 	limit?: number;
+	entity?: 'run' | 'node' | null;
+	includeViolations?: boolean;
+	violationsOnly?: boolean;
 }) {
 	const runId = String(params.runId ?? '').trim();
 	if (!runId) throw new Error('getRunTransitions requires runId');
 	const qs = new URLSearchParams();
 	qs.set('after_id', String(Math.max(0, Number(params.afterId ?? 0))));
 	qs.set('limit', String(Math.max(1, Number(params.limit ?? 200))));
+	if (params.entity === 'run' || params.entity === 'node') qs.set('entity', params.entity);
+	if (typeof params.includeViolations === 'boolean')
+		qs.set('include_violations', params.includeViolations ? 'true' : 'false');
+	if (typeof params.violationsOnly === 'boolean')
+		qs.set('violations_only', params.violationsOnly ? 'true' : 'false');
 	const res = await fetch(
 		backendUrl(`/api/runs/${encodeURIComponent(runId)}/transitions?${qs.toString()}`)
 	);
@@ -300,7 +308,11 @@ export async function getRunTransitions(params: {
 		runId: string;
 		afterId: number;
 		limit: number;
+		entity?: 'run' | 'node' | null;
+		includeViolations?: boolean;
+		violationsOnly?: boolean;
 		nextAfterId: number;
+		scannedAfterId?: number;
 		events: RunTransitionEvent[];
 	};
 }

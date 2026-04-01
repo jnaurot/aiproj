@@ -779,7 +779,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		);
 	}
 	$: runMonitorTransitionRunId = String(runMonitorRegressionPair.runId ?? '').trim();
-	$: runMonitorTransitionsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTransitionRunId}`;
+	$: runMonitorTransitionsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTransitionRunId}|${runMonitorTransitionFilter}`;
 	$: if (
 		runMonitorTransitionsAutoKey !== runMonitorTransitionsRefreshKey &&
 		runMonitorTransitionRunId
@@ -2138,10 +2138,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorTransitionsLoading = true;
 		runMonitorTransitionsError = null;
 		try {
+			const transitionQuery: {
+				entity?: 'run' | 'node' | null;
+				includeViolations?: boolean;
+				violationsOnly?: boolean;
+			} = {};
+			if (runMonitorTransitionFilter === 'run') transitionQuery.entity = 'run';
+			else if (runMonitorTransitionFilter === 'node') transitionQuery.entity = 'node';
+			else if (runMonitorTransitionFilter === 'violations') transitionQuery.violationsOnly = true;
 			const res = await getRunTransitions({
 				runId: resolvedRunId,
 				afterId: 0,
-				limit: 200
+				limit: 200,
+				...transitionQuery
 			});
 			runMonitorTransitions = buildRunMonitorTransitionRows(
 				Array.isArray(res.events) ? res.events.slice(-200) : []
