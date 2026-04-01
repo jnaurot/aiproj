@@ -36,6 +36,7 @@
 	import type {
 		ExperimentFailureTaxonomyItem,
 		ExperimentNodeTrendPoint,
+		RunTransitionEvent,
 		ExperimentSlaBreach,
 		RegressionAlert
 	} from '$lib/flow/client/runs';
@@ -44,6 +45,7 @@
 		getExperimentFailureTaxonomy,
 		getExperimentNodeTrends,
 		getExperimentRegressions,
+		getRunTransitions,
 		getExperimentSlaBreaches
 	} from '$lib/flow/client/runs';
 	import { listEnvProfiles, installEnvProfile, type EnvProfileStatus } from '$lib/flow/client/envProfiles';
@@ -389,6 +391,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
+	let runMonitorTransitions: RunTransitionEvent[] = [];
+	let runMonitorTransitionsLoading = false;
+	let runMonitorTransitionsError: string | null = null;
+	let runMonitorTransitionRunId = '';
+	let runMonitorTransitionsRefreshKey = '';
+	let runMonitorTransitionsAutoKey = '';
 	let runMonitorAnalyticsLoading = false;
 	let runMonitorAnalyticsError: string | null = null;
 	let runMonitorAnalyticsRefreshKey = '';
@@ -764,6 +772,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionPair.runId,
 			runMonitorRegressionPair.baselineRunId
 		);
+	}
+	$: runMonitorTransitionRunId = String(runMonitorRegressionPair.runId ?? '').trim();
+	$: runMonitorTransitionsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTransitionRunId}`;
+	$: if (
+		runMonitorTransitionsAutoKey !== runMonitorTransitionsRefreshKey &&
+		runMonitorTransitionRunId
+	) {
+		runMonitorTransitionsRefreshKey = runMonitorTransitionsAutoKey;
+		void refreshRunMonitorTransitions(runMonitorTransitionRunId);
+	}
+	$: if (!runMonitorTransitionRunId) {
+		runMonitorTransitions = [];
+		runMonitorTransitionsError = null;
 	}
 	$: runMonitorTrendNodeOptions = runMonitorNodeRows
 		.map((row) => ({ id: String(row.nodeId ?? '').trim(), label: String(row.label ?? '').trim() }))
@@ -2081,6 +2102,31 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionError = String(error ?? 'Failed to load regression alerts');
 		} finally {
 			runMonitorRegressionLoading = false;
+		}
+	}
+
+	async function refreshRunMonitorTransitions(runId?: string | null): Promise<void> {
+		if (typeof window === 'undefined') return;
+		const resolvedRunId = String(runId ?? '').trim();
+		if (!resolvedRunId) {
+			runMonitorTransitions = [];
+			runMonitorTransitionsError = null;
+			return;
+		}
+		runMonitorTransitionsLoading = true;
+		runMonitorTransitionsError = null;
+		try {
+			const res = await getRunTransitions({
+				runId: resolvedRunId,
+				afterId: 0,
+				limit: 200
+			});
+			runMonitorTransitions = Array.isArray(res.events) ? res.events.slice(-50).reverse() : [];
+		} catch (error) {
+			runMonitorTransitions = [];
+			runMonitorTransitionsError = String(error ?? 'Failed to load transition history');
+		} finally {
+			runMonitorTransitionsLoading = false;
 		}
 	}
 
@@ -4837,6 +4883,46 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														{/if}
 													</span>
 												</button>
+											{/each}
+										{/if}
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="State transition audit trail">
+										<div class="runtimeEnvHead">
+											<strong>State Transitions</strong>
+											<div class="runtimeEnvActions">
+												<button
+													type="button"
+													class="tabBtn"
+													on:click={() => void refreshRunMonitorTransitions(runMonitorTransitionRunId)}
+													disabled={runMonitorTransitionsLoading || !runMonitorTransitionRunId}
+												>
+													{runMonitorTransitionsLoading ? 'Loading...' : 'Reload'}
+												</button>
+											</div>
+										</div>
+										<div class="envPanelSummary">
+											run={runMonitorTransitionRunId || '-'} | events={runMonitorTransitions.length}
+										</div>
+										<div class="runMonitorNodeHead" role="row">
+											<span>event</span>
+											<span>entity</span>
+											<span>from</span>
+											<span>to</span>
+											<span>reason/code</span>
+										</div>
+										{#if runMonitorTransitionsError}
+											<div class="envProfileError">{runMonitorTransitionsError}</div>
+										{:else if runMonitorTransitions.length === 0}
+											<div class="envProfileEmpty">No state transition events for selected run.</div>
+										{:else}
+											{#each runMonitorTransitions as event (`${event.id}:${event.at}:${event.type}`)}
+												<div class="runMonitorNodeRow" role="row">
+													<span>{event.type}</span>
+													<span>{String(event.payload?.entity ?? '-')}:{String(event.payload?.entityId ?? '-')}</span>
+													<span>{String(event.payload?.source ?? '-')}</span>
+													<span>{String(event.payload?.target ?? '-')}</span>
+													<span>{String(event.payload?.reason ?? event.payload?.code ?? '-')}</span>
+												</div>
 											{/each}
 										{/if}
 									</div>

@@ -174,6 +174,22 @@ export type ExperimentFailureTaxonomyItem = {
 	count: number;
 };
 
+export type RunTransitionEvent = {
+	id: number;
+	runId: string;
+	type: 'state_transition' | 'state_transition_violation' | string;
+	at: string;
+	payload?: {
+		entity?: 'run' | 'node' | string;
+		entityId?: string;
+		source?: string;
+		target?: string;
+		reason?: string;
+		code?: string;
+		[node: string]: unknown;
+	};
+};
+
 export async function getExperimentRegressions(params: {
 	runId: string;
 	baselineRunId?: string | null;
@@ -260,6 +276,32 @@ export async function getExperimentFailureTaxonomy(params: { graphId: string; li
 		schemaVersion: 1;
 		graphId?: string | null;
 		taxonomy: ExperimentFailureTaxonomyItem[];
+	};
+}
+
+export async function getRunTransitions(params: {
+	runId: string;
+	afterId?: number;
+	limit?: number;
+}) {
+	const runId = String(params.runId ?? '').trim();
+	if (!runId) throw new Error('getRunTransitions requires runId');
+	const qs = new URLSearchParams();
+	qs.set('after_id', String(Math.max(0, Number(params.afterId ?? 0))));
+	qs.set('limit', String(Math.max(1, Number(params.limit ?? 200))));
+	const res = await fetch(
+		backendUrl(`/api/runs/${encodeURIComponent(runId)}/transitions?${qs.toString()}`)
+	);
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getRunTransitions failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		runId: string;
+		afterId: number;
+		limit: number;
+		nextAfterId: number;
+		events: RunTransitionEvent[];
 	};
 }
 
