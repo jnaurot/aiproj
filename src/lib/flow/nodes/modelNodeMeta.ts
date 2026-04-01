@@ -17,10 +17,11 @@ export function modelNodeMeta(data: ModelLikeNodeData | null | undefined): Model
 		unknown
 	>;
 	return {
-		model: String(params.model ?? '—'),
+		model: String(params.model ?? '-'),
 		modelKind: String((data as any)?.modelKind ?? 'llm'),
 		taskKind: String((data as any)?.taskKind ?? 'generate'),
 		provider: String((data as any)?.llmKind ?? 'ollama'),
 		outputMode: String(output.mode ?? 'text')
 	};
 }
+

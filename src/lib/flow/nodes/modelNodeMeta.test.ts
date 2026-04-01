@@ -4,7 +4,7 @@ import { modelNodeMeta } from './modelNodeMeta';
 describe('modelNodeMeta', () => {
 	it('resolves defaults for incomplete node data', () => {
 		expect(modelNodeMeta(undefined as any)).toEqual({
-			model: '—',
+			model: '-',
 			modelKind: 'llm',
 			taskKind: 'generate',
 			provider: 'ollama',
@@ -36,4 +36,11 @@ describe('modelNodeMeta', () => {
 			outputMode: 'json'
 		});
 	});
+
+	it('uses ascii-safe fallback model label', () => {
+		const meta = modelNodeMeta(undefined as any);
+		expect(meta.model).toBe('-');
+		expect(/^[\x20-\x7E]+$/.test(meta.model)).toBe(true);
+	});
 });
+
