@@ -3651,7 +3651,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				runMonitorEdgesWeight = Math.max(0.001, 1 - tableRatioRaw);
 			}
 			const adaptiveModeRaw = String(
-				sessionStorage.getItem(runMonitorAdaptiveOverrideStorageKey(gid)) ?? ''
+				localStorage.getItem(runMonitorAdaptiveOverrideStorageKey(gid)) ??
+					sessionStorage.getItem(runMonitorAdaptiveOverrideStorageKey(gid)) ??
+					''
 			).trim();
 			if (
 				adaptiveModeRaw === 'default' ||
@@ -3693,10 +3695,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const totalTable = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
 			const tableRatio = Math.min(0.95, Math.max(0.05, runMonitorNodesWeight / totalTable));
 			sessionStorage.setItem(runMonitorTableSplitStorageKey(gid), tableRatio.toFixed(4));
-			sessionStorage.setItem(
+			localStorage.setItem(
 				runMonitorAdaptiveOverrideStorageKey(gid),
 				String(runMonitorAdaptiveModeOverride || 'default')
 			);
+			sessionStorage.removeItem(runMonitorAdaptiveOverrideStorageKey(gid));
 		} catch {
 			// noop
 		}
