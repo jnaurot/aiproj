@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphState } from './graphStore';
-import { __applyRunEventForTest } from './graphStore';
+import { __applyRunEventForTest, __resetRunUiStateForTest } from './graphStore';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 
 function makeState(runStatus: GraphState['runStatus'] = 'running'): GraphState {
@@ -191,5 +191,55 @@ describe('graphStore pause/resume lifecycle', () => {
 			expect(String((edge?.data ?? {}).exec ?? 'idle')).not.toBe('active');
 		}
 		expect(Boolean((((next.nodes as any[])[0]?.data ?? {})?.meta ?? {}).llmAllocated)).toBe(false);
+	});
+
+	it('resetRunUi marks unpinned node bindings stale', () => {
+		const state = makeState('running');
+		(state as any).nodeBindings = {
+			n1: {
+				status: 'succeeded',
+				isUpToDate: true,
+				cacheValid: true,
+				currentRunId: 'run-pause',
+				staleReason: null,
+				current: { execKey: 'exec-1', artifactId: 'art-1' },
+				last: { execKey: 'exec-1', artifactId: 'art-1' }
+			}
+		};
+		const next = __resetRunUiStateForTest(state);
+		expect(next.runStatus).toBe('idle');
+		expect(next.activeRunId).toBeNull();
+		expect(next.logs).toEqual([]);
+		expect(next.nodeBindings.n1?.status).toBe('stale');
+		expect(next.nodeBindings.n1?.isUpToDate).toBe(false);
+		expect(next.nodeBindings.n1?.staleReason).toBe('RESET');
+	});
+
+	it('resetRunUi preserves pinned node binding status', () => {
+		const state = makeState('running');
+		(state as any).nodes = [
+			{
+				id: 'n1',
+				data: {
+					kind: 'model',
+					meta: { llmAllocated: true, freeze: { enabled: true, mode: 'sticky' } }
+				}
+			}
+		] as any;
+		(state as any).nodeBindings = {
+			n1: {
+				status: 'succeeded',
+				isUpToDate: true,
+				cacheValid: true,
+				currentRunId: 'run-pause',
+				staleReason: null,
+				current: { execKey: 'exec-1', artifactId: 'art-1' },
+				last: { execKey: 'exec-1', artifactId: 'art-1' }
+			}
+		};
+		const next = __resetRunUiStateForTest(state);
+		expect(next.nodeBindings.n1?.status).toBe('succeeded');
+		expect(next.nodeBindings.n1?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n1?.staleReason).toBeNull();
 	});
 });

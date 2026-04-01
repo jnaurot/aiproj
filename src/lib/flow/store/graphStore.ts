@@ -3351,6 +3351,10 @@ export function __hardResetGraphForTest(_state: GraphState, freshGraphId = 'grap
 	return buildHardResetState(freshGraphId);
 }
 
+export function __resetRunUiStateForTest(state: GraphState): GraphState {
+	return resetRunUiState(state);
+}
+
 function stripToDTO(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
@@ -5604,6 +5608,40 @@ function resetEdgesExec(edges: Edge<PipelineEdgeData>[]): Edge<PipelineEdgeData>
 	return edges.map((e) => ({ ...e, data: { ...e.data, exec: 'idle' as EdgeExec } }));
 }
 
+function resetRunUiState(state: GraphState): GraphState {
+	const edges = resetEdgesExec(state.edges);
+	const nodes = applyLlmHolderToNodes(state.nodes, null);
+	const normalizedBindings = ensureNormalizedBindingsForNodes(nodes as any, state.nodeBindings ?? {});
+	const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(nodes as any));
+	const nodeBindings: Record<string, NormalizedNodeBinding> = {};
+	for (const [nodeId, binding] of Object.entries(normalizedBindings)) {
+		const nodeIdNorm = String(nodeId ?? '').trim();
+		if (!nodeIdNorm) continue;
+		if (pinnedNodeIds.has(nodeIdNorm)) {
+			nodeBindings[nodeIdNorm] = binding;
+			continue;
+		}
+		nodeBindings[nodeIdNorm] = {
+			...binding,
+			status: 'stale',
+			isUpToDate: false,
+			staleReason: 'RESET'
+		};
+	}
+	return withGraphMeta({
+		...state,
+		nodes,
+		edges,
+		nodeBindings,
+		logs: [],
+		runStatus: IDLE,
+		activeRunId: null,
+		activeRunMode: 'from_start',
+		activeRunFrom: null,
+		activeRunNodeSet: new Set<string>()
+	});
+}
+
 function setEdgeExec(
 	edges: Edge<PipelineEdgeData>[],
 	edgeId: string,
@@ -5976,6 +6014,200 @@ export const graphStore = (() => {
 			return next;
 		});
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
+	let resumeFallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function clearResumeFallbackPollTimer(): void {
+		if (!resumeFallbackPollTimer) return;
+		clearTimeout(resumeFallbackPollTimer);
+		resumeFallbackPollTimer = null;
+	}
+
+	function attachActiveRunEventStream(runId: string): void {
+		const rid = String(runId ?? '').trim();
+		if (!rid) return;
+		if (activeRunStreamHandle?.runId === rid) return;
+		if (activeRunStreamHandle) {
+			try {
+				activeRunStreamHandle.close();
+			} catch {
+				// no-op
+			}
+			activeRunStreamHandle = null;
+		}
+		clearResumeFallbackPollTimer();
+
+		let settled = false;
+		let subHandle: { close: () => void } | null = null;
+		const settle = () => {
+			if (settled) return;
+			settled = true;
+			clearResumeFallbackPollTimer();
+			if (activeRunStreamHandle?.runId === rid) {
+				activeRunStreamHandle = null;
+			}
+			try {
+				subHandle?.close();
+			} catch {
+				// no-op
+			}
+		};
+		const applyEventBatch = (events: KnownRunEvent[]) => {
+			for (const evt of events) {
+				const cur = get({ subscribe } as any) as GraphState;
+				const evtGraphId = (evt as any)?.graphId;
+				if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== cur.graphId) {
+					continue;
+				}
+				const auditCtx: AuditContext =
+					evt.type === 'run_started'
+						? {
+								source: 'event',
+								evt,
+								expectedDirtyTransition: true,
+								allowedNodeIds: new Set<string>(
+									Array.isArray((evt as any).plannedNodeIds)
+										? ((evt as any).plannedNodeIds as string[])
+										: []
+								)
+							}
+						: { source: 'event', evt };
+				update((s) => reduceRunEventState(s, evt, rid), auditCtx);
+				if (evt.type === 'run_finished' || evt.type === 'run_paused') {
+					const current = get({ subscribe } as any) as GraphState;
+					persist(current);
+					void getRun(rid)
+						.then((snap) => {
+							const latest = get({ subscribe } as any) as GraphState;
+							if (
+								typeof snap.graphId === 'string' &&
+								snap.graphId &&
+								snap.graphId !== latest.graphId
+							) {
+								return;
+							}
+							update((s) => hydrateFromRunSnapshot(s, snap), {
+								source: 'hydrate_snapshot',
+								snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+							});
+						})
+						.catch(() => {});
+					settle();
+					return;
+				}
+			}
+		};
+		const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
+			maxBatchSize: 48,
+			maxDelayMs: 16
+		});
+		subHandle = streamRunEvents(
+			rid,
+			(evt: KnownRunEvent) => {
+				batcher.push(evt);
+			},
+			() => {
+				if (settled) return;
+				batcher.flush();
+				update((s) => withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; reconciling run status')));
+				void getRun(rid)
+					.then((snap) => {
+						const latest = get({ subscribe } as any) as GraphState;
+						if (
+							typeof snap.graphId === 'string' &&
+							snap.graphId &&
+							snap.graphId !== latest.graphId
+						) {
+							settle();
+							return;
+						}
+						update((s) => hydrateFromRunSnapshot(s, snap), {
+							source: 'hydrate_snapshot',
+							snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+						});
+						const status = String((snap as any)?.status ?? '').toLowerCase();
+						if (
+							status === 'succeeded' ||
+							status === 'failed' ||
+							status === 'canceled' ||
+							status === 'paused'
+						) {
+							update((s) =>
+								withGraphMeta(logPush({ ...s }, 'info', `Run reconciled via poll (${status})`))
+							);
+							settle();
+							return;
+						}
+						// Transitional status (running/resuming/pausing): keep reconciling until terminal.
+						const poll = () => {
+							if (settled) return;
+							void getRun(rid)
+								.then((nextSnap) => {
+									const currentState = get({ subscribe } as any) as GraphState;
+									if (
+										typeof nextSnap.graphId === 'string' &&
+										nextSnap.graphId &&
+										nextSnap.graphId !== currentState.graphId
+									) {
+										settle();
+										return;
+									}
+									update((s) => hydrateFromRunSnapshot(s, nextSnap), {
+										source: 'hydrate_snapshot',
+										snapshotNodeIds: new Set(Object.keys((nextSnap as any)?.nodeBindings ?? {}))
+									});
+									const nextStatus = String((nextSnap as any)?.status ?? '').toLowerCase();
+									if (
+										nextStatus === 'succeeded' ||
+										nextStatus === 'failed' ||
+										nextStatus === 'canceled' ||
+										nextStatus === 'paused'
+									) {
+										update((s) =>
+											withGraphMeta(logPush({ ...s }, 'info', `Run finished via polling (${nextStatus})`))
+										);
+										settle();
+										return;
+									}
+									resumeFallbackPollTimer = setTimeout(poll, 2000);
+								})
+								.catch(() => {
+									resumeFallbackPollTimer = setTimeout(poll, 3000);
+								});
+						};
+						resumeFallbackPollTimer = setTimeout(poll, 1500);
+					})
+					.catch(() => {
+						// Keep trying with poll loop when immediate reconciliation fetch fails.
+						const poll = () => {
+							if (settled) return;
+							void getRun(rid)
+								.then((snap) => {
+									update((s) => hydrateFromRunSnapshot(s, snap), {
+										source: 'hydrate_snapshot',
+										snapshotNodeIds: new Set(Object.keys((snap as any)?.nodeBindings ?? {}))
+									});
+									const status = String((snap as any)?.status ?? '').toLowerCase();
+									if (
+										status === 'succeeded' ||
+										status === 'failed' ||
+										status === 'canceled' ||
+										status === 'paused'
+									) {
+										settle();
+										return;
+									}
+									resumeFallbackPollTimer = setTimeout(poll, 2000);
+								})
+								.catch(() => {
+									resumeFallbackPollTimer = setTimeout(poll, 3000);
+								});
+						};
+						resumeFallbackPollTimer = setTimeout(poll, 1500);
+					});
+			}
+		);
+		activeRunStreamHandle = { runId: rid, close: () => subHandle?.close() };
+	}
 
 	function updateNodeConfigImpl(
 		nodeId: string,
@@ -8148,6 +8380,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		//before extensive renovations
 
 		async hardCancelActiveRuns() {
+			clearResumeFallbackPollTimer();
 			try {
 				await cancelAllRuns({ hard: true });
 			} catch (error) {
@@ -8190,6 +8423,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				await resumeRun(runId);
 				update((s) => withGraphMeta({ ...s, runStatus: 'resuming' }));
+				attachActiveRunEventStream(runId);
 				return { ok: true as const };
 			} catch (error) {
 				update((s) => logPush(s, 'error', `Resume run failed: ${String(error)}`));
@@ -8200,19 +8434,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		// ----- clear edges of prior run's status (uses edge highlighting) -----
 		resetRunUi() {
 			update((s) => {
-				const edges = resetEdgesExec(s.edges);
-				const nodes = applyLlmHolderToNodes(s.nodes, null);
-				const next = withGraphMeta({
-					...s,
-					nodes,
-					edges,
-					logs: [],
-					runStatus: IDLE,
-					activeRunId: null,
-					activeRunMode: 'from_start',
-					activeRunFrom: null,
-					activeRunNodeSet: new Set<string>()
-				});
+				clearResumeFallbackPollTimer();
+				const next = resetRunUiState(s);
 				persist(next);
 				return next;
 			});
