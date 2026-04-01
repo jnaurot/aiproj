@@ -252,6 +252,7 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		assert decision_rows
 		assert all(str(row.get("mode") or "") == "enforce" for row in decision_rows)
 		assert all(str((row.get("explanation") or {}).get("severity") or "") == "high" for row in decision_rows)
+		assert all(str(row.get("modeSource") or "") in {"env", "run_override"} for row in decision_rows)
 
 		adaptive_invalid_sort = client.get(
 			"/experiments/adaptive/decisions",

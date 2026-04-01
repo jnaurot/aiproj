@@ -606,6 +606,7 @@ async def adaptive_decisions(
 			if str(payload.get("type") or "").strip() != "scheduler_adaptive_decision":
 				continue
 			entry_mode = str(payload.get("mode") or "").strip().lower() or "off"
+			entry_mode_source = str(payload.get("modeSource") or "").strip().lower() or "env"
 			if mode_filter != "all" and entry_mode != mode_filter:
 				continue
 			explanation = payload.get("explanation") if isinstance(payload.get("explanation"), dict) else {}
@@ -618,6 +619,7 @@ async def adaptive_decisions(
 					"runId": rid,
 					"at": at,
 					"mode": entry_mode,
+					"modeSource": entry_mode_source,
 					"enforced": bool(payload.get("enforced") is True),
 					"inputs": payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {},
 					"reasons": payload.get("reasons") if isinstance(payload.get("reasons"), list) else [],
