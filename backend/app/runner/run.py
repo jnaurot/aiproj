@@ -71,6 +71,19 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _runner_visual_delay_seconds() -> float:
+    raw = get_env("RUNNER_VISUAL_DELAY_MS", "")
+    if raw in {None, ""}:
+        return 0.0
+    try:
+        ms = float(str(raw).strip())
+    except Exception:
+        return 0.0
+    if ms <= 0:
+        return 0.0
+    return ms / 1000.0
+
+
 def node_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return {n["id"]: n for n in graph.get("nodes", [])}
 
@@ -1509,8 +1522,7 @@ def _source_payload_schema(
                 for c in resolved_columns
                 if isinstance(c, dict)
             ]
-            print(f"[schema-types] nodeId={node_id} schema.table.columns={compact}")
-            logger.info("[schema-types] nodeId=%s schema.table.columns=%s", node_id, compact)
+            logger.debug("[schema-types] nodeId=%s schema.table.columns=%s", node_id, compact)
         return payload
     if out_contract == "json":
         schema = _json_payload_value_schema(data_value)
@@ -1636,7 +1648,13 @@ def _emit_external_schema_debug(*, kind: str, node_id: str, schema: Dict[str, An
         sample_json = json.dumps(_sample_external_payload(payload), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     except Exception:
         sample_json = str(_sample_external_payload(payload))
-    print(f"[external-schema] kind={kind} nodeId={node_id} schema={schema_json} sample={sample_json}")
+    logger.debug(
+        "[external-schema] kind=%s nodeId=%s schema=%s sample=%s",
+        kind,
+        node_id,
+        schema_json,
+        sample_json,
+    )
 
 
 def _tool_payload_schema(envelope_kind: str, payload: Any, envelope_meta: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -4552,7 +4570,7 @@ async def run_graph(
                 )
 
                 # Verification (you asked for checks)
-                print(f"[cache-hit] node={node_id} artifact={cached_artifact_id[:10]}...")
+                logger.debug("[cache-hit] node=%s artifact=%s...", node_id, cached_artifact_id[:10])
 
                 cached_art = await context.artifact_store.get(cached_artifact_id)
                 if cached_art.graph_id and str(cached_art.graph_id) != str(context.graph_id):
@@ -4725,11 +4743,13 @@ async def run_graph(
                     await _emit_node_started_once()
                 if preflight_error is not None:
                     raise preflight_error
-                await asyncio.sleep(0.5)  # visual delay
+                visual_delay_s = _runner_visual_delay_seconds()
+                if visual_delay_s > 0:
+                    await asyncio.sleep(visual_delay_s)
 
                 if kind == "source":
                     output = await exec_source(run_id, n, context, upstream_artifact_ids=upstream_ids)
-                    print("[run_graph] bound artifact", artifact_id[:10], "to node", node_id)
+                    logger.debug("[run_graph] bound artifact %s to node %s", artifact_id[:10], node_id)
 ###
                 elif kind == "transform":
                     transform_kind = str((n.get("data", {}) or {}).get("transformKind") or "").lower()
@@ -4768,9 +4788,10 @@ async def run_graph(
                                 "message": msg,
                                 "nodeId": node_id,
                             })
-                            print(
-                                f"[join-ack] runId={run_id} nodeId={node_id} "
-                                "node=<none> sourceNode=<none> inputHandle=<none> artifact=<none> cols=[]"
+                            logger.debug(
+                                "[join-ack] runId=%s nodeId=%s node=<none> sourceNode=<none> inputHandle=<none> artifact=<none> cols=[]",
+                                run_id,
+                                node_id,
                             )
                         else:
                             for e in join_edges:
@@ -4818,10 +4839,15 @@ async def run_graph(
                                     "message": msg,
                                     "nodeId": node_id,
                                 })
-                                print(
-                                    f"[join-ack] runId={run_id} nodeId={node_id} "
-                                    f"node={short_node} sourceNode={source_node} "
-                                    f"inputHandle={input_handle} artifact={artifact_label} cols={cols_label}"
+                                logger.debug(
+                                    "[join-ack] runId=%s nodeId=%s node=%s sourceNode=%s inputHandle=%s artifact=%s cols=%s",
+                                    run_id,
+                                    node_id,
+                                    short_node,
+                                    source_node,
+                                    input_handle,
+                                    artifact_label,
+                                    cols_label,
                                 )
 
                     if not params.get("enabled", True):
@@ -5019,7 +5045,7 @@ async def run_graph(
                             "message": input_schema_msg,
                             "nodeId": node_id,
                         })
-                        print(f"[transform-input-schema] runId={run_id} nodeId={node_id} {input_schema_msg}")
+                        logger.debug("[transform-input-schema] runId=%s nodeId=%s %s", run_id, node_id, input_schema_msg)
 
                         # join lookup (node_id -> DataFrame), best-effort
                         join_lookup: dict[str, Any] = {}
@@ -5874,13 +5900,14 @@ async def run_graph(
                                 input_schema_cols_by_handle=input_schema_cols_by_handle,
                                 input_columns=input_columns,
                             )
-                            print(
-                                "[dedupe-debug] "
-                                f"runId={run_id} nodeId={node_id} "
-                                f"column_names={by_cols} "
-                                f"availableColumns={available_cols} "
-                                f"allColumns={all_columns} "
-                                f"availableColumnsSource={available_source}"
+                            logger.debug(
+                                "[dedupe-debug] runId=%s nodeId=%s column_names=%s availableColumns=%s allColumns=%s availableColumnsSource=%s",
+                                run_id,
+                                node_id,
+                                by_cols,
+                                available_cols,
+                                all_columns,
+                                available_source,
                             )
                             if (not all_columns) and len(by_cols) == 0:
                                 raise ContractMismatchError(
@@ -6269,7 +6296,7 @@ async def run_graph(
                                 "message": output_schema_msg,
                                 "nodeId": node_id,
                             })
-                            print(f"[transform-output-schema] runId={run_id} nodeId={node_id} {output_schema_msg}")
+                            logger.debug("[transform-output-schema] runId=%s nodeId=%s %s", run_id, node_id, output_schema_msg)
                             base_payload_schema = {
                                 "schema_version": 1,
                                 "type": "table",
@@ -6551,7 +6578,12 @@ async def run_graph(
                         # cache index
                         await cache.store_artifact_id(exec_key, committed_artifact_id)
 
-                        print(f"[artifact] transform node={node_id} bytes={len(res.payload_bytes)} id={artifact_id[:10]}...")
+                        logger.debug(
+                            "[artifact] transform node=%s bytes=%s id=%s...",
+                            node_id,
+                            len(res.payload_bytes),
+                            artifact_id[:10],
+                        )
 
                         # emit node_output (UI fetches by artifactId)
                         await _emit({
@@ -7304,7 +7336,13 @@ async def run_graph(
                         await cache.store_artifact_id(exec_key, committed_artifact_id)
 
                     # Verification print
-                    print(f"[artifact] node={node_id} kind={kind} bytes={len(payload_bytes)} \n\tid={artifact_id}...")
+                    logger.debug(
+                        "[artifact] node=%s kind=%s bytes=%s id=%s...",
+                        node_id,
+                        kind,
+                        len(payload_bytes),
+                        artifact_id,
+                    )
 
                     await _emit({
                         "type": "node_finished",
@@ -7372,7 +7410,7 @@ async def run_graph(
                         "message": mismatch_msg,
                         "nodeId": node_id,
                     })
-                    print(f"[schema-mismatch] runId={run_id} nodeId={node_id} {mismatch_msg}")
+                    logger.debug("[schema-mismatch] runId=%s nodeId=%s %s", run_id, node_id, mismatch_msg)
 
                 if error_code:
                     env_guidance = _env_profile_log_guidance(
