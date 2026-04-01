@@ -7,11 +7,19 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def _summary(*, run_id: str, created_at: str, status: str, p95_ms: float, failure_code: str | None = None):
+def _summary(
+	*,
+	run_id: str,
+	created_at: str,
+	status: str,
+	p95_ms: float,
+	failure_code: str | None = None,
+	graph_id: str = "graph-analytics-1",
+):
 	failures = {failure_code: 1} if failure_code else {}
 	return {
 		"runId": run_id,
-		"graphId": "graph-analytics-1",
+		"graphId": graph_id,
 		"createdAt": created_at,
 		"status": status,
 		"params": {"nodes": {}},
@@ -110,3 +118,94 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert regressions_invalid_type.status_code == 400, regressions_invalid_type.text
+
+
+def test_experiments_analytics_supports_time_window_and_pagination():
+	with TestClient(app) as client:
+		rt = app.state.runtime
+		graph_id = "graph-analytics-window"
+		asyncio.run(
+			rt.artifact_store.upsert_run_experiment(
+				_summary(
+					run_id="run-win-1",
+					created_at="2026-03-31T00:00:00Z",
+					status="succeeded",
+					p95_ms=900.0,
+					failure_code="E_OLD",
+					graph_id=graph_id,
+				)
+			)
+		)
+		asyncio.run(
+			rt.artifact_store.upsert_run_experiment(
+				_summary(
+					run_id="run-win-2",
+					created_at="2026-03-31T00:10:00Z",
+					status="succeeded",
+					p95_ms=1900.0,
+					failure_code="E_MID",
+					graph_id=graph_id,
+				)
+			)
+		)
+		asyncio.run(
+			rt.artifact_store.upsert_run_experiment(
+				_summary(
+					run_id="run-win-3",
+					created_at="2026-03-31T00:20:00Z",
+					status="failed",
+					p95_ms=3900.0,
+					failure_code="E_NEW",
+					graph_id=graph_id,
+				)
+			)
+		)
+
+		window_params = {
+			"graphId": graph_id,
+			"startAt": "2026-03-31T00:09:00Z",
+			"endAt": "2026-03-31T00:21:00Z",
+		}
+
+		run_trends = client.get("/experiments/trends/runs", params={**window_params, "limit": 1, "offset": 1})
+		assert run_trends.status_code == 200, run_trends.text
+		run_body = run_trends.json()
+		assert int(run_body.get("total") or 0) >= 2
+		assert int(run_body.get("offset") or 0) == 1
+		run_points = run_body.get("points") or []
+		assert len(run_points) == 1
+		assert str(run_points[0].get("runId") or "") == "run-win-3"
+
+		node_trends = client.get(
+			"/experiments/trends/nodes",
+			params={**window_params, "nodeId": "node_a", "metric": "p95Ms", "limit": 2, "offset": 0},
+		)
+		assert node_trends.status_code == 200, node_trends.text
+		node_body = node_trends.json()
+		assert int(node_body.get("total") or 0) == 2
+		assert len(node_body.get("points") or []) == 2
+
+		breaches = client.get(
+			"/experiments/sla/breaches",
+			params={**window_params, "p95Ms": 1000, "limit": 1, "offset": 0},
+		)
+		assert breaches.status_code == 200, breaches.text
+		breach_body = breaches.json()
+		assert int(breach_body.get("total") or 0) >= 2
+		assert len(breach_body.get("breaches") or []) == 1
+
+		taxonomy = client.get(
+			"/experiments/failures/taxonomy",
+			params={**window_params, "limit": 10, "offset": 0},
+		)
+		assert taxonomy.status_code == 200, taxonomy.text
+		tax_body = taxonomy.json()
+		codes = {str(item.get("errorCode") or "") for item in (tax_body.get("taxonomy") or [])}
+		assert "E_OLD" not in codes
+		assert "E_MID" in codes or "E_NEW" in codes
+
+		invalid_window = client.get(
+			"/experiments/trends/runs",
+			params={"graphId": graph_id, "startAt": "not-an-iso"},
+		)
+		assert invalid_window.status_code == 400, invalid_window.text

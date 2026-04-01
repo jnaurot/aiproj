@@ -224,13 +224,19 @@ export async function getExperimentNodeTrends(params: {
 	graphId: string;
 	nodeId?: string | null;
 	metric?: string;
+	startAt?: string | null;
+	endAt?: string | null;
 	limit?: number;
+	offset?: number;
 }) {
 	const qs = new URLSearchParams();
 	qs.set('graphId', String(params.graphId ?? '').trim());
 	if (params.nodeId) qs.set('nodeId', String(params.nodeId).trim());
 	if (params.metric) qs.set('metric', String(params.metric).trim());
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	const res = await fetch(backendUrl(`/api/experiments/trends/nodes?${qs.toString()}`));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
@@ -241,6 +247,11 @@ export async function getExperimentNodeTrends(params: {
 		graphId?: string | null;
 		nodeId?: string | null;
 		metric: string;
+		startAt?: string | null;
+		endAt?: string | null;
+		limit?: number;
+		offset?: number;
+		total?: number;
 		points: ExperimentNodeTrendPoint[];
 	};
 }
@@ -248,12 +259,18 @@ export async function getExperimentNodeTrends(params: {
 export async function getExperimentSlaBreaches(params: {
 	graphId: string;
 	p95Ms?: number;
+	startAt?: string | null;
+	endAt?: string | null;
 	limit?: number;
+	offset?: number;
 }) {
 	const qs = new URLSearchParams();
 	qs.set('graphId', String(params.graphId ?? '').trim());
 	if (Number.isFinite(Number(params.p95Ms))) qs.set('p95Ms', String(Number(params.p95Ms)));
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	const res = await fetch(backendUrl(`/api/experiments/sla/breaches?${qs.toString()}`));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
@@ -263,14 +280,28 @@ export async function getExperimentSlaBreaches(params: {
 		schemaVersion: 1;
 		graphId?: string | null;
 		thresholdMs: number;
+		startAt?: string | null;
+		endAt?: string | null;
+		limit?: number;
+		offset?: number;
+		total?: number;
 		breaches: ExperimentSlaBreach[];
 	};
 }
 
-export async function getExperimentFailureTaxonomy(params: { graphId: string; limit?: number }) {
+export async function getExperimentFailureTaxonomy(params: {
+	graphId: string;
+	startAt?: string | null;
+	endAt?: string | null;
+	limit?: number;
+	offset?: number;
+}) {
 	const qs = new URLSearchParams();
 	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	const res = await fetch(backendUrl(`/api/experiments/failures/taxonomy?${qs.toString()}`));
 	if (!res.ok) {
 		const text = await res.text().catch(() => '');
@@ -279,6 +310,11 @@ export async function getExperimentFailureTaxonomy(params: { graphId: string; li
 	return (await res.json()) as {
 		schemaVersion: 1;
 		graphId?: string | null;
+		startAt?: string | null;
+		endAt?: string | null;
+		limit?: number;
+		offset?: number;
+		total?: number;
 		taxonomy: ExperimentFailureTaxonomyItem[];
 	};
 }

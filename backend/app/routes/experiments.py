@@ -1,10 +1,44 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 router = APIRouter()
+
+
+def _parse_iso_utc(value: Optional[str]) -> Optional[datetime]:
+	if not value:
+		return None
+	text = str(value).strip()
+	if not text:
+		return None
+	try:
+		if text.endswith("Z"):
+			text = f"{text[:-1]}+00:00"
+		parsed = datetime.fromisoformat(text)
+		if parsed.tzinfo is None:
+			parsed = parsed.replace(tzinfo=timezone.utc)
+		return parsed.astimezone(timezone.utc)
+	except Exception:
+		return None
+
+
+def _created_at_in_window(
+	created_at: str,
+	*,
+	start_at: Optional[datetime],
+	end_at: Optional[datetime],
+) -> bool:
+	current = _parse_iso_utc(created_at)
+	if current is None:
+		return False
+	if start_at is not None and current < start_at:
+		return False
+	if end_at is not None and current > end_at:
+		return False
+	return True
 
 
 def _extract_flat_metrics(summary: Dict[str, Any]) -> Dict[str, float]:
@@ -142,27 +176,45 @@ async def compare_runs(
 async def run_trends(
 	request: Request,
 	graphId: Optional[str] = Query(default=None),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
 	limit: int = Query(default=100, ge=1, le=1000),
+	offset: int = Query(default=0, ge=0),
 ):
-	rows = await _list_summaries(request, graph_id=graphId, limit=limit)
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request, graph_id=graphId, limit=_query_limit_with_offset(limit, offset)
+	)
 	points: list[Dict[str, Any]] = []
 	for row in rows:
+		created_at = str(row.get("createdAt") or "")
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
 		analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
 		run_telemetry = analytics.get("runTelemetry") if isinstance(analytics.get("runTelemetry"), dict) else {}
 		points.append(
 			{
 				"runId": str(row.get("runId") or ""),
-				"createdAt": str(row.get("createdAt") or ""),
+				"createdAt": created_at,
 				"status": str(row.get("status") or ""),
 				"runtimeMs": int(run_telemetry.get("runtime_ms") or 0),
 				"peakConcurrency": int(run_telemetry.get("peak_concurrency") or 0),
 			}
 		)
 	points.sort(key=lambda p: str(p.get("createdAt") or ""))
+	paged_points = points[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"graphId": str(graphId or "").strip() or None,
-		"points": points,
+		"startAt": startAt,
+		"endAt": endAt,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(points),
+		"points": paged_points,
 	}
 
 
@@ -172,11 +224,23 @@ async def node_trends(
 	graphId: Optional[str] = Query(default=None),
 	nodeId: Optional[str] = Query(default=None),
 	metric: str = Query(default="p95Ms"),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
 	limit: int = Query(default=100, ge=1, le=1000),
+	offset: int = Query(default=0, ge=0),
 ):
-	rows = await _list_summaries(request, graph_id=graphId, limit=limit)
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request, graph_id=graphId, limit=_query_limit_with_offset(limit, offset)
+	)
 	points: list[Dict[str, Any]] = []
 	for row in rows:
+		created_at = str(row.get("createdAt") or "")
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
 		analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
 		lat = analytics.get("nodeLatencyMs") if isinstance(analytics.get("nodeLatencyMs"), dict) else {}
 		for nid, item in lat.items():
@@ -190,19 +254,25 @@ async def node_trends(
 			points.append(
 				{
 					"runId": str(row.get("runId") or ""),
-					"createdAt": str(row.get("createdAt") or ""),
+					"createdAt": created_at,
 					"nodeId": str(nid),
 					"metric": str(metric),
 					"value": float(value),
 				}
 			)
 	points.sort(key=lambda p: (str(p.get("nodeId") or ""), str(p.get("createdAt") or "")))
+	paged_points = points[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"graphId": str(graphId or "").strip() or None,
 		"nodeId": str(nodeId or "").strip() or None,
 		"metric": metric,
-		"points": points,
+		"startAt": startAt,
+		"endAt": endAt,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(points),
+		"points": paged_points,
 	}
 
 
@@ -211,11 +281,23 @@ async def sla_breaches(
 	request: Request,
 	graphId: Optional[str] = Query(default=None),
 	p95Ms: float = Query(default=2000.0, gt=0.0),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
 	limit: int = Query(default=100, ge=1, le=1000),
+	offset: int = Query(default=0, ge=0),
 ):
-	rows = await _list_summaries(request, graph_id=graphId, limit=limit)
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request, graph_id=graphId, limit=_query_limit_with_offset(limit, offset)
+	)
 	breaches: list[Dict[str, Any]] = []
 	for row in rows:
+		created_at = str(row.get("createdAt") or "")
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
 		analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
 		lat = analytics.get("nodeLatencyMs") if isinstance(analytics.get("nodeLatencyMs"), dict) else {}
 		for nid, item in lat.items():
@@ -229,18 +311,24 @@ async def sla_breaches(
 			breaches.append(
 				{
 					"runId": str(row.get("runId") or ""),
-					"createdAt": str(row.get("createdAt") or ""),
+					"createdAt": created_at,
 					"nodeId": str(nid),
 					"p95Ms": float(p95),
 					"thresholdMs": float(p95Ms),
 				}
 			)
 	breaches.sort(key=lambda row: float(row.get("p95Ms") or 0.0), reverse=True)
+	paged_breaches = breaches[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"graphId": str(graphId or "").strip() or None,
 		"thresholdMs": float(p95Ms),
-		"breaches": breaches,
+		"startAt": startAt,
+		"endAt": endAt,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(breaches),
+		"breaches": paged_breaches,
 	}
 
 
@@ -248,11 +336,23 @@ async def sla_breaches(
 async def failure_taxonomy(
 	request: Request,
 	graphId: Optional[str] = Query(default=None),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
 	limit: int = Query(default=100, ge=1, le=1000),
+	offset: int = Query(default=0, ge=0),
 ):
-	rows = await _list_summaries(request, graph_id=graphId, limit=limit)
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request, graph_id=graphId, limit=_query_limit_with_offset(limit, offset)
+	)
 	counts: Dict[str, int] = {}
 	for row in rows:
+		created_at = str(row.get("createdAt") or "")
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
 		analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
 		failures = analytics.get("failureCategories") if isinstance(analytics.get("failureCategories"), dict) else {}
 		for code, raw in failures.items():
@@ -264,10 +364,16 @@ async def failure_taxonomy(
 			counts[key] = int(counts.get(key, 0)) + max(0, value)
 	items = [{"errorCode": code, "count": int(count)} for code, count in counts.items()]
 	items.sort(key=lambda row: int(row.get("count") or 0), reverse=True)
+	paged_items = items[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"graphId": str(graphId or "").strip() or None,
-		"taxonomy": items,
+		"startAt": startAt,
+		"endAt": endAt,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(items),
+		"taxonomy": paged_items,
 	}
 
 
@@ -276,6 +382,16 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 		return float(value)
 	except Exception:
 		return float(default)
+
+
+def _query_limit_with_offset(
+	limit: int,
+	offset: int,
+	*,
+	min_probe: int = 1000,
+	cap: int = 5000,
+) -> int:
+	return max(1, min(int(cap), max(int(min_probe), int(limit) + int(offset))))
 
 
 @router.get("/regressions")
