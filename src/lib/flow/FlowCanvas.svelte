@@ -368,6 +368,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		byMode: {},
 		bySeverity: { low: 0, medium: 0, high: 0 }
 	};
+	let runMonitorAdaptiveSparkline: RunMonitorTrendSparkline | null = null;
+	let runMonitorAdaptiveHoverIndex = -1;
+	let runMonitorAdaptiveHoverPoint:
+		| { x: number; y: number; value: number; createdAt: string }
+		| null = null;
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorAdaptiveChangedOnly = false;
@@ -821,6 +826,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorAdaptiveDecisionSummary = summarizeAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows
 	);
+	$: runMonitorAdaptiveSparkline = buildTrendSparkline(
+		runMonitorAdaptiveRowsVisible
+			.slice(0, 60)
+			.slice()
+			.reverse()
+			.map((row) => ({
+				createdAt: String(row.at ?? ''),
+				value: Number(row.explanation.score ?? NaN)
+			})),
+		{ width: 520, height: 72 }
+	);
+	$: runMonitorAdaptiveHoverPoint =
+		runMonitorAdaptiveSparkline &&
+		runMonitorAdaptiveHoverIndex >= 0 &&
+		runMonitorAdaptiveHoverIndex < runMonitorAdaptiveSparkline.points.length
+			? runMonitorAdaptiveSparkline.points[runMonitorAdaptiveHoverIndex]
+			: null;
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
@@ -2280,6 +2302,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			}
 		}
 		runMonitorTrendHoverIndex = bestIndex;
+	}
+
+	function onAdaptiveSparklineMove(event: PointerEvent): void {
+		if (!runMonitorAdaptiveSparkline || runMonitorAdaptiveSparkline.points.length === 0) {
+			runMonitorAdaptiveHoverIndex = -1;
+			return;
+		}
+		const target = event.currentTarget as SVGSVGElement | null;
+		if (!target) return;
+		const rect = target.getBoundingClientRect();
+		if (rect.width <= 0) return;
+		const px = Math.max(0, Math.min(rect.width, Number(event.clientX || 0) - rect.left));
+		const normalizedX = (px / rect.width) * runMonitorAdaptiveSparkline.width;
+		let bestIndex = 0;
+		let bestDistance = Number.POSITIVE_INFINITY;
+		for (let index = 0; index < runMonitorAdaptiveSparkline.points.length; index += 1) {
+			const distance = Math.abs(runMonitorAdaptiveSparkline.points[index].x - normalizedX);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				bestIndex = index;
+			}
+		}
+		runMonitorAdaptiveHoverIndex = bestIndex;
 	}
 
 	async function refreshRunMonitorRegressions(
@@ -5027,6 +5072,74 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											medium={runMonitorAdaptiveDecisionSummary.bySeverity.medium},
 											high={runMonitorAdaptiveDecisionSummary.bySeverity.high}
 										</div>
+										{#if runMonitorAdaptiveSparkline}
+											<div class="runMonitorSparklineCard">
+												<div class="runMonitorSparklineHead">
+													<span>Adaptive Score Trend</span>
+													<span class="mono">
+														last={runMonitorAdaptiveSparkline.lastValue.toFixed(1)}
+														| delta={runMonitorAdaptiveSparkline.deltaValue >= 0 ? '+' : ''}{runMonitorAdaptiveSparkline.deltaValue.toFixed(1)}
+														{#if runMonitorAdaptiveSparkline.deltaPct !== null}
+															({runMonitorAdaptiveSparkline.deltaPct >= 0 ? '+' : ''}{runMonitorAdaptiveSparkline.deltaPct.toFixed(1)}%)
+														{/if}
+													</span>
+												</div>
+												<svg
+													class="runMonitorSparkline"
+													viewBox={`0 0 ${runMonitorAdaptiveSparkline.width} ${runMonitorAdaptiveSparkline.height}`}
+													preserveAspectRatio="none"
+													role="img"
+													aria-label="Adaptive decision score trend"
+													on:pointermove={onAdaptiveSparklineMove}
+													on:pointerleave={() => (runMonitorAdaptiveHoverIndex = -1)}
+												>
+													<polyline
+														points={`0,${runMonitorAdaptiveSparkline.height} ${runMonitorAdaptiveSparkline.width},${runMonitorAdaptiveSparkline.height}`}
+														class="runMonitorSparklineBase"
+													/>
+													<line
+														x1="0"
+														y1={runMonitorAdaptiveSparkline.baselines.firstValueY}
+														x2={runMonitorAdaptiveSparkline.width}
+														y2={runMonitorAdaptiveSparkline.baselines.firstValueY}
+														class="runMonitorSparklineBaseline runMonitorSparklineBaseline-first"
+													/>
+													<line
+														x1="0"
+														y1={runMonitorAdaptiveSparkline.baselines.meanValueY}
+														x2={runMonitorAdaptiveSparkline.width}
+														y2={runMonitorAdaptiveSparkline.baselines.meanValueY}
+														class="runMonitorSparklineBaseline runMonitorSparklineBaseline-mean"
+													/>
+													<path d={runMonitorAdaptiveSparkline.path} class="runMonitorSparklinePath"></path>
+													{#if runMonitorAdaptiveHoverPoint}
+														<line
+															x1={runMonitorAdaptiveHoverPoint.x}
+															y1="0"
+															x2={runMonitorAdaptiveHoverPoint.x}
+															y2={runMonitorAdaptiveSparkline.height}
+															class="runMonitorSparklineHoverGuide"
+														/>
+														<circle
+															cx={runMonitorAdaptiveHoverPoint.x}
+															cy={runMonitorAdaptiveHoverPoint.y}
+															r="3.5"
+															class="runMonitorSparklineHoverPoint"
+														/>
+													{/if}
+												</svg>
+												{#if runMonitorAdaptiveHoverPoint}
+													<div class="runMonitorSparklineTooltip mono">
+														{runMonitorAdaptiveHoverPoint.createdAt || '-'} | score={runMonitorAdaptiveHoverPoint.value.toFixed(1)}
+													</div>
+												{/if}
+												<div class="runMonitorSparklineFoot mono">
+													min={runMonitorAdaptiveSparkline.minValue.toFixed(1)}
+													| max={runMonitorAdaptiveSparkline.maxValue.toFixed(1)}
+													| points={runMonitorAdaptiveSparkline.pointsCount}
+												</div>
+											</div>
+										{/if}
 										{#if runMonitorAdaptiveRowsVisible.length === 0}
 											<div class="envProfileEmpty">No adaptive scheduler decisions yet.</div>
 										{:else}
