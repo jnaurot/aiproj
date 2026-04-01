@@ -22,7 +22,7 @@ def _params(output_mode: str = "text") -> LLMParams:
 
 def test_openai_adapter_conforms_contract():
 	adapter = OpenAICompatAdapter()
-	prepared = adapter.prepare_request(_params("json"), upstream_text="abc")
+	prepared = adapter.prepare_request(_params("json"), upstream_text="abc", template_values={"job": "abc"})
 	assert prepared.provider == "openai_compat"
 	assert prepared.output_mode == "json"
 	assert prepared.url.endswith("/v1/chat/completions")
@@ -69,6 +69,14 @@ def test_ollama_adapter_conforms_contract():
 	assert parsed.file_suffix == "txt"
 	assert parsed.data == "hello"
 	assert "ollama" in adapter.normalize_error(ValueError("boom"))
+	template_params = _params("text").model_copy(update={"user_prompt": "role={job} input={input}"})
+	prepared_with_template = adapter.prepare_request(
+		template_params,
+		upstream_text="abc",
+		template_values={"input": "abc", "job": "role text"},
+	)
+	user_message = (prepared_with_template.payload.get("messages") or [{}])[-1]
+	assert "role text" in str(user_message.get("content") or "")
 
 
 def test_ollama_adapter_rejects_embeddings_mode():

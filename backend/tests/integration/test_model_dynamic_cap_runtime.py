@@ -27,6 +27,7 @@ async def test_runtime_env_cap_change_applies_without_process_restart(monkeypatc
 		input_text=None,
 		input_items=None,
 		input_media=None,
+		template_values=None,
 		upstream_artifact_ids=None,
 	):
 		node_id = str(node.get("id") or "")

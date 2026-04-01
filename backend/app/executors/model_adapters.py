@@ -32,6 +32,7 @@ class ModelProviderAdapter(Protocol):
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
 		input_media: Optional[List[Dict[str, Any]]] = None,
+		template_values: Optional[Dict[str, str]] = None,
 	) -> AdapterPreparedRequest: ...
 
 	def parse_response(self, output_mode: str, raw_data: str) -> AdapterParsedResponse: ...
@@ -50,15 +51,30 @@ def resolve_output_mode(params: LLMParams) -> str:
 	return "text"
 
 
-def build_messages(params: LLMParams, upstream_text: str) -> List[Dict[str, str]]:
+def _render_prompt_template(template: str, template_values: Dict[str, str]) -> str:
+	if not template_values:
+		return template
+	out = template
+	for key, value in template_values.items():
+		token = "{" + str(key) + "}"
+		if token in out:
+			out = out.replace(token, str(value))
+	return out
+
+
+def build_messages(params: LLMParams, upstream_text: str, template_values: Optional[Dict[str, str]] = None) -> List[Dict[str, str]]:
+	values: Dict[str, str] = dict(template_values or {})
+	if "input" not in values:
+		values["input"] = upstream_text
 	user_prompt = params.user_prompt or "Summarize the input data."
+	rendered_prompt = _render_prompt_template(user_prompt, values)
 	if "{input}" in user_prompt:
-		user_content = user_prompt.replace("{input}", upstream_text)
+		user_content = rendered_prompt
 	else:
-		user_content = f"{user_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
+		user_content = f"{rendered_prompt}\n\n--- INPUT DATA ---\n{upstream_text}"
 	messages: List[Dict[str, str]] = []
 	if params.system_prompt:
-		messages.append({"role": "system", "content": params.system_prompt})
+		messages.append({"role": "system", "content": _render_prompt_template(params.system_prompt, values)})
 	messages.append({"role": "user", "content": user_content})
 	return messages
 
@@ -96,6 +112,7 @@ class OpenAICompatAdapter:
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
 		input_media: Optional[List[Dict[str, Any]]] = None,
+		template_values: Optional[Dict[str, str]] = None,
 	) -> AdapterPreparedRequest:
 		base_url = (params.base_url or "").rstrip("/")
 		if not base_url:
@@ -111,7 +128,7 @@ class OpenAICompatAdapter:
 				"input": input_items if (input_items and len(input_items) > 1) else (input_items[0] if input_items else upstream_text),
 			}
 		else:
-			messages: List[Dict[str, Any]] = build_messages(params, upstream_text)
+			messages: List[Dict[str, Any]] = build_messages(params, upstream_text, template_values=template_values)
 			media_inputs = _canonicalize_input_media(input_media)
 			if media_inputs:
 				user_content = str(messages[-1].get("content") or "")
@@ -208,6 +225,7 @@ class OllamaAdapter:
 		upstream_text: str,
 		input_items: Optional[List[str]] = None,
 		input_media: Optional[List[Dict[str, Any]]] = None,
+		template_values: Optional[Dict[str, str]] = None,
 	) -> AdapterPreparedRequest:
 		base_url = (params.base_url or "").rstrip("/")
 		if not base_url:
@@ -223,7 +241,7 @@ class OllamaAdapter:
 			thinking_mode = params.thinking.mode
 		payload: Dict[str, Any] = {
 			"model": params.model,
-			"messages": build_messages(params, upstream_text),
+			"messages": build_messages(params, upstream_text, template_values=template_values),
 			"stream": True,
 			"think": thinking_mode in {"hidden", "visible"},
 			"options": {"temperature": params.temperature, "num_predict": params.max_tokens},

@@ -29,6 +29,7 @@ async def test_exec_llm_emits_llm_lease_waiting_acquired_released(monkeypatch) -
 		input_text=None,
 		input_items=None,
 		input_media=None,
+		template_values=None,
 		upstream_artifact_ids=None,
 	):
 		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")

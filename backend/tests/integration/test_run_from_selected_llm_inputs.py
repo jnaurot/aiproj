@@ -52,10 +52,12 @@ async def test_run_from_selected_llm_has_non_empty_upstream_and_succeeds(monkeyp
     async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
         return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="hello source")
 
-    async def _fake_exec_llm(run_id, node, context, upstream_artifact_ids=None):
+    async def _fake_exec_llm(run_id, node, context, upstream_artifact_ids=None, on_execution_started=None):
         upstream_artifact_ids = upstream_artifact_ids or []
         seen["upstream_counts"].append(len(upstream_artifact_ids))
         assert upstream_artifact_ids, "Expected non-empty upstream artifacts for selected LLM run"
+        if callable(on_execution_started):
+            await on_execution_started()
         return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="llm output")
 
     monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)

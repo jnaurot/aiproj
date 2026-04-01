@@ -301,6 +301,73 @@ def _resolve_llm_output_mode(node: Dict[str, Any], norm_params: Dict[str, Any]) 
     return _llm_schema_declared_output_mode(node)
 
 
+def _mapping_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _resolve_input_mapping(
+    *,
+    params: LLMParams,
+    raw_params: Dict[str, Any],
+    input_text: str,
+) -> tuple[Dict[str, str], Optional[str], Dict[str, Any]]:
+    declared = params.input_mapping if isinstance(params.input_mapping, dict) else {}
+    runtime_values = raw_params.get("_input_mapping_values") if isinstance(raw_params.get("_input_mapping_values"), dict) else {}
+    template_values: Dict[str, str] = {"input": input_text}
+    mapping_meta: Dict[str, Any] = {
+        "declared": {str(k): str(v) for k, v in declared.items()},
+        "resolvedKeys": [],
+        "runtimeSources": sorted(str(k) for k in runtime_values.keys()),
+    }
+    if not declared:
+        return template_values, None, mapping_meta
+    missing: List[Dict[str, str]] = []
+    for var_raw, source_raw in declared.items():
+        var_name = str(var_raw or "").strip()
+        source_name = str(source_raw or "").strip()
+        if not var_name or not source_name:
+            missing.append({"variable": var_name or "<empty>", "source": source_name or "<empty>"})
+            continue
+        if source_name in {"in", "input"}:
+            template_values[var_name] = input_text
+            continue
+        if source_name in runtime_values:
+            template_values[var_name] = _mapping_text(runtime_values.get(source_name))
+            continue
+        missing.append({"variable": var_name, "source": source_name})
+    mapping_meta["resolvedKeys"] = sorted(str(k) for k in template_values.keys())
+    if missing:
+        return (
+            template_values,
+            _model_error_payload(
+                "MODEL_INPUT_MAPPING_MISSING",
+                "input_mapping references sources that are unavailable at runtime",
+                missing=missing,
+                availableSources=sorted({"in", "input", *[str(k) for k in runtime_values.keys()]}),
+            ),
+            mapping_meta,
+        )
+    return template_values, None, mapping_meta
+
+
+def _attach_input_mapping_observability(output: NodeOutput, mapping_meta: Dict[str, Any]) -> NodeOutput:
+    if output.metadata is None:
+        return output
+    observability = dict(output.metadata.observability or {})
+    observability["inputMapping"] = mapping_meta
+    next_metadata = output.metadata.model_copy(update={"observability": observability})
+    return output.model_copy(update={"metadata": next_metadata})
+
+
 def iso_now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -639,6 +706,28 @@ async def exec_llm(
             }
         )
 
+    template_values, input_mapping_error, input_mapping_meta = _resolve_input_mapping(
+        params=llm_params,
+        raw_params=raw_params,
+        input_text=text or "",
+    )
+    if input_mapping_error:
+        await context.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "error",
+                "message": f"MODEL_INPUT_MAPPING_MISSING: {input_mapping_error}",
+                "nodeId": node_id,
+            }
+        )
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=0.0,
+            error=input_mapping_error,
+        )
 
     await context.bus.emit(
         {
@@ -662,6 +751,7 @@ async def exec_llm(
                 input_text=text,
                 input_items=serialized_inputs,
                 input_media=serialized_media,
+                template_values=template_values,
                 upstream_artifact_ids=upstream_artifact_ids,
             )
         if kind == "openai_compat":
@@ -674,6 +764,7 @@ async def exec_llm(
                 input_text=text,
                 input_items=serialized_inputs,
                 input_media=serialized_media,
+                template_values=template_values,
                 upstream_artifact_ids=upstream_artifact_ids,
             )
         raise ValueError(f"Unsupported llmKind: {kind}")
@@ -929,9 +1020,15 @@ async def exec_llm(
                     }
                 )
         if out.status == "succeeded":
+            out = _attach_input_mapping_observability(out, input_mapping_meta)
             return out
         last_output = out.model_copy(
             update={
+                "metadata": (
+                    _attach_input_mapping_observability(out, input_mapping_meta).metadata
+                    if out.metadata is not None
+                    else None
+                ),
                 "error": _normalize_model_error(
                     out.error,
                     default_code="MODEL_EXECUTION_FAILED",

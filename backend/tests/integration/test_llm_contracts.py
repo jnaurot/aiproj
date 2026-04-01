@@ -71,9 +71,10 @@ def _graph(output_mode: str, params_patch: dict | None = None) -> dict:
 		"model": "fake-model",
 		"user_prompt": "Summarize {input}",
 		"output_mode": output_mode,
-		"output_schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
 		"output_strict": True,
 	}
+	if str(output_mode).strip().lower() == "json":
+		params["output_schema"] = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
 	if params_patch:
 		params.update(params_patch)
 	return {

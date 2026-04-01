@@ -4068,14 +4068,28 @@ async def run_graph(
                 for token in placeholder_tokens
                 if token in _INJECTABLE_NON_WORK_HANDLES
             }
-            if injectable_handles and input_refs:
+            input_mapping_handles: set[str] = set()
+            if kind in {"model", "llm"} and isinstance(params.get("input_mapping"), dict):
+                for source_value in (params.get("input_mapping") or {}).values():
+                    handle = str(source_value or "").strip()
+                    if handle in _INJECTABLE_NON_WORK_HANDLES:
+                        input_mapping_handles.add(handle)
+            handles_to_materialize = injectable_handles | input_mapping_handles
+            if handles_to_materialize and input_refs:
                 injected_values = await _build_non_work_injection_values(
                     context,
                     input_refs,
-                    handles_to_inject=injectable_handles,
+                    handles_to_inject=handles_to_materialize,
                 )
                 if injected_values:
-                    params = _inject_placeholders(params, injected_values)
+                    if injectable_handles:
+                        params = _inject_placeholders(params, injected_values)
+                    if input_mapping_handles and kind in {"model", "llm"}:
+                        params["_input_mapping_values"] = {
+                            handle: injected_values[handle]
+                            for handle in sorted(input_mapping_handles)
+                            if handle in injected_values
+                        }
                     n["data"]["params"] = copy.deepcopy(params)
 
             try:

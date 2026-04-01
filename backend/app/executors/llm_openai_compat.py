@@ -88,6 +88,7 @@ async def exec_llm_openai_compat(
     input_text: Optional[str] = None,
     input_items: Optional[list[str]] = None,
     input_media: Optional[list[Dict[str, Any]]] = None,
+    template_values: Optional[Dict[str, str]] = None,
     upstream_artifact_ids: Optional[list[str]] = None,
 ) -> NodeOutput:
     node_id = node.get("id", "<missing-node-id>")
@@ -135,6 +136,7 @@ async def exec_llm_openai_compat(
             upstream_text,
             input_items=input_items,
             input_media=input_media,
+            template_values=template_values,
         )
     except Exception as e:
         return NodeOutput(

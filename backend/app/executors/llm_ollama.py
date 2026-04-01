@@ -221,6 +221,7 @@ async def exec_llm_ollama(
     input_text: Optional[str] = None,
     input_items: Optional[list[str]] = None,
     input_media: Optional[list[Dict[str, Any]]] = None,
+    template_values: Optional[Dict[str, str]] = None,
     upstream_artifact_ids: Optional[list[str]] = None
 ) -> NodeOutput:
     """
@@ -229,8 +230,7 @@ async def exec_llm_ollama(
     Called when node.data.llmKind == "ollama"
     Streams token/content deltas via the bus (log events), and returns final NodeOutput.
 
-    NOTE: This module purposefully avoids assuming your internal dataflow format.
-    Right now it can only safely template using '{input}' from input_metadata if present.
+    NOTE: Prompt templating is resolved by model adapters from mapped template values.
     """
     node_id = node.get("id", "<missing-node-id>")
     upstream_artifact_ids = upstream_artifact_ids or []
@@ -285,6 +285,7 @@ async def exec_llm_ollama(
             text,
             input_items=input_items,
             input_media=input_media,
+            template_values=template_values,
         )
     except Exception as e:
         return NodeOutput(
@@ -673,3 +674,5 @@ async def exec_llm_ollama(
             # exponential backoff, capped
             backoff = policy_backoff_seconds(request_policy, attempt)
             await asyncio.sleep(backoff)
+
+
