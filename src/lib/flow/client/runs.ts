@@ -174,6 +174,14 @@ export type ExperimentFailureTaxonomyItem = {
 	count: number;
 };
 
+export type ExperimentRunTrendPoint = {
+	runId: string;
+	createdAt: string;
+	status: string;
+	runtimeMs: number;
+	peakConcurrency: number;
+};
+
 export type RunTransitionEvent = {
 	id: number;
 	runId: string;
@@ -217,6 +225,36 @@ export async function getExperimentRegressions(params: {
 		baselineRunId: string;
 		alertType?: 'all' | 'latency' | 'failure';
 		alerts: RegressionAlert[];
+	};
+}
+
+export async function getExperimentRunTrends(params: {
+	graphId: string;
+	startAt?: string | null;
+	endAt?: string | null;
+	limit?: number;
+	offset?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
+	const res = await fetch(backendUrl(`/api/experiments/trends/runs?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentRunTrends failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		startAt?: string | null;
+		endAt?: string | null;
+		limit?: number;
+		offset?: number;
+		total?: number;
+		points: ExperimentRunTrendPoint[];
 	};
 }
 

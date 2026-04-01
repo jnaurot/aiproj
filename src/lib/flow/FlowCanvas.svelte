@@ -36,6 +36,7 @@
 	import type {
 		ExperimentFailureTaxonomyItem,
 		ExperimentNodeTrendPoint,
+		ExperimentRunTrendPoint,
 		ExperimentSlaBreach,
 		RegressionAlert
 	} from '$lib/flow/client/runs';
@@ -43,6 +44,7 @@
 	import {
 		getExperimentFailureTaxonomy,
 		getExperimentNodeTrends,
+		getExperimentRunTrends,
 		getExperimentRegressions,
 		getRunTransitions,
 		getExperimentSlaBreaches
@@ -398,6 +400,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let selectedRegressionAlert: RegressionAlert | null = null;
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
+	let runMonitorRunTrendPoints: ExperimentRunTrendPoint[] = [];
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
 	let runMonitorTrendSparkline: RunMonitorTrendSparkline | null = null;
 	let runMonitorTrendHoverIndex = -1;
@@ -2070,6 +2073,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runLogFilter = errorCode;
 	}
 
+	function selectRunTrendDrilldown(point: ExperimentRunTrendPoint): void {
+		const runId = String(point?.runId ?? '').trim();
+		if (!runId) return;
+		runLogFilter = runId;
+	}
+
 	function selectTransitionEventDrilldown(event: RunMonitorTransitionRow): void {
 		const entity = String(event?.entity ?? '').trim().toLowerCase();
 		const entityId = String(event?.entityId ?? '').trim();
@@ -2206,6 +2215,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (typeof window === 'undefined') return;
 		const graphId = String($graphStore.graphId ?? '').trim();
 		if (!graphId) {
+			runMonitorRunTrendPoints = [];
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
@@ -2215,7 +2225,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorAnalyticsLoading = true;
 		runMonitorAnalyticsError = null;
 		try {
-			const [trendRes, slaRes, failureRes] = await Promise.all([
+			const [runTrendRes, trendRes, slaRes, failureRes] = await Promise.all([
+				getExperimentRunTrends({
+					graphId,
+					limit: 20
+				}),
 				getExperimentNodeTrends({
 					graphId,
 					nodeId: runMonitorTrendNodeId || undefined,
@@ -2232,6 +2246,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					limit: 30
 				})
 			]);
+			runMonitorRunTrendPoints = Array.isArray(runTrendRes.points)
+				? runTrendRes.points.slice(-10)
+				: [];
 			runMonitorTrendPoints = Array.isArray(trendRes.points) ? trendRes.points.slice(-20) : [];
 			runMonitorTrendHoverIndex = -1;
 			runMonitorSlaBreaches = Array.isArray(slaRes.breaches) ? slaRes.breaches.slice(0, 20) : [];
@@ -2239,6 +2256,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				? failureRes.taxonomy.slice(0, 20)
 				: [];
 		} catch (error) {
+			runMonitorRunTrendPoints = [];
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
@@ -5116,6 +5134,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										{#if runMonitorAnalyticsError}
 											<div class="envProfileError">{runMonitorAnalyticsError}</div>
 										{:else}
+											<div class="runMonitorNodeHead" role="row">
+												<span>run</span>
+												<span>status</span>
+												<span>runtime ms</span>
+												<span>peak conc</span>
+												<span>created</span>
+											</div>
+											{#if runMonitorRunTrendPoints.length === 0}
+												<div class="envProfileEmpty">No run trend points in current window.</div>
+											{:else}
+												{#each runMonitorRunTrendPoints as point (`${point.runId}:${point.createdAt}`)}
+													<button
+														type="button"
+														class="runMonitorNodeRow"
+														role="row"
+														on:click={() => selectRunTrendDrilldown(point)}
+														title="Filter run logs by run id"
+													>
+														<span class="mono">{point.runId}</span>
+														<span>{point.status || '-'}</span>
+														<span>{Number(point.runtimeMs ?? 0)}</span>
+														<span>{Number(point.peakConcurrency ?? 0)}</span>
+														<span>{point.createdAt}</span>
+													</button>
+												{/each}
+											{/if}
 											{#if runMonitorTrendSparkline}
 												<div class="runMonitorSparklineCard">
 													<div class="runMonitorSparklineHead">
