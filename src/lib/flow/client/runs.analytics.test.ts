@@ -17,12 +17,14 @@ describe('runs client analytics endpoints', () => {
 			expect(url.includes('nodeId=n1')).toBe(true);
 			expect(url.includes('startAt=2026-03-31T00%3A00%3A00Z')).toBe(true);
 			expect(url.includes('endAt=2026-03-31T01%3A00%3A00Z')).toBe(true);
+			expect(url.includes('sort=value_desc')).toBe(true);
 			expect(url.includes('limit=50')).toBe(true);
 			expect(url.includes('offset=5')).toBe(true);
 			return new Response(
 				JSON.stringify({
 					schemaVersion: 1,
 					metric: 'p95Ms',
+					sort: 'value_desc',
 					total: 1,
 					points: [{ runId: 'r1', createdAt: '2026-03-31T00:00:00Z', nodeId: 'n1', metric: 'p95Ms', value: 1200 }]
 				}),
@@ -36,6 +38,7 @@ describe('runs client analytics endpoints', () => {
 				metric: 'p95Ms',
 				startAt: '2026-03-31T00:00:00Z',
 				endAt: '2026-03-31T01:00:00Z',
+				sort: 'value_desc',
 				limit: 50,
 				offset: 5
 			});
@@ -143,6 +146,7 @@ describe('runs client analytics endpoints', () => {
 				graphId: 'graph_1',
 				startAt: '2026-03-31T00:00:00Z',
 				endAt: '2026-03-31T01:00:00Z',
+				sort: 'runtime_desc',
 				limit: 5,
 				offset: 1
 			});

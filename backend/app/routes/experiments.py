@@ -178,9 +178,13 @@ async def run_trends(
 	graphId: Optional[str] = Query(default=None),
 	startAt: Optional[str] = Query(default=None),
 	endAt: Optional[str] = Query(default=None),
+	sort: str = Query(default="created_asc"),
 	limit: int = Query(default=100, ge=1, le=1000),
 	offset: int = Query(default=0, ge=0),
 ):
+	sort_mode = str(sort or "created_asc").strip().lower()
+	if sort_mode not in {"created_asc", "created_desc", "runtime_desc"}:
+		raise HTTPException(400, "sort must be one of: created_asc, created_desc, runtime_desc")
 	start_at = _parse_iso_utc(startAt)
 	end_at = _parse_iso_utc(endAt)
 	if (startAt and start_at is None) or (endAt and end_at is None):
@@ -204,13 +208,25 @@ async def run_trends(
 				"peakConcurrency": int(run_telemetry.get("peak_concurrency") or 0),
 			}
 		)
-	points.sort(key=lambda p: str(p.get("createdAt") or ""))
+	if sort_mode == "created_desc":
+		points.sort(key=lambda p: str(p.get("createdAt") or ""), reverse=True)
+	elif sort_mode == "runtime_desc":
+		points.sort(
+			key=lambda p: (
+				float(p.get("runtimeMs") or 0.0),
+				str(p.get("createdAt") or ""),
+			),
+			reverse=True,
+		)
+	else:
+		points.sort(key=lambda p: str(p.get("createdAt") or ""))
 	paged_points = points[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"graphId": str(graphId or "").strip() or None,
 		"startAt": startAt,
 		"endAt": endAt,
+		"sort": sort_mode,
 		"limit": int(limit),
 		"offset": int(offset),
 		"total": len(points),
@@ -226,9 +242,13 @@ async def node_trends(
 	metric: str = Query(default="p95Ms"),
 	startAt: Optional[str] = Query(default=None),
 	endAt: Optional[str] = Query(default=None),
+	sort: str = Query(default="created_asc"),
 	limit: int = Query(default=100, ge=1, le=1000),
 	offset: int = Query(default=0, ge=0),
 ):
+	sort_mode = str(sort or "created_asc").strip().lower()
+	if sort_mode not in {"created_asc", "created_desc", "value_desc"}:
+		raise HTTPException(400, "sort must be one of: created_asc, created_desc, value_desc")
 	start_at = _parse_iso_utc(startAt)
 	end_at = _parse_iso_utc(endAt)
 	if (startAt and start_at is None) or (endAt and end_at is None):
@@ -260,7 +280,22 @@ async def node_trends(
 					"value": float(value),
 				}
 			)
-	points.sort(key=lambda p: (str(p.get("nodeId") or ""), str(p.get("createdAt") or "")))
+	if sort_mode == "created_desc":
+		points.sort(
+			key=lambda p: (str(p.get("nodeId") or ""), str(p.get("createdAt") or "")),
+			reverse=True,
+		)
+	elif sort_mode == "value_desc":
+		points.sort(
+			key=lambda p: (
+				float(p.get("value") or 0.0),
+				str(p.get("nodeId") or ""),
+				str(p.get("createdAt") or ""),
+			),
+			reverse=True,
+		)
+	else:
+		points.sort(key=lambda p: (str(p.get("nodeId") or ""), str(p.get("createdAt") or "")))
 	paged_points = points[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
@@ -269,6 +304,7 @@ async def node_trends(
 		"metric": metric,
 		"startAt": startAt,
 		"endAt": endAt,
+		"sort": sort_mode,
 		"limit": int(limit),
 		"offset": int(offset),
 		"total": len(points),

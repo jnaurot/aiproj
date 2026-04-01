@@ -232,6 +232,7 @@ export async function getExperimentRunTrends(params: {
 	graphId: string;
 	startAt?: string | null;
 	endAt?: string | null;
+	sort?: 'created_asc' | 'created_desc' | 'runtime_desc';
 	limit?: number;
 	offset?: number;
 }) {
@@ -239,6 +240,7 @@ export async function getExperimentRunTrends(params: {
 	qs.set('graphId', String(params.graphId ?? '').trim());
 	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
 	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
+	if (params.sort) qs.set('sort', String(params.sort));
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
 	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	const res = await fetch(backendUrl(`/api/experiments/trends/runs?${qs.toString()}`));
@@ -251,6 +253,7 @@ export async function getExperimentRunTrends(params: {
 		graphId?: string | null;
 		startAt?: string | null;
 		endAt?: string | null;
+		sort?: 'created_asc' | 'created_desc' | 'runtime_desc';
 		limit?: number;
 		offset?: number;
 		total?: number;
@@ -264,6 +267,7 @@ export async function getExperimentNodeTrends(params: {
 	metric?: string;
 	startAt?: string | null;
 	endAt?: string | null;
+	sort?: 'created_asc' | 'created_desc' | 'value_desc';
 	limit?: number;
 	offset?: number;
 }) {
@@ -273,6 +277,7 @@ export async function getExperimentNodeTrends(params: {
 	if (params.metric) qs.set('metric', String(params.metric).trim());
 	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
 	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
+	if (params.sort) qs.set('sort', String(params.sort));
 	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
 	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	const res = await fetch(backendUrl(`/api/experiments/trends/nodes?${qs.toString()}`));
@@ -287,6 +292,7 @@ export async function getExperimentNodeTrends(params: {
 		metric: string;
 		startAt?: string | null;
 		endAt?: string | null;
+		sort?: 'created_asc' | 'created_desc' | 'value_desc';
 		limit?: number;
 		offset?: number;
 		total?: number;

@@ -175,6 +175,18 @@ def test_experiments_analytics_supports_time_window_and_pagination():
 		run_points = run_body.get("points") or []
 		assert len(run_points) == 1
 		assert str(run_points[0].get("runId") or "") == "run-win-3"
+		assert str(run_body.get("sort") or "") == "created_asc"
+
+		run_trends_runtime_desc = client.get(
+			"/experiments/trends/runs",
+			params={**window_params, "sort": "runtime_desc", "limit": 2, "offset": 0},
+		)
+		assert run_trends_runtime_desc.status_code == 200, run_trends_runtime_desc.text
+		runtime_points = run_trends_runtime_desc.json().get("points") or []
+		assert len(runtime_points) >= 1
+		assert float(runtime_points[0].get("runtimeMs") or 0.0) >= float(
+			(runtime_points[-1].get("runtimeMs") or 0.0)
+		)
 
 		node_trends = client.get(
 			"/experiments/trends/nodes",
@@ -184,6 +196,25 @@ def test_experiments_analytics_supports_time_window_and_pagination():
 		node_body = node_trends.json()
 		assert int(node_body.get("total") or 0) == 2
 		assert len(node_body.get("points") or []) == 2
+		assert str(node_body.get("sort") or "") == "created_asc"
+
+		node_trends_value_desc = client.get(
+			"/experiments/trends/nodes",
+			params={
+				**window_params,
+				"nodeId": "node_a",
+				"metric": "p95Ms",
+				"sort": "value_desc",
+				"limit": 2,
+				"offset": 0,
+			},
+		)
+		assert node_trends_value_desc.status_code == 200, node_trends_value_desc.text
+		node_desc_points = node_trends_value_desc.json().get("points") or []
+		assert len(node_desc_points) >= 1
+		assert float(node_desc_points[0].get("value") or 0.0) >= float(
+			(node_desc_points[-1].get("value") or 0.0)
+		)
 
 		breaches = client.get(
 			"/experiments/sla/breaches",
@@ -209,3 +240,9 @@ def test_experiments_analytics_supports_time_window_and_pagination():
 			params={"graphId": graph_id, "startAt": "not-an-iso"},
 		)
 		assert invalid_window.status_code == 400, invalid_window.text
+
+		invalid_sort = client.get(
+			"/experiments/trends/nodes",
+			params={"graphId": graph_id, "sort": "bogus"},
+		)
+		assert invalid_sort.status_code == 400, invalid_sort.text

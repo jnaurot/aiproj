@@ -2233,6 +2233,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
+					sort: 'created_asc',
 					limit: 20,
 					offset: Math.max(0, Number(runMonitorAnalyticsOffset || 0))
 				}),
@@ -2242,6 +2243,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					metric: runMonitorTrendMetric,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
+					sort: 'created_asc',
 					limit: 50,
 					offset: 0
 				}),
