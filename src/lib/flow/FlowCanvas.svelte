@@ -334,9 +334,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
+	let runMonitorAdaptiveRowsVisible: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionSelectedKey = '';
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
+	let runMonitorAdaptiveModeFilter: 'all' | 'off' | 'observe' | 'enforce' = 'all';
+	let runMonitorAdaptiveSeverityFilter: 'all' | 'low' | 'medium' | 'high' = 'all';
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -722,6 +725,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (index < 0) return null;
 		return runMonitorAdaptiveDecisionRows[index + 1] ?? null;
 	})();
+	$: runMonitorAdaptiveRowsVisible = runMonitorAdaptiveDecisionRows.filter((row) => {
+		if (runMonitorAdaptiveModeFilter !== 'all' && String(row.mode ?? '').trim() !== runMonitorAdaptiveModeFilter) {
+			return false;
+		}
+		if (
+			runMonitorAdaptiveSeverityFilter !== 'all' &&
+			String(row.explanation?.severity ?? '').trim() !== runMonitorAdaptiveSeverityFilter
+		) {
+			return false;
+		}
+		return true;
+	});
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
@@ -4569,6 +4584,26 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</div>
 									</div>
 									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Mode</span>
+												<select bind:value={runMonitorAdaptiveModeFilter}>
+													<option value="all">All</option>
+													<option value="off">off</option>
+													<option value="observe">observe</option>
+													<option value="enforce">enforce</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Severity</span>
+												<select bind:value={runMonitorAdaptiveSeverityFilter}>
+													<option value="all">All</option>
+													<option value="low">low</option>
+													<option value="medium">medium</option>
+													<option value="high">high</option>
+												</select>
+											</label>
+										</div>
 										<div class="runMonitorNodeHead runMonitorAdaptiveTimelineHead" role="row">
 											<span>time</span>
 											<span>mode</span>
@@ -4578,10 +4613,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<span>effective caps</span>
 											<span>reasons</span>
 										</div>
-										{#if runMonitorAdaptiveDecisionRows.length === 0}
+										{#if runMonitorAdaptiveRowsVisible.length === 0}
 											<div class="envProfileEmpty">No adaptive scheduler decisions yet.</div>
 										{:else}
-											{#each runMonitorAdaptiveDecisionRows.slice(0, 20) as row (`${row.at}:${row.runId}`)}
+											{#each runMonitorAdaptiveRowsVisible.slice(0, 20) as row (`${row.at}:${row.runId}`)}
 												<button
 													type="button"
 													class="runMonitorNodeRow runMonitorAdaptiveTimelineRow"
