@@ -213,6 +213,43 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		)
 		assert adaptive_invalid_sort.status_code == 400, adaptive_invalid_sort.text
 
+		adaptive_invalid_mode = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"mode": "bad",
+			},
+		)
+		assert adaptive_invalid_mode.status_code == 400, adaptive_invalid_mode.text
+
+		adaptive_invalid_severity = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"severity": "bad",
+			},
+		)
+		assert adaptive_invalid_severity.status_code == 400, adaptive_invalid_severity.text
+
+		adaptive_paged = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"startAt": "2026-03-31T00:00:00Z",
+				"endAt": "2026-03-31T00:11:00Z",
+				"sort": "created_asc",
+				"limit": 1,
+				"offset": 0,
+			},
+		)
+		assert adaptive_paged.status_code == 200, adaptive_paged.text
+		adaptive_paged_body = adaptive_paged.json()
+		assert str(adaptive_paged_body.get("sort") or "") == "created_asc"
+		assert int(adaptive_paged_body.get("limit") or 0) == 1
+		assert int(adaptive_paged_body.get("offset") or 0) == 0
+		assert int(adaptive_paged_body.get("total") or 0) >= 1
+		assert len(adaptive_paged_body.get("decisions") or []) == 1
+
 
 def test_experiments_analytics_supports_time_window_and_pagination():
 	with TestClient(app) as client:
