@@ -72,6 +72,28 @@
     "source": {
       "in": [],
       "out": ["table", "json", "text", "binary"],
+      "kindCapabilities": {
+        "file": {
+          "supportLevel": "production",
+          "notes": ["Stable local/snapshot file source path."]
+        },
+        "database": {
+          "supportLevel": "production",
+          "notes": ["Stable SQL database source path."]
+        },
+        "api": {
+          "supportLevel": "production",
+          "notes": ["Stable HTTP API source path."]
+        },
+        "object_store": {
+          "supportLevel": "preview",
+          "notes": ["Use object_store_mode=provider for production-backed reads.", "Use object_store_mode=mock for local/dev testing only."]
+        },
+        "warehouse": {
+          "supportLevel": "preview",
+          "notes": ["Warehouse provider path is available with connection-backed execution."]
+        }
+      },
       "ports": {
         "in": {},
         "out": { "default": { "affinity": "work" } }

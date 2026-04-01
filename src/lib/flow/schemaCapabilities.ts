@@ -10,6 +10,7 @@ type NodeCapabilities = {
 	out?: PayloadType[];
 	toolInByProvider?: Record<string, PayloadType[]>;
 	toolOutByProvider?: Record<string, PayloadType[]>;
+	kindCapabilities?: Record<string, any>;
 };
 
 let activeCaps = capsRaw as any;
@@ -51,7 +52,14 @@ function buildNodeCapabilities(): Record<
 		model: { in: asPayloadTypes(modelCaps?.in), out: asPayloadTypes(modelCaps?.out) },
 		llm: { in: asPayloadTypes(nodes.llm?.in), out: asPayloadTypes(nodes.llm?.out) },
 		transform: { in: asPayloadTypes(nodes.transform?.in), out: asPayloadTypes(nodes.transform?.out) },
-		source: { in: asPayloadTypes(nodes.source?.in), out: asPayloadTypes(nodes.source?.out) },
+		source: {
+			in: asPayloadTypes(nodes.source?.in),
+			out: asPayloadTypes(nodes.source?.out),
+			kindCapabilities:
+				nodes.source?.kindCapabilities && typeof nodes.source.kindCapabilities === 'object'
+					? (nodes.source.kindCapabilities as Record<string, any>)
+					: {}
+		},
 		tool: {
 			in: asPayloadTypes(nodes.tool?.in),
 			out: asPayloadTypes(nodes.tool?.out),

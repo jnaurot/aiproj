@@ -5,10 +5,12 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { asString } from '$lib/flow/components/editors/shared';
 
 	type SourceObjectStorePatch = Partial<SourceObjectStoreParams>;
 	type Provider = SourceObjectStoreParams['provider'];
+	type ObjectStoreMode = SourceObjectStoreParams['object_store_mode'];
 
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
 	export let params: Partial<SourceObjectStoreParams>;
@@ -16,9 +18,14 @@
 	export let onCommit: (patch: SourceObjectStorePatch) => void;
 
 	const providers: Provider[] = ['s3', 'azure_blob', 'gcs'];
+	const objectStoreModeOptions: ThemedSelectOption[] = [
+		{ value: 'provider', label: 'provider' },
+		{ value: 'mock', label: 'mock' }
+	];
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 
 	$: provider = (asString(params?.provider, 's3') as Provider) ?? 's3';
+	$: object_store_mode = (asString(params?.object_store_mode, 'provider') as ObjectStoreMode) ?? 'provider';
 	$: connection_ref = asString(params?.connection_ref, '');
 	$: bucket = asString(params?.bucket, '');
 	$: key = asString(params?.key, '');
@@ -50,6 +57,18 @@
 					<option value={p}>{p}</option>
 				{/each}
 			</select>
+		</Field>
+
+		<Field label="object_store_mode">
+			<ThemedSelect
+				value={object_store_mode}
+				options={objectStoreModeOptions}
+				on:change={(event) => {
+					const value = (event as CustomEvent<string>).detail as ObjectStoreMode;
+					draft({ object_store_mode: value });
+					commit({ object_store_mode: value });
+				}}
+			/>
 		</Field>
 
 		<Field label="connection_ref">

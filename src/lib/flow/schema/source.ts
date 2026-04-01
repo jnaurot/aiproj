@@ -366,6 +366,7 @@ export const SourceAPIParamsSchema = z
 export const SourceObjectStoreParamsSchema = z
 	.object({
 		provider: z.enum(["s3", "azure_blob", "gcs"]).default("s3"),
+		object_store_mode: z.enum(["provider", "mock"]).default("provider"),
 		connection_ref: z.string().optional(),
 		bucket: z.string().min(1).optional(),
 		key: z.string().min(1).optional(),
@@ -422,6 +423,9 @@ export const SourceObjectStoreParamsSchema = z
 		}
 		if (!v.bucket) {
 			ctx.addIssue({ code: "custom", message: "bucket is required" });
+		}
+		if (v.object_store_mode === "provider" && !v.connection_ref) {
+			ctx.addIssue({ code: "custom", message: "connection_ref is required in provider mode" });
 		}
 	});
 

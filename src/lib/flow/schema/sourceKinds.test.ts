@@ -11,6 +11,7 @@ describe('source kinds schema coverage', () => {
 	it('parses object_store params with defaults', () => {
 		const parsed = SourceObjectStoreParamsSchema.parse({
 			provider: 's3',
+			object_store_mode: 'mock',
 			bucket: 'demo',
 			key: 'file.txt',
 			file_format: 'txt'
@@ -32,6 +33,7 @@ describe('source kinds schema coverage', () => {
 	it('accepts explicit priming config', () => {
 		const parsed = SourceObjectStoreParamsSchema.parse({
 			provider: 's3',
+			object_store_mode: 'mock',
 			bucket: 'demo',
 			key: 'file.txt',
 			file_format: 'txt',
@@ -53,7 +55,7 @@ describe('source kinds schema coverage', () => {
 			label: 'Source',
 			status: 'idle',
 			sourceKind: 'object_store',
-			params: { provider: 's3', bucket: 'demo', key: 'file.txt', file_format: 'txt' }
+			params: { provider: 's3', object_store_mode: 'mock', bucket: 'demo', key: 'file.txt', file_format: 'txt' }
 		});
 		const warehouseNode = SourceNodeDataSchema.parse({
 			kind: 'source',

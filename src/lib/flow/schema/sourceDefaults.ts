@@ -121,6 +121,7 @@ export const defaultSourceAPIParams: SourceAPIParams = {
 
 export const defaultSourceObjectStoreParams: SourceObjectStoreParams = {
 	provider: "s3",
+	object_store_mode: "provider",
 	connection_ref: "conn:object_store_default",
 	bucket: "my-bucket",
 	key: "data.txt",

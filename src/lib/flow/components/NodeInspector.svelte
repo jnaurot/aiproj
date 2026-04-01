@@ -23,6 +23,10 @@
 		guidedControlsForTransform,
 		suggestNextTransformOps
 	} from '$lib/flow/components/editors/TransformEditor/transformAssist';
+	import {
+		buildSourceCapabilityNotices,
+		resolveSourceCapabilityDescriptor
+	} from '$lib/flow/sourceCapabilities';
 
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import {
@@ -106,6 +110,11 @@
 
 	// sub-kinds / kinds
 	$: sourceKind = (selectedNode?.data as any)?.sourceKind ?? 'file';
+	$: sourceCapability = isSource ? resolveSourceCapabilityDescriptor(sourceKind) : null;
+	$: sourceCapabilityNotices =
+		isSource && sourceCapability
+			? buildSourceCapabilityNotices(sourceCapability, (params as Record<string, unknown>) ?? null)
+			: [];
 
 	// LLM kind source of truth: node discriminator (optionally draft override), never node.data.kind.
 	$: llmKind = (((params as any)?.llmKind ?? (selectedNode?.data as any)?.llmKind ?? 'ollama') as LlmKind);
@@ -1428,6 +1437,20 @@
 		</div>
 	{/if}
 	{#if isSource}
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">
+				Source Capability: {String(sourceCapability?.supportLevel ?? 'production')}
+			</div>
+			{#if sourceCapabilityNotices.length > 0}
+				<div class="guidedAssistList">
+					{#each sourceCapabilityNotices as notice (notice)}
+						<div class="guidedAssistItem">
+							<div class="guidedAssistDesc">{notice}</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
 		<div class="guidedModeRow">
 			<label class="guidedToggle">
 				<input type="checkbox" bind:checked={sourceGuidedMode} />
