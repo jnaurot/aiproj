@@ -3,10 +3,12 @@ from __future__ import annotations
 import io
 import json
 import hashlib
+import os
 import re
 import unicodedata
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -995,6 +997,128 @@ class TransformAdditionalOutput:
     payload_bytes: bytes
     mime_type: str
     meta: Dict[str, Any]
+
+
+class TransformSqlGuardError(Exception):
+	def __init__(self, code: str, message: str, details: Optional[Dict[str, Any]] = None):
+		super().__init__(message)
+		self.code = str(code or "").strip() or "TRANSFORM_SQL_GUARD_ERROR"
+		self.details = dict(details or {})
+
+
+def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+	raw = os.getenv(name)
+	if raw is None:
+		value = int(default)
+	else:
+		try:
+			value = int(str(raw).strip())
+		except Exception:
+			value = int(default)
+	if minimum is not None and value < minimum:
+		value = int(minimum)
+	return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+	raw = os.getenv(name)
+	if raw is None:
+		return bool(default)
+	token = str(raw).strip().lower()
+	if token in {"1", "true", "yes", "on"}:
+		return True
+	if token in {"0", "false", "no", "off"}:
+		return False
+	return bool(default)
+
+
+def _sql_is_read_only(query: str) -> bool:
+	q = str(query or "").strip().lower()
+	if not q:
+		return False
+	if q.startswith("select ") or q.startswith("with "):
+		return True
+	return False
+
+
+def _run_sql_dataframe(con: Any, query: str) -> pd.DataFrame:
+	return con.execute(query).df()
+
+
+def _execute_sql_op_with_guards(con: Any, primary_name: str, spec: Dict[str, Any]) -> pd.DataFrame:
+	query = str(spec.get("query") or "").strip()
+	if not query:
+		raise TransformSqlGuardError(
+			"TRANSFORM_SQL_SAFE_MODE_VIOLATION",
+			"SQL query is required.",
+			{"op": "sql", "paramPath": "params.sql.query", "reason": "empty_query"},
+		)
+
+	default_runtime_ms = _env_int("TRANSFORM_SQL_MAX_RUNTIME_MS", 0, minimum=0)
+	default_max_output_rows = _env_int("TRANSFORM_SQL_MAX_OUTPUT_ROWS", 0, minimum=0)
+	default_safe_mode = _env_bool("TRANSFORM_SQL_SAFE_MODE", True)
+
+	max_runtime_ms = _env_int(
+		"TRANSFORM_SQL_MAX_RUNTIME_MS",
+		int(spec.get("max_runtime_ms") or default_runtime_ms),
+		minimum=0,
+	)
+	max_output_rows = _env_int(
+		"TRANSFORM_SQL_MAX_OUTPUT_ROWS",
+		int(spec.get("max_output_rows") or default_max_output_rows),
+		minimum=0,
+	)
+	safe_mode = bool(spec.get("safe_mode")) if "safe_mode" in spec else bool(default_safe_mode)
+
+	if safe_mode and not _sql_is_read_only(query):
+		raise TransformSqlGuardError(
+			"TRANSFORM_SQL_SAFE_MODE_VIOLATION",
+			"SQL safe mode allows read-only statements only.",
+			{
+				"op": "sql",
+				"paramPath": "params.sql.query",
+				"safeMode": True,
+				"expected": {"readOnly": True},
+				"actual": {"queryPreview": query[:120]},
+			},
+		)
+
+	if max_runtime_ms > 0:
+		with ThreadPoolExecutor(max_workers=1) as pool:
+			future = pool.submit(_run_sql_dataframe, con, query)
+			try:
+				df = future.result(timeout=max_runtime_ms / 1000.0)
+			except FuturesTimeoutError as ex:
+				try:
+					con.interrupt()
+				except Exception:
+					pass
+				raise TransformSqlGuardError(
+					"TRANSFORM_SQL_TIMEOUT",
+					"SQL transform exceeded max runtime.",
+					{
+						"op": "sql",
+						"paramPath": "params.sql.max_runtime_ms",
+						"maxRuntimeMs": max_runtime_ms,
+					},
+				) from ex
+	else:
+		df = _run_sql_dataframe(con, query)
+
+	row_count = int(getattr(df, "shape", (0, 0))[0] or 0)
+	if max_output_rows > 0 and row_count > max_output_rows:
+		raise TransformSqlGuardError(
+			"TRANSFORM_SQL_OUTPUT_ROW_LIMIT_EXCEEDED",
+			"SQL transform output exceeded row limit.",
+			{
+				"op": "sql",
+				"paramPath": "params.sql.max_output_rows",
+				"maxOutputRows": int(max_output_rows),
+				"actualRows": int(row_count),
+			},
+		)
+
+	return df
 
 # ---- table IO ----
 
@@ -3534,9 +3658,9 @@ def execute_transform_op(
             return con.execute(q).df()
 
         elif op == "sql":
-            q = params["sql"]["query"]
+            spec = params["sql"] if isinstance(params.get("sql"), dict) else {}
             # convention: user writes SQL referencing "input" (and optionally "other" if you add)
-            return con.execute(q).df()
+            return _execute_sql_op_with_guards(con, primary_name, spec)
 
         raise ValueError(f"Unsupported transform op: {op}")
     finally:

@@ -18,6 +18,7 @@ from app.runner.nodes.transform import (
     load_table_from_text_bytes,
     run_transform,
     sha256_hex,
+    TransformSqlGuardError,
 )
 
 
@@ -6013,6 +6014,12 @@ async def run_graph(
                                 param_inputs=param_inputs,
                             )
                         except Exception as transform_ex:
+                            if isinstance(transform_ex, TransformSqlGuardError):
+                                raise ContractMismatchError(
+                                    str(transform_ex),
+                                    code=str(transform_ex.code or "TRANSFORM_SQL_GUARD_ERROR"),
+                                    details=dict(transform_ex.details or {}),
+                                ) from transform_ex
                             if op == "derive":
                                 # Best-effort precheck can miss complex SQL semantics.
                                 raise ContractMismatchError(
