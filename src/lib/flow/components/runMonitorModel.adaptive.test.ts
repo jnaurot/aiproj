@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+	buildAdaptiveComponentBreakdown,
 	buildRunMonitorAdaptiveDecisionRows,
 	buildTrendSparkline,
 	explainAdaptiveDecision,
@@ -148,5 +149,19 @@ describe('runMonitorModel adaptive decision rows', () => {
 			runId: '',
 			baselineRunId: ''
 		});
+	});
+
+	it('builds normalized adaptive component breakdown bars', () => {
+		const rows = buildAdaptiveComponentBreakdown([
+			{ label: 'reason:failure_rate_high', delta: 20 },
+			{ label: 'queue_depth', delta: 6 },
+			{ label: 'recovery', delta: -4 }
+		]);
+		expect(rows).toHaveLength(3);
+		expect(rows[0]?.label).toBe('reason:failure_rate_high');
+		expect(rows[0]?.percentOfMax).toBeCloseTo(100, 4);
+		expect(rows[1]?.direction).toBe('up');
+		expect(rows[2]?.direction).toBe('down');
+		expect(rows[2]?.percentOfMax).toBeLessThan(100);
 	});
 });

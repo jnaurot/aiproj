@@ -92,6 +92,7 @@ import {
 	} from './components/dsmlGuidedUx';
 	import { refreshSchemaCapabilitiesFromBackend } from '$lib/flow/schemaCapabilities';
 	import {
+		buildAdaptiveComponentBreakdown,
 		buildTrendSparkline,
 		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
@@ -104,6 +105,7 @@ import {
 		preferredMonitorEdgeFocusNodeId,
 		resolveRunMonitorRegressionPair,
 		type RunMonitorAdaptiveDecisionRow,
+		type RunMonitorAdaptiveComponentBreakdownItem,
 		type RunMonitorAdaptiveModeFilter,
 		type RunMonitorAdaptiveSeverityFilter,
 		type RunMonitorFilter,
@@ -349,6 +351,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAdaptiveDecisionSelectedKey = '';
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
+	let selectedAdaptiveDecisionComponents: RunMonitorAdaptiveComponentBreakdownItem[] = [];
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
@@ -750,6 +753,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (index < 0) return null;
 		return runMonitorAdaptiveDecisionRows[index + 1] ?? null;
 	})();
+	$: selectedAdaptiveDecisionComponents = buildAdaptiveComponentBreakdown(
+		selectedAdaptiveDecision?.explanation?.components ?? []
+	);
 	$: runMonitorAdaptiveRowsVisible = filterRunMonitorAdaptiveDecisionRows(
 		runMonitorAdaptiveDecisionRows,
 		runMonitorAdaptiveModeFilter,
@@ -4825,6 +4831,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														.map((item) => `${item.label}:${item.delta >= 0 ? '+' : ''}${item.delta}`)
 														.join(' | ')}
 												</div>
+												<div class="adaptiveComponentBars" role="list" aria-label="Adaptive decision component impact">
+													{#each selectedAdaptiveDecisionComponents.slice(0, 8) as component (`${component.label}:${component.delta}`)}
+														<div class="adaptiveComponentBarRow" role="listitem">
+															<span class="adaptiveComponentLabel mono">{component.label}</span>
+															<div class="adaptiveComponentTrack">
+																<div
+																	class={`adaptiveComponentFill ${component.direction === 'up' ? 'adaptiveComponentFill-up' : 'adaptiveComponentFill-down'}`}
+																	style={`width:${component.percentOfMax.toFixed(1)}%;`}
+																></div>
+															</div>
+															<span class="adaptiveComponentDelta mono">{component.delta >= 0 ? '+' : ''}{component.delta.toFixed(2)}</span>
+														</div>
+													{/each}
+												</div>
 											{/if}
 											{#if selectedAdaptiveDecision.diffFromPrevious}
 												<div class="envPanelSummary">
@@ -6238,6 +6258,51 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		background: rgba(239, 68, 68, 0.16);
 		border-color: rgba(248, 113, 113, 0.42);
 		color: #ffc1c1;
+	}
+
+	.adaptiveComponentBars {
+		display: grid;
+		gap: 4px;
+		margin-top: 4px;
+	}
+
+	.adaptiveComponentBarRow {
+		display: grid;
+		grid-template-columns: minmax(160px, 1fr) minmax(90px, 2fr) auto;
+		align-items: center;
+		gap: 8px;
+		font-size: 11px;
+	}
+
+	.adaptiveComponentLabel {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.adaptiveComponentTrack {
+		height: 7px;
+		border-radius: 999px;
+		background: rgba(108, 128, 160, 0.22);
+		overflow: hidden;
+	}
+
+	.adaptiveComponentFill {
+		height: 100%;
+		border-radius: 999px;
+	}
+
+	.adaptiveComponentFill-up {
+		background: linear-gradient(90deg, rgba(92, 184, 255, 0.95), rgba(114, 223, 170, 0.95));
+	}
+
+	.adaptiveComponentFill-down {
+		background: linear-gradient(90deg, rgba(252, 165, 165, 0.92), rgba(248, 113, 113, 0.92));
+	}
+
+	.adaptiveComponentDelta {
+		min-width: 54px;
+		text-align: right;
 	}
 
 	.runMonitorSparklineCard {

@@ -100,6 +100,14 @@ export type RunMonitorAdaptiveDecisionRow = {
 	};
 };
 
+export type RunMonitorAdaptiveComponentBreakdownItem = {
+	label: string;
+	delta: number;
+	absDelta: number;
+	percentOfMax: number;
+	direction: 'up' | 'down';
+};
+
 export type RunMonitorTrendSparkline = {
 	path: string;
 	width: number;
@@ -553,6 +561,33 @@ export function explainAdaptiveDecision(input: {
 	const severity: 'low' | 'medium' | 'high' =
 		bounded >= 70 ? 'high' : bounded >= 40 ? 'medium' : 'low';
 	return { score: bounded, severity, signals, components };
+}
+
+export function buildAdaptiveComponentBreakdown(
+	components: Array<{ label?: string; delta?: number }>
+): RunMonitorAdaptiveComponentBreakdownItem[] {
+	const normalized = (Array.isArray(components) ? components : [])
+		.map((item) => {
+			const label = String(item?.label ?? '').trim();
+			const delta = Number(item?.delta ?? NaN);
+			if (!label || !Number.isFinite(delta) || delta === 0) return null;
+			return { label, delta };
+		})
+		.filter((item): item is { label: string; delta: number } => item !== null)
+		.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta) || a.label.localeCompare(b.label));
+	if (normalized.length === 0) return [];
+	const maxAbs = Math.max(...normalized.map((item) => Math.abs(item.delta)), 1e-9);
+	return normalized.map((item) => {
+		const absDelta = Math.abs(item.delta);
+		const percentOfMax = Math.max(0, Math.min(100, (absDelta / maxAbs) * 100));
+		return {
+			label: item.label,
+			delta: item.delta,
+			absDelta,
+			percentOfMax,
+			direction: item.delta >= 0 ? 'up' : 'down'
+		};
+	});
 }
 
 export function buildTrendSparkline(
