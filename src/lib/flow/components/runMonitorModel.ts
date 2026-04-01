@@ -85,6 +85,23 @@ export type RunMonitorAdaptiveDecisionRow = {
 	minCaps: Record<string, number>;
 	proposedCaps: Record<string, number>;
 	effectiveCaps: Record<string, number>;
+	explanation: {
+		score: number;
+		severity: 'low' | 'medium' | 'high';
+		signals: string[];
+	};
+};
+
+export type RunMonitorTrendSparkline = {
+	path: string;
+	width: number;
+	height: number;
+	minValue: number;
+	maxValue: number;
+	lastValue: number;
+	deltaValue: number;
+	deltaPct: number | null;
+	pointsCount: number;
 };
 
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
@@ -352,22 +369,151 @@ export function buildRunMonitorAdaptiveDecisionRows(
 	return rows
 		.map((raw) => {
 			const row = asRecord(raw);
+			const inputs =
+				row.inputs && typeof row.inputs === 'object'
+					? ({ ...(row.inputs as Record<string, unknown>) } as Record<string, unknown>)
+					: {};
+			const reasons = asArray<unknown>(row.reasons)
+				.map((value) => String(value ?? '').trim())
+				.filter(Boolean);
+			const changedCaps = toChangedCaps(row.changedCaps);
+			const effectiveCaps = toCaps(row.effectiveCaps);
+			const explanation = explainAdaptiveDecision({
+				enforced: Boolean(row.enforced ?? false),
+				reasons,
+				changedCaps,
+				inputs,
+				effectiveCaps
+			});
 			return {
 				at: String(row.at ?? '').trim(),
 				runId: String(row.runId ?? '').trim(),
 				mode: String(row.mode ?? '').trim() || 'off',
 				enforced: Boolean(row.enforced ?? false),
-				inputs: row.inputs && typeof row.inputs === 'object' ? ({ ...(row.inputs as Record<string, unknown>) } as Record<string, unknown>) : {},
-				reasons: asArray<unknown>(row.reasons)
-					.map((value) => String(value ?? '').trim())
-					.filter(Boolean),
-				changedCaps: toChangedCaps(row.changedCaps),
+				inputs,
+				reasons,
+				changedCaps,
 				hardCaps: toCaps(row.hardCaps),
 				minCaps: toCaps(row.minCaps),
 				proposedCaps: toCaps(row.proposedCaps),
-				effectiveCaps: toCaps(row.effectiveCaps)
+				effectiveCaps,
+				explanation
 			} as RunMonitorAdaptiveDecisionRow;
 		})
 		.filter((row) => row.runId.length > 0)
 		.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+export function explainAdaptiveDecision(input: {
+	enforced: boolean;
+	reasons: string[];
+	changedCaps: Record<string, { from: number; to: number }>;
+	inputs: Record<string, unknown>;
+	effectiveCaps: Record<string, number>;
+}): { score: number; severity: 'low' | 'medium' | 'high'; signals: string[] } {
+	const signals: string[] = [];
+	let score = 0;
+	if (input.enforced) {
+		score += 20;
+		signals.push('enforced_mode');
+	}
+	const changedEntries = Object.entries(input.changedCaps ?? {});
+	if (changedEntries.length > 0) {
+		score += Math.min(24, changedEntries.length * 8);
+		signals.push(`changed_caps=${changedEntries.length}`);
+	}
+	let totalDelta = 0;
+	for (const [, delta] of changedEntries) {
+		const from = Number(delta?.from ?? 0);
+		const to = Number(delta?.to ?? 0);
+		if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+		totalDelta += Math.abs(from - to);
+	}
+	if (totalDelta > 0) {
+		score += Math.min(20, totalDelta * 3);
+		signals.push(`delta_sum=${totalDelta}`);
+	}
+	const reasonWeights: Record<string, number> = {
+		queue_depth_high: 15,
+		queue_pressure: 12,
+		failure_rate_high: 20,
+		error_rate_high: 20,
+		lease_wait_high: 10,
+		recovery: 6
+	};
+	for (const reasonRaw of input.reasons ?? []) {
+		const reason = String(reasonRaw ?? '').trim().toLowerCase();
+		if (!reason) continue;
+		const weighted = Number(reasonWeights[reason] ?? 5);
+		score += weighted;
+		signals.push(`reason:${reason}`);
+	}
+	const queueDepth = Number((input.inputs ?? {}).queueDepth ?? (input.inputs ?? {}).pendingQueueDepth ?? 0);
+	if (Number.isFinite(queueDepth) && queueDepth > 0) {
+		if (queueDepth >= 20) score += 10;
+		else if (queueDepth >= 10) score += 6;
+		else if (queueDepth >= 5) score += 3;
+		signals.push(`queue_depth=${queueDepth}`);
+	}
+	const failureRate = Number((input.inputs ?? {}).failureRate ?? (input.inputs ?? {}).errorRate ?? 0);
+	if (Number.isFinite(failureRate) && failureRate > 0) {
+		if (failureRate >= 0.2) score += 15;
+		else if (failureRate >= 0.1) score += 10;
+		else if (failureRate >= 0.05) score += 5;
+		signals.push(`failure_rate=${failureRate.toFixed(3)}`);
+	}
+	const leaseWaitMs = Number((input.inputs ?? {}).leaseWaitMs ?? 0);
+	if (Number.isFinite(leaseWaitMs) && leaseWaitMs > 0) {
+		if (leaseWaitMs >= 5000) score += 8;
+		else if (leaseWaitMs >= 2000) score += 5;
+		else if (leaseWaitMs >= 1000) score += 3;
+		signals.push(`lease_wait_ms=${leaseWaitMs}`);
+	}
+	const bounded = Math.max(0, Math.min(100, Math.round(score)));
+	const severity: 'low' | 'medium' | 'high' =
+		bounded >= 70 ? 'high' : bounded >= 40 ? 'medium' : 'low';
+	return { score: bounded, severity, signals };
+}
+
+export function buildTrendSparkline(
+	points: Array<{ createdAt?: string; value?: number }>,
+	options?: { width?: number; height?: number }
+): RunMonitorTrendSparkline | null {
+	const normalized = (Array.isArray(points) ? points : [])
+		.map((point) => ({
+			createdAt: String(point?.createdAt ?? '').trim(),
+			value: Number(point?.value ?? NaN)
+		}))
+		.filter((point) => Number.isFinite(point.value));
+	if (normalized.length < 2) return null;
+	normalized.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+	const width = Math.max(80, Number(options?.width ?? 520));
+	const height = Math.max(40, Number(options?.height ?? 88));
+	const values = normalized.map((point) => point.value);
+	const minValue = Math.min(...values);
+	const maxValue = Math.max(...values);
+	const range = Math.max(1e-9, maxValue - minValue);
+	const stepX = width / Math.max(1, normalized.length - 1);
+	const toY = (value: number): number => {
+		const ratio = (value - minValue) / range;
+		return height - ratio * height;
+	};
+	const path = normalized
+		.map((point, index) => `${index === 0 ? 'M' : 'L'} ${(index * stepX).toFixed(2)} ${toY(point.value).toFixed(2)}`)
+		.join(' ');
+	const firstValue = normalized[0].value;
+	const lastValue = normalized[normalized.length - 1].value;
+	const deltaValue = lastValue - firstValue;
+	const deltaPct = firstValue === 0 ? null : (deltaValue / firstValue) * 100.0;
+	return {
+		path,
+		width,
+		height,
+		minValue,
+		maxValue,
+		lastValue,
+		deltaValue,
+		deltaPct,
+		pointsCount: normalized.length
+	};
 }

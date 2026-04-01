@@ -91,6 +91,7 @@ import {
 	} from './components/dsmlGuidedUx';
 	import { refreshSchemaCapabilitiesFromBackend } from '$lib/flow/schemaCapabilities';
 	import {
+		buildTrendSparkline,
 		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
 		buildRunMonitorNodeRows,
@@ -98,7 +99,8 @@ import {
 		preferredMonitorEdgeFocusNodeId,
 		type RunMonitorAdaptiveDecisionRow,
 		type RunMonitorFilter,
-		type RunMonitorSort
+		type RunMonitorSort,
+		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
@@ -366,6 +368,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
+	let runMonitorTrendSparkline: RunMonitorTrendSparkline | null = null;
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
@@ -749,6 +752,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorAnalyticsRefreshKey = runMonitorAnalyticsAutoKey;
 		void refreshRunMonitorAnalytics();
 	}
+	$: runMonitorTrendSparkline = buildTrendSparkline(
+		runMonitorTrendPoints.map((point) => ({
+			createdAt: String(point.createdAt ?? ''),
+			value: Number(point.value ?? NaN)
+		})),
+		{ width: 520, height: 88 }
+	);
 	$: if (!runMonitorRegressionPair.runId || !runMonitorRegressionPair.baselineRunId) {
 		runMonitorRegressionAlerts = [];
 		runMonitorRegressionError = null;
@@ -1912,6 +1922,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (!raw) return '';
 		if (raw.length <= 8) return raw;
 		return `${raw.slice(0, 8)}...`;
+	}
+
+	function adaptiveSeverityClass(severity: string): string {
+		const normalized = String(severity ?? '').trim().toLowerCase();
+		if (normalized === 'high') return 'adaptiveSeverity adaptiveSeverity-high';
+		if (normalized === 'medium') return 'adaptiveSeverity adaptiveSeverity-medium';
+		return 'adaptiveSeverity adaptiveSeverity-low';
 	}
 
 	async function refreshRunMonitorRegressions(
@@ -4472,6 +4489,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										<div class="runMonitorNodeHead" role="row">
 											<span>time</span>
 											<span>mode</span>
+											<span>score</span>
 											<span>changed</span>
 											<span>effective caps</span>
 											<span>reasons</span>
@@ -4490,6 +4508,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												>
 													<span class="mono">{row.at || '-'}</span>
 													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
+													<span>
+														<span class={adaptiveSeverityClass(row.explanation.severity)}>
+															{row.explanation.score}
+														</span>
+													</span>
 													<span>
 														{#if Object.keys(row.changedCaps).length === 0}
 															-
@@ -4529,7 +4552,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envPanelSummary">
 												run={selectedAdaptiveDecision.runId} | at={selectedAdaptiveDecision.at} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''}
 											</div>
+											<div class="envPanelSummary">
+												score=
+												<span class={adaptiveSeverityClass(selectedAdaptiveDecision.explanation.severity)}>
+													{selectedAdaptiveDecision.explanation.score}
+												</span>
+												| signals={selectedAdaptiveDecision.explanation.signals.length}
+											</div>
 											<pre class="runMonitorJsonDetail">{JSON.stringify({
+												explanation: selectedAdaptiveDecision.explanation,
 												inputs: selectedAdaptiveDecision.inputs,
 												reasons: selectedAdaptiveDecision.reasons,
 												changedCaps: selectedAdaptiveDecision.changedCaps,
@@ -4646,6 +4677,35 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										{#if runMonitorAnalyticsError}
 											<div class="envProfileError">{runMonitorAnalyticsError}</div>
 										{:else}
+											{#if runMonitorTrendSparkline}
+												<div class="runMonitorSparklineCard">
+													<div class="runMonitorSparklineHead">
+														<span>Trend Sparkline</span>
+														<span class="mono">
+															last={runMonitorTrendSparkline.lastValue.toFixed(1)}
+															| delta={runMonitorTrendSparkline.deltaValue >= 0 ? '+' : ''}{runMonitorTrendSparkline.deltaValue.toFixed(1)}
+															{#if runMonitorTrendSparkline.deltaPct !== null}
+																({runMonitorTrendSparkline.deltaPct >= 0 ? '+' : ''}{runMonitorTrendSparkline.deltaPct.toFixed(1)}%)
+															{/if}
+														</span>
+													</div>
+													<svg
+														class="runMonitorSparkline"
+														viewBox={`0 0 ${runMonitorTrendSparkline.width} ${runMonitorTrendSparkline.height}`}
+														preserveAspectRatio="none"
+														aria-label="Node metric trend sparkline"
+													>
+														<polyline
+															points={`0,${runMonitorTrendSparkline.height} ${runMonitorTrendSparkline.width},${runMonitorTrendSparkline.height}`}
+															class="runMonitorSparklineBase"
+														/>
+														<path d={runMonitorTrendSparkline.path} class="runMonitorSparklinePath"></path>
+													</svg>
+													<div class="runMonitorSparklineFoot mono">
+														min={runMonitorTrendSparkline.minValue.toFixed(1)} | max={runMonitorTrendSparkline.maxValue.toFixed(1)} | points={runMonitorTrendSparkline.pointsCount}
+													</div>
+												</div>
+											{/if}
 											<div class="runMonitorNodeHead" role="row">
 												<span>trend run</span>
 												<span>node</span>
@@ -5675,6 +5735,80 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runMonitorNodeRow:hover {
 		border-color: var(--color-control-border-focus, #35548c);
+	}
+
+	.adaptiveSeverity {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 36px;
+		padding: 1px 6px;
+		border-radius: 999px;
+		font-size: 11px;
+		font-weight: 700;
+		border: 1px solid transparent;
+	}
+
+	.adaptiveSeverity-low {
+		background: rgba(47, 191, 113, 0.15);
+		border-color: rgba(47, 191, 113, 0.4);
+		color: #7de2a9;
+	}
+
+	.adaptiveSeverity-medium {
+		background: rgba(242, 204, 96, 0.14);
+		border-color: rgba(242, 204, 96, 0.42);
+		color: #f4d98d;
+	}
+
+	.adaptiveSeverity-high {
+		background: rgba(239, 68, 68, 0.16);
+		border-color: rgba(248, 113, 113, 0.42);
+		color: #ffc1c1;
+	}
+
+	.runMonitorSparklineCard {
+		display: grid;
+		gap: 6px;
+		border: 1px solid var(--color-control-border, #1c2335);
+		border-radius: 8px;
+		background: var(--color-control-option-bg, #0c1220);
+		color: var(--color-control-option-text, #dbe7ff);
+		padding: 8px;
+		margin-bottom: 6px;
+	}
+
+	.runMonitorSparklineHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		font-size: 12px;
+	}
+
+	.runMonitorSparkline {
+		width: 100%;
+		height: 88px;
+		display: block;
+		background: rgba(8, 19, 39, 0.55);
+		border-radius: 6px;
+	}
+
+	.runMonitorSparklineBase {
+		fill: none;
+		stroke: rgba(108, 128, 160, 0.35);
+		stroke-width: 1;
+	}
+
+	.runMonitorSparklinePath {
+		fill: none;
+		stroke: #63a0ff;
+		stroke-width: 2;
+	}
+
+	.runMonitorSparklineFoot {
+		font-size: 11px;
+		opacity: 0.88;
 	}
 
 	.runMonitorJsonDetail {
