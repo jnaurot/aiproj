@@ -392,11 +392,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
 	let runMonitorTransitions: RunTransitionEvent[] = [];
+	let runMonitorTransitionsVisible: RunTransitionEvent[] = [];
 	let runMonitorTransitionsLoading = false;
 	let runMonitorTransitionsError: string | null = null;
 	let runMonitorTransitionRunId = '';
 	let runMonitorTransitionsRefreshKey = '';
 	let runMonitorTransitionsAutoKey = '';
+	let runMonitorTransitionFilter: 'all' | 'run' | 'node' | 'violations' = 'all';
 	let runMonitorAnalyticsLoading = false;
 	let runMonitorAnalyticsError: string | null = null;
 	let runMonitorAnalyticsRefreshKey = '';
@@ -786,6 +788,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorTransitions = [];
 		runMonitorTransitionsError = null;
 	}
+	$: runMonitorTransitionsVisible = runMonitorTransitions.filter((event) => {
+		const entity = String(event?.payload?.entity ?? '').trim().toLowerCase();
+		const type = String(event?.type ?? '').trim().toLowerCase();
+		if (runMonitorTransitionFilter === 'run') return entity === 'run';
+		if (runMonitorTransitionFilter === 'node') return entity === 'node';
+		if (runMonitorTransitionFilter === 'violations') return type === 'state_transition_violation';
+		return true;
+	});
 	$: runMonitorTrendNodeOptions = runMonitorNodeRows
 		.map((row) => ({ id: String(row.nodeId ?? '').trim(), label: String(row.label ?? '').trim() }))
 		.filter((row) => row.id.length > 0)
@@ -4900,8 +4910,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												</button>
 											</div>
 										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Filter</span>
+												<select bind:value={runMonitorTransitionFilter}>
+													<option value="all">All</option>
+													<option value="run">Run only</option>
+													<option value="node">Node only</option>
+													<option value="violations">Violations</option>
+												</select>
+											</label>
+										</div>
 										<div class="envPanelSummary">
-											run={runMonitorTransitionRunId || '-'} | events={runMonitorTransitions.length}
+											run={runMonitorTransitionRunId || '-'} | events={runMonitorTransitionsVisible.length}
 										</div>
 										<div class="runMonitorNodeHead" role="row">
 											<span>event</span>
@@ -4912,10 +4933,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</div>
 										{#if runMonitorTransitionsError}
 											<div class="envProfileError">{runMonitorTransitionsError}</div>
-										{:else if runMonitorTransitions.length === 0}
+										{:else if runMonitorTransitionsVisible.length === 0}
 											<div class="envProfileEmpty">No state transition events for selected run.</div>
 										{:else}
-											{#each runMonitorTransitions as event (`${event.id}:${event.at}:${event.type}`)}
+											{#each runMonitorTransitionsVisible as event (`${event.id}:${event.at}:${event.type}`)}
 												<div class="runMonitorNodeRow" role="row">
 													<span>{event.type}</span>
 													<span>{String(event.payload?.entity ?? '-')}:{String(event.payload?.entityId ?? '-')}</span>
