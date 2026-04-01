@@ -269,3 +269,98 @@ async def failure_taxonomy(
 		"graphId": str(graphId or "").strip() or None,
 		"taxonomy": items,
 	}
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+	try:
+		return float(value)
+	except Exception:
+		return float(default)
+
+
+@router.get("/regressions")
+async def regression_detection(
+	request: Request,
+	runId: str = Query(..., min_length=1),
+	baselineRunId: Optional[str] = Query(default=None),
+	latencyDriftPct: float = Query(default=25.0, ge=0.0),
+	failureDriftAbs: int = Query(default=1, ge=0),
+):
+	current = await _get_summary_or_404(request, runId)
+	if baselineRunId:
+		baseline = await _get_summary_or_404(request, baselineRunId)
+	else:
+		graph_id = str(current.get("graphId") or "").strip() or None
+		rows = await _list_summaries(request, graph_id=graph_id, limit=200)
+		rows_sorted = sorted(rows, key=lambda row: str(row.get("createdAt") or ""), reverse=True)
+		baseline = next((row for row in rows_sorted if str(row.get("runId") or "") != str(runId)), None)
+		if not isinstance(baseline, dict):
+			raise HTTPException(404, "No baseline run available for regression detection")
+
+	alerts: list[Dict[str, Any]] = []
+	current_analytics = current.get("analytics") if isinstance(current.get("analytics"), dict) else {}
+	baseline_analytics = baseline.get("analytics") if isinstance(baseline.get("analytics"), dict) else {}
+	current_latency = (
+		current_analytics.get("nodeLatencyMs") if isinstance(current_analytics.get("nodeLatencyMs"), dict) else {}
+	)
+	baseline_latency = (
+		baseline_analytics.get("nodeLatencyMs") if isinstance(baseline_analytics.get("nodeLatencyMs"), dict) else {}
+	)
+	for node_id in sorted(set(current_latency.keys()) & set(baseline_latency.keys())):
+		cur_item = current_latency.get(node_id) if isinstance(current_latency.get(node_id), dict) else {}
+		base_item = baseline_latency.get(node_id) if isinstance(baseline_latency.get(node_id), dict) else {}
+		cur_p95 = _safe_float(cur_item.get("p95Ms"), 0.0)
+		base_p95 = _safe_float(base_item.get("p95Ms"), 0.0)
+		if base_p95 <= 0:
+			continue
+		drift_pct = ((cur_p95 - base_p95) / base_p95) * 100.0
+		if drift_pct < float(latencyDriftPct):
+			continue
+		alerts.append(
+			{
+				"type": "latency_regression",
+				"nodeId": str(node_id),
+				"metric": "p95Ms",
+				"baseline": base_p95,
+				"current": cur_p95,
+				"driftPct": drift_pct,
+				"thresholdPct": float(latencyDriftPct),
+				"reasonCode": "LATENCY_DRIFT",
+			}
+		)
+
+	current_failures = (
+		current_analytics.get("failureCategories")
+		if isinstance(current_analytics.get("failureCategories"), dict)
+		else {}
+	)
+	baseline_failures = (
+		baseline_analytics.get("failureCategories")
+		if isinstance(baseline_analytics.get("failureCategories"), dict)
+		else {}
+	)
+	for code in sorted(set(current_failures.keys()) | set(baseline_failures.keys())):
+		cur_count = int(_safe_float(current_failures.get(code), 0.0))
+		base_count = int(_safe_float(baseline_failures.get(code), 0.0))
+		delta = cur_count - base_count
+		if delta < int(failureDriftAbs):
+			continue
+		alerts.append(
+			{
+				"type": "failure_regression",
+				"errorCode": str(code),
+				"baseline": base_count,
+				"current": cur_count,
+				"delta": delta,
+				"thresholdAbs": int(failureDriftAbs),
+				"reasonCode": "FAILURE_DRIFT",
+			}
+		)
+
+	alerts.sort(key=lambda row: (str(row.get("reasonCode") or ""), str(row.get("nodeId") or row.get("errorCode") or "")))
+	return {
+		"schemaVersion": 1,
+		"runId": str(runId),
+		"baselineRunId": str(baseline.get("runId") or ""),
+		"alerts": alerts,
+	}

@@ -56,3 +56,17 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		assert taxonomy.status_code == 200, taxonomy.text
 		items = taxonomy.json().get("taxonomy") or []
 		assert any(str(item.get("errorCode") or "") == "MODEL_EXECUTION_FAILED" for item in items)
+
+		regressions = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"latencyDriftPct": 20,
+				"failureDriftAbs": 1,
+			},
+		)
+		assert regressions.status_code == 200, regressions.text
+		alerts = regressions.json().get("alerts") or []
+		assert any(str(alert.get("reasonCode") or "") == "LATENCY_DRIFT" for alert in alerts)
+		assert any(str(alert.get("reasonCode") or "") == "FAILURE_DRIFT" for alert in alerts)
