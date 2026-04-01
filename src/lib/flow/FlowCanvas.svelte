@@ -401,6 +401,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
 	let runMonitorRunTrendPoints: ExperimentRunTrendPoint[] = [];
+	let runMonitorAnalyticsStartAt = '';
+	let runMonitorAnalyticsEndAt = '';
+	let runMonitorAnalyticsOffset = 0;
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
 	let runMonitorTrendSparkline: RunMonitorTrendSparkline | null = null;
 	let runMonitorTrendHoverIndex = -1;
@@ -830,7 +833,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
 		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
 	}
-	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}`;
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}`;
 	$: if (
 		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
 		String($graphStore.graphId ?? '').trim().length > 0
@@ -2228,22 +2231,34 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const [runTrendRes, trendRes, slaRes, failureRes] = await Promise.all([
 				getExperimentRunTrends({
 					graphId,
-					limit: 20
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					limit: 20,
+					offset: Math.max(0, Number(runMonitorAnalyticsOffset || 0))
 				}),
 				getExperimentNodeTrends({
 					graphId,
 					nodeId: runMonitorTrendNodeId || undefined,
 					metric: runMonitorTrendMetric,
-					limit: 50
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					limit: 50,
+					offset: 0
 				}),
 				getExperimentSlaBreaches({
 					graphId,
 					p95Ms: Number(runMonitorSlaThresholdMs || 2000),
-					limit: 30
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					limit: 30,
+					offset: 0
 				}),
 				getExperimentFailureTaxonomy({
 					graphId,
-					limit: 30
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					limit: 30,
+					offset: 0
 				})
 			]);
 			runMonitorRunTrendPoints = Array.isArray(runTrendRes.points)
@@ -5100,6 +5115,31 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</div>
 										<div class="monitorToolbar">
 											<label class="monitorField">
+												<span>Start (ISO)</span>
+												<input
+													type="text"
+													placeholder="2026-03-31T00:00:00Z"
+													bind:value={runMonitorAnalyticsStartAt}
+												/>
+											</label>
+											<label class="monitorField">
+												<span>End (ISO)</span>
+												<input
+													type="text"
+													placeholder="2026-03-31T23:59:59Z"
+													bind:value={runMonitorAnalyticsEndAt}
+												/>
+											</label>
+											<label class="monitorField">
+												<span>Run page</span>
+												<input
+													type="number"
+													min="0"
+													step="1"
+													bind:value={runMonitorAnalyticsOffset}
+												/>
+											</label>
+											<label class="monitorField">
 												<span>Node</span>
 												<select bind:value={runMonitorTrendNodeId}>
 													{#if runMonitorTrendNodeOptions.length === 0}
@@ -6460,7 +6500,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		overflow: auto;
 	}
 
-	.monitorField input[type='number'] {
+	.monitorField input[type='number'],
+	.monitorField input[type='text'] {
 		border: 1px solid var(--color-control-border, #2a3655);
 		background: var(--color-control-bg, #0b1323);
 		color: var(--color-control-text, #dbe7ff);
