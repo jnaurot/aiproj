@@ -104,8 +104,10 @@ import {
 		pickRunMonitorRegressionPairFromHistory,
 		preferredMonitorEdgeFocusNodeId,
 		resolveRunMonitorRegressionPair,
+		summarizeAdaptiveDecisionRows,
 		type RunMonitorAdaptiveDecisionRow,
 		type RunMonitorAdaptiveComponentBreakdownItem,
+		type RunMonitorAdaptiveDecisionSummary,
 		type RunMonitorAdaptiveModeFilter,
 		type RunMonitorAdaptiveSeverityFilter,
 		type RunMonitorFilter,
@@ -352,6 +354,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionComponents: RunMonitorAdaptiveComponentBreakdownItem[] = [];
+	let runMonitorAdaptiveDecisionSummary: RunMonitorAdaptiveDecisionSummary = {
+		total: 0,
+		enforced: 0,
+		byMode: {},
+		bySeverity: { low: 0, medium: 0, high: 0 }
+	};
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
@@ -760,6 +768,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorAdaptiveDecisionRows,
 		runMonitorAdaptiveModeFilter,
 		runMonitorAdaptiveSeverityFilter
+	);
+	$: runMonitorAdaptiveDecisionSummary = summarizeAdaptiveDecisionRows(
+		runMonitorAdaptiveDecisionRows
 	);
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
@@ -4737,6 +4748,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<span>diff</span>
 											<span>effective caps</span>
 											<span>reasons</span>
+										</div>
+										<div class="envPanelSummary">
+											total={runMonitorAdaptiveDecisionSummary.total}
+											| enforced={runMonitorAdaptiveDecisionSummary.enforced}
+											| modes:
+											observe={Number(runMonitorAdaptiveDecisionSummary.byMode.observe ?? 0)},
+											enforce={Number(runMonitorAdaptiveDecisionSummary.byMode.enforce ?? 0)},
+											off={Number(runMonitorAdaptiveDecisionSummary.byMode.off ?? 0)}
+											| severity:
+											low={runMonitorAdaptiveDecisionSummary.bySeverity.low},
+											medium={runMonitorAdaptiveDecisionSummary.bySeverity.medium},
+											high={runMonitorAdaptiveDecisionSummary.bySeverity.high}
 										</div>
 										{#if runMonitorAdaptiveRowsVisible.length === 0}
 											<div class="envProfileEmpty">No adaptive scheduler decisions yet.</div>

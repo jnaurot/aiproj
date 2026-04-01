@@ -7,7 +7,8 @@ import {
 	explainAdaptiveDecision,
 	filterRunMonitorAdaptiveDecisionRows,
 	pickRunMonitorRegressionPairFromHistory,
-	resolveRunMonitorRegressionPair
+	resolveRunMonitorRegressionPair,
+	summarizeAdaptiveDecisionRows
 } from './runMonitorModel';
 
 describe('runMonitorModel adaptive decision rows', () => {
@@ -163,5 +164,36 @@ describe('runMonitorModel adaptive decision rows', () => {
 		expect(rows[1]?.direction).toBe('up');
 		expect(rows[2]?.direction).toBe('down');
 		expect(rows[2]?.percentOfMax).toBeLessThan(100);
+	});
+
+	it('summarizes adaptive decisions by mode/severity/enforced', () => {
+		const rows = buildRunMonitorAdaptiveDecisionRows({
+			adaptiveDecisions: [
+				{
+					at: '2026-03-31T00:00:01.000Z',
+					runId: 'run_1',
+					mode: 'observe',
+					enforced: false,
+					reasons: ['recovery'],
+					changedCaps: {},
+					effectiveCaps: { global: 4 }
+				},
+				{
+					at: '2026-03-31T00:00:02.000Z',
+					runId: 'run_1',
+					mode: 'enforce',
+					enforced: true,
+					reasons: ['queue_depth_high', 'failure_rate_high'],
+					changedCaps: { global: { from: 4, to: 2 } },
+					effectiveCaps: { global: 2 }
+				}
+			]
+		});
+		const summary = summarizeAdaptiveDecisionRows(rows);
+		expect(summary.total).toBe(2);
+		expect(summary.enforced).toBe(1);
+		expect(summary.byMode.observe).toBe(1);
+		expect(summary.byMode.enforce).toBe(1);
+		expect(summary.bySeverity.high + summary.bySeverity.medium + summary.bySeverity.low).toBe(2);
 	});
 });

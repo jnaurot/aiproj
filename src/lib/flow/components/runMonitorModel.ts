@@ -108,6 +108,13 @@ export type RunMonitorAdaptiveComponentBreakdownItem = {
 	direction: 'up' | 'down';
 };
 
+export type RunMonitorAdaptiveDecisionSummary = {
+	total: number;
+	enforced: number;
+	byMode: Record<string, number>;
+	bySeverity: Record<'low' | 'medium' | 'high', number>;
+};
+
 export type RunMonitorTrendSparkline = {
 	path: string;
 	width: number;
@@ -588,6 +595,29 @@ export function buildAdaptiveComponentBreakdown(
 			direction: item.delta >= 0 ? 'up' : 'down'
 		};
 	});
+}
+
+export function summarizeAdaptiveDecisionRows(
+	rows: RunMonitorAdaptiveDecisionRow[]
+): RunMonitorAdaptiveDecisionSummary {
+	const out: RunMonitorAdaptiveDecisionSummary = {
+		total: 0,
+		enforced: 0,
+		byMode: {},
+		bySeverity: { low: 0, medium: 0, high: 0 }
+	};
+	const normalized = Array.isArray(rows) ? rows : [];
+	for (const row of normalized) {
+		out.total += 1;
+		if (row.enforced) out.enforced += 1;
+		const mode = String(row.mode ?? '').trim().toLowerCase() || 'unknown';
+		out.byMode[mode] = Number(out.byMode[mode] ?? 0) + 1;
+		const severityRaw = String(row.explanation?.severity ?? 'low').trim().toLowerCase();
+		const severity: 'low' | 'medium' | 'high' =
+			severityRaw === 'high' ? 'high' : severityRaw === 'medium' ? 'medium' : 'low';
+		out.bySeverity[severity] += 1;
+	}
+	return out;
 }
 
 export function buildTrendSparkline(
