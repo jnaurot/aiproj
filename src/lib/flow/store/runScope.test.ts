@@ -72,6 +72,22 @@ describe('runScope partial-run binding behavior', () => {
 		});
 	});
 
+	it('includes adaptive override mode when provided', () => {
+		const graph = { version: 1, nodes: [], edges: [] };
+		const req = buildRunCreateRequest(
+			graph,
+			'graph-test',
+			null,
+			'from_start',
+			[],
+			[],
+			{},
+			'default_on',
+			'observe'
+		);
+		expect((req as any).adaptive).toEqual({ mode: 'observe' });
+	});
+
 	it('includes pinned execution hints when provided', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
 		const req = buildRunCreateRequest(

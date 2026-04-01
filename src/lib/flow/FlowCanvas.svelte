@@ -79,10 +79,12 @@ import {
 	} from './components/dsmlGuidedUx';
 	import { refreshSchemaCapabilitiesFromBackend } from '$lib/flow/schemaCapabilities';
 	import {
+		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
 		buildRunMonitorNodeRows,
 		filterAndSortRunMonitorNodes,
 		preferredMonitorEdgeFocusNodeId,
+		type RunMonitorAdaptiveDecisionRow,
 		type RunMonitorFilter,
 		type RunMonitorSort
 	} from '$lib/flow/components/runMonitorModel';
@@ -317,6 +319,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorEnvPaneEl: HTMLElement | null = null;
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
+	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
 	let runMonitorSplitStartY = 0;
@@ -333,6 +336,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorPrefsGraphId = '';
 	let runMonitorSectionCollapsed = false;
 	let runMonitorShowHistory = false;
+	let runMonitorAdaptiveModeOverride: 'default' | 'off' | 'observe' | 'enforce' = 'default';
 	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
@@ -651,6 +655,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		edges: ($graphStore.edges ?? []) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
+	$: runMonitorAdaptiveDecisionRows = buildRunMonitorAdaptiveDecisionRows(
+		($graphStore.queueRuntime ?? {}) as any
+	);
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
@@ -1826,11 +1833,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function runFromStart() {
-		void graphStore.runRemote(null, 'from_start', globalCacheMode);
+		const adaptiveMode =
+			runMonitorAdaptiveModeOverride === 'default'
+				? null
+				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
+		void graphStore.runRemote(null, 'from_start', globalCacheMode, adaptiveMode);
 	}
 
 	function runFromSelected() {
-		void graphStore.runRemote($selectedNode?.id ?? null, 'from_selected_onward', globalCacheMode);
+		const adaptiveMode =
+			runMonitorAdaptiveModeOverride === 'default'
+				? null
+				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
+		void graphStore.runRemote(
+			$selectedNode?.id ?? null,
+			'from_selected_onward',
+			globalCacheMode,
+			adaptiveMode
+		);
 	}
 
 	function pauseRun() {
@@ -2822,6 +2842,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return `flow.runMonitor.split.table.${graphId || 'default'}`;
 	}
 
+	function runMonitorAdaptiveOverrideStorageKey(graphId: string): string {
+		return `flow.runMonitor.adaptiveOverride.${graphId || 'default'}`;
+	}
+
 	function inspectorSidebarWidthStorageKey(graphId: string): string {
 		return `flow.inspector.width.${graphId || 'default'}`;
 	}
@@ -2847,6 +2871,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			if (Number.isFinite(tableRatioRaw) && tableRatioRaw > 0.1 && tableRatioRaw < 0.9) {
 				runMonitorNodesWeight = tableRatioRaw;
 				runMonitorEdgesWeight = Math.max(0.001, 1 - tableRatioRaw);
+			}
+			const adaptiveModeRaw = String(
+				sessionStorage.getItem(runMonitorAdaptiveOverrideStorageKey(gid)) ?? ''
+			).trim();
+			if (
+				adaptiveModeRaw === 'default' ||
+				adaptiveModeRaw === 'off' ||
+				adaptiveModeRaw === 'observe' ||
+				adaptiveModeRaw === 'enforce'
+			) {
+				runMonitorAdaptiveModeOverride = adaptiveModeRaw;
+			} else {
+				runMonitorAdaptiveModeOverride = 'default';
 			}
 		} catch {
 			// noop
@@ -2878,6 +2915,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const totalTable = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
 			const tableRatio = Math.min(0.95, Math.max(0.05, runMonitorNodesWeight / totalTable));
 			sessionStorage.setItem(runMonitorTableSplitStorageKey(gid), tableRatio.toFixed(4));
+			sessionStorage.setItem(
+				runMonitorAdaptiveOverrideStorageKey(gid),
+				String(runMonitorAdaptiveModeOverride || 'default')
+			);
 		} catch {
 			// noop
 		}
@@ -4161,6 +4202,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												<option value="label_asc">Label A-Z</option>
 											</select>
 										</label>
+										<label class="monitorField">
+											<span>Adaptive</span>
+											<select
+												bind:value={runMonitorAdaptiveModeOverride}
+												on:change={() => persistRunMonitorSlideoutPrefs()}
+											>
+												<option value="default">Default (env)</option>
+												<option value="off">Off</option>
+												<option value="observe">Observe</option>
+												<option value="enforce">Enforce</option>
+											</select>
+										</label>
 									</div>
 									<div class="runMonitorTablesSplit">
 										<div class="runMonitorTablesPane" style={`flex:${runMonitorNodesWeight} 1 0;`} bind:this={runMonitorNodesPaneEl}>
@@ -4238,6 +4291,50 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												{/if}
 											</div>
 										</div>
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">
+										<div class="runMonitorNodeHead" role="row">
+											<span>time</span>
+											<span>mode</span>
+											<span>changed</span>
+											<span>effective caps</span>
+											<span>reasons</span>
+										</div>
+										{#if runMonitorAdaptiveDecisionRows.length === 0}
+											<div class="envProfileEmpty">No adaptive scheduler decisions yet.</div>
+										{:else}
+											{#each runMonitorAdaptiveDecisionRows.slice(0, 20) as row (`${row.at}:${row.runId}`)}
+												<div class="runMonitorNodeRow" role="row">
+													<span class="mono">{row.at || '-'}</span>
+													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
+													<span>
+														{#if Object.keys(row.changedCaps).length === 0}
+															-
+														{:else}
+															{Object.entries(row.changedCaps)
+																.map(([key, delta]) => `${key}:${delta.from}->${delta.to}`)
+																.join(' | ')}
+														{/if}
+													</span>
+													<span class="mono">
+														{#if Object.keys(row.effectiveCaps).length === 0}
+															-
+														{:else}
+															{Object.entries(row.effectiveCaps)
+																.map(([key, value]) => `${key}=${value}`)
+																.join(' ')}
+														{/if}
+													</span>
+													<span>
+														{#if row.reasons.length === 0}
+															-
+														{:else}
+															{row.reasons.join(', ')}
+														{/if}
+													</span>
+												</div>
+											{/each}
+										{/if}
 									</div>
 									{#if runMonitorShowHistory}
 										<div class="runMonitorHistoryTable" role="table" aria-label="Run monitor history">

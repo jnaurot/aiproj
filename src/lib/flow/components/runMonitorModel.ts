@@ -73,6 +73,16 @@ export type RunMonitorEdgeRow = {
 	oldestAgeSec: number | null;
 };
 
+export type RunMonitorAdaptiveDecisionRow = {
+	at: string;
+	runId: string;
+	mode: string;
+	enforced: boolean;
+	reasons: string[];
+	changedCaps: Record<string, { from: number; to: number }>;
+	effectiveCaps: Record<string, number>;
+};
+
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
 
@@ -304,4 +314,52 @@ export function preferredMonitorEdgeFocusNodeId(sourceNodeId: string, targetNode
 	const target = String(targetNodeId ?? '').trim();
 	if (target) return target;
 	return String(sourceNodeId ?? '').trim();
+}
+
+export function buildRunMonitorAdaptiveDecisionRows(
+	queueRuntime: unknown
+): RunMonitorAdaptiveDecisionRow[] {
+	const runtime = asRecord(queueRuntime);
+	const rows = Array.isArray((runtime as any)?.adaptiveDecisions)
+		? (((runtime as any).adaptiveDecisions as unknown[]) ?? [])
+		: [];
+	const toChangedCaps = (value: unknown): Record<string, { from: number; to: number }> => {
+		if (!value || typeof value !== 'object') return {};
+		const out: Record<string, { from: number; to: number }> = {};
+		for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+			if (!raw || typeof raw !== 'object') continue;
+			const from = Number((raw as Record<string, unknown>).from ?? 0);
+			const to = Number((raw as Record<string, unknown>).to ?? 0);
+			if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+			out[String(key)] = { from, to };
+		}
+		return out;
+	};
+	const toCaps = (value: unknown): Record<string, number> => {
+		if (!value || typeof value !== 'object') return {};
+		const out: Record<string, number> = {};
+		for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+			const n = Number(raw ?? 0);
+			if (!Number.isFinite(n)) continue;
+			out[String(key)] = n;
+		}
+		return out;
+	};
+	return rows
+		.map((raw) => {
+			const row = asRecord(raw);
+			return {
+				at: String(row.at ?? '').trim(),
+				runId: String(row.runId ?? '').trim(),
+				mode: String(row.mode ?? '').trim() || 'off',
+				enforced: Boolean(row.enforced ?? false),
+				reasons: asArray<unknown>(row.reasons)
+					.map((value) => String(value ?? '').trim())
+					.filter(Boolean),
+				changedCaps: toChangedCaps(row.changedCaps),
+				effectiveCaps: toCaps(row.effectiveCaps)
+			} as RunMonitorAdaptiveDecisionRow;
+		})
+		.filter((row) => row.runId.length > 0)
+		.sort((a, b) => b.at.localeCompare(a.at));
 }

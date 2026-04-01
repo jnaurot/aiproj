@@ -244,6 +244,7 @@ class RunRequest(BaseModel):
     runFrom: Optional[str] = None
     runMode: Optional[str] = None
     cacheMode: Optional[str] = None
+    adaptive: Optional[Dict[str, Any]] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
 
     @field_validator("graph")
@@ -446,7 +447,24 @@ async def create_run(req: RunRequest, request: Request):
 
     graph_id = str(req.graphId)
     canonical_graph, _ = canonicalize_graph_payload(req.graph)
-    await rt.start_run(run_id, canonical_graph, req.runFrom, run_mode=req.runMode, graph_id=graph_id)
+    adaptive_override = req.adaptive if isinstance(req.adaptive, dict) else None
+    if adaptive_override is None:
+        await rt.start_run(
+            run_id,
+            canonical_graph,
+            req.runFrom,
+            run_mode=req.runMode,
+            graph_id=graph_id,
+        )
+    else:
+        await rt.start_run(
+            run_id,
+            canonical_graph,
+            req.runFrom,
+            run_mode=req.runMode,
+            graph_id=graph_id,
+            adaptive_override=adaptive_override,
+        )
     
     return RunCreated(schemaVersion=1, runId=run_id, graphId=graph_id)
 

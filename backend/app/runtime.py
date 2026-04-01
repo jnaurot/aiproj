@@ -1621,6 +1621,7 @@ class RuntimeManager:
         graph_id: Optional[str] = None,
         *,
         resume_snapshot: Optional[Dict[str, Any]] = None,
+        adaptive_override: Optional[Dict[str, Any]] = None,
     ):
         handle = self.runs[run_id]
         resolved_graph_id = str(graph_id or "").strip()
@@ -1658,6 +1659,7 @@ class RuntimeManager:
                 runtime_ref=self,
                 graph_id=handle.graph_id,
                 resume_snapshot=resume_snapshot,
+                adaptive_override=adaptive_override,
             )
         )
 

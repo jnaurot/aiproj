@@ -1090,6 +1090,18 @@ export type GraphState = {
 			hadStalledSnapshot: boolean;
 			blockedEvents: number;
 		}>;
+		adaptiveDecisions?: Array<{
+			at: string;
+			runId: string;
+			mode: 'off' | 'observe' | 'enforce' | string;
+			enforced: boolean;
+			reasons: string[];
+			hardCaps: Record<string, number>;
+			minCaps: Record<string, number>;
+			proposedCaps: Record<string, number>;
+			effectiveCaps: Record<string, number>;
+			changedCaps: Record<string, { from: number; to: number }>;
+		}>;
 		handleStates?: Record<string, { state: string; updatedAt?: string }>;
 		handleTimeline?: Array<{
 			nodeId: string;
@@ -2203,6 +2215,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							runScoped: undefined,
 							schedulerSnapshot: undefined,
 							llmLease: undefined,
+							adaptiveDecisions: [],
 							currentRunSummary: {
 								runId: String(evt.runId ?? runId),
 								maxPendingQueueDepth: 0,
@@ -2796,6 +2809,9 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						typeof state.queueRuntime.llmLease === 'object'
 							? state.queueRuntime.llmLease
 							: undefined),
+					adaptiveDecisions: Array.isArray((state.queueRuntime as any)?.adaptiveDecisions)
+						? (((state.queueRuntime as any).adaptiveDecisions as unknown[]) ?? [])
+						: [],
 					currentRunSummary:
 						(state.queueRuntime?.currentRunSummary &&
 						typeof state.queueRuntime.currentRunSummary === 'object'
@@ -2882,6 +2898,70 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				nextState,
 				stalled ? 'warn' : 'info',
 				`[scheduler-snapshot] ready=${readyCount} inflight=${inflightCount} pending=${pendingQueueDepth} runnable=${runnableNodeCount} stalled=${String(stalled).toLowerCase()}`
+			);
+		}
+		case 'scheduler_adaptive_decision': {
+			const at = String((evt as any)?.at ?? '').trim();
+			const runIdForEvent = String((evt as any)?.runId ?? runId).trim();
+			const mode = String((evt as any)?.mode ?? 'off').trim() || 'off';
+			const enforced = Boolean((evt as any)?.enforced ?? false);
+			const reasons = Array.isArray((evt as any)?.reasons)
+				? ((evt as any).reasons as unknown[]).map((value) => String(value ?? '').trim()).filter(Boolean)
+				: [];
+			const toNumberRecord = (value: unknown): Record<string, number> => {
+				if (!value || typeof value !== 'object') return {};
+				const out: Record<string, number> = {};
+				for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+					const n = Number(raw ?? 0);
+					if (!Number.isFinite(n)) continue;
+					out[String(key)] = n;
+				}
+				return out;
+			};
+			const toChangedCaps = (value: unknown): Record<string, { from: number; to: number }> => {
+				if (!value || typeof value !== 'object') return {};
+				const out: Record<string, { from: number; to: number }> = {};
+				for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+					if (!raw || typeof raw !== 'object') continue;
+					const from = Number((raw as Record<string, unknown>).from ?? 0);
+					const to = Number((raw as Record<string, unknown>).to ?? 0);
+					if (!Number.isFinite(from) || !Number.isFinite(to)) continue;
+					out[String(key)] = { from, to };
+				}
+				return out;
+			};
+			const prior = Array.isArray((state.queueRuntime as any)?.adaptiveDecisions)
+				? (((state.queueRuntime as any).adaptiveDecisions as unknown[]) ?? [])
+				: [];
+			const entry = {
+				at,
+				runId: runIdForEvent,
+				mode,
+				enforced,
+				reasons,
+				hardCaps: toNumberRecord((evt as any)?.hardCaps),
+				minCaps: toNumberRecord((evt as any)?.minCaps),
+				proposedCaps: toNumberRecord((evt as any)?.proposedCaps),
+				effectiveCaps: toNumberRecord((evt as any)?.effectiveCaps),
+				changedCaps: toChangedCaps((evt as any)?.changedCaps)
+			};
+			const nextState = {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					adaptiveDecisions: [...prior.slice(Math.max(0, prior.length - 199)), entry]
+				}
+			};
+			const changedKeys = Object.keys(entry.changedCaps);
+			const reasonSuffix = reasons.length > 0 ? ` reasons=${reasons.join(',')}` : '';
+			const changedSuffix =
+				changedKeys.length > 0
+					? ` changed=${changedKeys.map((key) => `${key}:${entry.changedCaps[key].from}->${entry.changedCaps[key].to}`).join(',')}`
+					: ' changed=none';
+			return logPush(
+				nextState,
+				'info',
+				`[adaptive] mode=${mode} enforced=${String(enforced)}${changedSuffix}${reasonSuffix}`
 			);
 		}
 		case 'llm_lease': {
@@ -9021,7 +9101,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		async runRemote(
 			runFrom: string | null,
 			runMode?: ActiveRunMode,
-			cacheMode?: 'default_on' | 'force_off' | 'force_on'
+			cacheMode?: 'default_on' | 'force_off' | 'force_on',
+			adaptiveMode?: 'off' | 'observe' | 'enforce' | null
 		) {
 			// prevent concurrent runs
 			const s0 = get({ subscribe } as any) as GraphState;
@@ -9400,7 +9481,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					dirtyNodeIds,
 					pinnedNodeIds,
 					pinnedArtifacts,
-					cacheMode
+					cacheMode,
+					adaptiveMode ?? null
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 				await runSingleWithStream(payload, plannedNodeSet);
@@ -9454,7 +9536,8 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						componentDirtyNodeIds,
 						pinnedNodeIds,
 						pinnedArtifacts,
-						cacheMode
+						cacheMode,
+						adaptiveMode ?? null
 					);
 					const created = await createRun(payload);
 					const { snap, completionSource } = await waitForTerminalViaSse(created.runId, {

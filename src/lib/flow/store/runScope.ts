@@ -208,7 +208,8 @@ export function buildRunCreateRequest(
 	dirtyNodeIds?: string[],
 	pinnedNodeIds?: string[],
 	pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>,
-	cacheMode?: 'default_on' | 'force_off' | 'force_on'
+	cacheMode?: 'default_on' | 'force_off' | 'force_on',
+	adaptiveMode?: 'off' | 'observe' | 'enforce' | null
 ): {
 	graphId: string;
 	graph: {
@@ -224,6 +225,7 @@ export function buildRunCreateRequest(
 	runFrom?: string;
 	runMode?: 'from_selected_onward' | 'selected_only';
 	cacheMode?: 'default_on' | 'force_off' | 'force_on';
+	adaptive?: { mode: 'off' | 'observe' | 'enforce' };
 } {
 	const sanitizedDirty = Array.isArray(dirtyNodeIds)
 		? Array.from(new Set(dirtyNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
@@ -268,7 +270,11 @@ export function buildRunCreateRequest(
 			: graph;
 
 	if (runFrom === null || runMode === 'from_start' || !runMode) {
-		return cacheMode ? { graphId, graph: payloadGraph, cacheMode } : { graphId, graph: payloadGraph };
+		const base = cacheMode ? { graphId, graph: payloadGraph, cacheMode } : { graphId, graph: payloadGraph };
+		if (adaptiveMode && ['off', 'observe', 'enforce'].includes(String(adaptiveMode))) {
+			return { ...base, adaptive: { mode: adaptiveMode } };
+		}
+		return base;
 	}
 	const out = {
 		graphId,
@@ -292,6 +298,9 @@ export function buildRunCreateRequest(
 		cacheMode?: 'default_on' | 'force_off' | 'force_on';
 	};
 	if (cacheMode) out.cacheMode = cacheMode;
+	if (adaptiveMode && ['off', 'observe', 'enforce'].includes(String(adaptiveMode))) {
+		out.adaptive = { mode: adaptiveMode };
+	}
 	return out;
 }
 

@@ -3177,6 +3177,7 @@ async def run_graph(
     runtime_ref: Optional[Any] = None,
     graph_id: Optional[str] = None,
     resume_snapshot: Optional[Dict[str, Any]] = None,
+    adaptive_override: Optional[Dict[str, Any]] = None,
     ):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
@@ -3281,7 +3282,11 @@ async def run_graph(
     max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
-    adaptive_mode = normalize_adaptive_mode(get_env("RUNNER_ADAPTIVE_MODE", "off"))
+    adaptive_mode = normalize_adaptive_mode(
+        (adaptive_override or {}).get("mode")
+        if isinstance(adaptive_override, dict) and str((adaptive_override or {}).get("mode") or "").strip()
+        else get_env("RUNNER_ADAPTIVE_MODE", "off")
+    )
     adaptive_eval_interval_ms = _env_int("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", 500, minimum=100)
     adaptive_cooldown_ms = _env_int("RUNNER_ADAPTIVE_COOLDOWN_MS", 1000, minimum=0)
     adaptive_hard_caps = {
@@ -3330,6 +3335,12 @@ async def run_graph(
             },
             "adaptiveScheduling": {
                 "mode": str(adaptive_mode),
+                "modeSource": (
+                    "run_override"
+                    if isinstance(adaptive_override, dict)
+                    and str((adaptive_override or {}).get("mode") or "").strip()
+                    else "env"
+                ),
                 "evalIntervalMs": int(adaptive_eval_interval_ms),
                 "cooldownMs": int(adaptive_cooldown_ms),
                 "hardCaps": dict(adaptive_hard_caps),
