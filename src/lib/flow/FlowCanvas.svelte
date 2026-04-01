@@ -1978,6 +1978,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
+	function selectRegressionAlertDrilldown(alert: RegressionAlert): void {
+		const nodeId = String(alert?.nodeId ?? '').trim();
+		if (!nodeId) return;
+		runMonitorTrendNodeId = nodeId;
+		const type = String(alert?.type ?? '').trim().toLowerCase();
+		const reasonCode = String(alert?.reasonCode ?? '').trim().toLowerCase();
+		if (type.includes('latency') || reasonCode.includes('latency')) {
+			runMonitorTrendMetric = 'p95Ms';
+		}
+		focusNodeFromMonitor(nodeId);
+	}
+
 	function onTrendSparklineMove(event: PointerEvent): void {
 		if (!runMonitorTrendSparkline || runMonitorTrendSparkline.points.length === 0) {
 			runMonitorTrendHoverIndex = -1;
@@ -4731,7 +4743,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envProfileEmpty">No regression alerts for the latest completed runs.</div>
 										{:else}
 											{#each runMonitorRegressionAlerts as alert, index (`${alert.reasonCode}:${alert.nodeId ?? alert.errorCode ?? ''}:${index}`)}
-												<div class="runMonitorNodeRow" role="row">
+												<button
+													type="button"
+													class="runMonitorNodeRow"
+													role="row"
+													on:click={() => selectRegressionAlertDrilldown(alert)}
+													title="Focus alert node"
+												>
 													<span>{alert.reasonCode || alert.type || '-'}</span>
 													<span>{alert.nodeId || alert.errorCode || '-'}</span>
 													<span>{Number.isFinite(Number(alert.baseline)) ? Number(alert.baseline).toFixed(1) : '-'}</span>
@@ -4745,7 +4763,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															-
 														{/if}
 													</span>
-												</div>
+												</button>
 											{/each}
 										{/if}
 									</div>
