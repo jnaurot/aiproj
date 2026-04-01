@@ -4,6 +4,7 @@ import json
 import base64
 import threading
 import logging
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from app.runner.materialize import materialize_text
@@ -24,9 +25,20 @@ logger = logging.getLogger(__name__)
 
 
 _MODEL_PROVIDER_SEMAPHORES: Dict[str, asyncio.Semaphore] = {}
+_MODEL_PROVIDER_CAPS: Dict[str, int] = {}
+_MODEL_PROVIDER_IN_USE: Dict[str, int] = {}
+_MODEL_PROVIDER_PERMIT_DEBT: Dict[str, int] = {}
 _MODEL_PROVIDER_WAITERS: Dict[str, set[str]] = {}
 _MODEL_PROVIDER_HOLDERS: Dict[str, str] = {}
 _MODEL_PROVIDER_LOCK = threading.Lock()
+
+
+@dataclass
+class _ProviderReleaseState:
+    released: bool
+    in_use: int
+    debt: int
+    cap: int
 
 
 def _provider_cap_value(provider: str) -> int:
@@ -53,11 +65,84 @@ def _provider_semaphore(provider: str) -> Optional[asyncio.Semaphore]:
         if sem is None:
             sem = asyncio.Semaphore(cap)
             _MODEL_PROVIDER_SEMAPHORES[key] = sem
+            _MODEL_PROVIDER_CAPS[key] = cap
+            _MODEL_PROVIDER_IN_USE[key] = 0
+            _MODEL_PROVIDER_PERMIT_DEBT[key] = 0
+            logger.info(
+                "MODEL_PROVIDER_CAP_INIT provider=%s cap=%d",
+                key,
+                cap,
+            )
+            return sem
+        previous_cap = int(_MODEL_PROVIDER_CAPS.get(key, cap))
+        if previous_cap != cap:
+            delta = cap - previous_cap
+            if delta > 0:
+                for _ in range(delta):
+                    sem.release()
+            else:
+                reduce_by = -delta
+                available = max(0, int(getattr(sem, "_value", 0)))
+                retract = min(reduce_by, available)
+                if retract > 0:
+                    sem._value = max(0, available - retract)  # type: ignore[attr-defined]
+                carry = max(0, reduce_by - retract)
+                if carry > 0:
+                    _MODEL_PROVIDER_PERMIT_DEBT[key] = int(_MODEL_PROVIDER_PERMIT_DEBT.get(key, 0)) + carry
+            _MODEL_PROVIDER_CAPS[key] = cap
+            logger.info(
+                "MODEL_PROVIDER_CAP_RECONCILED provider=%s previous=%d current=%d in_use=%d debt=%d available=%d",
+                key,
+                previous_cap,
+                cap,
+                int(_MODEL_PROVIDER_IN_USE.get(key, 0)),
+                int(_MODEL_PROVIDER_PERMIT_DEBT.get(key, 0)),
+                int(getattr(sem, "_value", 0)),
+            )
         return sem
 
 
 def _provider_key(provider: str) -> str:
     return str(provider or "").strip().lower()
+
+
+def _provider_mark_acquired(provider: str) -> int:
+    key = _provider_key(provider)
+    with _MODEL_PROVIDER_LOCK:
+        current = int(_MODEL_PROVIDER_IN_USE.get(key, 0)) + 1
+        _MODEL_PROVIDER_IN_USE[key] = current
+        return current
+
+
+def _provider_release_permit(provider: str, sem: asyncio.Semaphore) -> _ProviderReleaseState:
+    key = _provider_key(provider)
+    with _MODEL_PROVIDER_LOCK:
+        in_use = max(0, int(_MODEL_PROVIDER_IN_USE.get(key, 0)) - 1)
+        _MODEL_PROVIDER_IN_USE[key] = in_use
+        debt = int(_MODEL_PROVIDER_PERMIT_DEBT.get(key, 0))
+        released = False
+        if debt > 0:
+            _MODEL_PROVIDER_PERMIT_DEBT[key] = debt - 1
+            debt = debt - 1
+        else:
+            sem.release()
+            released = True
+        return _ProviderReleaseState(
+            released=released,
+            in_use=in_use,
+            debt=debt,
+            cap=int(_MODEL_PROVIDER_CAPS.get(key, _provider_cap_value(provider))),
+        )
+
+
+def _reset_provider_lease_state_for_tests() -> None:
+    with _MODEL_PROVIDER_LOCK:
+        _MODEL_PROVIDER_SEMAPHORES.clear()
+        _MODEL_PROVIDER_CAPS.clear()
+        _MODEL_PROVIDER_IN_USE.clear()
+        _MODEL_PROVIDER_PERMIT_DEBT.clear()
+        _MODEL_PROVIDER_WAITERS.clear()
+        _MODEL_PROVIDER_HOLDERS.clear()
 
 
 def _provider_waiter_add(provider: str, node_id: str) -> int:
@@ -738,6 +823,7 @@ async def exec_llm(
                 )
             waited_ms = max(0, int((asyncio.get_running_loop().time() - waiting_started_at) * 1000))
             _provider_waiter_remove(kind, str(node["id"]))
+            _provider_mark_acquired(kind)
             holder_node_id = _provider_holder_set(kind, str(node["id"]))
             await _emit_llm_lease(
                 provider=kind,
@@ -789,7 +875,22 @@ async def exec_llm(
                         "nodeId": node["id"],
                     }
                 )
-                sem.release()
+                release_state = _provider_release_permit(kind, sem)
+                if not release_state.released and release_state.debt > 0:
+                    await context.bus.emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "info",
+                            "message": (
+                                "MODEL_PROVIDER_CAP_DOWNSCALE_DRAIN: "
+                                f"provider={kind} cap={release_state.cap} "
+                                f"in_use={release_state.in_use} debt={release_state.debt}"
+                            ),
+                            "nodeId": node["id"],
+                        }
+                    )
         else:
             _provider_holder_set(kind, str(node["id"]))
             await _emit_llm_lease(

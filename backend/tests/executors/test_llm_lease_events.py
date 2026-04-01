@@ -34,9 +34,7 @@ async def test_exec_llm_emits_llm_lease_waiting_acquired_released(monkeypatch) -
 		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
 
 	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
-	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
-	llm_exec._MODEL_PROVIDER_WAITERS.clear()
-	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	llm_exec._reset_provider_lease_state_for_tests()
 	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
 
 	node = {
