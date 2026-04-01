@@ -32,14 +32,13 @@ async def test_model_node_started_emits_only_after_llm_lease_acquired(monkeypatc
 		input_text=None,
 		input_items=None,
 		input_media=None,
+		template_values=None,
 		upstream_artifact_ids=None,
 	):
 		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
 
 	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
-	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
-	llm_exec._MODEL_PROVIDER_WAITERS.clear()
-	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	llm_exec._reset_provider_lease_state_for_tests()
 	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
 
 	graph = {
@@ -55,6 +54,7 @@ async def test_model_node_started_emits_only_after_llm_lease_acquired(monkeypatc
 						"base_url": "http://127.0.0.1:11434",
 						"user_prompt": "hello",
 						"output_mode": "text",
+						"allow_prompt_only_model_execution": True,
 					},
 				},
 			}
@@ -115,15 +115,14 @@ async def test_node_started_emits_exactly_once_for_non_lease_and_lease_nodes(mon
 		input_text=None,
 		input_items=None,
 		input_media=None,
+		template_values=None,
 		upstream_artifact_ids=None,
 	):
 		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
 
 	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
 	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
-	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
-	llm_exec._MODEL_PROVIDER_WAITERS.clear()
-	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	llm_exec._reset_provider_lease_state_for_tests()
 	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
 
 	graph_non_lease = {
@@ -172,6 +171,7 @@ async def test_node_started_emits_exactly_once_for_non_lease_and_lease_nodes(mon
 						"base_url": "http://127.0.0.1:11434",
 						"user_prompt": "hello",
 						"output_mode": "text",
+						"allow_prompt_only_model_execution": True,
 					},
 				},
 			},
@@ -203,9 +203,7 @@ async def test_model_timeout_before_lease_has_no_node_started_or_active_work_edg
 
 	monkeypatch.setenv("RUNNER_MAX_MODEL_PROVIDER_OLLAMA", "1")
 	monkeypatch.setenv("RUNNER_MODEL_PROVIDER_ACQUIRE_TIMEOUT_OLLAMA", "0.01")
-	llm_exec._MODEL_PROVIDER_SEMAPHORES.clear()
-	llm_exec._MODEL_PROVIDER_WAITERS.clear()
-	llm_exec._MODEL_PROVIDER_HOLDERS.clear()
+	llm_exec._reset_provider_lease_state_for_tests()
 	sem = llm_exec._provider_semaphore("ollama")
 	assert sem is not None
 	# Saturate provider so model times out before acquiring a lease.
@@ -224,6 +222,7 @@ async def test_model_timeout_before_lease_has_no_node_started_or_active_work_edg
 							"base_url": "http://127.0.0.1:11434",
 							"user_prompt": "hello",
 							"output_mode": "text",
+							"allow_prompt_only_model_execution": True,
 						},
 					},
 				},

@@ -60,6 +60,7 @@ async def test_runtime_env_cap_change_applies_without_process_restart(monkeypatc
 					"base_url": "http://127.0.0.1:11434",
 					"user_prompt": "hello",
 					"output_mode": "text",
+					"allow_prompt_only_model_execution": True,
 				},
 			},
 		}

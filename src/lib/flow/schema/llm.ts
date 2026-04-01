@@ -93,6 +93,7 @@ export const LlmParamsSchema = z
 			.strip()
 			.optional(),
 		on_error: z.enum(['fail_fast', 'skip_failed']).optional(),
+		allowPromptOnlyModelExecution: z.boolean().optional(),
 		requestPolicy: z
 			.object({
 				retries: z.number().int().min(0).max(20).optional(),

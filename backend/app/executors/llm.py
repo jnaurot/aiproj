@@ -247,6 +247,8 @@ def normalize_llm_params(raw: Dict[str, Any]) -> Dict[str, Any]:
         p["input_envelope"] = p.pop("inputEnvelope")
     if "onError" in p and "on_error" not in p:
         p["on_error"] = p.pop("onError")
+    if "allowPromptOnlyModelExecution" in p and "allow_prompt_only_model_execution" not in p:
+        p["allow_prompt_only_model_execution"] = p.pop("allowPromptOnlyModelExecution")
     if "requestPolicy" in p and "request_policy" not in p:
         p["request_policy"] = p.pop("requestPolicy")
     if isinstance(p.get("debug"), dict):
@@ -669,6 +671,31 @@ async def exec_llm(
         serialized_inputs = [*serialized_inputs, envelope_text]
     if envelope_media_parts:
         serialized_media = [*serialized_media, *envelope_media_parts]
+    prompt_only_allowed = bool(getattr(llm_params, "allow_prompt_only_model_execution", False))
+    has_runtime_work_item = isinstance(runtime_work_item, dict) and runtime_item_text is not None
+    has_any_upstream_input = bool(upstream_artifact_ids) or has_runtime_work_item
+    if not has_any_upstream_input and not prompt_only_allowed:
+        return NodeOutput(
+            status="failed",
+            metadata=None,
+            execution_time_ms=0.0,
+            error=_model_error_payload(
+                "MODEL_MISSING_UPSTREAM_INPUT",
+                "Prompt-only model execution is disabled and no upstream input was provided",
+                allowPromptOnlyModelExecution=False,
+            ),
+        )
+    if not has_any_upstream_input and prompt_only_allowed:
+        await context.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": "MODEL_PROMPT_ONLY_EXECUTION: proceeding without upstream artifacts",
+                "nodeId": node_id,
+            }
+        )
     logger.debug(
         "Model input prepared",
         extra={"nodeId": node_id, "upstreamCount": len(upstream_artifact_ids), "inputChars": len(text), "inputEncoding": input_encoding},

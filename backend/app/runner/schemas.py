@@ -63,6 +63,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     if "inputMapping" in p and "input_mapping" not in p:
         p["input_mapping"] = p.pop("inputMapping")
+    if "allowPromptOnlyModelExecution" in p and "allow_prompt_only_model_execution" not in p:
+        p["allow_prompt_only_model_execution"] = p.pop("allowPromptOnlyModelExecution")
     if "inputEncoding" in p and "input_encoding" not in p:
         p["input_encoding"] = p.pop("inputEncoding")
     if "inputEnvelope" in p and "input_envelope" not in p:
@@ -976,6 +978,7 @@ class LLMParams(NodeParamSchema):
     max_retries: int = Field(3, ge=0, le=10)
     timeout_seconds: int = Field(60, ge=1)
     on_error: Literal["fail_fast", "skip_failed"] = "fail_fast"
+    allow_prompt_only_model_execution: bool = False
     
     input_mapping: Optional[Dict[str, str]] = None  # variables -> input keys/handles
     input_envelope: Optional[List[Dict[str, Any]]] = None

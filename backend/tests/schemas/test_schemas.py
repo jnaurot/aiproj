@@ -302,6 +302,19 @@ class TestLLMParams:
             "input_value": "{{node_input.port_name}}"
         }
 
+    def test_allow_prompt_only_model_execution_normalizes_from_camel_case(self):
+        params_data = {
+            "model": "test-model",
+            "user_prompt": "Test",
+            "baseUrl": "http://localhost:11434",
+            "output": {"mode": "text"},
+            "allowPromptOnlyModelExecution": True,
+        }
+        normalized = normalize_llm_params_frontend(params_data)
+        assert normalized["allow_prompt_only_model_execution"] is True
+        llm_params = LLMParams.model_validate(normalized)
+        assert llm_params.allow_prompt_only_model_execution is True
+
     def test_accepts_input_envelope(self):
         llm_params = LLMParams.model_validate(
             {

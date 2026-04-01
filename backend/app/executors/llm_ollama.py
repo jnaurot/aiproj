@@ -240,7 +240,7 @@ async def exec_llm_ollama(
     
     t0 = asyncio.get_event_loop().time()
         
-    if not upstream_artifact_ids:
+    if not upstream_artifact_ids and not bool(getattr(params, "allow_prompt_only_model_execution", False)):
         await context.bus.emit({
             "type": "log",
             "runId": run_id,
@@ -258,7 +258,10 @@ async def exec_llm_ollama(
             metadata=None
             )
     
-    text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
+    if upstream_artifact_ids:
+        text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
+    else:
+        text = input_text if isinstance(input_text, str) else ""
     logger.debug(
         "Ollama input prepared",
         extra={"nodeId": node_id, "upstreamCount": len(upstream_artifact_ids), "inputChars": len(text)},

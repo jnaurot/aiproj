@@ -98,7 +98,7 @@ async def exec_llm_openai_compat(
     assert context is not None, "context is None"
     assert hasattr(context, "bus"), "context missing bus"
 
-    if not upstream_artifact_ids:
+    if not upstream_artifact_ids and not bool(getattr(params, "allow_prompt_only_model_execution", False)):
         await context.bus.emit(
             {
                 "type": "log",
@@ -116,7 +116,10 @@ async def exec_llm_openai_compat(
             execution_time_ms=(asyncio.get_event_loop().time() - t0) * 1000.0,
         )
 
-    upstream_text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
+    if upstream_artifact_ids:
+        upstream_text = input_text if isinstance(input_text, str) else await materialize_text(context, upstream_artifact_ids[0])
+    else:
+        upstream_text = input_text if isinstance(input_text, str) else ""
     input_items = input_items or ([upstream_text] if upstream_text else [])
     adapter = OpenAICompatAdapter()
     try:

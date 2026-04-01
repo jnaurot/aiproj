@@ -49,6 +49,7 @@ async def test_exec_llm_emits_llm_lease_waiting_acquired_released(monkeypatch) -
 				"base_url": "http://127.0.0.1:11434",
 				"user_prompt": "hello",
 				"output_mode": "text",
+				"allow_prompt_only_model_execution": True,
 			},
 		},
 	}

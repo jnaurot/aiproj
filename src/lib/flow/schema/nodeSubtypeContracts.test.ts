@@ -58,6 +58,16 @@ describe('node subtype contract schemas', () => {
 			LlmParamsSchemaByKind.openai_compat.safeParse({
 				connectionRef: 'openai_prod',
 				model: 'gpt-4.1-mini',
+				user_prompt: 'Prompt only',
+				allowPromptOnlyModelExecution: true,
+				output: { mode: 'text' },
+			}).success
+		).toBe(true);
+
+		expect(
+			LlmParamsSchemaByKind.openai_compat.safeParse({
+				connectionRef: 'openai_prod',
+				model: 'gpt-4.1-mini',
 				user_prompt: 'Analyze input',
 				inputEnvelope: [
 					{ type: 'text', text: 'extra context' },
