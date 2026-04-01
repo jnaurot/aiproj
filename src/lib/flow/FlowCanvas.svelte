@@ -451,6 +451,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAnalyticsStartAt = '';
 	let runMonitorAnalyticsEndAt = '';
 	let runMonitorAnalyticsOffset = 0;
+	let runMonitorRunTrendSort: 'created_asc' | 'created_desc' | 'runtime_desc' = 'created_asc';
+	let runMonitorNodeTrendSort: 'created_asc' | 'created_desc' | 'value_desc' = 'created_asc';
 	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
 	let runMonitorTrendSparkline: RunMonitorTrendSparkline | null = null;
 	let runMonitorTrendHoverIndex = -1;
@@ -970,7 +972,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
 		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
 	}
-	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorBottleneckSort}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorRunTrendSort}|${runMonitorNodeTrendSort}|${runMonitorSlaThresholdMs}|${runMonitorBottleneckSort}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
 	$: if (
 		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
 		String($graphStore.graphId ?? '').trim().length > 0
@@ -2538,7 +2540,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
-					sort: 'created_asc',
+					sort: runMonitorRunTrendSort,
 					limit: 20,
 					offset: Math.max(0, Number(runMonitorAnalyticsOffset || 0))
 				}),
@@ -2548,7 +2550,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					metric: runMonitorTrendMetric,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
-					sort: 'created_asc',
+					sort: runMonitorNodeTrendSort,
 					limit: 50,
 					offset: 0
 				}),
@@ -5657,6 +5659,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												/>
 											</label>
 											<label class="monitorField">
+												<span>Run sort</span>
+												<select bind:value={runMonitorRunTrendSort}>
+													<option value="created_asc">created asc</option>
+													<option value="created_desc">created desc</option>
+													<option value="runtime_desc">runtime desc</option>
+												</select>
+											</label>
+											<label class="monitorField">
 												<span>Node</span>
 												<select bind:value={runMonitorTrendNodeId}>
 													{#if runMonitorTrendNodeOptions.length === 0}
@@ -5676,6 +5686,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<option value="avgMs">avgMs</option>
 													<option value="maxMs">maxMs</option>
 													<option value="count">count</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Node sort</span>
+												<select bind:value={runMonitorNodeTrendSort}>
+													<option value="created_asc">created asc</option>
+													<option value="created_desc">created desc</option>
+													<option value="value_desc">value desc</option>
 												</select>
 											</label>
 											<label class="monitorField">
