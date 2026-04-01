@@ -956,6 +956,8 @@ async def list_state_transitions(
     request: Request,
     after_id: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
+    entity: Optional[str] = Query(default=None),
+    include_violations: bool = Query(default=True),
 ):
     rt = request.app.state.runtime
     handle = rt.get_run(run_id)
@@ -964,13 +966,30 @@ async def list_state_transitions(
         raise HTTPException(404, "Unknown runId")
 
     rows = await rt.list_run_events(run_id, after_id=after_id, limit=limit)
-    transition_types = {"state_transition", "state_transition_violation"}
+    transition_types = {"state_transition", "state_transition_violation"} if include_violations else {"state_transition"}
     transition_rows = [row for row in rows if str(row.get("type") or "") in transition_types]
+    entity_filter = str(entity or "").strip().lower()
+    if entity_filter:
+        transition_rows = [
+            row
+            for row in transition_rows
+            if str(
+                (
+                    row.get("payload", {}).get("entity")
+                    if isinstance(row.get("payload"), dict)
+                    else ""
+                )
+                or ""
+            ).strip().lower()
+            == entity_filter
+        ]
     next_after_id = transition_rows[-1]["id"] if transition_rows else after_id
     return {
         "runId": run_id,
         "afterId": after_id,
         "limit": limit,
+        "entity": entity_filter or None,
+        "includeViolations": include_violations,
         "events": transition_rows,
         "nextAfterId": next_after_id,
     }
