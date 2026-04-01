@@ -136,6 +136,12 @@ async def test_e2e_combined_control_adaptive_replay(monkeypatch) -> None:
 	assert all(isinstance(_payload_field(evt, "effectiveCaps"), dict) for evt in adaptive_events)
 	assert all(str(_payload_field(evt, "modeSource") or "") in {"env", "run_override"} for evt in adaptive_events)
 	assert not [evt for evt in events if str(evt.get("type") or "") == "state_invariant_violation"]
+	experiment = await rt.artifact_store.get_run_experiment(run_id)
+	assert isinstance(experiment, dict)
+	assert str(experiment.get("graphId") or "") == "graph-program-e2e-combined"
+	analytics = experiment.get("analytics") if isinstance(experiment.get("analytics"), dict) else {}
+	assert isinstance(analytics.get("nodeLatencyMs"), dict)
+	assert isinstance(analytics.get("queueDepthTrend"), list)
 
 	# Ensure replay compares against the same authoritative binding basis captured
 	# in the contract snapshot for this unchanged-run scenario.
@@ -160,6 +166,11 @@ async def test_e2e_combined_control_adaptive_replay(monkeypatch) -> None:
 		assert str(rt.get_run(replay_run_id).status or "") == "succeeded"
 		replay_events = await rt.list_run_events(replay_run_id, after_id=0, limit=2000)
 		assert any(str(evt.get("type") or "") == "control_gate_state" for evt in replay_events)
+		replay_experiment = await rt.artifact_store.get_run_experiment(replay_run_id)
+		assert isinstance(replay_experiment, dict)
+		assert str(replay_experiment.get("graphId") or "") == "graph-program-e2e-combined"
+		replay_analytics = replay_experiment.get("analytics") if isinstance(replay_experiment.get("analytics"), dict) else {}
+		assert isinstance(replay_analytics.get("nodeLatencyMs"), dict)
 	else:
 		assert str(replay_result.get("errorCode") or "") == "REPLAY_CONTRACT_VALIDATION_FAILED"
 		details = replay_result.get("details") if isinstance(replay_result.get("details"), dict) else {}
