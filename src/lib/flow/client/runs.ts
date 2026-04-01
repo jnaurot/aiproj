@@ -190,6 +190,7 @@ export type ExperimentAdaptiveDecision = {
 	runId: string;
 	at: string;
 	mode: string;
+	modeSource?: 'env' | 'run_override' | string;
 	enforced: boolean;
 	inputs?: Record<string, unknown>;
 	reasons?: string[];

@@ -5179,6 +5179,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										<div class="runMonitorNodeHead runMonitorAdaptiveTimelineHead" role="row">
 											<span>time</span>
 											<span>mode</span>
+											<span>source</span>
 											<span>score</span>
 											<span>changed</span>
 											<span>diff</span>
@@ -5288,6 +5289,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												>
 													<span class="mono">{row.at || '-'}</span>
 													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
+													<span>{row.modeSource || '-'}</span>
 													<span>
 														<span class={adaptiveSeverityClass(row.explanation.severity)}>
 															{row.explanation.score}
@@ -5349,7 +5351,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envProfileEmpty">Select an adaptive decision row to view full diagnostics.</div>
 										{:else}
 											<div class="envPanelSummary">
-												run={selectedAdaptiveDecision.runId} | at={selectedAdaptiveDecision.at} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''}
+												run={selectedAdaptiveDecision.runId} | at={selectedAdaptiveDecision.at} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''} | source={selectedAdaptiveDecision.modeSource || '-'}
 											</div>
 											<div class="envPanelSummary">
 												score=
@@ -6933,7 +6935,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runMonitorAdaptiveTimelineHead,
 	.runMonitorAdaptiveTimelineRow {
-		grid-template-columns: 1.2fr 0.9fr 0.55fr 1.25fr 1.15fr 1.2fr 1.4fr;
+		grid-template-columns: 1.1fr 0.75fr 0.65fr 0.55fr 1.15fr 1.05fr 1.2fr 1.35fr;
 	}
 
 	.runMonitorNodeHead {

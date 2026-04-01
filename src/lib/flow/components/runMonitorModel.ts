@@ -77,6 +77,7 @@ export type RunMonitorAdaptiveDecisionRow = {
 	at: string;
 	runId: string;
 	mode: string;
+	modeSource: string;
 	enforced: boolean;
 	inputs: Record<string, unknown>;
 	reasons: string[];
@@ -440,6 +441,7 @@ export function buildRunMonitorAdaptiveDecisionRows(
 				at: String(row.at ?? '').trim(),
 				runId: String(row.runId ?? '').trim(),
 				mode: String(row.mode ?? '').trim() || 'off',
+				modeSource: String(row.modeSource ?? '').trim() || 'env',
 				enforced: Boolean(row.enforced ?? false),
 				inputs,
 				reasons,

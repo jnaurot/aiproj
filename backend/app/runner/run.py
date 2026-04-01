@@ -3282,9 +3282,15 @@ async def run_graph(
     max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
+    adaptive_mode_source = (
+        "run_override"
+        if isinstance(adaptive_override, dict)
+        and str((adaptive_override or {}).get("mode") or "").strip()
+        else "env"
+    )
     adaptive_mode = normalize_adaptive_mode(
         (adaptive_override or {}).get("mode")
-        if isinstance(adaptive_override, dict) and str((adaptive_override or {}).get("mode") or "").strip()
+        if adaptive_mode_source == "run_override"
         else get_env("RUNNER_ADAPTIVE_MODE", "off")
     )
     adaptive_eval_interval_ms = _env_int("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", 500, minimum=100)
@@ -3335,12 +3341,7 @@ async def run_graph(
             },
             "adaptiveScheduling": {
                 "mode": str(adaptive_mode),
-                "modeSource": (
-                    "run_override"
-                    if isinstance(adaptive_override, dict)
-                    and str((adaptive_override or {}).get("mode") or "").strip()
-                    else "env"
-                ),
+                "modeSource": str(adaptive_mode_source),
                 "evalIntervalMs": int(adaptive_eval_interval_ms),
                 "cooldownMs": int(adaptive_cooldown_ms),
                 "hardCaps": dict(adaptive_hard_caps),
@@ -9055,6 +9056,7 @@ async def run_graph(
                     "runId": run_id,
                     "at": iso_now(),
                     "mode": str(adaptive_mode),
+                    "modeSource": str(adaptive_mode_source),
                     "enforced": bool(adaptive_mode == "enforce"),
                     "inputs": dict(decision.get("inputs") or {}),
                     "reasons": list(decision.get("reasons") or []),

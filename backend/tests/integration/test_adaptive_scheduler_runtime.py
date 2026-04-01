@@ -103,6 +103,7 @@ async def test_adaptive_observe_emits_decisions_without_enforcement(monkeypatch,
 	adaptive_events = [evt for evt in events if evt.get("type") == "scheduler_adaptive_decision"]
 	assert adaptive_events, "expected adaptive decision events in observe mode"
 	assert any(str(evt.get("mode") or "") == "observe" for evt in adaptive_events)
+	assert all(str(evt.get("modeSource") or "") == "env" for evt in adaptive_events)
 	assert any(int(((evt.get("effectiveCaps") or {}).get("tool") or 0)) == 2 for evt in adaptive_events)
 	assert state["max_tool"] >= 2, "observe mode should not enforce reduced tool cap"
 
@@ -169,6 +170,7 @@ async def test_adaptive_enforce_reduces_tool_concurrency(monkeypatch, tmp_path):
 	adaptive_events = [evt for evt in events if evt.get("type") == "scheduler_adaptive_decision"]
 	assert adaptive_events, "expected adaptive decision events in enforce mode"
 	assert any(str(evt.get("mode") or "") == "enforce" for evt in adaptive_events)
+	assert all(str(evt.get("modeSource") or "") == "env" for evt in adaptive_events)
 	assert any(int(((evt.get("effectiveCaps") or {}).get("tool") or 0)) <= 1 for evt in adaptive_events)
 	assert state["max_tool"] <= 1, "enforce mode should throttle tool concurrency"
 
@@ -207,3 +209,54 @@ async def test_adaptive_off_emits_no_decision_events(monkeypatch, tmp_path):
 	)
 
 	assert not [evt for evt in events if evt.get("type") == "scheduler_adaptive_decision"]
+
+
+@pytest.mark.asyncio
+async def test_adaptive_override_mode_source_is_run_override(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+	events = []
+
+	async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"seed": "src"}, "meta": {"status": "ok"}},
+		)
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data={"kind": "json", "payload": {"ok": True}})
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setattr(run_mod, "get_env", lambda name, default=None: os.getenv(name, default))
+	monkeypatch.setattr(
+		run_mod,
+		"apply_adaptive_policy",
+		lambda **kwargs: {
+			"nextCaps": {"global": 2, "source": 2, "transform": 2, "model": 1, "tool": 1},
+			"changedCaps": {"global": {"from": 3, "to": 2}},
+			"changed": True,
+			"reasons": ["pressure"],
+			"inputs": {"queueDepth": 2, "readyCount": 1, "avgLatencyMs": 5.0, "failureRate": 0.0, "leaseWaitMs": 0.0},
+		},
+	)
+	monkeypatch.setenv("RUNNER_ADAPTIVE_MODE", "off")
+	monkeypatch.setenv("RUNNER_MAX_CONCURRENCY", "3")
+
+	artifact_root = tmp_path / "adaptive-override-source"
+	await run_mod.run_graph(
+		run_id="run-adaptive-override-source",
+		graph=_fanout_tool_graph(),
+		run_from=None,
+		bus=RunEventBus("run-adaptive-override-source", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=DiskArtifactStore(artifact_root),
+		cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+		graph_id="graph-adaptive-override-source",
+		adaptive_override={"mode": "observe"},
+	)
+
+	adaptive_events = [evt for evt in events if evt.get("type") == "scheduler_adaptive_decision"]
+	assert adaptive_events, "expected adaptive decision events with run override"
+	assert any(str(evt.get("mode") or "") == "observe" for evt in adaptive_events)
+	assert all(str(evt.get("modeSource") or "") == "run_override" for evt in adaptive_events)
