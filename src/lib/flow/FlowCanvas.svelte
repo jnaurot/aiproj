@@ -377,6 +377,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendHoverPoint:
 		| { x: number; y: number; value: number; createdAt: string }
 		| null = null;
+	let runMonitorTrendHoverCreatedAt = '';
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
@@ -794,6 +795,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorTrendHoverIndex < runMonitorTrendSparkline.points.length
 			? runMonitorTrendSparkline.points[runMonitorTrendHoverIndex]
 			: null;
+	$: runMonitorTrendHoverCreatedAt = String(runMonitorTrendHoverPoint?.createdAt ?? '').trim();
 	$: if (!runMonitorRegressionPair.runId || !runMonitorRegressionPair.baselineRunId) {
 		runMonitorRegressionAlerts = [];
 		runMonitorRegressionError = null;
@@ -4941,7 +4943,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												{#each runMonitorTrendPoints as point (`${point.runId}:${point.createdAt}:${point.nodeId}`)}
 													<button
 														type="button"
-														class="runMonitorNodeRow"
+														class={`runMonitorNodeRow ${runMonitorTrendHoverCreatedAt && runMonitorTrendHoverCreatedAt === String(point.createdAt ?? '').trim() ? 'runMonitorNodeRow-highlighted' : ''}`}
 														role="row"
 														on:click={() => selectTrendPointDrilldown(point)}
 														title="Focus node and set trend metric"
@@ -5974,6 +5976,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runMonitorNodeRow:hover {
 		border-color: var(--color-control-border-focus, #35548c);
+	}
+
+	.runMonitorNodeRow-highlighted {
+		border-color: rgba(99, 160, 255, 0.78);
+		box-shadow: inset 0 0 0 1px rgba(99, 160, 255, 0.32);
 	}
 
 	.adaptiveSeverity {
