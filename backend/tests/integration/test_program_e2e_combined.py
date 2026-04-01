@@ -23,17 +23,23 @@ def _combined_graph() -> Dict[str, Any]:
 		"nodes": [
 			{
 				"id": "work_src",
-				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "side_effect_mode": "pure"},
+				},
 			},
 			{
 				"id": "control_src",
-				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "side_effect_mode": "pure"},
+				},
 			},
 			{
 				"id": "sink",
 				"data": {
 					"kind": "tool",
-					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}, "side_effect_mode": "pure"},
 					"portDeclarations": {
 						"in": {
 							"in": {"plane": "work", "required": True, "cardinality": "many"},
@@ -156,3 +162,74 @@ async def test_e2e_combined_control_adaptive_replay(monkeypatch) -> None:
 	assert str(replay_experiment.get("graphId") or "") == "graph-program-e2e-combined"
 	replay_analytics = replay_experiment.get("analytics") if isinstance(replay_experiment.get("analytics"), dict) else {}
 	assert isinstance(replay_analytics.get("nodeLatencyMs"), dict)
+
+
+@pytest.mark.asyncio
+async def test_e2e_combined_pause_resume_then_replay(monkeypatch) -> None:
+	"""Program-level lifecycle acceptance:
+	- run starts and is paused at safe boundary
+	- same run resumes and succeeds
+	- replay from final contract succeeds
+	"""
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		await asyncio.sleep(0.12)
+		payload = {"allow": True} if node_id == "control_src" else {"node": node_id, "ok": True}
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=2.0,
+			data={"kind": "json", "payload": payload, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setattr(run_mod, "get_env", lambda name, default=None: os.getenv(name, default))
+	monkeypatch.setattr(
+		run_mod,
+		"apply_adaptive_policy",
+		lambda **kwargs: {
+			"nextCaps": {"global": 2, "source": 2, "transform": 2, "model": 1, "tool": 1},
+			"changedCaps": {"tool": {"from": 2, "to": 1}},
+			"changed": True,
+			"reasons": ["pressure"],
+			"inputs": {"queueDepth": 2, "readyCount": 1, "avgLatencyMs": 8.0, "failureRate": 0.0, "leaseWaitMs": 0.0},
+		},
+	)
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	monkeypatch.setenv("RUNNER_ADAPTIVE_MODE", "enforce")
+	monkeypatch.setenv("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", "100")
+	monkeypatch.setenv("RUNNER_ADAPTIVE_COOLDOWN_MS", "0")
+	monkeypatch.setenv("RUNNER_MAX_CONCURRENCY", "3")
+	monkeypatch.setenv("RUNNER_MAX_TOOL", "2")
+
+	rt = RuntimeManager()
+	run_id = "run-program-e2e-pause-resume"
+	graph = _combined_graph()
+	rt.create_run(run_id)
+	await rt.start_run(run_id, graph, run_from=None, graph_id="graph-program-e2e-pause-resume")
+	await asyncio.sleep(0.05)
+	pause_result = await rt.request_pause(run_id)
+	assert bool(pause_result.get("found")) is True
+	await rt.get_run(run_id).task
+	assert str(rt.get_run(run_id).status or "") == "paused"
+
+	events_after_pause = await rt.list_run_events(run_id, after_id=0, limit=2000)
+	assert any(str(evt.get("type") or "") == "run_paused" for evt in events_after_pause)
+
+	resume_result = await rt.request_resume(run_id)
+	assert bool(resume_result.get("resumed")) is True, resume_result
+	await rt.get_run(run_id).task
+	assert str(rt.get_run(run_id).status or "") == "succeeded"
+
+	events_after_resume = await rt.list_run_events(run_id, after_id=0, limit=2000)
+	assert any(str(evt.get("type") or "") == "run_resumed" for evt in events_after_resume)
+
+	replay_result = await rt.request_replay(source_run_id=run_id)
+	assert bool(replay_result.get("replayed")) is True, replay_result
+	replay_run_id = str(replay_result.get("runId") or "")
+	assert replay_run_id
+	await rt.get_run(replay_run_id).task
+	assert str(rt.get_run(replay_run_id).status or "") == "succeeded"
