@@ -368,6 +368,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runId: '',
 		baselineRunId: ''
 	};
+	let runMonitorRegressionRunOverride = '';
+	let runMonitorRegressionBaselineOverride = '';
 	let runMonitorRegressionAutoKey = '';
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
@@ -749,6 +751,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		.reverse()
 		.slice(0, 20);
 	$: runMonitorRegressionPair = (() => {
+		if (
+			runMonitorRegressionRunOverride &&
+			runMonitorRegressionBaselineOverride &&
+			runMonitorHistoryRows.some((row) => String(row.runId ?? '').trim() === runMonitorRegressionRunOverride) &&
+			runMonitorHistoryRows.some((row) => String(row.runId ?? '').trim() === runMonitorRegressionBaselineOverride)
+		) {
+			return {
+				runId: runMonitorRegressionRunOverride,
+				baselineRunId: runMonitorRegressionBaselineOverride
+			};
+		}
 		if (runMonitorHistoryRows.length < 2) return { runId: '', baselineRunId: '' };
 		return {
 			runId: String(runMonitorHistoryRows[0]?.runId ?? '').trim(),
@@ -2011,6 +2024,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const errorCode = String(item?.errorCode ?? '').trim();
 		if (!errorCode) return;
 		runLogFilter = errorCode;
+	}
+
+	function selectRegressionHistoryPair(index: number): void {
+		const current = runMonitorHistoryRows[index];
+		const baseline = runMonitorHistoryRows[index + 1];
+		const currentRunId = String(current?.runId ?? '').trim();
+		const baselineRunId = String(baseline?.runId ?? '').trim();
+		if (!currentRunId || !baselineRunId) return;
+		runMonitorRegressionRunOverride = currentRunId;
+		runMonitorRegressionBaselineOverride = baselineRunId;
+	}
+
+	function clearRegressionHistoryPairOverride(): void {
+		runMonitorRegressionRunOverride = '';
+		runMonitorRegressionBaselineOverride = '';
 	}
 
 	function onTrendSparklineMove(event: PointerEvent): void {
@@ -4778,6 +4806,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												>
 													{runMonitorRegressionLoading ? 'Loading...' : 'Reload'}
 												</button>
+												{#if runMonitorRegressionRunOverride && runMonitorRegressionBaselineOverride}
+													<button
+														type="button"
+														class="tabBtn"
+														on:click={clearRegressionHistoryPairOverride}
+														title="Revert to latest run pair"
+													>
+														Use latest pair
+													</button>
+												{/if}
 											</div>
 										</div>
 										<div class="envPanelSummary">
@@ -5028,8 +5066,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{#if runMonitorHistoryRows.length === 0}
 												<div class="envProfileEmpty">No finished runs yet.</div>
 											{:else}
-												{#each runMonitorHistoryRows.slice(0, 8) as row (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
-													<div class="runMonitorNodeRow" role="row">
+												{#each runMonitorHistoryRows.slice(0, 8) as row, index (`${String(row.runId ?? '')}:${String(row.finishedAt ?? '')}`)}
+													<button
+														type="button"
+														class={`runMonitorNodeRow ${
+															String(row.runId ?? '').trim() === runMonitorRegressionPair.runId ||
+															String(row.runId ?? '').trim() === runMonitorRegressionPair.baselineRunId
+																? 'runMonitorNodeRow-highlighted'
+																: ''
+														}`}
+														role="row"
+														on:click={() => selectRegressionHistoryPair(index)}
+														title="Use this run and the next row as regression pair"
+														disabled={!runMonitorHistoryRows[index + 1]}
+													>
 														<span class="mono">{String(row.runId ?? '-')}</span>
 														<span>{String(row.status ?? '-')}</span>
 														<span>{Number(row.runtimeMs ?? 0)}</span>
@@ -5045,7 +5095,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 																-
 															{/if}
 														</span>
-													</div>
+													</button>
 												{/each}
 											{/if}
 										</div>
