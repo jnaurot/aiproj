@@ -28,6 +28,7 @@ describe('graphStore adaptive decision projection', () => {
 				at: '2026-03-31T04:00:01.000Z',
 				mode: 'enforce',
 				enforced: true,
+				inputs: { queueDepth: 12, failureRate: 0.2 },
 				reasons: ['queue_depth_high'],
 				hardCaps: { global: 4, model: 1 },
 				minCaps: { global: 1, model: 1 },
@@ -44,7 +45,7 @@ describe('graphStore adaptive decision projection', () => {
 			mode: 'enforce',
 			enforced: true
 		});
+		expect(rows[0]?.inputs?.queueDepth).toBe(12);
 		expect(rows[0]?.changedCaps?.global).toEqual({ from: 4, to: 3 });
 	});
 });
-

@@ -153,6 +153,27 @@ export type RegressionAlert = {
 	thresholdAbs?: number;
 };
 
+export type ExperimentNodeTrendPoint = {
+	runId: string;
+	createdAt: string;
+	nodeId: string;
+	metric: string;
+	value: number;
+};
+
+export type ExperimentSlaBreach = {
+	runId: string;
+	createdAt: string;
+	nodeId: string;
+	p95Ms: number;
+	thresholdMs: number;
+};
+
+export type ExperimentFailureTaxonomyItem = {
+	errorCode: string;
+	count: number;
+};
+
 export async function getExperimentRegressions(params: {
 	runId: string;
 	baselineRunId?: string | null;
@@ -176,6 +197,69 @@ export async function getExperimentRegressions(params: {
 		runId: string;
 		baselineRunId: string;
 		alerts: RegressionAlert[];
+	};
+}
+
+export async function getExperimentNodeTrends(params: {
+	graphId: string;
+	nodeId?: string | null;
+	metric?: string;
+	limit?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (params.nodeId) qs.set('nodeId', String(params.nodeId).trim());
+	if (params.metric) qs.set('metric', String(params.metric).trim());
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	const res = await fetch(backendUrl(`/api/experiments/trends/nodes?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentNodeTrends failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		nodeId?: string | null;
+		metric: string;
+		points: ExperimentNodeTrendPoint[];
+	};
+}
+
+export async function getExperimentSlaBreaches(params: {
+	graphId: string;
+	p95Ms?: number;
+	limit?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (Number.isFinite(Number(params.p95Ms))) qs.set('p95Ms', String(Number(params.p95Ms)));
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	const res = await fetch(backendUrl(`/api/experiments/sla/breaches?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentSlaBreaches failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		thresholdMs: number;
+		breaches: ExperimentSlaBreach[];
+	};
+}
+
+export async function getExperimentFailureTaxonomy(params: { graphId: string; limit?: number }) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	const res = await fetch(backendUrl(`/api/experiments/failures/taxonomy?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentFailureTaxonomy failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		taxonomy: ExperimentFailureTaxonomyItem[];
 	};
 }
 

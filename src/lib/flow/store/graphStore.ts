@@ -1095,6 +1095,7 @@ export type GraphState = {
 			runId: string;
 			mode: 'off' | 'observe' | 'enforce' | string;
 			enforced: boolean;
+			inputs: Record<string, unknown>;
 			reasons: string[];
 			hardCaps: Record<string, number>;
 			minCaps: Record<string, number>;
@@ -2938,6 +2939,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				runId: runIdForEvent,
 				mode,
 				enforced,
+				inputs:
+					(evt as any)?.inputs && typeof (evt as any).inputs === 'object'
+						? ({ ...((evt as any).inputs as Record<string, unknown>) } as Record<string, unknown>)
+						: {},
 				reasons,
 				hardCaps: toNumberRecord((evt as any)?.hardCaps),
 				minCaps: toNumberRecord((evt as any)?.minCaps),

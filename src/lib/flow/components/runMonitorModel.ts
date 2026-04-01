@@ -78,8 +78,12 @@ export type RunMonitorAdaptiveDecisionRow = {
 	runId: string;
 	mode: string;
 	enforced: boolean;
+	inputs: Record<string, unknown>;
 	reasons: string[];
 	changedCaps: Record<string, { from: number; to: number }>;
+	hardCaps: Record<string, number>;
+	minCaps: Record<string, number>;
+	proposedCaps: Record<string, number>;
 	effectiveCaps: Record<string, number>;
 };
 
@@ -353,10 +357,14 @@ export function buildRunMonitorAdaptiveDecisionRows(
 				runId: String(row.runId ?? '').trim(),
 				mode: String(row.mode ?? '').trim() || 'off',
 				enforced: Boolean(row.enforced ?? false),
+				inputs: row.inputs && typeof row.inputs === 'object' ? ({ ...(row.inputs as Record<string, unknown>) } as Record<string, unknown>) : {},
 				reasons: asArray<unknown>(row.reasons)
 					.map((value) => String(value ?? '').trim())
 					.filter(Boolean),
 				changedCaps: toChangedCaps(row.changedCaps),
+				hardCaps: toCaps(row.hardCaps),
+				minCaps: toCaps(row.minCaps),
+				proposedCaps: toCaps(row.proposedCaps),
 				effectiveCaps: toCaps(row.effectiveCaps)
 			} as RunMonitorAdaptiveDecisionRow;
 		})

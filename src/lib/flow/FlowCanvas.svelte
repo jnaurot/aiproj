@@ -33,9 +33,19 @@
 	import { buildScopedStatus } from './components/statusScope';
 	import { parseComponentExitDecision } from './components/componentExitGuard';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
-	import type { RegressionAlert } from '$lib/flow/client/runs';
+	import type {
+		ExperimentFailureTaxonomyItem,
+		ExperimentNodeTrendPoint,
+		ExperimentSlaBreach,
+		RegressionAlert
+	} from '$lib/flow/client/runs';
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
-	import { getExperimentRegressions } from '$lib/flow/client/runs';
+	import {
+		getExperimentFailureTaxonomy,
+		getExperimentNodeTrends,
+		getExperimentRegressions,
+		getExperimentSlaBreaches
+	} from '$lib/flow/client/runs';
 	import { listEnvProfiles, installEnvProfile, type EnvProfileStatus } from '$lib/flow/client/envProfiles';
 	import {
 		listRuntimeEnvVars,
@@ -322,6 +332,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
+	let runMonitorAdaptiveDecisionSelectedKey = '';
+	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
+	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
 	let runMonitorSplitStartY = 0;
@@ -350,6 +363,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		baselineRunId: ''
 	};
 	let runMonitorRegressionAutoKey = '';
+	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
+	let runMonitorTrendNodeId = '';
+	let runMonitorTrendPoints: ExperimentNodeTrendPoint[] = [];
+	let runMonitorSlaThresholdMs = 2000;
+	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
+	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
+	let runMonitorAnalyticsLoading = false;
+	let runMonitorAnalyticsError: string | null = null;
+	let runMonitorAnalyticsRefreshKey = '';
 	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
@@ -671,6 +693,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorAdaptiveDecisionRows = buildRunMonitorAdaptiveDecisionRows(
 		($graphStore.queueRuntime ?? {}) as any
 	);
+	$: if (
+		runMonitorAdaptiveDecisionRows.length > 0 &&
+		!runMonitorAdaptiveDecisionRows.some(
+			(row) => `${row.at}:${row.runId}` === runMonitorAdaptiveDecisionSelectedKey
+		)
+	) {
+		runMonitorAdaptiveDecisionSelectedKey = `${runMonitorAdaptiveDecisionRows[0].at}:${runMonitorAdaptiveDecisionRows[0].runId}`;
+	}
+	$: selectedAdaptiveDecision =
+		runMonitorAdaptiveDecisionRows.find(
+			(row) => `${row.at}:${row.runId}` === runMonitorAdaptiveDecisionSelectedKey
+		) ?? null;
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
@@ -699,6 +733,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionPair.runId,
 			runMonitorRegressionPair.baselineRunId
 		);
+	}
+	$: runMonitorTrendNodeOptions = runMonitorNodeRows
+		.map((row) => ({ id: String(row.nodeId ?? '').trim(), label: String(row.label ?? '').trim() }))
+		.filter((row) => row.id.length > 0)
+		.sort((a, b) => a.label.localeCompare(b.label));
+	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
+		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
+	}
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}`;
+	$: if (
+		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
+		String($graphStore.graphId ?? '').trim().length > 0
+	) {
+		runMonitorAnalyticsRefreshKey = runMonitorAnalyticsAutoKey;
+		void refreshRunMonitorAnalytics();
 	}
 	$: if (!runMonitorRegressionPair.runId || !runMonitorRegressionPair.baselineRunId) {
 		runMonitorRegressionAlerts = [];
@@ -1869,6 +1918,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runId?: string | null,
 		baselineRunId?: string | null
 	): Promise<void> {
+		if (typeof window === 'undefined') return;
 		const resolvedRunId = String(runId ?? '').trim();
 		const resolvedBaselineRunId = String(baselineRunId ?? '').trim();
 		if (!resolvedRunId || !resolvedBaselineRunId) {
@@ -1899,6 +1949,51 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionError = String(error ?? 'Failed to load regression alerts');
 		} finally {
 			runMonitorRegressionLoading = false;
+		}
+	}
+
+	async function refreshRunMonitorAnalytics(): Promise<void> {
+		if (typeof window === 'undefined') return;
+		const graphId = String($graphStore.graphId ?? '').trim();
+		if (!graphId) {
+			runMonitorTrendPoints = [];
+			runMonitorSlaBreaches = [];
+			runMonitorFailureTaxonomy = [];
+			runMonitorAnalyticsError = null;
+			return;
+		}
+		runMonitorAnalyticsLoading = true;
+		runMonitorAnalyticsError = null;
+		try {
+			const [trendRes, slaRes, failureRes] = await Promise.all([
+				getExperimentNodeTrends({
+					graphId,
+					nodeId: runMonitorTrendNodeId || undefined,
+					metric: runMonitorTrendMetric,
+					limit: 50
+				}),
+				getExperimentSlaBreaches({
+					graphId,
+					p95Ms: Number(runMonitorSlaThresholdMs || 2000),
+					limit: 30
+				}),
+				getExperimentFailureTaxonomy({
+					graphId,
+					limit: 30
+				})
+			]);
+			runMonitorTrendPoints = Array.isArray(trendRes.points) ? trendRes.points.slice(-20) : [];
+			runMonitorSlaBreaches = Array.isArray(slaRes.breaches) ? slaRes.breaches.slice(0, 20) : [];
+			runMonitorFailureTaxonomy = Array.isArray(failureRes.taxonomy)
+				? failureRes.taxonomy.slice(0, 20)
+				: [];
+		} catch (error) {
+			runMonitorTrendPoints = [];
+			runMonitorSlaBreaches = [];
+			runMonitorFailureTaxonomy = [];
+			runMonitorAnalyticsError = String(error ?? 'Failed to load historical analytics');
+		} finally {
+			runMonitorAnalyticsLoading = false;
 		}
 	}
 
@@ -4385,7 +4480,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envProfileEmpty">No adaptive scheduler decisions yet.</div>
 										{:else}
 											{#each runMonitorAdaptiveDecisionRows.slice(0, 20) as row (`${row.at}:${row.runId}`)}
-												<div class="runMonitorNodeRow" role="row">
+												<button
+													type="button"
+													class="runMonitorNodeRow"
+													role="row"
+													on:click={() =>
+														(runMonitorAdaptiveDecisionSelectedKey = `${row.at}:${row.runId}`)}
+													title="Select adaptive decision details"
+												>
 													<span class="mono">{row.at || '-'}</span>
 													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
 													<span>
@@ -4413,8 +4515,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															{row.reasons.join(', ')}
 														{/if}
 													</span>
-												</div>
+												</button>
 											{/each}
+										{/if}
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision detail">
+										<div class="runtimeEnvHead">
+											<strong>Adaptive Decision Detail</strong>
+										</div>
+										{#if !selectedAdaptiveDecision}
+											<div class="envProfileEmpty">Select an adaptive decision row to view full diagnostics.</div>
+										{:else}
+											<div class="envPanelSummary">
+												run={selectedAdaptiveDecision.runId} | at={selectedAdaptiveDecision.at} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''}
+											</div>
+											<pre class="runMonitorJsonDetail">{JSON.stringify({
+												inputs: selectedAdaptiveDecision.inputs,
+												reasons: selectedAdaptiveDecision.reasons,
+												changedCaps: selectedAdaptiveDecision.changedCaps,
+												hardCaps: selectedAdaptiveDecision.hardCaps,
+												minCaps: selectedAdaptiveDecision.minCaps,
+												proposedCaps: selectedAdaptiveDecision.proposedCaps,
+												effectiveCaps: selectedAdaptiveDecision.effectiveCaps
+											}, null, 2)}</pre>
 										{/if}
 									</div>
 									<div class="runMonitorHistoryTable" role="table" aria-label="Regression detection alerts">
@@ -4471,6 +4594,118 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													</span>
 												</div>
 											{/each}
+										{/if}
+									</div>
+									<div class="runMonitorHistoryTable" role="table" aria-label="Historical analytics drilldown">
+										<div class="runtimeEnvHead">
+											<strong>Historical Drilldown</strong>
+											<div class="runtimeEnvActions">
+												<button
+													type="button"
+													class="tabBtn"
+													on:click={() => void refreshRunMonitorAnalytics()}
+													disabled={runMonitorAnalyticsLoading}
+												>
+													{runMonitorAnalyticsLoading ? 'Loading...' : 'Reload'}
+												</button>
+											</div>
+										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Node</span>
+												<select bind:value={runMonitorTrendNodeId}>
+													{#if runMonitorTrendNodeOptions.length === 0}
+														<option value="">(none)</option>
+													{:else}
+														{#each runMonitorTrendNodeOptions as option (`${option.id}`)}
+															<option value={option.id}>{option.label}</option>
+														{/each}
+													{/if}
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Metric</span>
+												<select bind:value={runMonitorTrendMetric}>
+													<option value="p95Ms">p95Ms</option>
+													<option value="p50Ms">p50Ms</option>
+													<option value="avgMs">avgMs</option>
+													<option value="maxMs">maxMs</option>
+													<option value="count">count</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>SLA p95</span>
+												<input
+													type="number"
+													min="1"
+													step="50"
+													bind:value={runMonitorSlaThresholdMs}
+												/>
+											</label>
+										</div>
+										{#if runMonitorAnalyticsError}
+											<div class="envProfileError">{runMonitorAnalyticsError}</div>
+										{:else}
+											<div class="runMonitorNodeHead" role="row">
+												<span>trend run</span>
+												<span>node</span>
+												<span>metric</span>
+												<span>value</span>
+												<span>created</span>
+											</div>
+											{#if runMonitorTrendPoints.length === 0}
+												<div class="envProfileEmpty">No trend points for selected node/metric.</div>
+											{:else}
+												{#each runMonitorTrendPoints as point (`${point.runId}:${point.createdAt}:${point.nodeId}`)}
+													<div class="runMonitorNodeRow" role="row">
+														<span class="mono">{point.runId}</span>
+														<span>{point.nodeId}</span>
+														<span>{point.metric}</span>
+														<span>{Number(point.value ?? 0).toFixed(1)}</span>
+														<span>{point.createdAt}</span>
+													</div>
+												{/each}
+											{/if}
+											<div class="runMonitorNodeHead" role="row">
+												<span>sla run</span>
+												<span>node</span>
+												<span>p95</span>
+												<span>threshold</span>
+												<span>created</span>
+											</div>
+											{#if runMonitorSlaBreaches.length === 0}
+												<div class="envProfileEmpty">No SLA breaches at current threshold.</div>
+											{:else}
+												{#each runMonitorSlaBreaches as breach (`${breach.runId}:${breach.nodeId}:${breach.createdAt}`)}
+													<div class="runMonitorNodeRow" role="row">
+														<span class="mono">{breach.runId}</span>
+														<span>{breach.nodeId}</span>
+														<span>{Number(breach.p95Ms ?? 0).toFixed(1)}</span>
+														<span>{Number(breach.thresholdMs ?? 0).toFixed(1)}</span>
+														<span>{breach.createdAt}</span>
+													</div>
+												{/each}
+											{/if}
+											<div class="runMonitorNodeHead" role="row">
+												<span>error code</span>
+												<span>count</span>
+												<span></span>
+												<span></span>
+												<span></span>
+											</div>
+											{#if runMonitorFailureTaxonomy.length === 0}
+												<div class="envProfileEmpty">No failure taxonomy rows.</div>
+											{:else}
+												{#each runMonitorFailureTaxonomy as item (`${item.errorCode}`)}
+													<div class="runMonitorNodeRow" role="row">
+														<span>{item.errorCode}</span>
+														<span>{item.count}</span>
+														<span></span>
+														<span></span>
+														<span></span>
+													</div>
+												{/each}
+											{/if}
 										{/if}
 									</div>
 									{#if runMonitorShowHistory}
@@ -5440,6 +5675,28 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runMonitorNodeRow:hover {
 		border-color: var(--color-control-border-focus, #35548c);
+	}
+
+	.runMonitorJsonDetail {
+		margin: 0;
+		padding: 8px;
+		border: 1px solid var(--color-control-border, #1c2335);
+		border-radius: 8px;
+		background: var(--color-control-option-bg, #0c1220);
+		color: var(--color-control-option-text, #dbe7ff);
+		font-size: 11px;
+		line-height: 1.35;
+		max-height: 220px;
+		overflow: auto;
+	}
+
+	.monitorField input[type='number'] {
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-bg, #0b1323);
+		color: var(--color-control-text, #dbe7ff);
+		padding: 6px 8px;
+		border-radius: 8px;
+		font-size: 12px;
 	}
 
 	.runMonitorNodeName {
