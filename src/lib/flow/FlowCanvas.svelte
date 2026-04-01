@@ -461,6 +461,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
 	let runMonitorBottleneckNodes: ExperimentBottleneckNode[] = [];
+	let runMonitorBottleneckSort: 'score_desc' | 'score_asc' | 'p95_desc' = 'score_desc';
 	let runMonitorTransitions: RunMonitorTransitionRow[] = [];
 	let runMonitorTransitionsVisible: RunMonitorTransitionRow[] = [];
 	let runMonitorTransitionsLoading = false;
@@ -968,7 +969,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
 		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
 	}
-	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorBottleneckSort}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
 	$: if (
 		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
 		String($graphStore.graphId ?? '').trim().length > 0
@@ -2572,7 +2573,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
-					sort: 'score_desc',
+					sort: runMonitorBottleneckSort,
 					limit: 30,
 					offset: 0
 				})
@@ -5670,6 +5671,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													step="50"
 													bind:value={runMonitorSlaThresholdMs}
 												/>
+											</label>
+											<label class="monitorField">
+												<span>Bottleneck sort</span>
+												<select bind:value={runMonitorBottleneckSort}>
+													<option value="score_desc">score desc</option>
+													<option value="score_asc">score asc</option>
+													<option value="p95_desc">p95 desc</option>
+												</select>
 											</label>
 										</div>
 										{#if runMonitorAnalyticsError}
