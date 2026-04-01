@@ -201,6 +201,92 @@ async def test_resume_uses_pause_snapshot_and_skips_already_completed_node(monke
 
 
 @pytest.mark.asyncio
+async def test_resume_hydrates_bindings_for_once_node_upstream_inputs(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	first_started = asyncio.Event()
+	call_counts: dict[str, int] = {"n1": 0, "n2": 0}
+	n2_upstream_lengths: list[int] = []
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		call_counts[node_id] = int(call_counts.get(node_id, 0)) + 1
+		if node_id == "n1":
+			first_started.set()
+			await asyncio.sleep(0.05)
+		if node_id == "n2":
+			n2_upstream_lengths.append(len(list(upstream_artifact_ids or [])))
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=5.0,
+			data={"kind": "json", "payload": {"node": node_id}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+	graph = {
+		"nodes": [
+			{"id": "n1", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "n2", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e_work", "source": "n1", "target": "n2", "targetHandle": "in", "data": {"mode": "work"}}],
+	}
+
+	artifact_store = MemoryArtifactStore()
+	cache = ExecutionCache()
+	pause_events: list[dict[str, Any]] = []
+	pause_bus = RunEventBus("run-resume-bindings-hydrate", on_emit=lambda evt: pause_events.append(dict(evt)))
+	pause_event = asyncio.Event()
+
+	first_run = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-resume-bindings-hydrate",
+			graph=graph,
+			run_from=None,
+			bus=pause_bus,
+			artifact_store=artifact_store,
+			cache=cache,
+			graph_id="graph-resume-bindings-hydrate",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(first_started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.wait_for(first_run, timeout=5.0)
+	paused_evt = next((evt for evt in pause_events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot")
+	assert isinstance(snapshot, dict)
+
+	# On the paused run, only n1 should have executed.
+	assert call_counts["n1"] == 1
+	assert call_counts["n2"] == 0
+
+	resume_events: list[dict[str, Any]] = []
+	resume_bus = RunEventBus("run-resume-bindings-hydrate", on_emit=lambda evt: resume_events.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-resume-bindings-hydrate",
+		graph=graph,
+		run_from=None,
+		bus=resume_bus,
+		artifact_store=artifact_store,
+		cache=cache,
+		graph_id="graph-resume-bindings-hydrate",
+		resume_snapshot=snapshot,
+	)
+
+	assert _event_index(resume_events, "run_resumed") >= 0
+	assert _event_index(resume_events, "node_started", "n1") < 0
+	assert _event_index(resume_events, "node_started", "n2") >= 0
+	assert call_counts["n1"] == 1
+	assert call_counts["n2"] == 1
+	# The resumed n2 execution must receive its upstream artifact binding.
+	assert n2_upstream_lengths and n2_upstream_lengths[-1] >= 1
+
+
+@pytest.mark.asyncio
 async def test_missing_resumability_declaration_fails(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")

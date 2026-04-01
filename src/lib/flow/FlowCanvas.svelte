@@ -333,6 +333,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeEnvDraftByName: Record<string, string> = {};
 	let runtimeEnvFilter = '';
 	let runtimeEnvRevealSensitive = false;
+	let runtimeEnvDirtyNames: string[] = [];
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	let lastObservedLogCount = 0;
@@ -343,19 +344,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runLogsCollapsed = false;
 	let runMonitorNodeFilter: RunMonitorFilter = 'all';
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
+	let runMonitorTab: 'live' | 'diagnostics' | 'history' = 'live';
+	let runMonitorNodeStatusFilters: string[] = [];
+	let runMonitorEdgeStatusFilters: Array<'active' | 'waiting' | 'blocked' | 'full'> = [];
 	let runMonitorSlideoutOpen = true;
 	let runMonitorSlideoutWidth = 380;
 	let runMonitorResizeActive = false;
 	let runMonitorResizeStartX = 0;
 	let runMonitorResizeStartWidth = 380;
-	let runMonitorMonitorWeight = 1;
-	let runMonitorEnvWeight = 1;
 	let runMonitorNodesWeight = 1;
 	let runMonitorEdgesWeight = 1;
-	let runMonitorPaneEl: HTMLElement | null = null;
-	let runMonitorEnvPaneEl: HTMLElement | null = null;
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
+	let runtimeSettingsOpen = false;
+	let runtimeSettingsPopoverEl: HTMLElement | null = null;
+	let runtimeSettingsButtonEl: HTMLButtonElement | null = null;
+	let runtimeSettingsCloseWarningOpen = false;
+	let runtimeSettingsSavingAll = false;
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsLive: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsHistory: RunMonitorAdaptiveDecisionRow[] = [];
@@ -402,7 +407,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		{ value: 'impact_desc', label: 'Impact desc' }
 	];
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
-	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
+	let runMonitorNodeStatusOptions: string[] = [];
+	let runMonitorNodeRowsSorted: ReturnType<typeof buildRunMonitorNodeRows> = [];
+	let runMonitorNodeRowsStatusFiltered: ReturnType<typeof buildRunMonitorNodeRows> = [];
+	let runMonitorNodeRowsVisible: ReturnType<typeof buildRunMonitorNodeRows> = [];
+	let runMonitorEdgeRowsVisible: ReturnType<typeof buildRunMonitorEdgeRows> = [];
+	type RunMonitorSplitPair = 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
 	let runMonitorSplitStartY = 0;
 	let runMonitorSplitPaneAStartPx = 0;
@@ -479,7 +489,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAnalyticsLoading = false;
 	let runMonitorAnalyticsError: string | null = null;
 	let runMonitorAnalyticsRefreshKey = '';
-	let slideoutEnvironmentCollapsed = true;
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
@@ -576,6 +585,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			String(row.description ?? '').toLowerCase().includes(q)
 		);
 	});
+	$: runtimeEnvDirtyNames = runtimeEnvVars
+		.filter((row) => String(runtimeEnvDraftByName[row.name] ?? '') !== String(row.value ?? ''))
+		.map((row) => row.name);
 	$: {
 		const envModeRaw = String(
 			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'RUNNER_ADAPTIVE_MODE')?.value ??
@@ -803,17 +815,42 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		nodeBindings: ($graphStore.nodeBindings ?? {}) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
-	$: runMonitorNodeRowsVisible = filterAndSortRunMonitorNodes(
+	$: runMonitorNodeRowsSorted = filterAndSortRunMonitorNodes(
 		runMonitorNodeRows,
 		runMonitorNodeFilter,
 		runMonitorNodeSort,
 		runMonitorGlobalStalled
 	);
+	$: runMonitorNodeStatusOptions = Array.from(
+		new Set(
+			runMonitorNodeRows
+				.map((row) => String(row.status ?? '').trim())
+				.filter((value) => value.length > 0)
+		)
+	).sort((left, right) => left.localeCompare(right));
+	$: runMonitorNodeRowsStatusFiltered =
+		runMonitorNodeStatusFilters.length === 0
+			? runMonitorNodeRowsSorted
+			: runMonitorNodeRowsSorted.filter((row) =>
+					runMonitorNodeStatusFilters.includes(String(row.status ?? '').trim())
+				);
+	$: runMonitorNodeRowsVisible = runMonitorNodeRowsStatusFiltered.slice(0, 40);
 	$: runMonitorEdgeRows = buildRunMonitorEdgeRows({
 		nodes: ($graphStore.nodes ?? []) as any,
 		edges: ($graphStore.edges ?? []) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
+	$: runMonitorEdgeRowsVisible = runMonitorEdgeRows
+		.filter((row) => {
+			if (runMonitorEdgeStatusFilters.length === 0) return true;
+			const statuses: Array<'active' | 'waiting' | 'blocked' | 'full'> = [];
+			if (row.blocked) statuses.push('blocked');
+			if (row.full) statuses.push('full');
+			if (row.depth <= 0) statuses.push('waiting');
+			if (row.depth > 0 && !row.blocked) statuses.push('active');
+			return statuses.some((status) => runMonitorEdgeStatusFilters.includes(status));
+		})
+		.slice(0, 40);
 	$: runMonitorAdaptiveDecisionRowsLive = buildRunMonitorAdaptiveDecisionRows(
 		($graphStore.queueRuntime ?? {}) as any
 	);
@@ -3643,10 +3680,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return `flow.runMonitor.width.${graphId || 'default'}`;
 	}
 
-	function runMonitorSectionSplitStorageKey(graphId: string): string {
-		return `flow.runMonitor.split.section.${graphId || 'default'}`;
-	}
-
 	function runMonitorTableSplitStorageKey(graphId: string): string {
 		return `flow.runMonitor.split.table.${graphId || 'default'}`;
 	}
@@ -3670,11 +3703,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const widthRaw = Number(sessionStorage.getItem(runMonitorWidthStorageKey(gid)));
 			if (Number.isFinite(widthRaw)) {
 				runMonitorSlideoutWidth = Math.min(720, Math.max(300, widthRaw));
-			}
-			const sectionRatioRaw = Number(sessionStorage.getItem(runMonitorSectionSplitStorageKey(gid)));
-			if (Number.isFinite(sectionRatioRaw) && sectionRatioRaw > 0.1 && sectionRatioRaw < 0.9) {
-				runMonitorMonitorWeight = sectionRatioRaw;
-				runMonitorEnvWeight = Math.max(0.001, 1 - sectionRatioRaw);
 			}
 			const tableRatioRaw = Number(sessionStorage.getItem(runMonitorTableSplitStorageKey(gid)));
 			if (Number.isFinite(tableRatioRaw) && tableRatioRaw > 0.1 && tableRatioRaw < 0.9) {
@@ -3720,9 +3748,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		try {
 			sessionStorage.setItem(runMonitorOpenStorageKey(gid), runMonitorSlideoutOpen ? '1' : '0');
 			sessionStorage.setItem(runMonitorWidthStorageKey(gid), String(Math.round(runMonitorSlideoutWidth)));
-			const totalSection = Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight);
-			const sectionRatio = Math.min(0.95, Math.max(0.05, runMonitorMonitorWeight / totalSection));
-			sessionStorage.setItem(runMonitorSectionSplitStorageKey(gid), sectionRatio.toFixed(4));
 			const totalTable = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
 			const tableRatio = Math.min(0.95, Math.max(0.05, runMonitorNodesWeight / totalTable));
 			sessionStorage.setItem(runMonitorTableSplitStorageKey(gid), tableRatio.toFixed(4));
@@ -3749,6 +3774,33 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function toggleRunMonitorSlideout(): void {
 		runMonitorSlideoutOpen = !runMonitorSlideoutOpen;
 		persistRunMonitorSlideoutPrefs();
+	}
+
+	function toggleRuntimeSettingsPopover(): void {
+		if (runtimeSettingsOpen) {
+			void requestCloseRuntimeSettingsPopover();
+			return;
+		}
+		runtimeSettingsOpen = true;
+		runtimeSettingsCloseWarningOpen = false;
+	}
+
+	function toggleNodeStatusFilter(status: string): void {
+		const value = String(status ?? '').trim();
+		if (!value) return;
+		if (runMonitorNodeStatusFilters.includes(value)) {
+			runMonitorNodeStatusFilters = runMonitorNodeStatusFilters.filter((entry) => entry !== value);
+			return;
+		}
+		runMonitorNodeStatusFilters = [...runMonitorNodeStatusFilters, value];
+	}
+
+	function toggleEdgeStatusFilter(status: 'active' | 'waiting' | 'blocked' | 'full'): void {
+		if (runMonitorEdgeStatusFilters.includes(status)) {
+			runMonitorEdgeStatusFilters = runMonitorEdgeStatusFilters.filter((entry) => entry !== status);
+			return;
+		}
+		runMonitorEdgeStatusFilters = [...runMonitorEdgeStatusFilters, status];
 	}
 
 	function beginRunMonitorResize(event: PointerEvent): void {
@@ -3798,18 +3850,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function beginRunMonitorSplit(pair: RunMonitorSplitPair, event: PointerEvent): void {
-		const paneA = pair === 'monitor_env' ? runMonitorPaneEl : runMonitorNodesPaneEl;
-		const paneB = pair === 'monitor_env' ? runMonitorEnvPaneEl : runMonitorEdgesPaneEl;
+		const paneA = runMonitorNodesPaneEl;
+		const paneB = runMonitorEdgesPaneEl;
 		if (!paneA || !paneB) return;
 		const aRect = paneA.getBoundingClientRect();
 		const bRect = paneB.getBoundingClientRect();
 		const pairStartPx = aRect.height + bRect.height;
 		if (pairStartPx <= 0) return;
-		const totalWeight =
-			pair === 'monitor_env'
-				? Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight)
-				: Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
-		const paneAWeight = pair === 'monitor_env' ? runMonitorMonitorWeight : runMonitorNodesWeight;
+		const totalWeight = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
+		const paneAWeight = runMonitorNodesWeight;
 		const paneAFromWeight = (pairStartPx * paneAWeight) / totalWeight;
 		const paneAStart = aRect.height > 0 ? aRect.height : paneAFromWeight;
 		const normalizedA = Math.max(0, Math.min(pairStartPx, paneAStart));
@@ -3854,12 +3903,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			nextPaneA = Math.max(nextPaneA, floor);
 		}
 		nextPaneA = Math.max(minPanePx, Math.min(pairStartPx - minPanePx, nextPaneA));
-		if (activeRunMonitorSplit === 'monitor_env') {
-			const total = Math.max(0.001, runMonitorMonitorWeight + runMonitorEnvWeight);
-			runMonitorMonitorWeight = (total * nextPaneA) / pairStartPx;
-			runMonitorEnvWeight = Math.max(0.001, total - runMonitorMonitorWeight);
-			return;
-		}
 		const total = Math.max(0.001, runMonitorNodesWeight + runMonitorEdgesWeight);
 		runMonitorNodesWeight = (total * nextPaneA) / pairStartPx;
 		runMonitorEdgesWeight = Math.max(0.001, total - runMonitorNodesWeight);
@@ -3878,6 +3921,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function onGlobalPointerMove(event: PointerEvent): void {
 		onInspectorSplitMove(event);
 		onRunMonitorSplitMove(event);
+	}
+
+	function onGlobalPointerDown(event: PointerEvent): void {
+		if (!runtimeSettingsOpen || runtimeSettingsCloseWarningOpen) return;
+		const target = event.target as Node | null;
+		if (!target) return;
+		if (runtimeSettingsPopoverEl?.contains(target) || runtimeSettingsButtonEl?.contains(target)) return;
+		void requestCloseRuntimeSettingsPopover();
 	}
 
 	function onGlobalPointerUp(): void {
@@ -3991,6 +4042,37 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			delete next[key];
 			runtimeEnvSaving = next;
 		}
+	}
+
+	async function saveRuntimeSettingsAndClose(): Promise<void> {
+		if (runtimeSettingsSavingAll) return;
+		runtimeSettingsSavingAll = true;
+		try {
+			for (const key of runtimeEnvDirtyNames) {
+				await applyRuntimeEnvVar(key);
+			}
+			await refreshRuntimeEnvPanel();
+			runtimeSettingsOpen = false;
+			runtimeSettingsCloseWarningOpen = false;
+		} finally {
+			runtimeSettingsSavingAll = false;
+		}
+	}
+
+	async function requestCloseRuntimeSettingsPopover(): Promise<void> {
+		if (!runtimeSettingsOpen) return;
+		if (runtimeEnvDirtyNames.length === 0) {
+			runtimeSettingsOpen = false;
+			runtimeSettingsCloseWarningOpen = false;
+			return;
+		}
+		runtimeSettingsCloseWarningOpen = true;
+	}
+
+	async function cancelRuntimeSettingsClose(): Promise<void> {
+		await refreshRuntimeEnvPanel();
+		runtimeSettingsOpen = false;
+		runtimeSettingsCloseWarningOpen = false;
 	}
 
 	onDestroy(() => {
@@ -4121,6 +4203,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 </script>
 
 <svelte:window
+	on:pointerdown={onGlobalPointerDown}
 	on:pointermove={onGlobalPointerMove}
 	on:pointerup={onGlobalPointerUp}
 	on:keydown={onWindowKeyDown}
@@ -4249,8 +4332,96 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				>
 					Monitor
 				</button>
+				<div class="settingsMenuWrap">
+					<button
+						type="button"
+						class="runSecondary settingsIconBtn"
+						bind:this={runtimeSettingsButtonEl}
+						title="Runtime environment settings"
+						aria-label="Runtime environment settings"
+						aria-expanded={runtimeSettingsOpen}
+						on:click={toggleRuntimeSettingsPopover}
+					>
+						⚙
+					</button>
+					{#if runtimeSettingsOpen}
+						<div class="settingsPopover" bind:this={runtimeSettingsPopoverEl} role="dialog" aria-label="Runtime environment settings">
+							<div class="runtimeEnvPanel">
+								<div class="runtimeEnvHead">
+									<strong>Runtime Env Vars</strong>
+									<div class="runtimeEnvActions">
+										<button class="tabBtn" on:click={() => void refreshRuntimeEnvPanel()} disabled={runtimeEnvLoading || runtimeSettingsSavingAll}>
+											{runtimeEnvLoading ? 'Loading...' : 'Reload'}
+										</button>
+										<label class="runtimeEnvToggle">
+											<input type="checkbox" bind:checked={runtimeEnvRevealSensitive} on:change={() => void refreshRuntimeEnvPanel()} disabled={runtimeSettingsSavingAll} />
+											<span>Reveal sensitive</span>
+										</label>
+									</div>
+								</div>
+								<input class="logFilterInput" placeholder="Filter env vars..." bind:value={runtimeEnvFilter} aria-label="Filter runtime env vars" />
+								{#if runtimeEnvError}
+									<div class="envProfileError">{runtimeEnvError}</div>
+								{/if}
+								{#if runtimeEnvRows.length === 0}
+									<div class="envProfileEmpty">No runtime env vars available.</div>
+								{:else}
+									<div class="runtimeEnvTable" role="table" aria-label="Runtime env vars">
+										{#each runtimeEnvRows as row (`${row.name}`)}
+											<div class="runtimeEnvRow" role="row">
+												<div class="runtimeEnvMeta">
+													<div class="mono runtimeEnvName">{row.name}{#if row.restartRequired}<span class="runtimeEnvRestart">restart</span>{/if}</div>
+													<div class="runtimeEnvSub">{row.category} | source={row.source}{row.masked ? ' | masked' : ''}</div>
+													<div class="runtimeEnvDesc">{row.description}</div>
+												</div>
+												<div class="runtimeEnvEdit">
+													<input class="runtimeEnvInput" type="text" value={runtimeEnvDraftByName[row.name] ?? ''} disabled={Boolean(runtimeEnvSaving[row.name]) || runtimeSettingsSavingAll} on:input={(event) => { const next = String((event.currentTarget as HTMLInputElement).value ?? ''); runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [row.name]: next }; }} placeholder={row.masked ? 'masked value' : (row.defaultValue ?? '')} />
+													<div class="runtimeEnvButtons">
+														<button class="tabBtn" on:click={() => void applyRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name]) || runtimeSettingsSavingAll}>Apply</button>
+														<button class="tabBtn" on:click={() => void unsetRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name]) || runtimeSettingsSavingAll}>Clear</button>
+													</div>
+												</div>
+											</div>
+										{/each}
+									</div>
+								{/if}
+								<div class="settingsPopoverActions">
+									<button class="tabBtn" on:click={() => void saveRuntimeSettingsAndClose()} disabled={runtimeSettingsSavingAll || runtimeEnvDirtyNames.length === 0}>
+										{runtimeSettingsSavingAll ? 'Saving...' : 'Save'}
+									</button>
+									<button class="tabBtn" on:click={() => void requestCloseRuntimeSettingsPopover()} disabled={runtimeSettingsSavingAll}>
+										Close
+									</button>
+								</div>
+							</div>
+						</div>
+					{/if}
+				</div>
 			</div>
 		</div>
+		{#if runtimeSettingsCloseWarningOpen}
+			<div class="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Unsaved environment changes">
+				<div class="componentSaveApplyModal">
+					<div class="componentSaveApplyHead">
+						<b>Unsaved Environment Changes</b>
+					</div>
+					<div class="componentSaveApplyBody">
+						<div>
+							You have unsaved environment variable edits. Save or cancel before closing settings.
+						</div>
+						<div class="mono">pending changes: {runtimeEnvDirtyNames.length}</div>
+					</div>
+					<div class="componentSaveApplyActions">
+						<button class="primary" on:click={() => void saveRuntimeSettingsAndClose()} disabled={runtimeSettingsSavingAll}>
+							{runtimeSettingsSavingAll ? 'Saving...' : 'Save'}
+						</button>
+						<button on:click={() => void cancelRuntimeSettingsClose()} disabled={runtimeSettingsSavingAll}>
+							Cancel
+						</button>
+					</div>
+				</div>
+			</div>
+		{/if}
 		{#if commandPaletteOpen}
 			<div class="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Command palette">
 				<div class="commandPaletteCard">
@@ -4974,10 +5145,39 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				></button>
 				<div class="runMonitorPanel">
 					<div class="runMonitorSections">
-						<div class="runMonitorSectionPane" style={`flex:${runMonitorMonitorWeight} 1 0;`} bind:this={runMonitorPaneEl}>
+						<div class="runMonitorSectionPane runMonitorMainSection">
 							<div class="runtimeEnvHead">
 								<strong>Run Monitor</strong>
 								<div class="runtimeEnvActions">
+									<div class="runMonitorTabs" role="tablist" aria-label="Run monitor views">
+										<button
+											type="button"
+											class={`pill pinBtn ${runMonitorTab === 'live' ? 'is-active' : ''}`}
+											role="tab"
+											aria-selected={runMonitorTab === 'live'}
+											on:click={() => (runMonitorTab = 'live')}
+										>
+											Live
+										</button>
+										<button
+											type="button"
+											class={`pill pinBtn ${runMonitorTab === 'diagnostics' ? 'is-active' : ''}`}
+											role="tab"
+											aria-selected={runMonitorTab === 'diagnostics'}
+											on:click={() => (runMonitorTab = 'diagnostics')}
+										>
+											Diagnostics
+										</button>
+										<button
+											type="button"
+											class={`pill pinBtn ${runMonitorTab === 'history' ? 'is-active' : ''}`}
+											role="tab"
+											aria-selected={runMonitorTab === 'history'}
+											on:click={() => (runMonitorTab = 'history')}
+										>
+											History
+										</button>
+									</div>
 									<button
 										type="button"
 										class="tabBtn sectionToggle"
@@ -4990,51 +5190,85 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							</div>
 							{#if !runMonitorSectionCollapsed}
 								<div class="runMonitorMonitorBody">
-									<div class="envPanelSummary">
-										nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
-									</div>
-									<div class="runMonitorLegend">legend: solid=data/work | dashed teal=control link</div>
-									<div class="monitorToolbar">
-										<label class="monitorField">
-											<span>Filter</span>
-											<select bind:value={runMonitorNodeFilter}>
-												<option value="all">All</option>
-												<option value="blocked">Blocked</option>
-												<option value="waiting">Waiting</option>
-												<option value="stalled">Stalled</option>
-											</select>
-										</label>
-										<label class="monitorField">
-											<span>Sort</span>
-											<select bind:value={runMonitorNodeSort}>
-												<option value="depth_desc">Depth desc</option>
-												<option value="depth_asc">Depth asc</option>
-												<option value="pending_desc">Pending desc</option>
-												<option value="pending_asc">Pending asc</option>
-												<option value="label_asc">Label A-Z</option>
-											</select>
-										</label>
-										<label class="monitorField">
-											<span>Adaptive</span>
-											<select
-												bind:value={runMonitorAdaptiveModeOverride}
-												on:change={() => persistRunMonitorSlideoutPrefs()}
-											>
-												<option value="default">Default (env)</option>
-												<option value="off">Off</option>
-												<option value="observe">Observe</option>
-												<option value="enforce">Enforce</option>
-											</select>
-										</label>
-									</div>
-									<div class="envPanelSummary">
-										adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
-										| env={runMonitorAdaptiveEnvMode}
-										| effective={runMonitorAdaptiveEffectiveMode}
-										{#if runMonitorAdaptiveDecisionRows.length > 0}
-											| last decision mode={runMonitorAdaptiveDecisionRows[0]?.mode ?? '-'}{runMonitorAdaptiveDecisionRows[0]?.enforced ? ' (enforced)' : ''}
-										{/if}
-									</div>
+									{#if runMonitorTab === 'live'}
+										<div class="envPanelSummary">
+											nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
+										</div>
+										<div class="envPanelSummary">
+											active leases={runMonitorNodeRows.filter((row) => row.isLlmHolder).length}
+											| waiting leases={runMonitorNodeRows.filter((row) => row.isLlmWaiting).length}
+											| last decision={runMonitorAdaptiveDecisionRows[0]?.mode ?? '-'}{runMonitorAdaptiveDecisionRows[0]?.enforced ? ' (enforced)' : ''}
+										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Node filter</span>
+												<select bind:value={runMonitorNodeFilter}>
+													<option value="all">All</option>
+													<option value="blocked">Blocked</option>
+													<option value="waiting">Waiting</option>
+													<option value="stalled">Stalled</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Node sort</span>
+												<select bind:value={runMonitorNodeSort}>
+													<option value="depth_desc">Depth desc</option>
+													<option value="depth_asc">Depth asc</option>
+													<option value="pending_desc">Pending desc</option>
+													<option value="pending_asc">Pending asc</option>
+													<option value="label_asc">Label A-Z</option>
+												</select>
+											</label>
+										</div>
+										<div class="monitorChipRow">
+											<span class="monitorChipLabel">Node status</span>
+											{#each runMonitorNodeStatusOptions as status (`node-status-${status}`)}
+												<button
+													type="button"
+													class={`pill pinBtn monitorChip ${runMonitorNodeStatusFilters.includes(status) ? 'is-active' : ''}`}
+													on:click={() => toggleNodeStatusFilter(status)}
+												>
+													{status}
+												</button>
+											{/each}
+											{#if runMonitorNodeStatusOptions.length === 0}
+												<span class="envProfileEmpty">No node statuses yet.</span>
+											{/if}
+										</div>
+										<div class="monitorChipRow">
+											<span class="monitorChipLabel">Edge status</span>
+											{#each (['active', 'waiting', 'blocked', 'full'] as const) as status (`edge-status-${status}`)}
+												<button
+													type="button"
+													class={`pill pinBtn monitorChip ${runMonitorEdgeStatusFilters.includes(status) ? 'is-active' : ''}`}
+													on:click={() => toggleEdgeStatusFilter(status)}
+												>
+													{status}
+												</button>
+											{/each}
+										</div>
+									{:else if runMonitorTab === 'diagnostics'}
+										<div class="envPanelSummary">
+											adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
+											| env={runMonitorAdaptiveEnvMode}
+											| effective={runMonitorAdaptiveEffectiveMode}
+										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Adaptive</span>
+												<select
+													bind:value={runMonitorAdaptiveModeOverride}
+													on:change={() => persistRunMonitorSlideoutPrefs()}
+												>
+													<option value="default">Default (env)</option>
+													<option value="off">Off</option>
+													<option value="observe">Observe</option>
+													<option value="enforce">Enforce</option>
+												</select>
+											</label>
+										</div>
+									{/if}
+									{#if runMonitorTab === 'live'}
 									<div class="runMonitorTablesSplit">
 										<div class="runMonitorTablesPane" style={`flex:${runMonitorNodesWeight} 1 0;`} bind:this={runMonitorNodesPaneEl}>
 											{#if runMonitorNodeRowsVisible.length === 0}
@@ -5089,10 +5323,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<span>depth</span>
 													<span>age</span>
 												</div>
-												{#if runMonitorEdgeRows.length === 0}
+												{#if runMonitorEdgeRowsVisible.length === 0}
 													<div class="envProfileEmpty">No edge telemetry yet.</div>
 												{:else}
-													{#each runMonitorEdgeRows.slice(0, 40) as row (`${row.edgeId}:${row.handle}`)}
+													{#each runMonitorEdgeRowsVisible as row (`${row.edgeId}:${row.handle}`)}
 														<button
 															type="button"
 															class="runMonitorNodeRow"
@@ -5112,6 +5346,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											</div>
 										</div>
 									</div>
+									{/if}
+									{#if runMonitorTab === 'diagnostics'}
 									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">
 										<div class="monitorToolbar">
 											<label class="monitorField">
@@ -5652,6 +5888,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{/each}
 										{/if}
 									</div>
+									{/if}
+									{#if runMonitorTab === 'history'}
 									<div class="runMonitorHistoryTable" role="table" aria-label="Historical analytics drilldown">
 										<div class="runtimeEnvHead">
 											<strong>Historical Drilldown</strong>
@@ -6022,83 +6260,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{/if}
 										</div>
 									{/if}
+									{/if}
 								</div>
 							{:else}
 								<div class="envPanelSummary">Run monitor section is collapsed.</div>
-							{/if}
-						</div>
-
-						{#if !runMonitorSectionCollapsed && !slideoutEnvironmentCollapsed}
-							<button
-								type="button"
-								class="runMonitorInnerSplitter"
-								aria-label="Resize run monitor and environment sections"
-								on:pointerdown={(event) => beginRunMonitorSplit('monitor_env', event)}
-							></button>
-						{/if}
-
-						<div
-							class="runMonitorSectionPane runMonitorEnvSection"
-							class:is-collapsed={slideoutEnvironmentCollapsed}
-							style={`flex:${slideoutEnvironmentCollapsed ? '0 0 auto' : `${runMonitorEnvWeight} 1 0`};`}
-							bind:this={runMonitorEnvPaneEl}
-						>
-							<div class="runtimeEnvHead">
-								<strong>Environment Variables</strong>
-								<div class="runtimeEnvActions">
-									<button
-										type="button"
-										class="pill pinBtn"
-										title={slideoutEnvironmentCollapsed ? 'Expand environment section' : 'Collapse environment section'}
-										on:click={() => (slideoutEnvironmentCollapsed = !slideoutEnvironmentCollapsed)}
-									>
-										Env
-									</button>
-								</div>
-							</div>
-							{#if !slideoutEnvironmentCollapsed}
-								<div class="runtimeEnvPanel">
-									<div class="runtimeEnvHead">
-										<strong>Runtime Env Vars</strong>
-										<div class="runtimeEnvActions">
-											<button class="tabBtn" on:click={() => void refreshRuntimeEnvPanel()} disabled={runtimeEnvLoading}>
-												{runtimeEnvLoading ? 'Loading...' : 'Reload'}
-											</button>
-											<label class="runtimeEnvToggle">
-												<input type="checkbox" bind:checked={runtimeEnvRevealSensitive} on:change={() => void refreshRuntimeEnvPanel()} />
-												<span>Reveal sensitive</span>
-											</label>
-										</div>
-									</div>
-									<input class="logFilterInput" placeholder="Filter env vars..." bind:value={runtimeEnvFilter} aria-label="Filter runtime env vars" />
-									{#if runtimeEnvError}
-										<div class="envProfileError">{runtimeEnvError}</div>
-									{/if}
-									{#if runtimeEnvRows.length === 0}
-										<div class="envProfileEmpty">No runtime env vars available.</div>
-									{:else}
-										<div class="runtimeEnvTable" role="table" aria-label="Runtime env vars">
-											{#each runtimeEnvRows as row (`${row.name}`)}
-												<div class="runtimeEnvRow" role="row">
-													<div class="runtimeEnvMeta">
-														<div class="mono runtimeEnvName">{row.name}{#if row.restartRequired}<span class="runtimeEnvRestart">restart</span>{/if}</div>
-														<div class="runtimeEnvSub">{row.category} | source={row.source}{row.masked ? ' | masked' : ''}</div>
-														<div class="runtimeEnvDesc">{row.description}</div>
-													</div>
-													<div class="runtimeEnvEdit">
-														<input class="runtimeEnvInput" type="text" value={runtimeEnvDraftByName[row.name] ?? ''} disabled={Boolean(runtimeEnvSaving[row.name])} on:input={(event) => { const next = String((event.currentTarget as HTMLInputElement).value ?? ''); runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [row.name]: next }; }} placeholder={row.masked ? 'masked value' : (row.defaultValue ?? '')} />
-														<div class="runtimeEnvButtons">
-															<button class="tabBtn" on:click={() => void applyRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name])}>Apply</button>
-															<button class="tabBtn" on:click={() => void unsetRuntimeEnvVar(row.name)} disabled={Boolean(runtimeEnvSaving[row.name])}>Clear</button>
-														</div>
-													</div>
-												</div>
-											{/each}
-										</div>
-									{/if}
-								</div>
-							{:else}
-								<div class="envPanelSummary">Environment variables are collapsed.</div>
 							{/if}
 						</div>
 					</div>
@@ -6223,6 +6388,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		flex-direction: column;
 	}
 
+	.runMonitorMainSection {
+		flex: 1 1 auto;
+	}
+
 	.runMonitorEnvSection.is-collapsed {
 		min-height: 0;
 		overflow: visible;
@@ -6267,6 +6436,38 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
+	}
+
+	.runMonitorTabs {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.runMonitorTabs .pinBtn.is-active,
+	.monitorChip.is-active {
+		border-color: var(--color-accent, #4b8cff);
+		background: color-mix(in srgb, var(--color-accent, #4b8cff) 18%, transparent);
+		color: var(--color-text-primary, #f4f8ff);
+	}
+
+	.monitorChipRow {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 6px;
+		margin: 2px 0;
+	}
+
+	.monitorChipLabel {
+		font-size: 12px;
+		opacity: 0.85;
+		min-width: 80px;
+	}
+
+	.monitorChip {
+		font-size: 11px;
+		padding: 4px 8px;
 	}
 
 	.flow {
@@ -6431,6 +6632,38 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		margin-left: auto;
 	}
 
+	.settingsMenuWrap {
+		position: relative;
+	}
+
+	.settingsIconBtn {
+		padding: 6px 9px;
+		min-width: 34px;
+	}
+
+	.settingsPopover {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 8px);
+		z-index: 40;
+		width: min(560px, calc(100vw - 24px));
+		max-height: min(72vh, 720px);
+		display: flex;
+		flex-direction: column;
+		overflow: auto;
+		border-radius: 12px;
+		border: 1px solid var(--color-control-border, #2a3550);
+		background: var(--color-surface-raised, #0f1626);
+		box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
+		padding: 10px;
+	}
+
+	.settingsPopoverActions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 8px;
+	}
+
 	.status {
 		opacity: 0.68;
 		font-size: 13px;
@@ -6519,7 +6752,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		position: absolute;
 		inset: 0;
 		background: rgba(2, 5, 10, 0.58);
-		z-index: 8;
+		z-index: 90;
 		display: grid;
 		place-items: start center;
 		padding-top: 64px;
@@ -6541,6 +6774,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		border-radius: 12px;
 		border: 1px solid #2a3550;
 		background: #0f1626;
+		color: var(--color-control-text, #e6eefc);
 		box-shadow: 0 12px 35px rgba(0, 0, 0, 0.4);
 		padding: 12px;
 		display: grid;
@@ -6921,7 +7155,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		display: grid;
 		gap: 4px;
 		padding-right: 2px;
-		overflow: visible;
+		max-width: 100%;
+		overflow: auto;
 	}
 
 	.runMonitorNodeHead,
@@ -6937,6 +7172,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.runMonitorHistoryTable .runMonitorNodeHead,
 	.runMonitorHistoryTable .runMonitorNodeRow {
 		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
+	}
+
+	.runMonitorHistoryTable .runMonitorNodeHead,
+	.runMonitorHistoryTable .runMonitorNodeRow {
+		min-width: max-content;
 	}
 
 	.runMonitorEdgeTable .runMonitorNodeHead,

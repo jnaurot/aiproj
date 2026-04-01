@@ -8030,6 +8030,25 @@ async def run_graph(
                 "currentArtifactId": str(artifact_id or "").strip(),
             }
 
+        def _hydrate_runtime_bindings_from_authoritative() -> None:
+            # Resume executions must seed runtime bindings from the authoritative
+            # frontier snapshot before any node dispatch. Otherwise once-mode nodes
+            # can be admitted with empty upstream refs (inputs=[]).
+            for node_key, pair in authoritative_frontier_bindings.items():
+                if not isinstance(pair, dict):
+                    continue
+                artifact_id = str(pair.get("currentArtifactId") or "").strip()
+                if not artifact_id:
+                    continue
+                context.bindings.bind(
+                    node_id=str(node_key),
+                    artifact_id=artifact_id,
+                    status="restored",
+                )
+
+        if isinstance(resume_snapshot, dict):
+            _hydrate_runtime_bindings_from_authoritative()
+
         def _snapshot_frontier_validation_basis() -> Dict[str, Any]:
             frontier_nodes = set(ready)
             frontier_nodes.update(
