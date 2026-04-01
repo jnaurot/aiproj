@@ -236,6 +236,7 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			params={
 				"graphId": "graph-analytics-1",
 				"mode": "enforce",
+				"modeSource": "env",
 				"severity": "high",
 				"sort": "impact_desc",
 				"limit": 10,
@@ -246,6 +247,7 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		adaptive_body = adaptive_decisions.json()
 		assert str(adaptive_body.get("sort") or "") == "impact_desc"
 		assert str(adaptive_body.get("mode") or "") == "enforce"
+		assert str(adaptive_body.get("modeSource") or "") == "env"
 		assert str(adaptive_body.get("severity") or "") == "high"
 		assert int(adaptive_body.get("total") or 0) >= 1
 		decision_rows = adaptive_body.get("decisions") or []
@@ -271,6 +273,15 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert adaptive_invalid_mode.status_code == 400, adaptive_invalid_mode.text
+
+		adaptive_invalid_mode_source = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"modeSource": "bad",
+			},
+		)
+		assert adaptive_invalid_mode_source.status_code == 400, adaptive_invalid_mode_source.text
 
 		adaptive_invalid_severity = client.get(
 			"/experiments/adaptive/decisions",

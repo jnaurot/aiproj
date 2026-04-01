@@ -385,6 +385,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		| { x: number; y: number; value: number; createdAt: string }
 		| null = null;
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
+	let runMonitorAdaptiveModeSourceFilter: 'all' | 'env' | 'run_override' = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorAdaptiveChangedOnly = false;
 	let runMonitorAdaptiveMinScore = 0;
@@ -991,7 +992,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
 		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
 	}
-	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorRunTrendSort}|${runMonitorNodeTrendSort}|${runMonitorSlaThresholdMs}|${runMonitorBottleneckSort}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorRunTrendSort}|${runMonitorNodeTrendSort}|${runMonitorSlaThresholdMs}|${runMonitorBottleneckSort}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}|${runMonitorAdaptiveModeSourceFilter}`;
 	$: if (
 		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
 		String($graphStore.graphId ?? '').trim().length > 0
@@ -2592,6 +2593,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
 					endAt: runMonitorAnalyticsEndAt || undefined,
+					modeSource: runMonitorAdaptiveModeSourceFilter,
 					sort: runMonitorAdaptiveHistorySort,
 					limit: 100,
 					offset: 0
@@ -5150,6 +5152,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<option value="off">off</option>
 													<option value="observe">observe</option>
 													<option value="enforce">enforce</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Source</span>
+												<select bind:value={runMonitorAdaptiveModeSourceFilter}>
+													<option value="all">all</option>
+													<option value="env">env</option>
+													<option value="run_override">run_override</option>
 												</select>
 											</label>
 											<label class="monitorField">

@@ -169,6 +169,7 @@ describe('runs client analytics endpoints', () => {
 			expect(url.includes('startAt=2026-03-31T00%3A00%3A00Z')).toBe(true);
 			expect(url.includes('endAt=2026-03-31T01%3A00%3A00Z')).toBe(true);
 			expect(url.includes('mode=enforce')).toBe(true);
+			expect(url.includes('modeSource=run_override')).toBe(true);
 			expect(url.includes('severity=high')).toBe(true);
 			expect(url.includes('sort=impact_desc')).toBe(true);
 			expect(url.includes('limit=20')).toBe(true);
@@ -196,6 +197,7 @@ describe('runs client analytics endpoints', () => {
 				startAt: '2026-03-31T00:00:00Z',
 				endAt: '2026-03-31T01:00:00Z',
 				mode: 'enforce',
+				modeSource: 'run_override',
 				severity: 'high',
 				sort: 'impact_desc',
 				limit: 20,

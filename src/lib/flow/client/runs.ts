@@ -467,6 +467,7 @@ export async function getExperimentAdaptiveDecisions(params: {
 	startAt?: string | null;
 	endAt?: string | null;
 	mode?: 'all' | 'off' | 'observe' | 'enforce';
+	modeSource?: 'all' | 'env' | 'run_override';
 	severity?: 'all' | 'low' | 'medium' | 'high';
 	sort?: 'created_asc' | 'created_desc' | 'impact_desc';
 	limit?: number;
@@ -479,6 +480,9 @@ export async function getExperimentAdaptiveDecisions(params: {
 	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
 	if (params.mode && ['all', 'off', 'observe', 'enforce'].includes(String(params.mode))) {
 		qs.set('mode', String(params.mode));
+	}
+	if (params.modeSource && ['all', 'env', 'run_override'].includes(String(params.modeSource))) {
+		qs.set('modeSource', String(params.modeSource));
 	}
 	if (params.severity && ['all', 'low', 'medium', 'high'].includes(String(params.severity))) {
 		qs.set('severity', String(params.severity));
@@ -500,6 +504,7 @@ export async function getExperimentAdaptiveDecisions(params: {
 		startAt?: string | null;
 		endAt?: string | null;
 		mode?: 'all' | 'off' | 'observe' | 'enforce';
+		modeSource?: 'all' | 'env' | 'run_override';
 		severity?: 'all' | 'low' | 'medium' | 'high';
 		sort?: 'created_asc' | 'created_desc' | 'impact_desc';
 		limit?: number;

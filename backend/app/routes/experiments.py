@@ -560,6 +560,7 @@ async def adaptive_decisions(
 	startAt: Optional[str] = Query(default=None),
 	endAt: Optional[str] = Query(default=None),
 	mode: str = Query(default="all"),
+	modeSource: str = Query(default="all"),
 	severity: str = Query(default="all"),
 	sort: str = Query(default="created_desc"),
 	limit: int = Query(default=100, ge=1, le=2000),
@@ -568,6 +569,9 @@ async def adaptive_decisions(
 	mode_filter = str(mode or "all").strip().lower()
 	if mode_filter not in {"all", "off", "observe", "enforce"}:
 		raise HTTPException(400, "mode must be one of: all, off, observe, enforce")
+	mode_source_filter = str(modeSource or "all").strip().lower()
+	if mode_source_filter not in {"all", "env", "run_override"}:
+		raise HTTPException(400, "modeSource must be one of: all, env, run_override")
 	severity_filter = str(severity or "all").strip().lower()
 	if severity_filter not in {"all", "low", "medium", "high"}:
 		raise HTTPException(400, "severity must be one of: all, low, medium, high")
@@ -608,6 +612,8 @@ async def adaptive_decisions(
 			entry_mode = str(payload.get("mode") or "").strip().lower() or "off"
 			entry_mode_source = str(payload.get("modeSource") or "").strip().lower() or "env"
 			if mode_filter != "all" and entry_mode != mode_filter:
+				continue
+			if mode_source_filter != "all" and entry_mode_source != mode_source_filter:
 				continue
 			explanation = payload.get("explanation") if isinstance(payload.get("explanation"), dict) else {}
 			entry_severity = str(explanation.get("severity") or "").strip().lower() or "low"
@@ -662,6 +668,7 @@ async def adaptive_decisions(
 		"startAt": startAt,
 		"endAt": endAt,
 		"mode": mode_filter,
+		"modeSource": mode_source_filter,
 		"severity": severity_filter,
 		"sort": sort_mode,
 		"limit": int(limit),
