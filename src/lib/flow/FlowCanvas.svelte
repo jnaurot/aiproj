@@ -364,6 +364,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
 	let selectedAdaptiveDecisionComponents: RunMonitorAdaptiveComponentBreakdownItem[] = [];
+	let selectedAdaptiveCapRows: Array<{
+		key: string;
+		hard: string;
+		min: string;
+		proposed: string;
+		effective: string;
+		changed: string;
+	}> = [];
 	let runMonitorAdaptiveDecisionSummary: RunMonitorAdaptiveDecisionSummary = {
 		total: 0,
 		enforced: 0,
@@ -816,6 +824,40 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: selectedAdaptiveDecisionComponents = buildAdaptiveComponentBreakdown(
 		selectedAdaptiveDecision?.explanation?.components ?? []
 	);
+	$: selectedAdaptiveCapRows = (() => {
+		if (!selectedAdaptiveDecision) return [];
+		const hardCaps = selectedAdaptiveDecision.hardCaps ?? {};
+		const minCaps = selectedAdaptiveDecision.minCaps ?? {};
+		const proposedCaps = selectedAdaptiveDecision.proposedCaps ?? {};
+		const effectiveCaps = selectedAdaptiveDecision.effectiveCaps ?? {};
+		const changedCaps = selectedAdaptiveDecision.changedCaps ?? {};
+		const keys = Array.from(
+			new Set([
+				...Object.keys(hardCaps),
+				...Object.keys(minCaps),
+				...Object.keys(proposedCaps),
+				...Object.keys(effectiveCaps)
+			])
+		).sort((a, b) => a.localeCompare(b));
+		return keys.map((key) => {
+			const hard = hardCaps[key];
+			const min = minCaps[key];
+			const proposed = proposedCaps[key];
+			const effective = effectiveCaps[key];
+			const changed = changedCaps[key];
+			return {
+				key,
+				hard: Number.isFinite(Number(hard)) ? String(Number(hard)) : '-',
+				min: Number.isFinite(Number(min)) ? String(Number(min)) : '-',
+				proposed: Number.isFinite(Number(proposed)) ? String(Number(proposed)) : '-',
+				effective: Number.isFinite(Number(effective)) ? String(Number(effective)) : '-',
+				changed:
+					changed && Number.isFinite(Number((changed as any).from)) && Number.isFinite(Number((changed as any).to))
+						? `${Number((changed as any).from)}->${Number((changed as any).to)}`
+						: '-'
+			};
+		});
+	})();
 	$: runMonitorAdaptiveMinScore = Math.max(
 		0,
 		Math.min(100, Number.isFinite(Number(runMonitorAdaptiveMinScore)) ? Number(runMonitorAdaptiveMinScore) : 0)
@@ -5323,6 +5365,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												<div class="envPanelSummary">
 													previous at={selectedAdaptiveDecisionPrevious.at} mode={selectedAdaptiveDecisionPrevious.mode}
 												</div>
+											{/if}
+											{#if selectedAdaptiveCapRows.length > 0}
+												<div class="runMonitorNodeHead" role="row">
+													<span>cap</span>
+													<span>hard</span>
+													<span>min</span>
+													<span>proposed</span>
+													<span>effective / changed</span>
+												</div>
+												{#each selectedAdaptiveCapRows as cap (`${cap.key}:${cap.changed}`)}
+													<div class="runMonitorNodeRow" role="row">
+														<span class="mono">{cap.key}</span>
+														<span>{cap.hard}</span>
+														<span>{cap.min}</span>
+														<span>{cap.proposed}</span>
+														<span>{cap.effective} | {cap.changed}</span>
+													</div>
+												{/each}
 											{/if}
 											<pre class="runMonitorJsonDetail">{JSON.stringify({
 												explanation: selectedAdaptiveDecision.explanation,
