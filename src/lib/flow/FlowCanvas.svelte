@@ -5577,7 +5577,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												{#each runMonitorRunTrendPoints as point (`${point.runId}:${point.createdAt}`)}
 													<button
 														type="button"
-														class="runMonitorNodeRow"
+														class={`runMonitorNodeRow ${
+															String(point.runId ?? '').trim() === runMonitorSelectedRunTrendId
+																? 'runMonitorNodeRow-highlighted'
+																: ''
+														}`}
 														role="row"
 														on:click={() => selectRunTrendDrilldown(point)}
 														title="Filter run logs by run id"
