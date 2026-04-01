@@ -419,6 +419,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionSort: 'default' | 'impact_desc' | 'impact_asc' = 'default';
 	let runMonitorRegressionSelectedIndex = -1;
 	let selectedRegressionAlert: RegressionAlert | null = null;
+	let runMonitorRegressionSummaryRefreshKey = '';
+	let runMonitorRegressionCurrentSummary: Record<string, unknown> | null = null;
+	let runMonitorRegressionBaselineSummary: Record<string, unknown> | null = null;
+	let runMonitorRegressionSummaryLoading = false;
+	let runMonitorRegressionSummaryError: string | null = null;
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
 	let runMonitorRunTrendPoints: ExperimentRunTrendPoint[] = [];
@@ -835,6 +840,33 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorRegressionSelectedIndex < runMonitorRegressionAlerts.length
 			? runMonitorRegressionAlerts[runMonitorRegressionSelectedIndex]
 			: null;
+	$: if (!selectedRegressionAlert) {
+		runMonitorRegressionSummaryRefreshKey = '';
+		runMonitorRegressionCurrentSummary = null;
+		runMonitorRegressionBaselineSummary = null;
+		runMonitorRegressionSummaryError = null;
+	}
+	$: {
+		const autoKey = [
+			String(runMonitorRegressionRunId ?? '').trim(),
+			String(runMonitorRegressionBaselineRunId ?? '').trim(),
+			String(runMonitorRegressionSelectedIndex ?? -1),
+			String(selectedRegressionAlert?.reasonCode ?? ''),
+			String(selectedRegressionAlert?.nodeId ?? selectedRegressionAlert?.errorCode ?? '')
+		].join('|');
+		if (
+			autoKey !== runMonitorRegressionSummaryRefreshKey &&
+			selectedRegressionAlert &&
+			String(runMonitorRegressionRunId ?? '').trim() &&
+			String(runMonitorRegressionBaselineRunId ?? '').trim()
+		) {
+			runMonitorRegressionSummaryRefreshKey = autoKey;
+			void refreshRegressionRunSummaries(
+				String(runMonitorRegressionRunId ?? '').trim(),
+				String(runMonitorRegressionBaselineRunId ?? '').trim()
+			);
+		}
+	}
 	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}|${runMonitorRegressionSort}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
@@ -2164,6 +2196,44 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 	}
 
+	async function refreshRegressionRunSummaries(
+		runId: string,
+		baselineRunId: string
+	): Promise<void> {
+		const currentRunId = String(runId ?? '').trim();
+		const baselineId = String(baselineRunId ?? '').trim();
+		if (!currentRunId || !baselineId) {
+			runMonitorRegressionCurrentSummary = null;
+			runMonitorRegressionBaselineSummary = null;
+			runMonitorRegressionSummaryError = null;
+			return;
+		}
+		runMonitorRegressionSummaryLoading = true;
+		runMonitorRegressionSummaryError = null;
+		try {
+			const [currentRes, baselineRes] = await Promise.all([
+				getExperimentRunSummary(currentRunId),
+				getExperimentRunSummary(baselineId)
+			]);
+			runMonitorRegressionCurrentSummary =
+				currentRes.experiment && typeof currentRes.experiment === 'object'
+					? (currentRes.experiment as Record<string, unknown>)
+					: null;
+			runMonitorRegressionBaselineSummary =
+				baselineRes.experiment && typeof baselineRes.experiment === 'object'
+					? (baselineRes.experiment as Record<string, unknown>)
+					: null;
+		} catch (error) {
+			runMonitorRegressionCurrentSummary = null;
+			runMonitorRegressionBaselineSummary = null;
+			runMonitorRegressionSummaryError = String(
+				error ?? 'Failed to load regression run summaries'
+			);
+		} finally {
+			runMonitorRegressionSummaryLoading = false;
+		}
+	}
+
 	function selectTransitionEventDrilldown(event: RunMonitorTransitionRow): void {
 		const entity = String(event?.entity ?? '').trim().toLowerCase();
 		const entityId = String(event?.entityId ?? '').trim();
@@ -2224,6 +2294,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionError = null;
 			runMonitorRegressionRunId = resolvedRunId;
 			runMonitorRegressionBaselineRunId = resolvedBaselineRunId;
+			runMonitorRegressionSummaryRefreshKey = '';
+			runMonitorRegressionCurrentSummary = null;
+			runMonitorRegressionBaselineSummary = null;
+			runMonitorRegressionSummaryError = null;
 			return;
 		}
 		runMonitorRegressionLoading = true;
@@ -2242,6 +2316,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionAlerts = Array.isArray(res.alerts) ? res.alerts : [];
 			if (runMonitorRegressionAlerts.length === 0) {
 				runMonitorRegressionSelectedIndex = -1;
+				runMonitorRegressionSummaryRefreshKey = '';
+				runMonitorRegressionCurrentSummary = null;
+				runMonitorRegressionBaselineSummary = null;
+				runMonitorRegressionSummaryError = null;
 			} else if (
 				runMonitorRegressionSelectedIndex < 0 ||
 				runMonitorRegressionSelectedIndex >= runMonitorRegressionAlerts.length
@@ -2257,6 +2335,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorRegressionSelectedIndex = -1;
 			runMonitorRegressionRunId = resolvedRunId;
 			runMonitorRegressionBaselineRunId = resolvedBaselineRunId;
+			runMonitorRegressionSummaryRefreshKey = '';
+			runMonitorRegressionCurrentSummary = null;
+			runMonitorRegressionBaselineSummary = null;
+			runMonitorRegressionSummaryError = null;
 			runMonitorRegressionError = String(error ?? 'Failed to load regression alerts');
 		} finally {
 			runMonitorRegressionLoading = false;
@@ -5199,6 +5281,22 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envPanelSummary">
 												thresholdPct={Number.isFinite(Number(selectedRegressionAlert.thresholdPct)) ? Number(selectedRegressionAlert.thresholdPct).toFixed(3) : '-'} | thresholdAbs={Number.isFinite(Number(selectedRegressionAlert.thresholdAbs)) ? Number(selectedRegressionAlert.thresholdAbs).toFixed(3) : '-'} | errorCode={selectedRegressionAlert.errorCode || '-'}
 											</div>
+											{#if runMonitorRegressionSummaryLoading}
+												<div class="envProfileEmpty">Loading run summaries…</div>
+											{:else if runMonitorRegressionSummaryError}
+												<div class="envProfileError">{runMonitorRegressionSummaryError}</div>
+											{:else if runMonitorRegressionCurrentSummary && runMonitorRegressionBaselineSummary}
+												<div class="envPanelSummary mono">
+													current status={String((runMonitorRegressionCurrentSummary as any)?.status ?? '-')}
+													| runtime={Number((runMonitorRegressionCurrentSummary as any)?.analytics?.runTelemetry?.runtime_ms ?? 0)}
+													| peak={Number((runMonitorRegressionCurrentSummary as any)?.analytics?.runTelemetry?.peak_concurrency ?? 0)}
+												</div>
+												<div class="envPanelSummary mono">
+													baseline status={String((runMonitorRegressionBaselineSummary as any)?.status ?? '-')}
+													| runtime={Number((runMonitorRegressionBaselineSummary as any)?.analytics?.runTelemetry?.runtime_ms ?? 0)}
+													| peak={Number((runMonitorRegressionBaselineSummary as any)?.analytics?.runTelemetry?.peak_concurrency ?? 0)}
+												</div>
+											{/if}
 										{/if}
 									</div>
 									<div class="runMonitorHistoryTable" role="table" aria-label="State transition audit trail">
