@@ -24,7 +24,7 @@ describe('runMonitorModel adaptive decision rows', () => {
 					runId: 'run_1',
 					mode: 'enforce',
 					enforced: true,
-					reasons: ['queue_depth_high'],
+					reasons: ['queue_depth_high', 'failure_rate_high'],
 					changedCaps: { global: { from: 4, to: 3 } },
 					effectiveCaps: { global: 3, model: 1 }
 				}
@@ -42,6 +42,9 @@ describe('runMonitorModel adaptive decision rows', () => {
 		expect(rows[1]?.mode).toBe('observe');
 		expect(rows[0]?.diffFromPrevious?.modeChanged).toBe(true);
 		expect(rows[0]?.diffFromPrevious?.scoreDelta).not.toBe(0);
+		expect(rows[0]?.diffFromPrevious?.capDelta?.global).toEqual({ from: 4, to: 3 });
+		expect(rows[0]?.diffFromPrevious?.reasonsAdded).toContain('failure_rate_high');
+		expect(rows[0]?.diffFromPrevious?.reasonsRemoved).not.toContain('queue_depth_high');
 	});
 
 	it('scores pressure + enforced decisions higher than low-signal observe events', () => {

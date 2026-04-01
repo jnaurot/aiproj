@@ -336,6 +336,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionSelectedKey = '';
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
+	let selectedAdaptiveDecisionPrevious: RunMonitorAdaptiveDecisionRow | null = null;
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -712,6 +713,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorAdaptiveDecisionRows.find(
 			(row) => `${row.at}:${row.runId}` === runMonitorAdaptiveDecisionSelectedKey
 		) ?? null;
+	$: selectedAdaptiveDecisionPrevious = (() => {
+		if (!selectedAdaptiveDecision) return null;
+		const selectedKey = `${selectedAdaptiveDecision.at}:${selectedAdaptiveDecision.runId}`;
+		const index = runMonitorAdaptiveDecisionRows.findIndex(
+			(row) => `${row.at}:${row.runId}` === selectedKey
+		);
+		if (index < 0) return null;
+		return runMonitorAdaptiveDecisionRows[index + 1] ?? null;
+	})();
 	$: runMonitorBlockedCount = runMonitorNodeRows.filter((row) => row.isBlocked).length;
 	$: runMonitorWaitingCount = runMonitorNodeRows.filter((row) => row.isWaiting).length;
 	$: runMonitorHistoryRows = (
@@ -1939,6 +1949,33 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (normalized === 'high') return 'adaptiveSeverity adaptiveSeverity-high';
 		if (normalized === 'medium') return 'adaptiveSeverity adaptiveSeverity-medium';
 		return 'adaptiveSeverity adaptiveSeverity-low';
+	}
+
+	function selectTrendPointDrilldown(point: ExperimentNodeTrendPoint): void {
+		const nodeId = String(point?.nodeId ?? '').trim();
+		if (nodeId) {
+			runMonitorTrendNodeId = nodeId;
+			focusNodeFromMonitor(nodeId);
+		}
+		const metric = String(point?.metric ?? '').trim();
+		if (
+			metric === 'p95Ms' ||
+			metric === 'p50Ms' ||
+			metric === 'avgMs' ||
+			metric === 'maxMs' ||
+			metric === 'count'
+		) {
+			runMonitorTrendMetric = metric;
+		}
+	}
+
+	function selectSlaBreachDrilldown(breach: ExperimentSlaBreach): void {
+		const nodeId = String(breach?.nodeId ?? '').trim();
+		if (nodeId) {
+			runMonitorTrendNodeId = nodeId;
+			runMonitorTrendMetric = 'p95Ms';
+			focusNodeFromMonitor(nodeId);
+		}
 	}
 
 	function onTrendSparklineMove(event: PointerEvent): void {
@@ -4613,6 +4650,37 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												</span>
 												| signals={selectedAdaptiveDecision.explanation.signals.length}
 											</div>
+											{#if selectedAdaptiveDecision.diffFromPrevious}
+												<div class="envPanelSummary">
+													diff score=
+													{selectedAdaptiveDecision.diffFromPrevious.scoreDelta >= 0 ? '+' : ''}{selectedAdaptiveDecision.diffFromPrevious.scoreDelta}
+													| mode changed={selectedAdaptiveDecision.diffFromPrevious.modeChanged ? 'yes' : 'no'}
+													| cap changes={Object.keys(selectedAdaptiveDecision.diffFromPrevious.capDelta).length}
+												</div>
+												{#if selectedAdaptiveDecision.diffFromPrevious.reasonsAdded.length > 0}
+													<div class="envPanelSummary">
+														reasons added: {selectedAdaptiveDecision.diffFromPrevious.reasonsAdded.join(', ')}
+													</div>
+												{/if}
+												{#if selectedAdaptiveDecision.diffFromPrevious.reasonsRemoved.length > 0}
+													<div class="envPanelSummary">
+														reasons removed: {selectedAdaptiveDecision.diffFromPrevious.reasonsRemoved.join(', ')}
+													</div>
+												{/if}
+												{#if Object.keys(selectedAdaptiveDecision.diffFromPrevious.capDelta).length > 0}
+													<div class="envPanelSummary mono">
+														cap deltas:
+														{Object.entries(selectedAdaptiveDecision.diffFromPrevious.capDelta)
+															.map(([key, delta]) => `${key}:${delta.from}->${delta.to}`)
+															.join(' | ')}
+													</div>
+												{/if}
+											{/if}
+											{#if selectedAdaptiveDecisionPrevious}
+												<div class="envPanelSummary">
+													previous at={selectedAdaptiveDecisionPrevious.at} mode={selectedAdaptiveDecisionPrevious.mode}
+												</div>
+											{/if}
 											<pre class="runMonitorJsonDetail">{JSON.stringify({
 												explanation: selectedAdaptiveDecision.explanation,
 												inputs: selectedAdaptiveDecision.inputs,
@@ -4808,13 +4876,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												<div class="envProfileEmpty">No trend points for selected node/metric.</div>
 											{:else}
 												{#each runMonitorTrendPoints as point (`${point.runId}:${point.createdAt}:${point.nodeId}`)}
-													<div class="runMonitorNodeRow" role="row">
+													<button
+														type="button"
+														class="runMonitorNodeRow"
+														role="row"
+														on:click={() => selectTrendPointDrilldown(point)}
+														title="Focus node and set trend metric"
+													>
 														<span class="mono">{point.runId}</span>
 														<span>{point.nodeId}</span>
 														<span>{point.metric}</span>
 														<span>{Number(point.value ?? 0).toFixed(1)}</span>
 														<span>{point.createdAt}</span>
-													</div>
+													</button>
 												{/each}
 											{/if}
 											<div class="runMonitorNodeHead" role="row">
@@ -4828,13 +4902,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												<div class="envProfileEmpty">No SLA breaches at current threshold.</div>
 											{:else}
 												{#each runMonitorSlaBreaches as breach (`${breach.runId}:${breach.nodeId}:${breach.createdAt}`)}
-													<div class="runMonitorNodeRow" role="row">
+													<button
+														type="button"
+														class="runMonitorNodeRow"
+														role="row"
+														on:click={() => selectSlaBreachDrilldown(breach)}
+														title="Focus node and open p95 trend"
+													>
 														<span class="mono">{breach.runId}</span>
 														<span>{breach.nodeId}</span>
 														<span>{Number(breach.p95Ms ?? 0).toFixed(1)}</span>
 														<span>{Number(breach.thresholdMs ?? 0).toFixed(1)}</span>
 														<span>{breach.createdAt}</span>
-													</div>
+													</button>
 												{/each}
 											{/if}
 											<div class="runMonitorNodeHead" role="row">
