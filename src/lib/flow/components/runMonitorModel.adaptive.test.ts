@@ -4,7 +4,9 @@ import {
 	buildRunMonitorAdaptiveDecisionRows,
 	buildTrendSparkline,
 	explainAdaptiveDecision,
-	filterRunMonitorAdaptiveDecisionRows
+	filterRunMonitorAdaptiveDecisionRows,
+	pickRunMonitorRegressionPairFromHistory,
+	resolveRunMonitorRegressionPair
 } from './runMonitorModel';
 
 describe('runMonitorModel adaptive decision rows', () => {
@@ -112,5 +114,39 @@ describe('runMonitorModel adaptive decision rows', () => {
 		const lowOnly = filterRunMonitorAdaptiveDecisionRows(rows, 'all', 'low');
 		expect(lowOnly.length).toBeGreaterThanOrEqual(1);
 		expect(lowOnly.every((row) => row.explanation.severity === 'low')).toBe(true);
+	});
+
+	it('resolves regression pair using valid override or latest history fallback', () => {
+		const historyRows = [
+			{ runId: 'run_new' },
+			{ runId: 'run_prev' },
+			{ runId: 'run_old' }
+		] as Array<Record<string, unknown>>;
+		const fromOverride = resolveRunMonitorRegressionPair(historyRows, {
+			runId: 'run_prev',
+			baselineRunId: 'run_old'
+		});
+		expect(fromOverride).toEqual({ runId: 'run_prev', baselineRunId: 'run_old' });
+		const fallback = resolveRunMonitorRegressionPair(historyRows, {
+			runId: 'missing',
+			baselineRunId: 'run_old'
+		});
+		expect(fallback).toEqual({ runId: 'run_new', baselineRunId: 'run_prev' });
+	});
+
+	it('picks a regression pair from adjacent history rows', () => {
+		const historyRows = [
+			{ runId: 'run_new' },
+			{ runId: 'run_prev' },
+			{ runId: 'run_old' }
+		] as Array<Record<string, unknown>>;
+		expect(pickRunMonitorRegressionPairFromHistory(historyRows, 1)).toEqual({
+			runId: 'run_prev',
+			baselineRunId: 'run_old'
+		});
+		expect(pickRunMonitorRegressionPairFromHistory(historyRows, 2)).toEqual({
+			runId: '',
+			baselineRunId: ''
+		});
 	});
 });

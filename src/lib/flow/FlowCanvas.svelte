@@ -97,11 +97,14 @@ import {
 		buildRunMonitorNodeRows,
 		filterRunMonitorAdaptiveDecisionRows,
 		filterAndSortRunMonitorNodes,
+		pickRunMonitorRegressionPairFromHistory,
 		preferredMonitorEdgeFocusNodeId,
+		resolveRunMonitorRegressionPair,
 		type RunMonitorAdaptiveDecisionRow,
 		type RunMonitorAdaptiveModeFilter,
 		type RunMonitorAdaptiveSeverityFilter,
 		type RunMonitorFilter,
+		type RunMonitorRegressionPair,
 		type RunMonitorSort,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
@@ -367,7 +370,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionRunId = '';
 	let runMonitorRegressionBaselineRunId = '';
 	let runMonitorRegressionRefreshKey = '';
-	let runMonitorRegressionPair: { runId: string; baselineRunId: string } = {
+	let runMonitorRegressionPair: RunMonitorRegressionPair = {
 		runId: '',
 		baselineRunId: ''
 	};
@@ -746,24 +749,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		.slice()
 		.reverse()
 		.slice(0, 20);
-	$: runMonitorRegressionPair = (() => {
-		if (
-			runMonitorRegressionRunOverride &&
-			runMonitorRegressionBaselineOverride &&
-			runMonitorHistoryRows.some((row) => String(row.runId ?? '').trim() === runMonitorRegressionRunOverride) &&
-			runMonitorHistoryRows.some((row) => String(row.runId ?? '').trim() === runMonitorRegressionBaselineOverride)
-		) {
-			return {
-				runId: runMonitorRegressionRunOverride,
-				baselineRunId: runMonitorRegressionBaselineOverride
-			};
-		}
-		if (runMonitorHistoryRows.length < 2) return { runId: '', baselineRunId: '' };
-		return {
-			runId: String(runMonitorHistoryRows[0]?.runId ?? '').trim(),
-			baselineRunId: String(runMonitorHistoryRows[1]?.runId ?? '').trim()
-		};
-	})();
+	$: runMonitorRegressionPair = resolveRunMonitorRegressionPair(runMonitorHistoryRows as any, {
+		runId: runMonitorRegressionRunOverride,
+		baselineRunId: runMonitorRegressionBaselineOverride
+	});
 	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
@@ -2023,13 +2012,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function selectRegressionHistoryPair(index: number): void {
-		const current = runMonitorHistoryRows[index];
-		const baseline = runMonitorHistoryRows[index + 1];
-		const currentRunId = String(current?.runId ?? '').trim();
-		const baselineRunId = String(baseline?.runId ?? '').trim();
-		if (!currentRunId || !baselineRunId) return;
-		runMonitorRegressionRunOverride = currentRunId;
-		runMonitorRegressionBaselineOverride = baselineRunId;
+		const pair = pickRunMonitorRegressionPairFromHistory(runMonitorHistoryRows as any, index);
+		if (!pair.runId || !pair.baselineRunId) return;
+		runMonitorRegressionRunOverride = pair.runId;
+		runMonitorRegressionBaselineOverride = pair.baselineRunId;
 	}
 
 	function clearRegressionHistoryPairOverride(): void {

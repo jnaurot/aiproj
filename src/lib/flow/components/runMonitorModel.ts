@@ -124,6 +124,7 @@ export type RunMonitorTrendSparkline = {
 
 export type RunMonitorAdaptiveModeFilter = 'all' | 'off' | 'observe' | 'enforce';
 export type RunMonitorAdaptiveSeverityFilter = 'all' | 'low' | 'medium' | 'high';
+export type RunMonitorRegressionPair = { runId: string; baselineRunId: string };
 
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
@@ -609,4 +610,42 @@ export function filterRunMonitorAdaptiveDecisionRows(
 		if (severity !== 'all' && rowSeverity !== severity) return false;
 		return true;
 	});
+}
+
+function _historyRunId(row: Record<string, unknown> | null | undefined): string {
+	return String(row?.runId ?? '').trim();
+}
+
+export function resolveRunMonitorRegressionPair(
+	historyRows: Record<string, unknown>[],
+	overridePair?: RunMonitorRegressionPair | null
+): RunMonitorRegressionPair {
+	const rows = Array.isArray(historyRows) ? historyRows : [];
+	const overrideRunId = String(overridePair?.runId ?? '').trim();
+	const overrideBaselineRunId = String(overridePair?.baselineRunId ?? '').trim();
+	if (overrideRunId && overrideBaselineRunId) {
+		const runExists = rows.some((row) => _historyRunId(row) === overrideRunId);
+		const baselineExists = rows.some((row) => _historyRunId(row) === overrideBaselineRunId);
+		if (runExists && baselineExists) {
+			return { runId: overrideRunId, baselineRunId: overrideBaselineRunId };
+		}
+	}
+	if (rows.length < 2) return { runId: '', baselineRunId: '' };
+	return {
+		runId: _historyRunId(rows[0]),
+		baselineRunId: _historyRunId(rows[1])
+	};
+}
+
+export function pickRunMonitorRegressionPairFromHistory(
+	historyRows: Record<string, unknown>[],
+	index: number
+): RunMonitorRegressionPair {
+	const rows = Array.isArray(historyRows) ? historyRows : [];
+	const idx = Number(index ?? -1);
+	if (!Number.isInteger(idx) || idx < 0) return { runId: '', baselineRunId: '' };
+	const runId = _historyRunId(rows[idx]);
+	const baselineRunId = _historyRunId(rows[idx + 1]);
+	if (!runId || !baselineRunId) return { runId: '', baselineRunId: '' };
+	return { runId, baselineRunId };
 }
