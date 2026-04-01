@@ -435,6 +435,123 @@ async def failure_taxonomy(
 	}
 
 
+@router.get("/bottlenecks")
+async def bottleneck_nodes(
+	request: Request,
+	graphId: Optional[str] = Query(default=None),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
+	sort: str = Query(default="score_desc"),
+	limit: int = Query(default=100, ge=1, le=1000),
+	offset: int = Query(default=0, ge=0),
+):
+	sort_mode = str(sort or "score_desc").strip().lower()
+	if sort_mode not in {"score_desc", "score_asc", "p95_desc"}:
+		raise HTTPException(400, "sort must be one of: score_desc, score_asc, p95_desc")
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request, graph_id=graphId, limit=_query_limit_with_offset(limit, offset)
+	)
+	by_node: Dict[str, Dict[str, float]] = {}
+	for row in rows:
+		created_at = str(row.get("createdAt") or "")
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
+		analytics = row.get("analytics") if isinstance(row.get("analytics"), dict) else {}
+		lat = analytics.get("nodeLatencyMs") if isinstance(analytics.get("nodeLatencyMs"), dict) else {}
+		for node_id, item in lat.items():
+			if not isinstance(item, dict):
+				continue
+			key = str(node_id or "").strip()
+			if not key:
+				continue
+			p95 = _safe_float(item.get("p95Ms"), 0.0)
+			avg = _safe_float(item.get("avgMs"), 0.0)
+			max_v = _safe_float(item.get("maxMs"), 0.0)
+			count = max(0.0, _safe_float(item.get("count"), 0.0))
+			current = by_node.get(
+				key,
+				{
+					"runsSeen": 0.0,
+					"p95Total": 0.0,
+					"p95Max": 0.0,
+					"avgTotal": 0.0,
+					"maxSeen": 0.0,
+					"countTotal": 0.0,
+				},
+			)
+			current["runsSeen"] = current["runsSeen"] + 1.0
+			current["p95Total"] = current["p95Total"] + p95
+			current["p95Max"] = max(current["p95Max"], p95)
+			current["avgTotal"] = current["avgTotal"] + avg
+			current["maxSeen"] = max(current["maxSeen"], max_v)
+			current["countTotal"] = current["countTotal"] + count
+			by_node[key] = current
+
+	items: list[Dict[str, Any]] = []
+	for node_id, agg in by_node.items():
+		runs_seen = max(1.0, float(agg.get("runsSeen") or 1.0))
+		p95_avg = float(agg.get("p95Total") or 0.0) / runs_seen
+		avg_ms_avg = float(agg.get("avgTotal") or 0.0) / runs_seen
+		p95_max = float(agg.get("p95Max") or 0.0)
+		max_seen = float(agg.get("maxSeen") or 0.0)
+		count_sum = float(agg.get("countTotal") or 0.0)
+		score = p95_avg + (0.35 * p95_max) + (0.2 * avg_ms_avg)
+		items.append(
+			{
+				"nodeId": node_id,
+				"runsSeen": int(runs_seen),
+				"p95AvgMs": float(p95_avg),
+				"p95MaxMs": float(p95_max),
+				"avgMsAvg": float(avg_ms_avg),
+				"maxMsMax": float(max_seen),
+				"countSum": int(count_sum),
+				"bottleneckScore": float(score),
+			}
+		)
+	if sort_mode == "score_asc":
+		items.sort(
+			key=lambda row: (
+				float(row.get("bottleneckScore") or 0.0),
+				float(row.get("p95AvgMs") or 0.0),
+				str(row.get("nodeId") or ""),
+			)
+		)
+	elif sort_mode == "p95_desc":
+		items.sort(
+			key=lambda row: (
+				float(row.get("p95AvgMs") or 0.0),
+				float(row.get("bottleneckScore") or 0.0),
+				str(row.get("nodeId") or ""),
+			),
+			reverse=True,
+		)
+	else:
+		items.sort(
+			key=lambda row: (
+				float(row.get("bottleneckScore") or 0.0),
+				float(row.get("p95AvgMs") or 0.0),
+				str(row.get("nodeId") or ""),
+			),
+			reverse=True,
+		)
+	paged_items = items[offset : offset + limit]
+	return {
+		"schemaVersion": 1,
+		"graphId": str(graphId or "").strip() or None,
+		"startAt": startAt,
+		"endAt": endAt,
+		"sort": sort_mode,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(items),
+		"nodes": paged_items,
+	}
+
+
 @router.get("/adaptive/decisions")
 async def adaptive_decisions(
 	request: Request,

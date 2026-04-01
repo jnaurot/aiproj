@@ -97,6 +97,29 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		items = taxonomy.json().get("taxonomy") or []
 		assert any(str(item.get("errorCode") or "") == "MODEL_EXECUTION_FAILED" for item in items)
 
+		bottlenecks = client.get(
+			"/experiments/bottlenecks",
+			params={
+				"graphId": "graph-analytics-1",
+				"sort": "score_desc",
+				"limit": 10,
+				"offset": 0,
+			},
+		)
+		assert bottlenecks.status_code == 200, bottlenecks.text
+		bottlenecks_body = bottlenecks.json()
+		assert str(bottlenecks_body.get("sort") or "") == "score_desc"
+		assert int(bottlenecks_body.get("total") or 0) >= 1
+		bn_nodes = bottlenecks_body.get("nodes") or []
+		assert bn_nodes
+		assert str((bn_nodes[0] or {}).get("nodeId") or "") == "node_a"
+
+		bottlenecks_invalid_sort = client.get(
+			"/experiments/bottlenecks",
+			params={"graphId": "graph-analytics-1", "sort": "bogus"},
+		)
+		assert bottlenecks_invalid_sort.status_code == 400, bottlenecks_invalid_sort.text
+
 		regressions = client.get(
 			"/experiments/regressions",
 			params={

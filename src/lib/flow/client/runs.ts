@@ -174,6 +174,17 @@ export type ExperimentFailureTaxonomyItem = {
 	count: number;
 };
 
+export type ExperimentBottleneckNode = {
+	nodeId: string;
+	runsSeen: number;
+	p95AvgMs: number;
+	p95MaxMs: number;
+	avgMsAvg: number;
+	maxMsMax: number;
+	countSum: number;
+	bottleneckScore: number;
+};
+
 export type ExperimentAdaptiveDecision = {
 	runId: string;
 	at: string;
@@ -406,6 +417,41 @@ export async function getExperimentFailureTaxonomy(params: {
 		offset?: number;
 		total?: number;
 		taxonomy: ExperimentFailureTaxonomyItem[];
+	};
+}
+
+export async function getExperimentBottlenecks(params: {
+	graphId: string;
+	startAt?: string | null;
+	endAt?: string | null;
+	sort?: 'score_desc' | 'score_asc' | 'p95_desc';
+	limit?: number;
+	offset?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
+	if (params.sort && ['score_desc', 'score_asc', 'p95_desc'].includes(String(params.sort))) {
+		qs.set('sort', String(params.sort));
+	}
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Number(params.limit)));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
+	const res = await fetch(backendUrl(`/api/experiments/bottlenecks?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentBottlenecks failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		startAt?: string | null;
+		endAt?: string | null;
+		sort?: 'score_desc' | 'score_asc' | 'p95_desc';
+		limit?: number;
+		offset?: number;
+		total?: number;
+		nodes: ExperimentBottleneckNode[];
 	};
 }
 

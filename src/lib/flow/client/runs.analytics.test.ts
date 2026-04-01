@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	getExperimentAdaptiveDecisions,
+	getExperimentBottlenecks,
 	getExperimentFailureTaxonomy,
 	getExperimentNodeTrends,
 	getExperimentRunSummary,
@@ -223,6 +224,52 @@ describe('runs client analytics endpoints', () => {
 		try {
 			const res = await getExperimentRunSummary('run_42');
 			expect(String(res.experiment?.runId ?? '')).toBe('run_42');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('queries bottlenecks endpoint', async () => {
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			expect(url.startsWith('/api/experiments/bottlenecks?')).toBe(true);
+			expect(url.includes('graphId=graph_1')).toBe(true);
+			expect(url.includes('startAt=2026-03-31T00%3A00%3A00Z')).toBe(true);
+			expect(url.includes('endAt=2026-03-31T01%3A00%3A00Z')).toBe(true);
+			expect(url.includes('sort=p95_desc')).toBe(true);
+			expect(url.includes('limit=15')).toBe(true);
+			expect(url.includes('offset=3')).toBe(true);
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 1,
+					total: 1,
+					nodes: [
+						{
+							nodeId: 'node_a',
+							runsSeen: 4,
+							p95AvgMs: 1200,
+							p95MaxMs: 2100,
+							avgMsAvg: 900,
+							maxMsMax: 3200,
+							countSum: 99,
+							bottleneckScore: 2115
+						}
+					]
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } }
+			);
+		};
+		try {
+			const res = await getExperimentBottlenecks({
+				graphId: 'graph_1',
+				startAt: '2026-03-31T00:00:00Z',
+				endAt: '2026-03-31T01:00:00Z',
+				sort: 'p95_desc',
+				limit: 15,
+				offset: 3
+			});
+			expect(res.nodes[0]?.nodeId).toBe('node_a');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}

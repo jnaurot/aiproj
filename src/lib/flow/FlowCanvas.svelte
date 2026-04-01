@@ -36,6 +36,7 @@
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import type {
 		ExperimentAdaptiveDecision,
+		ExperimentBottleneckNode,
 		ExperimentFailureTaxonomyItem,
 		ExperimentNodeTrendPoint,
 		ExperimentRunTrendPoint,
@@ -46,6 +47,7 @@
 	import {
 		getExperimentFailureTaxonomy,
 		getExperimentAdaptiveDecisions,
+		getExperimentBottlenecks,
 		getExperimentNodeTrends,
 		getExperimentRunSummary,
 		getExperimentRunTrends,
@@ -450,6 +452,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorSlaThresholdMs = 2000;
 	let runMonitorSlaBreaches: ExperimentSlaBreach[] = [];
 	let runMonitorFailureTaxonomy: ExperimentFailureTaxonomyItem[] = [];
+	let runMonitorBottleneckNodes: ExperimentBottleneckNode[] = [];
 	let runMonitorTransitions: RunMonitorTransitionRow[] = [];
 	let runMonitorTransitionsVisible: RunMonitorTransitionRow[] = [];
 	let runMonitorTransitionsLoading = false;
@@ -2185,6 +2188,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runLogFilter = errorCode;
 	}
 
+	function selectBottleneckDrilldown(item: ExperimentBottleneckNode): void {
+		const nodeId = String(item?.nodeId ?? '').trim();
+		if (!nodeId) return;
+		runMonitorTrendNodeId = nodeId;
+		runMonitorTrendMetric = 'p95Ms';
+		focusNodeFromMonitor(nodeId);
+	}
+
 	function selectRunTrendDrilldown(point: ExperimentRunTrendPoint): void {
 		const runId = String(point?.runId ?? '').trim();
 		if (!runId) return;
@@ -2450,6 +2461,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
+			runMonitorBottleneckNodes = [];
 			runMonitorAdaptiveHistoryRowsRaw = [];
 			runMonitorAnalyticsError = null;
 			return;
@@ -2457,7 +2469,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorAnalyticsLoading = true;
 		runMonitorAnalyticsError = null;
 		try {
-			const [runTrendRes, trendRes, slaRes, failureRes, adaptiveRes] = await Promise.all([
+			const [runTrendRes, trendRes, slaRes, failureRes, adaptiveRes, bottleneckRes] =
+				await Promise.all([
 				getExperimentRunTrends({
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
@@ -2498,6 +2511,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					sort: runMonitorAdaptiveHistorySort,
 					limit: 100,
 					offset: 0
+				}),
+				getExperimentBottlenecks({
+					graphId,
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					sort: 'score_desc',
+					limit: 30,
+					offset: 0
 				})
 			]);
 			runMonitorRunTrendPoints = Array.isArray(runTrendRes.points)
@@ -2512,11 +2533,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorAdaptiveHistoryRowsRaw = Array.isArray(adaptiveRes.decisions)
 				? adaptiveRes.decisions.slice(0, 100)
 				: [];
+			runMonitorBottleneckNodes = Array.isArray(bottleneckRes.nodes)
+				? bottleneckRes.nodes.slice(0, 20)
+				: [];
 		} catch (error) {
 			runMonitorRunTrendPoints = [];
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
+			runMonitorBottleneckNodes = [];
 			runMonitorAdaptiveHistoryRowsRaw = [];
 			runMonitorAnalyticsError = String(error ?? 'Failed to load historical analytics');
 		} finally {
@@ -5732,6 +5757,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														<span>{Number(breach.p95Ms ?? 0).toFixed(1)}</span>
 														<span>{Number(breach.thresholdMs ?? 0).toFixed(1)}</span>
 														<span>{breach.createdAt}</span>
+													</button>
+												{/each}
+											{/if}
+											<div class="runMonitorNodeHead" role="row">
+												<span>bottleneck node</span>
+												<span>score</span>
+												<span>p95 avg</span>
+												<span>runs</span>
+												<span>count sum</span>
+											</div>
+											{#if runMonitorBottleneckNodes.length === 0}
+												<div class="envProfileEmpty">No bottleneck rows in current window.</div>
+											{:else}
+												{#each runMonitorBottleneckNodes as item (`${item.nodeId}`)}
+													<button
+														type="button"
+														class="runMonitorNodeRow"
+														role="row"
+														on:click={() => selectBottleneckDrilldown(item)}
+														title="Focus node and open p95 trend"
+													>
+														<span>{item.nodeId}</span>
+														<span>{Number(item.bottleneckScore ?? 0).toFixed(1)}</span>
+														<span>{Number(item.p95AvgMs ?? 0).toFixed(1)}</span>
+														<span>{Number(item.runsSeen ?? 0)}</span>
+														<span>{Number(item.countSum ?? 0)}</span>
 													</button>
 												{/each}
 											{/if}
