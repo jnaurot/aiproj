@@ -6,7 +6,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import FilterRulesBuilder from './FilterRulesBuilder.svelte';
 	import { defaultFilterRules, normalizeFilterParams, type FilterGroup } from './filterRulesModel';
-	import { uniqueStrings } from '$lib/flow/components/editors/shared';
+	import { buildJsonFilterColumns } from './jsonFilterColumns';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformJsonFilterParams>;
@@ -53,65 +53,15 @@
 		lastParamsSignature = paramsSignature;
 	}
 
-	$: schemaTypeByName = buildSchemaTypeMap(
-		(inputSchemaColumns?.length ?? 0) > 0 ? inputSchemaColumns : (inputSchemas ?? []).flatMap((schema) => schema.columns ?? [])
-	);
-	$: expectedInputColumns = resolveExpectedInputColumns(selectedNode);
-	$: columnNames = uniqueStrings(
-		[...inputColumns, ...Array.from(schemaTypeByName.keys()), ...expectedInputColumns]
-			.map((c) => String(c).trim())
-			.filter(Boolean)
-	).sort((a, b) => a.localeCompare(b));
-	$: columns = columnNames.map((name) => ({ name, type: schemaTypeByName.get(name) ?? 'unknown' }));
+	$: columns = buildJsonFilterColumns({
+		selectedNode,
+		inputColumns,
+		inputSchemaColumns,
+		inputSchemas,
+	});
 
 	function isObject(v: unknown): v is Record<string, unknown> {
 		return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
-	}
-
-	function buildSchemaTypeMap(columns: Array<{ name: string; type?: string }>): Map<string, string> {
-		const out = new Map<string, string>();
-		for (const col of columns) {
-			const name = String(col?.name ?? '').trim();
-			if (!name) continue;
-			const nextType = String(col?.type ?? 'unknown').trim() || 'unknown';
-			const prevType = out.get(name);
-			if (!prevType || prevType === 'unknown' || prevType.length === 0) {
-				out.set(name, nextType);
-				continue;
-			}
-			if (nextType !== 'unknown' && nextType.length > 0) out.set(name, nextType);
-		}
-		return out;
-	}
-
-	function resolveExpectedInputColumns(node: Node<PipelineNodeData> | undefined): string[] {
-		const schema = (node?.data as any)?.schema;
-		const expectedInputSchemas =
-			schema?.expectedInputSchemas && typeof schema.expectedInputSchemas === 'object'
-				? (schema.expectedInputSchemas as Record<string, unknown>)
-				: {};
-		const out: string[] = [];
-		for (const [handle, envelope] of Object.entries(expectedInputSchemas)) {
-			const handleName = String(handle ?? '').trim().toLowerCase();
-			if (!handleName || handleName.startsWith('param') || handleName.startsWith('control') || handleName.startsWith('ctl')) {
-				continue;
-			}
-			const typedSchema =
-				envelope && typeof envelope === 'object'
-					? ((envelope as any).typedSchema as Record<string, unknown> | undefined)
-					: undefined;
-			const fields = Array.isArray((typedSchema as any)?.fields) ? ((typedSchema as any).fields as unknown[]) : [];
-			for (const field of fields) {
-				if (field && typeof field === 'object') {
-					const name = String((field as Record<string, unknown>).name ?? '').trim();
-					if (name) out.push(name);
-					continue;
-				}
-				const name = String(field ?? '').trim();
-				if (name) out.push(name);
-			}
-		}
-		return uniqueStrings(out);
 	}
 
 	function toJsonFilterRuleNode(node: any): Record<string, unknown> {
