@@ -799,6 +799,9 @@ export const TransformInferenceParityParamsSchema = z
 export const TransformSqlParamsSchema = z.object({
   dialect: z.enum(["duckdb", "postgres", "sqlite"]).optional().default("duckdb"),
   query: z.string().min(1, "SQL query cannot be empty"),
+  max_runtime_ms: z.coerce.number().int().min(0).default(0),
+  max_output_rows: z.coerce.number().int().min(0).default(0),
+  safe_mode: z.boolean().default(true),
 }).strip();
 
 export const TransformJsonToTableParamsSchema = z

@@ -282,7 +282,10 @@ export const defaultTransformInferenceParityParams: TransformInferenceParityPara
 
 export const defaultTransformSqlParams: TransformSqlParams = {
 	dialect: 'duckdb',
-	query: 'SELECT * FROM input LIMIT 10'
+	query: 'SELECT * FROM input LIMIT 10',
+	max_runtime_ms: 0,
+	max_output_rows: 0,
+	safe_mode: true
 };
 
 export const defaultTransformJsonToTableParams: TransformJsonToTableParams = {

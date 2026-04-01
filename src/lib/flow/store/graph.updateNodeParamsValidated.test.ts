@@ -121,6 +121,160 @@ function transformDeriveNode(): Node<PipelineNodeData> {
 	};
 }
 
+function transformSelectNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_select',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'select',
+			label: 'Select',
+			params: {
+				op: 'select',
+				select: { mode: 'include', columns: ['id', 'title'], keepOrder: 'custom', strict: true }
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformJoinNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_join',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'join',
+			label: 'Join',
+			params: {
+				op: 'join',
+				join: {
+					clauses: [
+						{
+							leftNodeId: 'n_left',
+							leftCol: 'id',
+							rightNodeId: 'n_right',
+							rightCol: 'job_id',
+							how: 'inner'
+						}
+					]
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformSqlNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_sql',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'sql',
+			label: 'SQL',
+			params: {
+				op: 'sql',
+				sql: {
+					query: 'select * from input',
+					max_runtime_ms: 4000,
+					max_output_rows: 1000,
+					safe_mode: true
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformSplitNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_split',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'split',
+			label: 'Split',
+			params: {
+				op: 'split',
+				split: { sourceColumn: 'description', mode: 'regex', delimiterRegex: '\\\\s+', outColumn: 'token' }
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformMlContractNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_ml_contract',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'ml_contract',
+			label: 'ML Contract',
+			params: {
+				op: 'ml_contract',
+				ml_contract: {
+					labelColumn: 'label',
+					featureColumns: ['f1', 'f2'],
+					taskType: 'classification'
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
+function transformTextToTableNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_text_to_table',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'text_to_table',
+			label: 'TextToTable',
+			params: { op: 'text_to_table', text_to_table: { mode: 'csv', delimiter: ',', hasHeader: true } }
+		} as PipelineNodeData
+	};
+}
+
+function transformTableToJsonNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_table_to_json',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'table_to_json',
+			label: 'TableToJson',
+			params: { op: 'table_to_json', table_to_json: { orient: 'split', pretty: true } }
+		} as PipelineNodeData
+	};
+}
+
+function transformJsonFilterNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_transform_json_filter',
+		type: 'transform',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'transform',
+			transformKind: 'json_filter',
+			label: 'JsonFilter',
+			params: {
+				op: 'json_filter',
+				json_filter: {
+					mode: 'rules',
+					rules: { kind: 'group', op: 'all', conditions: [] },
+					route_reject: true,
+					include_reject_meta: true
+				}
+			}
+		} as PipelineNodeData
+	};
+}
+
 describe('updateNodeParamsValidated builtin args replacement', () => {
 	it('replaces builtin args object on operation switch instead of deep-merging keys', () => {
 		const nodes = [
@@ -278,5 +432,107 @@ describe('updateNodeParamsValidated transform dual-mode patch canonicalization',
 		expect(params.derive.mode).toBe('rules');
 		expect(Array.isArray(params.derive.rules)).toBe(true);
 		expect(params.derive.rules[0].formula.op).toBe('add');
+	});
+});
+
+describe('updateNodeParamsValidated transform editor roundtrip parity', () => {
+	it('persists select mode/columns/keepOrder', () => {
+		const nodes = [transformSelectNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_select', {
+			op: 'select',
+			select: { mode: 'exclude', columns: ['salary'], keepOrder: 'input', strict: true }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_select')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.select.mode).toBe('exclude');
+		expect(params.select.columns).toEqual(['salary']);
+		expect(params.select.keepOrder).toBe('input');
+	});
+
+	it('persists join clauses without key loss', () => {
+		const nodes = [transformJoinNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_join', {
+			op: 'join',
+			join: {
+				clauses: [{ leftNodeId: 'n_left', leftCol: 'id', rightNodeId: 'n_aux', rightCol: 'id', how: 'left' }]
+			}
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_join')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.join.clauses[0].how).toBe('left');
+		expect(params.join.clauses[0].rightNodeId).toBe('n_aux');
+	});
+
+	it('persists sql safety controls on update', () => {
+		const nodes = [transformSqlNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_sql', {
+			op: 'sql',
+			sql: { query: 'select id from input', max_runtime_ms: 2500, max_output_rows: 250, safe_mode: false }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_sql')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.sql.max_runtime_ms).toBe(2500);
+		expect(params.sql.max_output_rows).toBe(250);
+		expect(params.sql.safe_mode).toBe(false);
+	});
+
+	it('persists split mode and output field config', () => {
+		const nodes = [transformSplitNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_split', {
+			op: 'split',
+			split: { sourceColumn: 'description', mode: 'delimiter', delimiter: ',', outColumn: 'part' }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_split')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.split.mode).toBe('delimiter');
+		expect(params.split.outColumn).toBe('part');
+	});
+
+	it('persists ml_contract required columns', () => {
+		const nodes = [transformMlContractNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_ml_contract', {
+			op: 'ml_contract',
+			ml_contract: { labelColumn: 'target', featureColumns: ['f1'], taskType: 'classification' }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_ml_contract')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.ml_contract.labelColumn).toBe('target');
+		expect(params.ml_contract.featureColumns).toEqual(['f1']);
+	});
+
+	it('persists text_to_table mode options', () => {
+		const nodes = [transformTextToTableNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_text_to_table', {
+			op: 'text_to_table',
+			text_to_table: { mode: 'lines', column: 'line_text' }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_text_to_table')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.text_to_table.mode).toBe('lines');
+		expect(params.text_to_table.column).toBe('line_text');
+	});
+
+	it('persists table_to_json orient config', () => {
+		const nodes = [transformTableToJsonNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_table_to_json', {
+			op: 'table_to_json',
+			table_to_json: { orient: 'records', pretty: false }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_table_to_json')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.table_to_json.orient).toBe('records');
+		expect(params.table_to_json.pretty).toBe(false);
+	});
+
+	it('persists json_filter route reject settings', () => {
+		const nodes = [transformJsonFilterNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_json_filter', {
+			op: 'json_filter',
+			json_filter: { mode: 'rules', rules: { kind: 'group', op: 'all', conditions: [] }, route_reject: false, include_reject_meta: false }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_json_filter')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.json_filter.route_reject).toBe(false);
+		expect(params.json_filter.include_reject_meta).toBe(false);
 	});
 });

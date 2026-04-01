@@ -5,6 +5,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 
 	type Dialect = NonNullable<TransformSqlParams['dialect']>;
 
@@ -15,12 +16,23 @@
 
 	const defaults: TransformSqlParams = {
 		dialect: 'duckdb',
-		query: 'SELECT * FROM input LIMIT 10'
+		query: 'SELECT * FROM input LIMIT 10',
+		max_runtime_ms: 0,
+		max_output_rows: 0,
+		safe_mode: true
 	};
+	const dialectOptions: ThemedSelectOption[] = [
+		{ value: 'duckdb', label: 'duckdb' },
+		{ value: 'postgres', label: 'postgres' },
+		{ value: 'sqlite', label: 'sqlite' }
+	];
 
 	$: void selectedNode?.id;
 	$: dialect = params?.dialect ?? defaults.dialect;
 	$: query = typeof params?.query === 'string' ? params.query : defaults.query;
+	$: maxRuntimeMs = Number.isFinite(Number(params?.max_runtime_ms)) ? Number(params?.max_runtime_ms) : defaults.max_runtime_ms;
+	$: maxOutputRows = Number.isFinite(Number(params?.max_output_rows)) ? Number(params?.max_output_rows) : defaults.max_output_rows;
+	$: safeMode = typeof params?.safe_mode === 'boolean' ? params.safe_mode : defaults.safe_mode;
 
 	function insertSnippet(snippet: string): void {
 		const merged = query.trimEnd().length > 0 ? `${query.trimEnd()}\n\n${snippet}` : snippet;
@@ -32,17 +44,12 @@
 	<div class="hint">Write SQL against <code>input</code>.</div>
 
 	<Field label="dialect">
-		<select
+		<ThemedSelect
 			value={dialect}
-			on:change={(event) => {
-				const value = (event.currentTarget as HTMLSelectElement).value as Dialect;
-				onDraft({ dialect: value });
-			}}
-		>
-			<option value="duckdb">duckdb</option>
-			<option value="postgres">postgres</option>
-			<option value="sqlite">sqlite</option>
-		</select>
+			options={dialectOptions}
+			ariaLabel="SQL dialect"
+			onValueChange={(next) => onDraft({ dialect: next as Dialect })}
+		/>
 	</Field>
 
 	<Field label="query">
@@ -67,6 +74,43 @@
 			</div>
 		</div>
 	</Field>
+
+	<Field label="max runtime (ms)">
+		<Input
+			type="number"
+			min={0}
+			step={100}
+			value={String(maxRuntimeMs)}
+			onInput={(event) => {
+				const raw = Number((event.currentTarget as HTMLInputElement).value);
+				const next = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+				onDraft({ max_runtime_ms: next });
+			}}
+		/>
+	</Field>
+
+	<Field label="max output rows">
+		<Input
+			type="number"
+			min={0}
+			step={100}
+			value={String(maxOutputRows)}
+			onInput={(event) => {
+				const raw = Number((event.currentTarget as HTMLInputElement).value);
+				const next = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+				onDraft({ max_output_rows: next });
+			}}
+		/>
+	</Field>
+
+	<label class="safeModeToggle">
+		<input
+			type="checkbox"
+			checked={safeMode}
+			on:change={(event) => onDraft({ safe_mode: (event.currentTarget as HTMLInputElement).checked })}
+		/>
+		<span>safe mode (read-only SQL only)</span>
+	</label>
 
 	<div class="actions">
 		<button class="small" type="button" on:click={() => insertSnippet('SELECT * FROM input LIMIT 10;')}>Limit</button>
@@ -142,6 +186,14 @@
 
 	code {
 		font-family: ui-monospace, Menlo, Consolas, monospace;
+		font-size: 12px;
+	}
+
+	.safeModeToggle {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 6px;
 		font-size: 12px;
 	}
 </style>
