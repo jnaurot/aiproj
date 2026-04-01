@@ -85,6 +85,28 @@ async def _list_summaries(
 	return [row for row in rows if isinstance(row, dict)]
 
 
+async def _list_all_events_for_run(request: Request, run_id: str) -> list[Dict[str, Any]]:
+	rt = request.app.state.runtime
+	list_fn = getattr(rt, "list_run_events", None)
+	if not callable(list_fn):
+		return []
+	rows: list[Dict[str, Any]] = []
+	after_id = 0
+	while True:
+		chunk = await list_fn(str(run_id or "").strip(), after_id=after_id, limit=1000)
+		if not isinstance(chunk, list) or len(chunk) == 0:
+			break
+		valid = [row for row in chunk if isinstance(row, dict)]
+		if len(valid) == 0:
+			break
+		rows.extend(valid)
+		last_id = int(valid[-1].get("id") or 0)
+		if last_id <= after_id:
+			break
+		after_id = last_id
+	return rows
+
+
 @router.get("")
 async def list_experiments(
 	request: Request,
@@ -410,6 +432,123 @@ async def failure_taxonomy(
 		"offset": int(offset),
 		"total": len(items),
 		"taxonomy": paged_items,
+	}
+
+
+@router.get("/adaptive/decisions")
+async def adaptive_decisions(
+	request: Request,
+	graphId: Optional[str] = Query(default=None),
+	runId: Optional[str] = Query(default=None),
+	startAt: Optional[str] = Query(default=None),
+	endAt: Optional[str] = Query(default=None),
+	mode: str = Query(default="all"),
+	severity: str = Query(default="all"),
+	sort: str = Query(default="created_desc"),
+	limit: int = Query(default=100, ge=1, le=2000),
+	offset: int = Query(default=0, ge=0),
+):
+	mode_filter = str(mode or "all").strip().lower()
+	if mode_filter not in {"all", "off", "observe", "enforce"}:
+		raise HTTPException(400, "mode must be one of: all, off, observe, enforce")
+	severity_filter = str(severity or "all").strip().lower()
+	if severity_filter not in {"all", "low", "medium", "high"}:
+		raise HTTPException(400, "severity must be one of: all, low, medium, high")
+	sort_mode = str(sort or "created_desc").strip().lower()
+	if sort_mode not in {"created_asc", "created_desc", "impact_desc"}:
+		raise HTTPException(400, "sort must be one of: created_asc, created_desc, impact_desc")
+	start_at = _parse_iso_utc(startAt)
+	end_at = _parse_iso_utc(endAt)
+	if (startAt and start_at is None) or (endAt and end_at is None):
+		raise HTTPException(400, "startAt/endAt must be ISO-8601 timestamps")
+	rows = await _list_summaries(
+		request,
+		graph_id=graphId,
+		limit=_query_limit_with_offset(limit, offset, min_probe=300, cap=8000),
+	)
+	run_id_filter = str(runId or "").strip()
+	filtered_summaries: list[Dict[str, Any]] = []
+	for row in rows:
+		rid = str(row.get("runId") or "").strip()
+		created_at = str(row.get("createdAt") or "")
+		if run_id_filter and rid != run_id_filter:
+			continue
+		if not _created_at_in_window(created_at, start_at=start_at, end_at=end_at):
+			continue
+		filtered_summaries.append(row)
+	summary_by_run_id = {
+		str(row.get("runId") or "").strip(): str(row.get("createdAt") or "")
+		for row in filtered_summaries
+		if str(row.get("runId") or "").strip()
+	}
+	decisions: list[Dict[str, Any]] = []
+	for rid, run_created_at in summary_by_run_id.items():
+		events_rows = await _list_all_events_for_run(request, rid)
+		for event_row in events_rows:
+			payload = event_row.get("payload") if isinstance(event_row.get("payload"), dict) else {}
+			if str(payload.get("type") or "").strip() != "scheduler_adaptive_decision":
+				continue
+			entry_mode = str(payload.get("mode") or "").strip().lower() or "off"
+			if mode_filter != "all" and entry_mode != mode_filter:
+				continue
+			explanation = payload.get("explanation") if isinstance(payload.get("explanation"), dict) else {}
+			entry_severity = str(explanation.get("severity") or "").strip().lower() or "low"
+			if severity_filter != "all" and entry_severity != severity_filter:
+				continue
+			at = str(payload.get("at") or event_row.get("ts") or run_created_at or "").strip()
+			decisions.append(
+				{
+					"runId": rid,
+					"at": at,
+					"mode": entry_mode,
+					"enforced": bool(payload.get("enforced") is True),
+					"inputs": payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {},
+					"reasons": payload.get("reasons") if isinstance(payload.get("reasons"), list) else [],
+					"changedCaps": payload.get("changedCaps")
+					if isinstance(payload.get("changedCaps"), dict)
+					else {},
+					"hardCaps": payload.get("hardCaps") if isinstance(payload.get("hardCaps"), dict) else {},
+					"minCaps": payload.get("minCaps") if isinstance(payload.get("minCaps"), dict) else {},
+					"proposedCaps": payload.get("proposedCaps")
+					if isinstance(payload.get("proposedCaps"), dict)
+					else {},
+					"effectiveCaps": payload.get("effectiveCaps")
+					if isinstance(payload.get("effectiveCaps"), dict)
+					else {},
+					"explanation": explanation,
+					"createdAt": at or run_created_at,
+				}
+			)
+	if sort_mode == "created_asc":
+		decisions.sort(key=lambda row: (str(row.get("createdAt") or ""), str(row.get("runId") or "")))
+	elif sort_mode == "impact_desc":
+		decisions.sort(
+			key=lambda row: (
+				abs(float((row.get("explanation") or {}).get("score") or 0.0)),
+				str(row.get("createdAt") or ""),
+				str(row.get("runId") or ""),
+			),
+			reverse=True,
+		)
+	else:
+		decisions.sort(
+			key=lambda row: (str(row.get("createdAt") or ""), str(row.get("runId") or "")),
+			reverse=True,
+		)
+	paged = decisions[offset : offset + limit]
+	return {
+		"schemaVersion": 1,
+		"graphId": str(graphId or "").strip() or None,
+		"runId": run_id_filter or None,
+		"startAt": startAt,
+		"endAt": endAt,
+		"mode": mode_filter,
+		"severity": severity_filter,
+		"sort": sort_mode,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(decisions),
+		"decisions": paged,
 	}
 
 

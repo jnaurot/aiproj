@@ -174,6 +174,27 @@ export type ExperimentFailureTaxonomyItem = {
 	count: number;
 };
 
+export type ExperimentAdaptiveDecision = {
+	runId: string;
+	at: string;
+	mode: string;
+	enforced: boolean;
+	inputs?: Record<string, unknown>;
+	reasons?: string[];
+	changedCaps?: Record<string, { from: number; to: number }>;
+	hardCaps?: Record<string, number>;
+	minCaps?: Record<string, number>;
+	proposedCaps?: Record<string, number>;
+	effectiveCaps?: Record<string, number>;
+	explanation?: {
+		score?: number;
+		severity?: 'low' | 'medium' | 'high' | string;
+		signals?: string[];
+		components?: Array<{ label?: string; delta?: number }>;
+	};
+	createdAt?: string;
+};
+
 export type ExperimentRunTrendPoint = {
 	runId: string;
 	createdAt: string;
@@ -371,6 +392,54 @@ export async function getExperimentFailureTaxonomy(params: {
 		offset?: number;
 		total?: number;
 		taxonomy: ExperimentFailureTaxonomyItem[];
+	};
+}
+
+export async function getExperimentAdaptiveDecisions(params: {
+	graphId: string;
+	runId?: string | null;
+	startAt?: string | null;
+	endAt?: string | null;
+	mode?: 'all' | 'off' | 'observe' | 'enforce';
+	severity?: 'all' | 'low' | 'medium' | 'high';
+	sort?: 'created_asc' | 'created_desc' | 'impact_desc';
+	limit?: number;
+	offset?: number;
+}) {
+	const qs = new URLSearchParams();
+	qs.set('graphId', String(params.graphId ?? '').trim());
+	if (params.runId) qs.set('runId', String(params.runId).trim());
+	if (params.startAt) qs.set('startAt', String(params.startAt).trim());
+	if (params.endAt) qs.set('endAt', String(params.endAt).trim());
+	if (params.mode && ['all', 'off', 'observe', 'enforce'].includes(String(params.mode))) {
+		qs.set('mode', String(params.mode));
+	}
+	if (params.severity && ['all', 'low', 'medium', 'high'].includes(String(params.severity))) {
+		qs.set('severity', String(params.severity));
+	}
+	if (params.sort && ['created_asc', 'created_desc', 'impact_desc'].includes(String(params.sort))) {
+		qs.set('sort', String(params.sort));
+	}
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Math.max(1, Number(params.limit))));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
+	const res = await fetch(backendUrl(`/api/experiments/adaptive/decisions?${qs.toString()}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentAdaptiveDecisions failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		graphId?: string | null;
+		runId?: string | null;
+		startAt?: string | null;
+		endAt?: string | null;
+		mode?: 'all' | 'off' | 'observe' | 'enforce';
+		severity?: 'all' | 'low' | 'medium' | 'high';
+		sort?: 'created_asc' | 'created_desc' | 'impact_desc';
+		limit?: number;
+		offset?: number;
+		total?: number;
+		decisions: ExperimentAdaptiveDecision[];
 	};
 }
 

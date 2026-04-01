@@ -41,6 +41,38 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		rt = app.state.runtime
 		asyncio.run(rt.artifact_store.upsert_run_experiment(_summary(run_id="run-a1", created_at="2026-03-31T00:00:00Z", status="succeeded", p95_ms=900.0)))
 		asyncio.run(rt.artifact_store.upsert_run_experiment(_summary(run_id="run-a2", created_at="2026-03-31T00:10:00Z", status="failed", p95_ms=3500.0, failure_code="MODEL_EXECUTION_FAILED")))
+		asyncio.run(
+			rt.event_store.append_event(
+				{
+					"type": "scheduler_adaptive_decision",
+					"runId": "run-a2",
+					"at": "2026-03-31T00:10:30Z",
+					"mode": "enforce",
+					"enforced": True,
+					"inputs": {"queueDepth": 12},
+					"reasons": ["queue_pressure"],
+					"changedCaps": {"global": {"from": 4, "to": 2}},
+					"effectiveCaps": {"global": 2},
+					"explanation": {"score": 78, "severity": "high"},
+				}
+			)
+		)
+		asyncio.run(
+			rt.event_store.append_event(
+				{
+					"type": "scheduler_adaptive_decision",
+					"runId": "run-a1",
+					"at": "2026-03-31T00:00:30Z",
+					"mode": "observe",
+					"enforced": False,
+					"inputs": {"queueDepth": 4},
+					"reasons": ["recovery"],
+					"changedCaps": {},
+					"effectiveCaps": {"global": 4},
+					"explanation": {"score": 24, "severity": "low"},
+				}
+			)
+		)
 
 		run_trends = client.get("/experiments/trends/runs", params={"graphId": "graph-analytics-1"})
 		assert run_trends.status_code == 200, run_trends.text
@@ -149,6 +181,37 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert regressions_invalid_sort.status_code == 400, regressions_invalid_sort.text
+
+		adaptive_decisions = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"mode": "enforce",
+				"severity": "high",
+				"sort": "impact_desc",
+				"limit": 10,
+				"offset": 0,
+			},
+		)
+		assert adaptive_decisions.status_code == 200, adaptive_decisions.text
+		adaptive_body = adaptive_decisions.json()
+		assert str(adaptive_body.get("sort") or "") == "impact_desc"
+		assert str(adaptive_body.get("mode") or "") == "enforce"
+		assert str(adaptive_body.get("severity") or "") == "high"
+		assert int(adaptive_body.get("total") or 0) >= 1
+		decision_rows = adaptive_body.get("decisions") or []
+		assert decision_rows
+		assert all(str(row.get("mode") or "") == "enforce" for row in decision_rows)
+		assert all(str((row.get("explanation") or {}).get("severity") or "") == "high" for row in decision_rows)
+
+		adaptive_invalid_sort = client.get(
+			"/experiments/adaptive/decisions",
+			params={
+				"graphId": "graph-analytics-1",
+				"sort": "bogus",
+			},
+		)
+		assert adaptive_invalid_sort.status_code == 400, adaptive_invalid_sort.text
 
 
 def test_experiments_analytics_supports_time_window_and_pagination():

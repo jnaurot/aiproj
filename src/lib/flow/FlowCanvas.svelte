@@ -17,6 +17,7 @@
 	} from '$lib/flow/store/graphStore';
 	import type { GraphState, InputResolution, SaveConsistencyMismatch } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import ToolbarMenu from './components/ToolbarMenu.svelte';
@@ -34,6 +35,7 @@
 	import { parseComponentExitDecision } from './components/componentExitGuard';
 	import { getArtifactMetaUrl } from '$lib/flow/client/runs';
 	import type {
+		ExperimentAdaptiveDecision,
 		ExperimentFailureTaxonomyItem,
 		ExperimentNodeTrendPoint,
 		ExperimentRunTrendPoint,
@@ -43,6 +45,7 @@
 	import { getGlobalCacheConfig, setGlobalCacheConfig } from '$lib/flow/client/runs';
 	import {
 		getExperimentFailureTaxonomy,
+		getExperimentAdaptiveDecisions,
 		getExperimentNodeTrends,
 		getExperimentRunTrends,
 		getExperimentRegressions,
@@ -351,6 +354,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
+	let runMonitorAdaptiveDecisionRowsLive: RunMonitorAdaptiveDecisionRow[] = [];
+	let runMonitorAdaptiveDecisionRowsHistory: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveRowsVisible: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionSelectedKey = '';
 	let selectedAdaptiveDecision: RunMonitorAdaptiveDecisionRow | null = null;
@@ -365,6 +370,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAdaptiveModeFilter: RunMonitorAdaptiveModeFilter = 'all';
 	let runMonitorAdaptiveSeverityFilter: RunMonitorAdaptiveSeverityFilter = 'all';
 	let runMonitorAdaptiveChangedOnly = false;
+	let runMonitorAdaptiveDataSource: 'live' | 'history' = 'live';
+	let runMonitorAdaptiveHistoryRowsRaw: ExperimentAdaptiveDecision[] = [];
+	let runMonitorAdaptiveHistorySort: 'created_desc' | 'created_asc' | 'impact_desc' = 'created_desc';
+	const runMonitorAdaptiveDataSourceOptions: ThemedSelectOption[] = [
+		{ value: 'live', label: 'Live run' },
+		{ value: 'history', label: 'History window' }
+	];
+	const runMonitorAdaptiveHistorySortOptions: ThemedSelectOption[] = [
+		{ value: 'created_desc', label: 'Newest' },
+		{ value: 'created_asc', label: 'Oldest' },
+		{ value: 'impact_desc', label: 'Impact desc' }
+	];
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	type RunMonitorSplitPair = 'monitor_env' | 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -745,9 +762,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		edges: ($graphStore.edges ?? []) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
-	$: runMonitorAdaptiveDecisionRows = buildRunMonitorAdaptiveDecisionRows(
+	$: runMonitorAdaptiveDecisionRowsLive = buildRunMonitorAdaptiveDecisionRows(
 		($graphStore.queueRuntime ?? {}) as any
 	);
+	$: runMonitorAdaptiveDecisionRowsHistory = buildRunMonitorAdaptiveDecisionRows({
+		adaptiveDecisions: runMonitorAdaptiveHistoryRowsRaw
+	} as any);
+	$: runMonitorAdaptiveDecisionRows =
+		runMonitorAdaptiveDataSource === 'history'
+			? runMonitorAdaptiveDecisionRowsHistory
+			: runMonitorAdaptiveDecisionRowsLive;
 	$: if (
 		runMonitorAdaptiveDecisionRows.length > 0 &&
 		!runMonitorAdaptiveDecisionRows.some(
@@ -836,7 +860,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: if (!runMonitorTrendNodeId && runMonitorTrendNodeOptions.length > 0) {
 		runMonitorTrendNodeId = runMonitorTrendNodeOptions[0].id;
 	}
-	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}`;
+	$: runMonitorAnalyticsAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorTrendNodeId}|${runMonitorTrendMetric}|${runMonitorSlaThresholdMs}|${runMonitorAnalyticsStartAt}|${runMonitorAnalyticsEndAt}|${runMonitorAnalyticsOffset}|${runMonitorAdaptiveHistorySort}`;
 	$: if (
 		runMonitorAnalyticsAutoKey !== runMonitorAnalyticsRefreshKey &&
 		String($graphStore.graphId ?? '').trim().length > 0
@@ -2228,13 +2252,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
+			runMonitorAdaptiveHistoryRowsRaw = [];
 			runMonitorAnalyticsError = null;
 			return;
 		}
 		runMonitorAnalyticsLoading = true;
 		runMonitorAnalyticsError = null;
 		try {
-			const [runTrendRes, trendRes, slaRes, failureRes] = await Promise.all([
+			const [runTrendRes, trendRes, slaRes, failureRes, adaptiveRes] = await Promise.all([
 				getExperimentRunTrends({
 					graphId,
 					startAt: runMonitorAnalyticsStartAt || undefined,
@@ -2267,6 +2292,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					endAt: runMonitorAnalyticsEndAt || undefined,
 					limit: 30,
 					offset: 0
+				}),
+				getExperimentAdaptiveDecisions({
+					graphId,
+					startAt: runMonitorAnalyticsStartAt || undefined,
+					endAt: runMonitorAnalyticsEndAt || undefined,
+					sort: runMonitorAdaptiveHistorySort,
+					limit: 100,
+					offset: 0
 				})
 			]);
 			runMonitorRunTrendPoints = Array.isArray(runTrendRes.points)
@@ -2278,11 +2311,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorFailureTaxonomy = Array.isArray(failureRes.taxonomy)
 				? failureRes.taxonomy.slice(0, 20)
 				: [];
+			runMonitorAdaptiveHistoryRowsRaw = Array.isArray(adaptiveRes.decisions)
+				? adaptiveRes.decisions.slice(0, 100)
+				: [];
 		} catch (error) {
 			runMonitorRunTrendPoints = [];
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
+			runMonitorAdaptiveHistoryRowsRaw = [];
 			runMonitorAnalyticsError = String(error ?? 'Failed to load historical analytics');
 		} finally {
 			runMonitorAnalyticsLoading = false;
@@ -4763,6 +4800,38 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">
 										<div class="monitorToolbar">
 											<label class="monitorField">
+												<span>Source</span>
+												<ThemedSelect
+													value={runMonitorAdaptiveDataSource}
+													options={runMonitorAdaptiveDataSourceOptions}
+													ariaLabel="Adaptive decision source"
+													onValueChange={(next) => {
+														if (next === 'live' || next === 'history') {
+															runMonitorAdaptiveDataSource = next;
+														}
+													}}
+												/>
+											</label>
+											{#if runMonitorAdaptiveDataSource === 'history'}
+												<label class="monitorField">
+													<span>Sort</span>
+													<ThemedSelect
+														value={runMonitorAdaptiveHistorySort}
+														options={runMonitorAdaptiveHistorySortOptions}
+														ariaLabel="Adaptive history sort"
+														onValueChange={(next) => {
+															if (
+																next === 'created_desc' ||
+																next === 'created_asc' ||
+																next === 'impact_desc'
+															) {
+																runMonitorAdaptiveHistorySort = next;
+															}
+														}}
+													/>
+												</label>
+											{/if}
+											<label class="monitorField">
 												<span>Mode</span>
 												<select bind:value={runMonitorAdaptiveModeFilter}>
 													<option value="all">All</option>
@@ -4795,6 +4864,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<span>reasons</span>
 										</div>
 										<div class="envPanelSummary">
+											source={runMonitorAdaptiveDataSource}
+											| 
 											total={runMonitorAdaptiveDecisionSummary.total}
 											| enforced={runMonitorAdaptiveDecisionSummary.enforced}
 											| modes:
