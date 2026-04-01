@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
 
 import pandas as pd
@@ -239,12 +239,16 @@ def _extract_dataset_lineage(
 
 
 
+class AdaptiveOverride(BaseModel):
+    mode: Literal["off", "observe", "enforce"]
+
+
 class RunRequest(BaseModel):
     graphId: str
     runFrom: Optional[str] = None
     runMode: Optional[str] = None
     cacheMode: Optional[str] = None
-    adaptive: Optional[Dict[str, Any]] = None
+    adaptive: Optional[AdaptiveOverride] = None
     graph: Dict[str, Any]  # PipelineGraphDTO shape from frontend
 
     @field_validator("graph")
@@ -447,7 +451,7 @@ async def create_run(req: RunRequest, request: Request):
 
     graph_id = str(req.graphId)
     canonical_graph, _ = canonicalize_graph_payload(req.graph)
-    adaptive_override = req.adaptive if isinstance(req.adaptive, dict) else None
+    adaptive_override = req.adaptive.model_dump() if isinstance(req.adaptive, AdaptiveOverride) else None
     if adaptive_override is None:
         await rt.start_run(
             run_id,
