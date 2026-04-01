@@ -436,12 +436,18 @@ async def regression_detection(
 	runId: str = Query(..., min_length=1),
 	baselineRunId: Optional[str] = Query(default=None),
 	alertType: str = Query(default="all"),
+	sort: str = Query(default="default"),
+	limit: int = Query(default=100, ge=1, le=2000),
+	offset: int = Query(default=0, ge=0),
 	latencyDriftPct: float = Query(default=25.0, ge=0.0),
 	failureDriftAbs: int = Query(default=1, ge=0),
 ):
 	alert_type = str(alertType or "all").strip().lower()
 	if alert_type not in {"all", "latency", "failure"}:
 		raise HTTPException(400, "alertType must be one of: all, latency, failure")
+	sort_mode = str(sort or "default").strip().lower()
+	if sort_mode not in {"default", "impact_desc", "impact_asc"}:
+		raise HTTPException(400, "sort must be one of: default, impact_desc, impact_asc")
 	current = await _get_summary_or_404(request, runId)
 	if baselineRunId:
 		baseline = await _get_summary_or_404(request, baselineRunId)
@@ -515,11 +521,44 @@ async def regression_detection(
 				}
 			)
 
-	alerts.sort(key=lambda row: (str(row.get("reasonCode") or ""), str(row.get("nodeId") or row.get("errorCode") or "")))
+	def _impact_value(row: Dict[str, Any]) -> float:
+		if str(row.get("type") or "").strip().lower() == "latency_regression":
+			return abs(float(row.get("driftPct") or 0.0))
+		return abs(float(row.get("delta") or 0.0))
+
+	if sort_mode == "impact_desc":
+		alerts.sort(
+			key=lambda row: (
+				_impact_value(row),
+				str(row.get("reasonCode") or ""),
+				str(row.get("nodeId") or row.get("errorCode") or ""),
+			),
+			reverse=True,
+		)
+	elif sort_mode == "impact_asc":
+		alerts.sort(
+			key=lambda row: (
+				_impact_value(row),
+				str(row.get("reasonCode") or ""),
+				str(row.get("nodeId") or row.get("errorCode") or ""),
+			),
+		)
+	else:
+		alerts.sort(
+			key=lambda row: (
+				str(row.get("reasonCode") or ""),
+				str(row.get("nodeId") or row.get("errorCode") or ""),
+			)
+		)
+	paged_alerts = alerts[offset : offset + limit]
 	return {
 		"schemaVersion": 1,
 		"runId": str(runId),
 		"baselineRunId": str(baseline.get("runId") or ""),
 		"alertType": alert_type,
-		"alerts": alerts,
+		"sort": sort_mode,
+		"limit": int(limit),
+		"offset": int(offset),
+		"total": len(alerts),
+		"alerts": paged_alerts,
 	}

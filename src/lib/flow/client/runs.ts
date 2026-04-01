@@ -202,6 +202,9 @@ export async function getExperimentRegressions(params: {
 	runId: string;
 	baselineRunId?: string | null;
 	alertType?: 'all' | 'latency' | 'failure';
+	sort?: 'default' | 'impact_desc' | 'impact_asc';
+	limit?: number;
+	offset?: number;
 	latencyDriftPct?: number;
 	failureDriftAbs?: number;
 }) {
@@ -210,6 +213,10 @@ export async function getExperimentRegressions(params: {
 	if (params.baselineRunId) qs.set('baselineRunId', String(params.baselineRunId).trim());
 	if (params.alertType && ['all', 'latency', 'failure'].includes(String(params.alertType)))
 		qs.set('alertType', String(params.alertType));
+	if (params.sort && ['default', 'impact_desc', 'impact_asc'].includes(String(params.sort)))
+		qs.set('sort', String(params.sort));
+	if (Number.isFinite(Number(params.limit))) qs.set('limit', String(Math.max(1, Number(params.limit))));
+	if (Number.isFinite(Number(params.offset))) qs.set('offset', String(Math.max(0, Number(params.offset))));
 	if (Number.isFinite(Number(params.latencyDriftPct)))
 		qs.set('latencyDriftPct', String(Number(params.latencyDriftPct)));
 	if (Number.isFinite(Number(params.failureDriftAbs)))
@@ -224,6 +231,10 @@ export async function getExperimentRegressions(params: {
 		runId: string;
 		baselineRunId: string;
 		alertType?: 'all' | 'latency' | 'failure';
+		sort?: 'default' | 'impact_desc' | 'impact_asc';
+		limit?: number;
+		offset?: number;
+		total?: number;
 		alerts: RegressionAlert[];
 	};
 }

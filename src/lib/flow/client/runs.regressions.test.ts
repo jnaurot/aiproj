@@ -11,12 +11,17 @@ describe('runs client regressions endpoint', () => {
 			expect(url.includes('runId=run_new')).toBe(true);
 			expect(url.includes('baselineRunId=run_old')).toBe(true);
 			expect(url.includes('alertType=latency')).toBe(true);
+			expect(url.includes('sort=impact_desc')).toBe(true);
+			expect(url.includes('limit=25')).toBe(true);
+			expect(url.includes('offset=2')).toBe(true);
 			return new Response(
 				JSON.stringify({
 					schemaVersion: 1,
 					runId: 'run_new',
 					baselineRunId: 'run_old',
 					alertType: 'latency',
+					sort: 'impact_desc',
+					total: 1,
 					alerts: [{ type: 'latency_regression', reasonCode: 'LATENCY_DRIFT', nodeId: 'n1' }]
 				}),
 				{ status: 200, headers: { 'content-type': 'application/json' } }
@@ -27,6 +32,9 @@ describe('runs client regressions endpoint', () => {
 				runId: 'run_new',
 				baselineRunId: 'run_old',
 				alertType: 'latency',
+				sort: 'impact_desc',
+				limit: 25,
+				offset: 2,
 				latencyDriftPct: 20,
 				failureDriftAbs: 1
 			});

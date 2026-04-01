@@ -397,6 +397,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionBaselineOverride = '';
 	let runMonitorRegressionAutoKey = '';
 	let runMonitorRegressionTypeFilter: 'all' | 'latency' | 'failure' = 'all';
+	let runMonitorRegressionSort: 'default' | 'impact_desc' | 'impact_asc' = 'default';
 	let runMonitorRegressionSelectedIndex = -1;
 	let selectedRegressionAlert: RegressionAlert | null = null;
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
@@ -799,7 +800,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorRegressionSelectedIndex < runMonitorRegressionAlerts.length
 			? runMonitorRegressionAlerts[runMonitorRegressionSelectedIndex]
 			: null;
-	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}`;
+	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}|${runMonitorRegressionSort}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
 		runMonitorRegressionPair.runId &&
@@ -2153,6 +2154,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				runId: resolvedRunId,
 				baselineRunId: resolvedBaselineRunId,
 				alertType: runMonitorRegressionTypeFilter,
+				sort: runMonitorRegressionSort,
+				limit: 50,
+				offset: 0,
 				latencyDriftPct: 25,
 				failureDriftAbs: 1
 			});
@@ -4992,6 +4996,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<option value="all">all</option>
 													<option value="latency">latency</option>
 													<option value="failure">failure</option>
+												</select>
+											</label>
+											<label class="monitorField">
+												<span>Sort</span>
+												<select bind:value={runMonitorRegressionSort}>
+													<option value="default">default</option>
+													<option value="impact_desc">impact desc</option>
+													<option value="impact_asc">impact asc</option>
 												</select>
 											</label>
 										</div>

@@ -75,9 +75,30 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert regressions.status_code == 200, regressions.text
-		alerts = regressions.json().get("alerts") or []
+		regressions_body = regressions.json()
+		assert str(regressions_body.get("sort") or "") == "default"
+		assert int(regressions_body.get("total") or 0) >= 2
+		alerts = regressions_body.get("alerts") or []
 		assert any(str(alert.get("reasonCode") or "") == "LATENCY_DRIFT" for alert in alerts)
 		assert any(str(alert.get("reasonCode") or "") == "FAILURE_DRIFT" for alert in alerts)
+
+		regressions_sorted = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"sort": "impact_desc",
+				"limit": 1,
+				"offset": 0,
+				"latencyDriftPct": 20,
+				"failureDriftAbs": 1,
+			},
+		)
+		assert regressions_sorted.status_code == 200, regressions_sorted.text
+		reg_sorted_body = regressions_sorted.json()
+		assert str(reg_sorted_body.get("sort") or "") == "impact_desc"
+		assert int(reg_sorted_body.get("limit") or 0) == 1
+		assert len(reg_sorted_body.get("alerts") or []) == 1
 
 		regressions_latency_only = client.get(
 			"/experiments/regressions",
@@ -118,6 +139,16 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 			},
 		)
 		assert regressions_invalid_type.status_code == 400, regressions_invalid_type.text
+
+		regressions_invalid_sort = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"sort": "bogus",
+			},
+		)
+		assert regressions_invalid_sort.status_code == 400, regressions_invalid_sort.text
 
 
 def test_experiments_analytics_supports_time_window_and_pagination():
