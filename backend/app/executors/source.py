@@ -2953,12 +2953,16 @@ async def _handle_api_source(
             return decoded
 
         failed_partitions: list[Dict[str, Any]] = []
-        async with httpx.AsyncClient() as client:
-            gathered = await asyncio.gather(
-                *[_run_partition(p, client) for p in planned_partitions],
-                return_exceptions=(partition_on_error == "skip_failed"),
-            )
-        if partition_on_error == "skip_failed":
+        if partition_on_error == "fail_fast":
+            async with httpx.AsyncClient() as client:
+                for spec in planned_partitions:
+                    partition_results.append(await _run_partition(spec, client))
+        else:
+            async with httpx.AsyncClient() as client:
+                gathered = await asyncio.gather(
+                    *[_run_partition(p, client) for p in planned_partitions],
+                    return_exceptions=True,
+                )
             for idx, item in enumerate(gathered):
                 if isinstance(item, Exception):
                     spec = planned_partitions[idx] if idx < len(planned_partitions) else {}
@@ -2984,8 +2988,6 @@ async def _handle_api_source(
                 )
             if not partition_results:
                 raise RuntimeError("PARTITION_FAILED: all partitions failed under skip_failed policy")
-        else:
-            partition_results = [item for item in gathered if isinstance(item, dict)]
         data = _merge_partition_results(output_mode, partition_results)
     else:
         async with httpx.AsyncClient() as client:
