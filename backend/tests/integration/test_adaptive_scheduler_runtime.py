@@ -42,6 +42,39 @@ def _fanout_tool_graph() -> dict:
 	}
 
 
+def _burst_fanin_tool_graph() -> dict:
+	return {
+		"nodes": [
+			{
+				"id": "src_a",
+				"data": {"kind": "tool", "label": "Src A", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+			{
+				"id": "src_b",
+				"data": {"kind": "tool", "label": "Src B", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+			{
+				"id": "src_c",
+				"data": {"kind": "tool", "label": "Src C", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+			{
+				"id": "src_d",
+				"data": {"kind": "tool", "label": "Src D", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+			{
+				"id": "sink",
+				"data": {"kind": "tool", "label": "Sink", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+		],
+		"edges": [
+			{"id": "e_a", "source": "src_a", "target": "sink"},
+			{"id": "e_b", "source": "src_b", "target": "sink"},
+			{"id": "e_c", "source": "src_c", "target": "sink"},
+			{"id": "e_d", "source": "src_d", "target": "sink"},
+		],
+	}
+
+
 @pytest.mark.asyncio
 async def test_adaptive_observe_emits_decisions_without_enforcement(monkeypatch, tmp_path):
 	run_mod = importlib.import_module("app.runner.run")
@@ -260,3 +293,64 @@ async def test_adaptive_override_mode_source_is_run_override(monkeypatch, tmp_pa
 	assert adaptive_events, "expected adaptive decision events with run override"
 	assert any(str(evt.get("mode") or "") == "observe" for evt in adaptive_events)
 	assert all(str(evt.get("modeSource") or "") == "run_override" for evt in adaptive_events)
+
+
+@pytest.mark.asyncio
+async def test_adaptive_enforce_reduces_peak_queue_depth_under_burst(monkeypatch, tmp_path):
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _run_once(mode: str, run_id: str) -> int:
+		events = []
+
+		async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+			node_id = str(node.get("id") or "")
+			if node_id == "sink":
+				await asyncio.sleep(0.2)
+			else:
+				await asyncio.sleep(0.02)
+			return NodeOutput(
+				status="succeeded",
+				metadata=None,
+				execution_time_ms=1.0,
+				data={"kind": "json", "payload": {"node": node_id, "ok": True}},
+			)
+
+		monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+		monkeypatch.setattr(run_mod, "get_env", lambda name, default=None: os.getenv(name, default))
+		monkeypatch.setattr(
+			run_mod,
+			"apply_adaptive_policy",
+			lambda **kwargs: {
+				"nextCaps": {"global": 1, "source": 1, "transform": 1, "model": 1, "tool": 1},
+				"changedCaps": {"global": {"from": 5, "to": 1}, "tool": {"from": 5, "to": 1}},
+				"changed": True,
+				"reasons": ["queue_depth_high"],
+				"inputs": {"queueDepth": 4, "readyCount": 4, "avgLatencyMs": 15.0, "failureRate": 0.0, "leaseWaitMs": 0.0},
+			},
+		)
+		monkeypatch.setenv("RUNNER_MAX_CONCURRENCY", "5")
+		monkeypatch.setenv("RUNNER_MAX_TOOL", "5")
+		monkeypatch.setenv("RUNNER_ADAPTIVE_MODE", mode)
+		monkeypatch.setenv("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", "100")
+		monkeypatch.setenv("RUNNER_ADAPTIVE_COOLDOWN_MS", "0")
+		monkeypatch.setenv("RUNNER_ADAPTIVE_MIN_TOOL", "1")
+		artifact_root = tmp_path / f"adaptive-queue-burst-{mode}"
+		await run_mod.run_graph(
+			run_id=run_id,
+			graph=_burst_fanin_tool_graph(),
+			run_from=None,
+			bus=RunEventBus(run_id, on_emit=lambda evt: events.append(dict(evt))),
+			artifact_store=DiskArtifactStore(artifact_root),
+			cache=SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite")),
+			graph_id=f"graph-adaptive-queue-{mode}",
+		)
+		queue_depths = [
+			int(((evt.get("metrics") or {}).get("globalDepth") or 0))
+			for evt in events
+			if str(evt.get("type") or "") == "queue_metrics"
+		]
+		return max(queue_depths) if queue_depths else 0
+
+	off_peak = await _run_once("off", "run-adaptive-queue-off")
+	enforce_peak = await _run_once("enforce", "run-adaptive-queue-enforce")
+	assert enforce_peak <= off_peak, f"expected enforce peak queue depth <= off (off={off_peak}, enforce={enforce_peak})"
