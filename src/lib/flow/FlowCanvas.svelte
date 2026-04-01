@@ -2007,6 +2007,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		focusNodeFromMonitor(nodeId);
 	}
 
+	function selectFailureTaxonomyDrilldown(item: ExperimentFailureTaxonomyItem): void {
+		const errorCode = String(item?.errorCode ?? '').trim();
+		if (!errorCode) return;
+		runLogFilter = errorCode;
+	}
+
 	function onTrendSparklineMove(event: PointerEvent): void {
 		if (!runMonitorTrendSparkline || runMonitorTrendSparkline.points.length === 0) {
 			runMonitorTrendHoverIndex = -1;
@@ -4993,13 +4999,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												<div class="envProfileEmpty">No failure taxonomy rows.</div>
 											{:else}
 												{#each runMonitorFailureTaxonomy as item (`${item.errorCode}`)}
-													<div class="runMonitorNodeRow" role="row">
+													<button
+														type="button"
+														class="runMonitorNodeRow"
+														role="row"
+														on:click={() => selectFailureTaxonomyDrilldown(item)}
+														title="Filter run logs by error code"
+													>
 														<span>{item.errorCode}</span>
 														<span>{item.count}</span>
 														<span></span>
 														<span></span>
 														<span></span>
-													</div>
+													</button>
 												{/each}
 											{/if}
 										{/if}
