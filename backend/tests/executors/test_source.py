@@ -41,6 +41,12 @@ def _ctx_with_events(events: list[dict]):
 	)
 
 
+def _error_payload(result: NodeOutput) -> dict:
+	assert result.status == "failed"
+	raw = str(result.error or "")
+	return json.loads(raw) if raw.startswith("{") else {"message": raw}
+
+
 @pytest.mark.asyncio
 async def test_source_file_csv_success(tmp_path):
 	file_path = tmp_path / "data.csv"
@@ -1454,7 +1460,89 @@ async def test_source_invalid_type_returns_failed():
 	node = {"id": "n_bad", "data": {"params": {"source_type": "invalid"}}}
 	result = await exec_source("run_4", node, _ctx())
 	assert result.status == "failed"
-	assert "unknown source_type" in (result.error or "").lower()
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_CONFIG_INVALID"
+	assert "unknown source_type" in str(payload.get("message") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_source_error_mapping_not_found(tmp_path):
+	node = {
+		"id": "n_source_missing_file",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"rel_path": str(tmp_path),
+				"filename": "does-not-exist.txt",
+				"file_format": "txt",
+				"output_mode": "text",
+			}
+		},
+	}
+	result = await exec_source("run_source_not_found", node, _ctx())
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_source_error_mapping_parse_failed_invalid_json(tmp_path):
+	file_path = tmp_path / "bad.json"
+	file_path.write_text('{"bad": ', encoding="utf-8")
+	node = {
+		"id": "n_source_bad_json",
+		"data": {
+			"params": {
+				"source_type": "file",
+				"file_path": str(file_path),
+				"file_format": "json",
+				"json_mode": "document",
+				"output_mode": "json",
+			}
+		},
+	}
+	result = await exec_source("run_source_bad_json", node, _ctx())
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_PARSE_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_source_error_mapping_auth_failed(monkeypatch):
+	request = httpx.Request("GET", "https://example.com")
+	response = httpx.Response(401, request=request, text="unauthorized")
+	auth_error = httpx.HTTPStatusError("401 Unauthorized", request=request, response=response)
+
+	async def _boom(*_args, **_kwargs):
+		raise auth_error
+
+	monkeypatch.setattr(source_mod, "_handle_api_source", _boom)
+	node = {"id": "n_auth", "data": {"sourceKind": "api", "params": {"source_type": "api", "url": "https://example.com"}}}
+	result = await exec_source("run_auth_error", node, _ctx())
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_AUTH_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_source_error_mapping_timeout(monkeypatch):
+	async def _boom(*_args, **_kwargs):
+		raise asyncio.TimeoutError("timed out")
+
+	monkeypatch.setattr(source_mod, "_handle_api_source", _boom)
+	node = {"id": "n_timeout", "data": {"sourceKind": "api", "params": {"source_type": "api", "url": "https://example.com"}}}
+	result = await exec_source("run_timeout_error", node, _ctx())
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_source_error_mapping_connection_failed(monkeypatch):
+	async def _boom(*_args, **_kwargs):
+		raise httpx.ConnectError("connect failed", request=httpx.Request("GET", "https://example.com"))
+
+	monkeypatch.setattr(source_mod, "_handle_api_source", _boom)
+	node = {"id": "n_conn", "data": {"sourceKind": "api", "params": {"source_type": "api", "url": "https://example.com"}}}
+	result = await exec_source("run_connect_error", node, _ctx())
+	payload = _error_payload(result)
+	assert str(payload.get("errorCode") or "") == "SOURCE_CONNECTION_FAILED"
 
 
 @pytest.mark.asyncio

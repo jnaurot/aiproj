@@ -1878,6 +1878,28 @@ def _is_contract_mismatch_error(message: str) -> bool:
     return ("contract mismatch" in m) or ("payload schema mismatch" in m)
 
 
+def _parse_executor_error_payload(message: str) -> Optional[Dict[str, Any]]:
+    raw = str(message or "").strip()
+    if not raw.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    code = str(parsed.get("errorCode") or parsed.get("code") or "").strip()
+    if not code:
+        return None
+    msg = str(parsed.get("message") or raw).strip() or raw
+    details = parsed.get("details") if isinstance(parsed.get("details"), dict) else {}
+    out = dict(parsed)
+    out["errorCode"] = code
+    out["message"] = msg
+    out["details"] = details
+    return out
+
+
 _CACHE_DECISIONS = {"cache_hit", "cache_miss", "cache_hit_contract_mismatch"}
 _CACHE_REASONS = {
     "CACHE_HIT",
@@ -7299,11 +7321,18 @@ async def run_graph(
             except Exception as ex:
                 traceback.print_exc()
                 error_message = str(ex)
+                display_error_message = error_message
                 error_details: Dict[str, Any] = {}
                 error_code: Optional[str] = None
+                parsed_executor_error = _parse_executor_error_payload(error_message)
+                if isinstance(parsed_executor_error, dict):
+                    error_code = str(parsed_executor_error.get("errorCode") or "").strip() or None
+                    error_details = dict(parsed_executor_error.get("details") or {})
+                    display_error_message = str(parsed_executor_error.get("message") or error_message)
                 if isinstance(ex, ContractMismatchError):
                     error_code = ex.code
                     error_details = dict(ex.details or {})
+                    display_error_message = error_message
                 elif _is_contract_mismatch_error(error_message):
                     error_code = (
                         "PAYLOAD_SCHEMA_MISMATCH"
@@ -7338,7 +7367,7 @@ async def run_graph(
                         "runId": run_id,
                         "at": iso_now(),
                         "level": "error",
-                        "message": f"{error_code}: {error_message}",
+                        "message": f"{error_code}: {display_error_message}",
                         "nodeId": node_id,
                     })
                     if env_guidance:
@@ -7356,7 +7385,7 @@ async def run_graph(
                     "runId": run_id,
                     "at": iso_now(),
                     "level": "error",
-                    "message": error_message,
+                    "message": display_error_message,
                     "nodeId": node_id
                 })
                 await _emit({
@@ -7365,7 +7394,7 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id,
                     "status": "failed",
-                    "error": error_message,
+                    "error": display_error_message,
                     **({"errorCode": error_code} if error_code else {}),
                     **({"errorDetails": error_details} if error_details else {}),
                     "execution_time_ms": max(0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0),

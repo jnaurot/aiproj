@@ -78,6 +78,62 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _source_error_code_for_exception(exc: Exception) -> str:
+    msg = str(exc or "")
+    lower = msg.lower()
+
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+        return "SOURCE_TIMEOUT"
+    if isinstance(exc, FileNotFoundError):
+        return "SOURCE_NOT_FOUND"
+    if isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError, csv.Error)):
+        return "SOURCE_PARSE_FAILED"
+    if isinstance(exc, getattr(pd.errors, "ParserError", tuple())):
+        return "SOURCE_PARSE_FAILED"
+    if isinstance(exc, ImportError):
+        return "SOURCE_CONFIG_INVALID"
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = int(getattr(getattr(exc, "response", None), "status_code", 0) or 0)
+        if status in {401, 403}:
+            return "SOURCE_AUTH_FAILED"
+        if status == 404:
+            return "SOURCE_NOT_FOUND"
+        return "SOURCE_CONNECTION_FAILED"
+    if isinstance(exc, httpx.RequestError):
+        return "SOURCE_CONNECTION_FAILED"
+
+    if "missing_secret" in lower or "invalid_identifier" in lower:
+        return "SOURCE_CONFIG_INVALID"
+    if "unknown source_type" in lower:
+        return "SOURCE_CONFIG_INVALID"
+    if "requires sqlalchemy" in lower or "connection_string or connection_ref required" in lower:
+        return "SOURCE_CONFIG_INVALID"
+    if "not found" in lower:
+        return "SOURCE_NOT_FOUND"
+    if "parse" in lower or "decode" in lower:
+        return "SOURCE_PARSE_FAILED"
+    if "unsupported" in lower:
+        return "SOURCE_UNSUPPORTED_FORMAT"
+
+    return "SOURCE_CONNECTION_FAILED"
+
+
+def _build_source_error_payload(source_kind: str, exc: Exception) -> Dict[str, Any]:
+    code = _source_error_code_for_exception(exc)
+    details: Dict[str, Any] = {
+        "sourceKind": str(source_kind or "unknown"),
+        "exceptionType": type(exc).__name__,
+    }
+    if isinstance(exc, httpx.HTTPStatusError):
+        details["httpStatus"] = int(getattr(getattr(exc, "response", None), "status_code", 0) or 0)
+    return {
+        "errorCode": code,
+        "message": str(exc or ""),
+        "sourceKind": str(source_kind or "unknown"),
+        "details": details,
+    }
+
+
 def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -1947,11 +2003,25 @@ async def exec_source(
         output.execution_time_ms = (time.time() - start_time) * 1000
         return output
     except Exception as exc:
+        payload = _build_source_error_payload(str(source_type or "unknown"), exc)
+        try:
+            await context.bus.emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": _iso_now(),
+                    "level": "error",
+                    "message": f"{str(payload.get('errorCode') or 'SOURCE_ERROR')}: {str(payload.get('message') or '')}",
+                    "nodeId": node_id,
+                }
+            )
+        except Exception:
+            pass
         return NodeOutput(
             status="failed",
             metadata=None,
             execution_time_ms=(time.time() - start_time) * 1000,
-            error=str(exc),
+            error=json.dumps(payload, ensure_ascii=False),
         )
 
 
