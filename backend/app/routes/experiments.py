@@ -283,9 +283,13 @@ async def regression_detection(
 	request: Request,
 	runId: str = Query(..., min_length=1),
 	baselineRunId: Optional[str] = Query(default=None),
+	alertType: str = Query(default="all"),
 	latencyDriftPct: float = Query(default=25.0, ge=0.0),
 	failureDriftAbs: int = Query(default=1, ge=0),
 ):
+	alert_type = str(alertType or "all").strip().lower()
+	if alert_type not in {"all", "latency", "failure"}:
+		raise HTTPException(400, "alertType must be one of: all, latency, failure")
 	current = await _get_summary_or_404(request, runId)
 	if baselineRunId:
 		baseline = await _get_summary_or_404(request, baselineRunId)
@@ -306,28 +310,29 @@ async def regression_detection(
 	baseline_latency = (
 		baseline_analytics.get("nodeLatencyMs") if isinstance(baseline_analytics.get("nodeLatencyMs"), dict) else {}
 	)
-	for node_id in sorted(set(current_latency.keys()) & set(baseline_latency.keys())):
-		cur_item = current_latency.get(node_id) if isinstance(current_latency.get(node_id), dict) else {}
-		base_item = baseline_latency.get(node_id) if isinstance(baseline_latency.get(node_id), dict) else {}
-		cur_p95 = _safe_float(cur_item.get("p95Ms"), 0.0)
-		base_p95 = _safe_float(base_item.get("p95Ms"), 0.0)
-		if base_p95 <= 0:
-			continue
-		drift_pct = ((cur_p95 - base_p95) / base_p95) * 100.0
-		if drift_pct < float(latencyDriftPct):
-			continue
-		alerts.append(
-			{
-				"type": "latency_regression",
-				"nodeId": str(node_id),
-				"metric": "p95Ms",
-				"baseline": base_p95,
-				"current": cur_p95,
-				"driftPct": drift_pct,
-				"thresholdPct": float(latencyDriftPct),
-				"reasonCode": "LATENCY_DRIFT",
-			}
-		)
+	if alert_type in {"all", "latency"}:
+		for node_id in sorted(set(current_latency.keys()) & set(baseline_latency.keys())):
+			cur_item = current_latency.get(node_id) if isinstance(current_latency.get(node_id), dict) else {}
+			base_item = baseline_latency.get(node_id) if isinstance(baseline_latency.get(node_id), dict) else {}
+			cur_p95 = _safe_float(cur_item.get("p95Ms"), 0.0)
+			base_p95 = _safe_float(base_item.get("p95Ms"), 0.0)
+			if base_p95 <= 0:
+				continue
+			drift_pct = ((cur_p95 - base_p95) / base_p95) * 100.0
+			if drift_pct < float(latencyDriftPct):
+				continue
+			alerts.append(
+				{
+					"type": "latency_regression",
+					"nodeId": str(node_id),
+					"metric": "p95Ms",
+					"baseline": base_p95,
+					"current": cur_p95,
+					"driftPct": drift_pct,
+					"thresholdPct": float(latencyDriftPct),
+					"reasonCode": "LATENCY_DRIFT",
+				}
+			)
 
 	current_failures = (
 		current_analytics.get("failureCategories")
@@ -339,28 +344,30 @@ async def regression_detection(
 		if isinstance(baseline_analytics.get("failureCategories"), dict)
 		else {}
 	)
-	for code in sorted(set(current_failures.keys()) | set(baseline_failures.keys())):
-		cur_count = int(_safe_float(current_failures.get(code), 0.0))
-		base_count = int(_safe_float(baseline_failures.get(code), 0.0))
-		delta = cur_count - base_count
-		if delta < int(failureDriftAbs):
-			continue
-		alerts.append(
-			{
-				"type": "failure_regression",
-				"errorCode": str(code),
-				"baseline": base_count,
-				"current": cur_count,
-				"delta": delta,
-				"thresholdAbs": int(failureDriftAbs),
-				"reasonCode": "FAILURE_DRIFT",
-			}
-		)
+	if alert_type in {"all", "failure"}:
+		for code in sorted(set(current_failures.keys()) | set(baseline_failures.keys())):
+			cur_count = int(_safe_float(current_failures.get(code), 0.0))
+			base_count = int(_safe_float(baseline_failures.get(code), 0.0))
+			delta = cur_count - base_count
+			if delta < int(failureDriftAbs):
+				continue
+			alerts.append(
+				{
+					"type": "failure_regression",
+					"errorCode": str(code),
+					"baseline": base_count,
+					"current": cur_count,
+					"delta": delta,
+					"thresholdAbs": int(failureDriftAbs),
+					"reasonCode": "FAILURE_DRIFT",
+				}
+			)
 
 	alerts.sort(key=lambda row: (str(row.get("reasonCode") or ""), str(row.get("nodeId") or row.get("errorCode") or "")))
 	return {
 		"schemaVersion": 1,
 		"runId": str(runId),
 		"baselineRunId": str(baseline.get("runId") or ""),
+		"alertType": alert_type,
 		"alerts": alerts,
 	}

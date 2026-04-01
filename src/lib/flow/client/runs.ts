@@ -193,12 +193,15 @@ export type RunTransitionEvent = {
 export async function getExperimentRegressions(params: {
 	runId: string;
 	baselineRunId?: string | null;
+	alertType?: 'all' | 'latency' | 'failure';
 	latencyDriftPct?: number;
 	failureDriftAbs?: number;
 }) {
 	const qs = new URLSearchParams();
 	qs.set('runId', String(params.runId ?? '').trim());
 	if (params.baselineRunId) qs.set('baselineRunId', String(params.baselineRunId).trim());
+	if (params.alertType && ['all', 'latency', 'failure'].includes(String(params.alertType)))
+		qs.set('alertType', String(params.alertType));
 	if (Number.isFinite(Number(params.latencyDriftPct)))
 		qs.set('latencyDriftPct', String(Number(params.latencyDriftPct)));
 	if (Number.isFinite(Number(params.failureDriftAbs)))
@@ -212,6 +215,7 @@ export async function getExperimentRegressions(params: {
 		schemaVersion: 1;
 		runId: string;
 		baselineRunId: string;
+		alertType?: 'all' | 'latency' | 'failure';
 		alerts: RegressionAlert[];
 	};
 }

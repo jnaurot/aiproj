@@ -10,11 +10,13 @@ describe('runs client regressions endpoint', () => {
 			expect(url.startsWith('/api/experiments/regressions?')).toBe(true);
 			expect(url.includes('runId=run_new')).toBe(true);
 			expect(url.includes('baselineRunId=run_old')).toBe(true);
+			expect(url.includes('alertType=latency')).toBe(true);
 			return new Response(
 				JSON.stringify({
 					schemaVersion: 1,
 					runId: 'run_new',
 					baselineRunId: 'run_old',
+					alertType: 'latency',
 					alerts: [{ type: 'latency_regression', reasonCode: 'LATENCY_DRIFT', nodeId: 'n1' }]
 				}),
 				{ status: 200, headers: { 'content-type': 'application/json' } }
@@ -24,6 +26,7 @@ describe('runs client regressions endpoint', () => {
 			const res = await getExperimentRegressions({
 				runId: 'run_new',
 				baselineRunId: 'run_old',
+				alertType: 'latency',
 				latencyDriftPct: 20,
 				failureDriftAbs: 1
 			});
@@ -33,4 +36,3 @@ describe('runs client regressions endpoint', () => {
 		}
 	});
 });
-

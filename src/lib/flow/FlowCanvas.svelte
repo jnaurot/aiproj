@@ -382,6 +382,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorRegressionRunOverride = '';
 	let runMonitorRegressionBaselineOverride = '';
 	let runMonitorRegressionAutoKey = '';
+	let runMonitorRegressionTypeFilter: 'all' | 'latency' | 'failure' = 'all';
 	let runMonitorRegressionSelectedIndex = -1;
 	let selectedRegressionAlert: RegressionAlert | null = null;
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
@@ -773,7 +774,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorRegressionSelectedIndex < runMonitorRegressionAlerts.length
 			? runMonitorRegressionAlerts[runMonitorRegressionSelectedIndex]
 			: null;
-	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}`;
+	$: runMonitorRegressionAutoKey = `${String($graphStore.graphId ?? '').trim()}|${runMonitorRegressionPair.runId}|${runMonitorRegressionPair.baselineRunId}|${runMonitorRegressionTypeFilter}`;
 	$: if (
 		runMonitorRegressionAutoKey !== runMonitorRegressionRefreshKey &&
 		runMonitorRegressionPair.runId &&
@@ -2120,6 +2121,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const res = await getExperimentRegressions({
 				runId: resolvedRunId,
 				baselineRunId: resolvedBaselineRunId,
+				alertType: runMonitorRegressionTypeFilter,
 				latencyDriftPct: 25,
 				failureDriftAbs: 1
 			});
@@ -4899,8 +4901,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												{/if}
 											</div>
 										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField">
+												<span>Type</span>
+												<select bind:value={runMonitorRegressionTypeFilter}>
+													<option value="all">all</option>
+													<option value="latency">latency</option>
+													<option value="failure">failure</option>
+												</select>
+											</label>
+										</div>
 										<div class="envPanelSummary">
-											run={runMonitorRegressionRunId || runMonitorRegressionPair.runId || '-'} | baseline={runMonitorRegressionBaselineRunId || runMonitorRegressionPair.baselineRunId || '-'}
+											run={runMonitorRegressionRunId || runMonitorRegressionPair.runId || '-'} | baseline={runMonitorRegressionBaselineRunId || runMonitorRegressionPair.baselineRunId || '-'} | filter={runMonitorRegressionTypeFilter}
 										</div>
 										<div class="runMonitorNodeHead" role="row">
 											<span>type</span>

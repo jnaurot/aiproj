@@ -70,3 +70,33 @@ def test_experiments_analytics_trends_and_taxonomy_routes():
 		alerts = regressions.json().get("alerts") or []
 		assert any(str(alert.get("reasonCode") or "") == "LATENCY_DRIFT" for alert in alerts)
 		assert any(str(alert.get("reasonCode") or "") == "FAILURE_DRIFT" for alert in alerts)
+
+		regressions_latency_only = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"alertType": "latency",
+				"latencyDriftPct": 20,
+				"failureDriftAbs": 1,
+			},
+		)
+		assert regressions_latency_only.status_code == 200, regressions_latency_only.text
+		latency_alerts = regressions_latency_only.json().get("alerts") or []
+		assert latency_alerts
+		assert all(str(alert.get("type") or "") == "latency_regression" for alert in latency_alerts)
+
+		regressions_failure_only = client.get(
+			"/experiments/regressions",
+			params={
+				"runId": "run-a2",
+				"baselineRunId": "run-a1",
+				"alertType": "failure",
+				"latencyDriftPct": 20,
+				"failureDriftAbs": 1,
+			},
+		)
+		assert regressions_failure_only.status_code == 200, regressions_failure_only.text
+		failure_alerts = regressions_failure_only.json().get("alerts") or []
+		assert failure_alerts
+		assert all(str(alert.get("type") or "") == "failure_regression" for alert in failure_alerts)
