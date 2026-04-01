@@ -4696,7 +4696,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													{selectedAdaptiveDecision.explanation.score}
 												</span>
 												| signals={selectedAdaptiveDecision.explanation.signals.length}
+												| components={selectedAdaptiveDecision.explanation.components.length}
 											</div>
+											{#if selectedAdaptiveDecision.explanation.components.length > 0}
+												<div class="envPanelSummary mono">
+													weights:
+													{selectedAdaptiveDecision.explanation.components
+														.slice(0, 8)
+														.map((item) => `${item.label}:${item.delta >= 0 ? '+' : ''}${item.delta}`)
+														.join(' | ')}
+												</div>
+											{/if}
 											{#if selectedAdaptiveDecision.diffFromPrevious}
 												<div class="envPanelSummary">
 													diff score=

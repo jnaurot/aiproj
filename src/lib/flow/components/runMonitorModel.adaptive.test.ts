@@ -38,6 +38,7 @@ describe('runMonitorModel adaptive decision rows', () => {
 		});
 		expect(Number(rows[0]?.explanation?.score ?? 0)).toBeGreaterThan(0);
 		expect(['low', 'medium', 'high']).toContain(rows[0]?.explanation?.severity);
+		expect((rows[0]?.explanation?.components ?? []).length).toBeGreaterThan(0);
 		expect(rows[0]?.changedCaps?.global).toEqual({ from: 4, to: 3 });
 		expect(rows[1]?.mode).toBe('observe');
 		expect(rows[0]?.diffFromPrevious?.modeChanged).toBe(true);
@@ -64,6 +65,8 @@ describe('runMonitorModel adaptive decision rows', () => {
 		});
 		expect(high.score).toBeGreaterThan(low.score);
 		expect(high.severity).toBe('high');
+		expect(high.components.length).toBeGreaterThan(0);
+		expect(high.components.some((item) => item.label.includes('reason:failure_rate_high'))).toBe(true);
 	});
 
 	it('builds a sparkline projection for trend points', () => {

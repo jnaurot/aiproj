@@ -89,6 +89,7 @@ export type RunMonitorAdaptiveDecisionRow = {
 		score: number;
 		severity: 'low' | 'medium' | 'high';
 		signals: string[];
+		components: Array<{ label: string; delta: number }>;
 	};
 	diffFromPrevious?: {
 		modeChanged: boolean;
@@ -453,16 +454,28 @@ export function explainAdaptiveDecision(input: {
 	changedCaps: Record<string, { from: number; to: number }>;
 	inputs: Record<string, unknown>;
 	effectiveCaps: Record<string, number>;
-}): { score: number; severity: 'low' | 'medium' | 'high'; signals: string[] } {
+}): {
+	score: number;
+	severity: 'low' | 'medium' | 'high';
+	signals: string[];
+	components: Array<{ label: string; delta: number }>;
+} {
 	const signals: string[] = [];
+	const components: Array<{ label: string; delta: number }> = [];
 	let score = 0;
+	const addComponent = (label: string, deltaRaw: number): void => {
+		const delta = Number(deltaRaw ?? 0);
+		if (!Number.isFinite(delta) || delta === 0) return;
+		score += delta;
+		components.push({ label: String(label ?? ''), delta: Number(delta.toFixed(2)) });
+	};
 	if (input.enforced) {
-		score += 20;
+		addComponent('enforced_mode', 20);
 		signals.push('enforced_mode');
 	}
 	const changedEntries = Object.entries(input.changedCaps ?? {});
 	if (changedEntries.length > 0) {
-		score += Math.min(24, changedEntries.length * 8);
+		addComponent('changed_caps', Math.min(24, changedEntries.length * 8));
 		signals.push(`changed_caps=${changedEntries.length}`);
 	}
 	let totalDelta = 0;
@@ -473,7 +486,7 @@ export function explainAdaptiveDecision(input: {
 		totalDelta += Math.abs(from - to);
 	}
 	if (totalDelta > 0) {
-		score += Math.min(20, totalDelta * 3);
+		addComponent('cap_delta_sum', Math.min(20, totalDelta * 3));
 		signals.push(`delta_sum=${totalDelta}`);
 	}
 	const reasonWeights: Record<string, number> = {
@@ -488,34 +501,40 @@ export function explainAdaptiveDecision(input: {
 		const reason = String(reasonRaw ?? '').trim().toLowerCase();
 		if (!reason) continue;
 		const weighted = Number(reasonWeights[reason] ?? 5);
-		score += weighted;
+		addComponent(`reason:${reason}`, weighted);
 		signals.push(`reason:${reason}`);
 	}
 	const queueDepth = Number((input.inputs ?? {}).queueDepth ?? (input.inputs ?? {}).pendingQueueDepth ?? 0);
 	if (Number.isFinite(queueDepth) && queueDepth > 0) {
-		if (queueDepth >= 20) score += 10;
-		else if (queueDepth >= 10) score += 6;
-		else if (queueDepth >= 5) score += 3;
+		let queueDelta = 0;
+		if (queueDepth >= 20) queueDelta = 10;
+		else if (queueDepth >= 10) queueDelta = 6;
+		else if (queueDepth >= 5) queueDelta = 3;
+		addComponent('queue_depth', queueDelta);
 		signals.push(`queue_depth=${queueDepth}`);
 	}
 	const failureRate = Number((input.inputs ?? {}).failureRate ?? (input.inputs ?? {}).errorRate ?? 0);
 	if (Number.isFinite(failureRate) && failureRate > 0) {
-		if (failureRate >= 0.2) score += 15;
-		else if (failureRate >= 0.1) score += 10;
-		else if (failureRate >= 0.05) score += 5;
+		let failureDelta = 0;
+		if (failureRate >= 0.2) failureDelta = 15;
+		else if (failureRate >= 0.1) failureDelta = 10;
+		else if (failureRate >= 0.05) failureDelta = 5;
+		addComponent('failure_rate', failureDelta);
 		signals.push(`failure_rate=${failureRate.toFixed(3)}`);
 	}
 	const leaseWaitMs = Number((input.inputs ?? {}).leaseWaitMs ?? 0);
 	if (Number.isFinite(leaseWaitMs) && leaseWaitMs > 0) {
-		if (leaseWaitMs >= 5000) score += 8;
-		else if (leaseWaitMs >= 2000) score += 5;
-		else if (leaseWaitMs >= 1000) score += 3;
+		let leaseDelta = 0;
+		if (leaseWaitMs >= 5000) leaseDelta = 8;
+		else if (leaseWaitMs >= 2000) leaseDelta = 5;
+		else if (leaseWaitMs >= 1000) leaseDelta = 3;
+		addComponent('lease_wait_ms', leaseDelta);
 		signals.push(`lease_wait_ms=${leaseWaitMs}`);
 	}
 	const bounded = Math.max(0, Math.min(100, Math.round(score)));
 	const severity: 'low' | 'medium' | 'high' =
 		bounded >= 70 ? 'high' : bounded >= 40 ? 'medium' : 'low';
-	return { score: bounded, severity, signals };
+	return { score: bounded, severity, signals, components };
 }
 
 export function buildTrendSparkline(
