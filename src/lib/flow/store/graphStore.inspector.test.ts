@@ -72,6 +72,33 @@ describe('graphStore snapshot scoped commit', () => {
 		expect(next.nodeOutputs[nodeId]?.lastError?.availableColumns).toEqual(['text', 'other']);
 	});
 
+	it('node_finished failed parses structured error payload from error string when fields are omitted', () => {
+		const nodeId = setupSourceNode();
+		const state = get(graphStore) as GraphState;
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'node_finished',
+				runId: 'run_model_error_payload',
+				at: '2026-04-01T00:00:00Z',
+				nodeId,
+				status: 'failed',
+				error: JSON.stringify({
+					errorCode: 'MODEL_EXECUTION_FAILED',
+					message: 'LLM output_mode=json but response was not valid JSON',
+					details: { op: 'extract', paramPath: 'output.jsonSchema' }
+				})
+			} as any,
+			'run_model_error_payload'
+		);
+		expect(next.nodeOutputs[nodeId]?.lastError?.errorCode).toBe('MODEL_EXECUTION_FAILED');
+		expect(next.nodeOutputs[nodeId]?.lastError?.message).toBe(
+			'LLM output_mode=json but response was not valid JSON'
+		);
+		expect(next.nodeOutputs[nodeId]?.lastError?.op).toBe('extract');
+		expect(next.nodeOutputs[nodeId]?.lastError?.paramPath).toBe('output.jsonSchema');
+	});
+
 	it('selecting_previous_upload_does_not_accept_unrelated_drafts', async () => {
 		const nodeId = setupSourceNode();
 		const snapshotId = 'b'.repeat(64);

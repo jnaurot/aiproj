@@ -40,6 +40,9 @@ class ModelProviderAdapter(Protocol):
 
 
 def resolve_output_mode(params: LLMParams) -> str:
+	explicit = str(getattr(params, "output_mode", "") or "").strip().lower()
+	if explicit in {"text", "json", "embeddings"}:
+		return explicit
 	if isinstance(params.embedding_contract, dict) and params.embedding_contract:
 		return "embeddings"
 	if isinstance(params.output_schema, dict):

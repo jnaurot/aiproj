@@ -11,6 +11,7 @@ def _params(output_mode: str = "text") -> LLMParams:
 		"base_url": "http://localhost:11434",
 		"model": "demo-model",
 		"user_prompt": "hello {input}",
+		"output_mode": output_mode,
 	}
 	if output_mode == "json":
 		raw["output_schema"] = {"type": "object", "properties": {"ok": {"type": "boolean"}}}

@@ -130,6 +130,7 @@ async def test_model_runtime_hardening_structured_error_and_no_model_debug_print
 	error_obj = json.loads(error_raw)
 	assert error_obj.get("code")
 	assert error_obj.get("errorCode") == error_obj.get("code")
+	assert str(finished[-1].get("errorCode") or "").strip() == str(error_obj.get("errorCode") or "").strip()
 	assert isinstance(error_obj.get("message"), str) and error_obj.get("message")
 
 	stdout = capsys.readouterr().out

@@ -8,6 +8,9 @@ from enum import Enum
 
 def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(raw or {})
+    legacy_output_mode = str(p.get("output_mode") or "").strip().lower()
+    if legacy_output_mode not in {"text", "json", "embeddings"}:
+        legacy_output_mode = ""
 
     # camelCase -> snake_case (what LLMParams expects)
     if "baseUrl" in p and "base_url" not in p:
@@ -32,7 +35,15 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
 
     # frontend output object -> backend output_schema/strict/embedding_contract
     out = p.get("output")
+    if not isinstance(out, dict) and legacy_output_mode:
+        out = {"mode": legacy_output_mode}
+        p["output"] = out
     if isinstance(out, dict):
+        mode = str(out.get("mode") or "").strip().lower()
+        if mode not in {"text", "json", "embeddings"} and legacy_output_mode:
+            mode = legacy_output_mode
+        if mode in {"text", "json", "embeddings"}:
+            p["output_mode"] = mode
         if "jsonSchema" in out and "output_schema" not in p:
             p["output_schema"] = out.get("jsonSchema")
         if "strict" in out and "output_strict" not in p:
@@ -41,8 +52,8 @@ def normalize_llm_params_frontend(raw: Dict[str, Any]) -> Dict[str, Any]:
             p["output_validation_mode"] = out.get("validationMode")
         if "embedding" in out and "embedding_contract" not in p:
             p["embedding_contract"] = out.get("embedding")
-    # Schema-first: ignore legacy flattened output mode key.
-    p.pop("output_mode", None)
+    elif legacy_output_mode:
+        p["output_mode"] = legacy_output_mode
 
     # frontend may send stopSequences, inputMapping (if you add later)
     if "stopSequences" in p and "stop_sequences" not in p:
@@ -977,6 +988,8 @@ class LLMParams(NodeParamSchema):
             raise ValueError("Either base_url or connection_ref is required")
         if self.output_mode == "json" and self.output_schema is None:
             raise ValueError("output_schema required when output_mode='json'")
+        if self.output_mode != "json" and self.output_schema is not None:
+            raise ValueError("output_schema is only allowed when output_mode='json'")
         if self.output_mode == "embeddings":
             contract = self.embedding_contract
             if not isinstance(contract, dict):
@@ -994,6 +1007,8 @@ class LLMParams(NodeParamSchema):
                 contract["layout"] = "1d"
             elif layout not in {"1d", "2d"}:
                 raise ValueError("embedding_contract.layout must be one of: 1d, 2d")
+        elif self.embedding_contract is not None:
+            raise ValueError("embedding_contract is only allowed when output_mode='embeddings'")
         if self.input_envelope is not None:
             if not isinstance(self.input_envelope, list):
                 raise ValueError("input_envelope must be an array")
@@ -1319,6 +1334,18 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
             llm_kind = node.get("data", {}).get("llmKind") or "ollama"
             model_kind = node.get("data", {}).get("modelKind") or "llm"
             task_kind = node.get("data", {}).get("taskKind") or "generate"
+            llm_kind = str(llm_kind).strip().lower()
+            model_kind = str(model_kind).strip().lower()
+            task_kind = str(task_kind).strip().lower()
+            if llm_kind not in {"ollama", "openai_compat"}:
+                errors.append(
+                    _machine_error(
+                        code="INVALID_VALUE",
+                        param_path="data.llmKind",
+                        message="llmKind must be one of: ollama, openai_compat",
+                        value=llm_kind,
+                    )
+                )
             if model_kind not in {"llm", "vision", "audio", "embedding", "reranker", "multimodal"}:
                 errors.append(
                     _machine_error(
@@ -1357,6 +1384,21 @@ def validate_node_params(node: Dict[str, Any]) -> List[str]:
                         message=f"taskKind '{task_kind}' is not valid for modelKind '{model_kind}'",
                         modelKind=model_kind,
                         taskKind=task_kind,
+                    )
+                )
+            provider_model_kind_support = {
+                "ollama": {"llm", "vision", "multimodal"},
+                "openai_compat": {"llm", "vision", "audio", "embedding", "reranker", "multimodal"},
+            }
+            supported_model_kinds = provider_model_kind_support.get(llm_kind, set())
+            if supported_model_kinds and model_kind not in supported_model_kinds:
+                errors.append(
+                    _machine_error(
+                        code="INVALID_VALUE",
+                        param_path="data.modelKind",
+                        message=f"modelKind '{model_kind}' is not supported by llmKind '{llm_kind}'",
+                        llmKind=llm_kind,
+                        modelKind=model_kind,
                     )
                 )
 

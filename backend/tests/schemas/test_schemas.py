@@ -55,7 +55,7 @@ class TestLLMParams:
         
         result = normalize_llm_params_frontend(input_params)
         
-        assert "output_mode" not in result
+        assert result["output_mode"] == "json"
         assert result["output_schema"] == {"type": "object"}
         assert result["output_strict"] is True
 
@@ -68,7 +68,7 @@ class TestLLMParams:
         }
 
         result = normalize_llm_params_frontend(input_params)
-        assert "output_mode" not in result
+        assert result["output_mode"] == "text"
         assert isinstance(result.get("output"), dict)
         assert result["output"].get("mode") == "text"
     
@@ -107,7 +107,7 @@ class TestLLMParams:
         assert result["frequency_penalty"] == -0.1
         assert result["repeat_penalty"] == 1.1
         assert result["thinking"] == {"enabled": True, "mode": "visible"}
-        assert "output_mode" not in result
+        assert result["output_mode"] == "embeddings"
         assert result["embedding_contract"] == {"dims": 1536}
 
     def test_normalize_output_validation_mode(self):
@@ -188,6 +188,30 @@ class TestLLMParams:
                     "user_prompt": "Test",
                     "base_url": "http://api.example.com",
                     "output_mode": "embeddings",
+                }
+            )
+
+    def test_rejects_output_schema_when_not_json_mode(self):
+        with pytest.raises(ValueError, match="output_schema is only allowed when output_mode='json'"):
+            LLMParams.model_validate(
+                {
+                    "model": "gpt-4",
+                    "user_prompt": "Test",
+                    "base_url": "http://api.example.com",
+                    "output_mode": "text",
+                    "output_schema": {"type": "object"},
+                }
+            )
+
+    def test_rejects_embedding_contract_when_not_embeddings_mode(self):
+        with pytest.raises(ValueError, match="embedding_contract is only allowed when output_mode='embeddings'"):
+            LLMParams.model_validate(
+                {
+                    "model": "gpt-4",
+                    "user_prompt": "Test",
+                    "base_url": "http://api.example.com",
+                    "output_mode": "text",
+                    "embedding_contract": {"dims": 1536},
                 }
             )
 
@@ -1573,6 +1597,23 @@ class TestValidateNodeParamsSourceNormalization:
 
 
 class TestValidateNodeParamsModelKind:
+    def test_llm_kind_validation_rejects_unknown(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "modelKind": "llm",
+                "llmKind": "unknown_provider",
+                "params": {
+                    "connectionRef": "OPENAI_API_KEY",
+                    "model": "gpt-4o-mini",
+                    "user_prompt": "hello",
+                    "output": {"mode": "text"},
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("llmKind must be one of" in err for err in errors)
+
     def test_model_kind_validation_rejects_unknown(self):
         node = {
             "data": {
@@ -1607,3 +1648,39 @@ class TestValidateNodeParamsModelKind:
         }
         errors = validate_node_params(node)
         assert any("not valid for modelKind" in err for err in errors)
+
+    def test_provider_model_kind_validation_rejects_ollama_embedding(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "modelKind": "embedding",
+                "taskKind": "embed",
+                "llmKind": "ollama",
+                "params": {
+                    "connectionRef": "CONN_OLLAMA",
+                    "model": "nomic-embed-text",
+                    "user_prompt": "embed this",
+                    "output": {"mode": "embeddings", "embedding": {"dims": 768}},
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert any("not supported by llmKind" in err for err in errors)
+
+    def test_provider_model_kind_validation_accepts_openai_embedding(self):
+        node = {
+            "data": {
+                "kind": "model",
+                "modelKind": "embedding",
+                "taskKind": "embed",
+                "llmKind": "openai_compat",
+                "params": {
+                    "connectionRef": "OPENAI_API_KEY",
+                    "model": "text-embedding-3-small",
+                    "user_prompt": "embed this",
+                    "output": {"mode": "embeddings", "embedding": {"dims": 1536}},
+                },
+            }
+        }
+        errors = validate_node_params(node)
+        assert errors == []

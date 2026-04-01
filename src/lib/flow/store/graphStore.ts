@@ -3118,12 +3118,38 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				evt.status === 'stale' &&
 				Boolean(softFailNode && Number((softFailNode as any)?.count ?? 0) > 0);
 			const succeeded = evt.status === 'succeeded' || softFailSucceeded;
-			const errorDetails = (evt as any).errorDetails as Record<string, unknown> | undefined;
+			const rawError = typeof evt.error === 'string' ? String(evt.error) : '';
+			let parsedErrorPayload: Record<string, unknown> | null = null;
+			if (rawError.startsWith('{') && rawError.endsWith('}')) {
+				try {
+					const parsed = JSON.parse(rawError);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						parsedErrorPayload = parsed as Record<string, unknown>;
+					}
+				} catch {
+					parsedErrorPayload = null;
+				}
+			}
+			const errorDetails =
+				((evt as any).errorDetails as Record<string, unknown> | undefined) ??
+				((parsedErrorPayload?.details as Record<string, unknown> | undefined) ?? undefined);
+			const errorCodeValue =
+				typeof (evt as any).errorCode === 'string'
+					? String((evt as any).errorCode)
+					: typeof parsedErrorPayload?.errorCode === 'string'
+						? String(parsedErrorPayload.errorCode)
+						: typeof parsedErrorPayload?.code === 'string'
+							? String(parsedErrorPayload.code)
+							: undefined;
+			const errorMessageValue =
+				typeof parsedErrorPayload?.message === 'string'
+					? String(parsedErrorPayload.message)
+					: rawError || undefined;
 			const errorPayload: NodeExecutionError | null = succeeded
 				? null
 				: {
-					message: evt.error ? String(evt.error) : undefined,
-					errorCode: typeof (evt as any).errorCode === 'string' ? String((evt as any).errorCode) : undefined,
+					message: errorMessageValue,
+					errorCode: errorCodeValue,
 					op: typeof errorDetails?.op === 'string' ? String(errorDetails.op) : undefined,
 					paramPath: typeof errorDetails?.paramPath === 'string' ? String(errorDetails.paramPath) : undefined,
 					missingColumns: Array.isArray(errorDetails?.missingColumns)
