@@ -293,6 +293,20 @@ export async function getExperimentRunTrends(params: {
 	};
 }
 
+export async function getExperimentRunSummary(runId: string) {
+	const id = String(runId ?? '').trim();
+	if (!id) throw new Error('getExperimentRunSummary requires runId');
+	const res = await fetch(backendUrl(`/api/experiments/runs/${encodeURIComponent(id)}`));
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`getExperimentRunSummary failed: ${res.status} ${text}`);
+	}
+	return (await res.json()) as {
+		schemaVersion: 1;
+		experiment: Record<string, unknown>;
+	};
+}
+
 export async function getExperimentNodeTrends(params: {
 	graphId: string;
 	nodeId?: string | null;

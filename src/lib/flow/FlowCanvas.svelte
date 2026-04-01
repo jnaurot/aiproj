@@ -47,6 +47,7 @@
 		getExperimentFailureTaxonomy,
 		getExperimentAdaptiveDecisions,
 		getExperimentNodeTrends,
+		getExperimentRunSummary,
 		getExperimentRunTrends,
 		getExperimentRegressions,
 		getRunTransitions,
@@ -420,6 +421,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendMetric: 'p95Ms' | 'p50Ms' | 'avgMs' | 'maxMs' | 'count' = 'p95Ms';
 	let runMonitorTrendNodeId = '';
 	let runMonitorRunTrendPoints: ExperimentRunTrendPoint[] = [];
+	let runMonitorSelectedRunTrendId = '';
+	let runMonitorSelectedRunSummary: Record<string, unknown> | null = null;
+	let runMonitorSelectedRunSummaryLoading = false;
+	let runMonitorSelectedRunSummaryError: string | null = null;
 	let runMonitorAnalyticsStartAt = '';
 	let runMonitorAnalyticsEndAt = '';
 	let runMonitorAnalyticsOffset = 0;
@@ -875,6 +880,25 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		})),
 		{ width: 520, height: 88 }
 	);
+	$: if (
+		runMonitorRunTrendPoints.length === 0 &&
+		(runMonitorSelectedRunTrendId || runMonitorSelectedRunSummary || runMonitorSelectedRunSummaryError)
+	) {
+		runMonitorSelectedRunTrendId = '';
+		runMonitorSelectedRunSummary = null;
+		runMonitorSelectedRunSummaryError = null;
+	}
+	$: if (
+		runMonitorRunTrendPoints.length > 0 &&
+		!runMonitorRunTrendPoints.some(
+			(point) => String(point.runId ?? '').trim() === runMonitorSelectedRunTrendId
+		)
+	) {
+		runMonitorSelectedRunTrendId = String(runMonitorRunTrendPoints[0]?.runId ?? '').trim();
+		if (runMonitorSelectedRunTrendId) {
+			void refreshRunTrendSummary(runMonitorSelectedRunTrendId);
+		}
+	}
 	$: runMonitorTrendHoverPoint =
 		runMonitorTrendSparkline &&
 		runMonitorTrendHoverIndex >= 0 &&
@@ -2106,7 +2130,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	function selectRunTrendDrilldown(point: ExperimentRunTrendPoint): void {
 		const runId = String(point?.runId ?? '').trim();
 		if (!runId) return;
+		runMonitorSelectedRunTrendId = runId;
+		void refreshRunTrendSummary(runId);
 		runLogFilter = runId;
+	}
+
+	async function refreshRunTrendSummary(runId: string): Promise<void> {
+		const resolvedRunId = String(runId ?? '').trim();
+		if (!resolvedRunId) {
+			runMonitorSelectedRunSummary = null;
+			runMonitorSelectedRunSummaryError = null;
+			return;
+		}
+		runMonitorSelectedRunSummaryLoading = true;
+		runMonitorSelectedRunSummaryError = null;
+		try {
+			const res = await getExperimentRunSummary(resolvedRunId);
+			runMonitorSelectedRunSummary =
+				res.experiment && typeof res.experiment === 'object'
+					? (res.experiment as Record<string, unknown>)
+					: null;
+		} catch (error) {
+			runMonitorSelectedRunSummary = null;
+			runMonitorSelectedRunSummaryError = String(error ?? 'Failed to load run summary');
+		} finally {
+			runMonitorSelectedRunSummaryLoading = false;
+		}
 	}
 
 	function selectTransitionEventDrilldown(event: RunMonitorTransitionRow): void {
@@ -2249,6 +2298,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const graphId = String($graphStore.graphId ?? '').trim();
 		if (!graphId) {
 			runMonitorRunTrendPoints = [];
+			runMonitorSelectedRunTrendId = '';
+			runMonitorSelectedRunSummary = null;
+			runMonitorSelectedRunSummaryError = null;
 			runMonitorTrendPoints = [];
 			runMonitorSlaBreaches = [];
 			runMonitorFailureTaxonomy = [];
@@ -5291,6 +5343,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													</button>
 												{/each}
 											{/if}
+											{#if runMonitorSelectedRunTrendId}
+												<div class="runMonitorSparklineCard">
+													<div class="runMonitorSparklineHead">
+														<span>Run Drilldown</span>
+														<span class="mono">run={runMonitorSelectedRunTrendId}</span>
+													</div>
+													{#if runMonitorSelectedRunSummaryLoading}
+														<div class="envProfileEmpty">Loading run summary…</div>
+													{:else if runMonitorSelectedRunSummaryError}
+														<div class="envProfileError">{runMonitorSelectedRunSummaryError}</div>
+													{:else if runMonitorSelectedRunSummary}
+														<div class="runMonitorRunSummary mono">
+															status={String((runMonitorSelectedRunSummary as any)?.status ?? '-')}
+															| runtime={Number((runMonitorSelectedRunSummary as any)?.analytics?.runTelemetry?.runtime_ms ?? 0)}
+															| peak={Number((runMonitorSelectedRunSummary as any)?.analytics?.runTelemetry?.peak_concurrency ?? 0)}
+															| nodeLatencyKeys={Object.keys((runMonitorSelectedRunSummary as any)?.analytics?.nodeLatencyMs ?? {}).length}
+															| failureKinds={Object.keys((runMonitorSelectedRunSummary as any)?.analytics?.failureCategories ?? {}).length}
+														</div>
+													{:else}
+														<div class="envProfileEmpty">No run summary available.</div>
+													{/if}
+												</div>
+											{/if}
 											{#if runMonitorTrendSparkline}
 												<div class="runMonitorSparklineCard">
 													<div class="runMonitorSparklineHead">
@@ -6588,6 +6663,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.runMonitorSparklineFoot {
 		font-size: 11px;
 		opacity: 0.88;
+	}
+
+	.runMonitorRunSummary {
+		font-size: 11px;
+		line-height: 1.35;
+		opacity: 0.95;
+		word-break: break-word;
 	}
 
 	.runMonitorJsonDetail {

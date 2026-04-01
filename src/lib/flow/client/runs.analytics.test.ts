@@ -4,6 +4,7 @@ import {
 	getExperimentAdaptiveDecisions,
 	getExperimentFailureTaxonomy,
 	getExperimentNodeTrends,
+	getExperimentRunSummary,
 	getExperimentRunTrends,
 	getExperimentSlaBreaches
 } from './runs';
@@ -201,6 +202,27 @@ describe('runs client analytics endpoints', () => {
 			});
 			expect(res.decisions[0]?.mode).toBe('enforce');
 			expect(res.decisions[0]?.enforced).toBe(true);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('queries run summary endpoint', async () => {
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			expect(url).toBe('/api/experiments/runs/run_42');
+			return new Response(
+				JSON.stringify({
+					schemaVersion: 1,
+					experiment: { runId: 'run_42', status: 'succeeded', analytics: {} }
+				}),
+				{ status: 200, headers: { 'content-type': 'application/json' } }
+			);
+		};
+		try {
+			const res = await getExperimentRunSummary('run_42');
+			expect(String(res.experiment?.runId ?? '')).toBe('run_42');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
