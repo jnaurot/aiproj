@@ -4,6 +4,7 @@ import {
 	normalizeRuntimeStatus,
 	projectEdgeStatus,
 	projectNodeStatus,
+	reconcileLifecycleForActiveRun,
 	toDisplayNodeStatus
 } from './statusModel';
 
@@ -79,5 +80,43 @@ describe('toDisplayNodeStatus', () => {
 		expect(toDisplayNodeStatus('completed', 'fresh')).toBe('succeeded');
 		expect(toDisplayNodeStatus('waiting')).toBe('busy');
 		expect(toDisplayNodeStatus('canceled')).toBe('canceled');
+	});
+});
+
+describe('reconcileLifecycleForActiveRun', () => {
+	it('keeps once nodes completed during active run when no pending signals remain', () => {
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'once',
+				runStatus: 'running',
+				inflight: 0,
+				pendingInputCount: 0,
+				readyWork: false
+			})
+		).toBe('completed');
+	});
+
+	it('downgrades single/batch completed nodes to waiting during active run', () => {
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'single_item',
+				runStatus: 'running',
+				inflight: 0,
+				pendingInputCount: 0,
+				readyWork: false
+			})
+		).toBe('waiting');
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'batch',
+				runStatus: 'resuming',
+				inflight: 0,
+				pendingInputCount: 0,
+				readyWork: false
+			})
+		).toBe('waiting');
 	});
 });

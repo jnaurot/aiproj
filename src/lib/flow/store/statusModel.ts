@@ -69,6 +69,9 @@ export type EdgeStatusProjection = {
 	};
 };
 
+export type NodeConsumeMode = 'once' | 'single_item' | 'batch';
+export type RunActivityStatus = 'idle' | 'running' | 'pausing' | 'paused' | 'resuming' | 'succeeded' | 'failed' | 'canceled' | string;
+
 export function normalizeRuntimeStatus(raw: unknown): RuntimeNodeStatus | null {
 	const value = String(raw ?? '')
 		.trim()
@@ -193,6 +196,40 @@ export function toDisplayNodeStatus(
 		return freshness === 'stale' ? 'stale' : 'succeeded';
 	}
 	return 'idle';
+}
+
+export function reconcileLifecycleForActiveRun(input: {
+	lifecycle: NodeLifecycleStatus;
+	consumeMode: NodeConsumeMode;
+	runStatus: RunActivityStatus;
+	inflight: number;
+	pendingInputCount: number;
+	readyWork: boolean;
+	blockedReasonCode?: string | null;
+}): NodeLifecycleStatus {
+	const lifecycle = input.lifecycle;
+	const consumeMode = input.consumeMode;
+	const runStatus = String(input.runStatus ?? 'idle').trim().toLowerCase();
+	const inflight = Math.max(0, Number(input.inflight ?? 0));
+	const pendingInputCount = Math.max(0, Number(input.pendingInputCount ?? 0));
+	const readyWork = Boolean(input.readyWork);
+	const blockedReasonCode = String(input.blockedReasonCode ?? '').trim();
+	const isActiveRun = runStatus === 'running' || runStatus === 'pausing' || runStatus === 'resuming';
+
+	if (!isActiveRun) return lifecycle;
+	if (lifecycle === 'failed' || lifecycle === 'canceled' || lifecycle === 'skipped') return lifecycle;
+	if (inflight > 0 || lifecycle === 'running') return 'running';
+
+	const hasWaitingSignal = pendingInputCount > 0 || readyWork || blockedReasonCode.length > 0;
+	if (consumeMode === 'once') {
+		return hasWaitingSignal ? 'waiting' : lifecycle;
+	}
+	if (consumeMode === 'single_item' || consumeMode === 'batch') {
+		if (lifecycle === 'completed') return 'waiting';
+		if (lifecycle === 'blocked') return 'waiting';
+		if (hasWaitingSignal) return 'waiting';
+	}
+	return lifecycle;
 }
 
 export function projectEdgeStatus(input: EdgeStatusProjectionInput): EdgeStatusProjection {

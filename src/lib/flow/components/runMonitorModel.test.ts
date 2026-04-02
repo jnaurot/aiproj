@@ -322,6 +322,35 @@ describe('runMonitorModel', () => {
 		expect(single?.totalProcessed).toBe(3);
 	});
 
+	it('does not mark single-item nodes completed while run is active', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_single',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'model',
+						label: 'ResumeBuilder',
+						processingPolicy: { consume_mode: 'single_item' },
+						params: {}
+					}
+				} as any
+			],
+			edges: [],
+			nodeBindings: {
+				n_single: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_single', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.consumeMode).toBe('single_item');
+		expect(rows[0]?.lifecycle).toBe('waiting');
+	});
+
 	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {
 		expect(
 			edgeStatusesForFilter({

@@ -816,7 +816,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		nodes: ($graphStore.nodes ?? []) as any,
 		edges: ($graphStore.edges ?? []) as any,
 		nodeBindings: ($graphStore.nodeBindings ?? {}) as any,
-		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
+		queueRuntime: ($graphStore.queueRuntime ?? {}) as any,
+		runStatus: ($graphStore.runStatus ?? 'idle') as any
 	});
 	$: runMonitorNodeRowsSorted = filterAndSortRunMonitorNodes(
 		runMonitorNodeRows,

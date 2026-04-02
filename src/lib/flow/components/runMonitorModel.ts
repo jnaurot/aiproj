@@ -5,7 +5,9 @@ import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 import {
 	projectEdgeStatus,
 	projectNodeStatus,
+	reconcileLifecycleForActiveRun,
 	type EdgeLifecycleStatus,
+	type RunActivityStatus,
 	type NodeExecutionStatus,
 	type NodeFreshnessStatus,
 	type NodeLifecycleStatus
@@ -187,6 +189,7 @@ type RunMonitorProjectionInput = {
 		llmLease?: LlmLease;
 		blockedByNode?: BlockedByNode;
 	};
+	runStatus?: RunActivityStatus;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -348,6 +351,15 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const consumeModeRaw = String(processingPolicy.consume_mode ?? 'once').trim().toLowerCase();
 		const consumeMode: 'once' | 'single_item' | 'batch' =
 			consumeModeRaw === 'single_item' || consumeModeRaw === 'batch' ? consumeModeRaw : 'once';
+		const lifecycle = reconcileLifecycleForActiveRun({
+			lifecycle: projection.lifecycle,
+			consumeMode,
+			runStatus: input?.runStatus ?? 'idle',
+			inflight,
+			pendingInputCount,
+			readyWork: Boolean(schedulerRow?.readyWork ?? false),
+			blockedReasonCode: blockedReasonCode || schedulerRow?.lastBlockedReasonCode || ''
+		});
 		const nodeCounter = runtimeNodeCounters.get(nodeId);
 		const acceptedCount = Math.max(0, Number(nodeCounter?.accepted ?? 0));
 		const rejectedCount = Math.max(0, Number(nodeCounter?.rejected ?? 0));
@@ -358,7 +370,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			nodeId,
 			label: nodeLabel(node),
 			status: displayStatusFromBinding(nodeBindings[nodeId] as any),
-			lifecycle: projection.lifecycle,
+			lifecycle,
 			execution: projection.execution,
 			freshness: projection.freshness,
 			consumeMode,

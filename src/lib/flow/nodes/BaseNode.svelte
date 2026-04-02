@@ -2,7 +2,8 @@
 	import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
-	import { displayStatusFromBinding, statusProjectionFromBinding } from '$lib/flow/store/runScope';
+	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
+	import { reconcileLifecycleForActiveRun, toDisplayNodeStatus } from '$lib/flow/store/statusModel';
 	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
 	import {
 		buildNodeExecutionBadge,
@@ -23,9 +24,28 @@
 	// Status is derived from bindings; node.data.status is not authoritative.
 	$: binding = $graphStore.nodeBindings?.[id];
 	$: statusProjection = statusProjectionFromBinding(binding as any);
-	$: status = displayStatusFromBinding(binding as any);
-	$: lifecycleLabel = statusProjection.lifecycle;
-	$: freshnessHint = statusProjection.freshness === 'stale' ? ' (stale)' : '';
+	$: runStatus = String(($graphStore as any)?.runStatus ?? 'idle');
+	$: schedulerRows = Array.isArray(($graphStore as any)?.queueRuntime?.schedulerSnapshot?.perNode)
+		? (($graphStore as any).queueRuntime.schedulerSnapshot.perNode as Array<Record<string, unknown>>)
+		: [];
+	$: schedulerRow = schedulerRows.find((row) => String(row?.nodeId ?? '') === String(id)) ?? {};
+	$: pendingInputCount = Math.max(0, Number((schedulerRow as any)?.pendingInputCount ?? 0));
+	$: inflightCount = Math.max(0, Number((schedulerRow as any)?.inflight ?? 0));
+	$: readyWork = Boolean((schedulerRow as any)?.readyWork ?? false);
+	$: blockedReasonCode = String((schedulerRow as any)?.lastBlockedReasonCode ?? '').trim();
+	$: effectiveLifecycle = reconcileLifecycleForActiveRun({
+		lifecycle: statusProjection.lifecycle,
+		consumeMode,
+		runStatus,
+		inflight: inflightCount,
+		pendingInputCount,
+		readyWork,
+		blockedReasonCode
+	});
+	$: status = toDisplayNodeStatus(effectiveLifecycle, statusProjection.freshness);
+	$: lifecycleLabel = effectiveLifecycle;
+	$: freshnessHint =
+		effectiveLifecycle === 'completed' && statusProjection.freshness === 'stale' ? ' (stale)' : '';
 	$: kind = data?.kind ?? 'node';
 	$: label = data?.label ?? 'Node';
 	$: freezeMeta = (data as any)?.meta?.freeze;
