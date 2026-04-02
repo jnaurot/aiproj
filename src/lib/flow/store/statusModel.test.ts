@@ -97,6 +97,20 @@ describe('reconcileLifecycleForActiveRun', () => {
 		).toBe('completed');
 	});
 
+	it('keeps once nodes completed even if scheduler still reports pending signals', () => {
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'once',
+				runStatus: 'running',
+				inflight: 0,
+				pendingInputCount: 2,
+				readyWork: true,
+				blockedReasonCode: 'WAITING_REQUIRED_INPUT'
+			})
+		).toBe('completed');
+	});
+
 	it('downgrades single/batch completed nodes to waiting during active run', () => {
 		expect(
 			reconcileLifecycleForActiveRun({

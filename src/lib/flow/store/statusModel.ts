@@ -222,6 +222,8 @@ export function reconcileLifecycleForActiveRun(input: {
 
 	const hasWaitingSignal = pendingInputCount > 0 || readyWork || blockedReasonCode.length > 0;
 	if (consumeMode === 'once') {
+		// "once" nodes are terminal after they complete their single execution.
+		if (lifecycle === 'completed') return 'completed';
 		return hasWaitingSignal ? 'waiting' : lifecycle;
 	}
 	if (consumeMode === 'single_item' || consumeMode === 'batch') {
