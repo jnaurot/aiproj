@@ -57,6 +57,10 @@ export type RunMonitorNodeRow = {
 	lifecycle: NodeLifecycleStatus;
 	execution: NodeExecutionStatus;
 	freshness: NodeFreshnessStatus;
+	consumeMode: 'once' | 'single_item' | 'batch';
+	acceptedCount: number;
+	rejectedCount: number;
+	totalProcessed: number;
 	pendingInputCount: number;
 	inflight: number;
 	inboundDepth: number;
@@ -213,6 +217,74 @@ function parseSchedulerPerNode(snapshot: SchedulerSnapshot | undefined): Map<str
 	return out;
 }
 
+type RuntimeNodeCounter = {
+	accepted: number;
+	rejected: number;
+};
+
+function parseRuntimeNodeCounters(queueRuntime: Record<string, unknown>): Map<string, RuntimeNodeCounter> {
+	const pickMetrics = (container: unknown): Record<string, unknown> =>
+		asRecord(asRecord(container).runtimeItemMetrics);
+	const runScopedMetrics = pickMetrics(queueRuntime.runScoped);
+	const rootMetrics = pickMetrics(queueRuntime);
+	const nodeCounters = asRecord(runScopedMetrics.nodeCounters);
+	const fallbackCounters = asRecord(rootMetrics.nodeCounters);
+	const byHandle = asRecord(runScopedMetrics.byHandle);
+	const fallbackByHandle = asRecord(rootMetrics.byHandle);
+	const out = new Map<string, RuntimeNodeCounter>();
+
+	const upsert = (nodeId: string, acceptedRaw: unknown, rejectedRaw: unknown): void => {
+		const accepted = Math.max(0, Number(acceptedRaw ?? 0));
+		const rejected = Math.max(0, Number(rejectedRaw ?? 0));
+		const existing = out.get(nodeId);
+		if (existing) {
+			existing.accepted = Math.max(existing.accepted, accepted);
+			existing.rejected = Math.max(existing.rejected, rejected);
+			return;
+		}
+		out.set(nodeId, { accepted, rejected });
+	};
+
+	for (const [nodeIdRaw, value] of Object.entries(nodeCounters)) {
+		const nodeId = String(nodeIdRaw ?? '').trim();
+		if (!nodeId) continue;
+		const entry = asRecord(value);
+		upsert(nodeId, entry.accepted, entry.rejected);
+	}
+	for (const [nodeIdRaw, value] of Object.entries(fallbackCounters)) {
+		const nodeId = String(nodeIdRaw ?? '').trim();
+		if (!nodeId || out.has(nodeId)) continue;
+		const entry = asRecord(value);
+		upsert(nodeId, entry.accepted, entry.rejected);
+	}
+
+	const ingestByHandle = (bucket: Record<string, unknown>): void => {
+		for (const value of Object.values(bucket)) {
+			const entry = asRecord(value);
+			const nodeId = String(entry.nodeId ?? '').trim();
+			if (!nodeId) continue;
+			const plane = String(entry.plane ?? 'work').trim().toLowerCase();
+			if (plane !== 'work') continue;
+			const accepted = Math.max(0, Number(entry.itemsAccepted ?? 0));
+			const rejected = Math.max(0, Number(entry.itemsRejected ?? 0));
+			const existing = out.get(nodeId);
+			if (existing) {
+				existing.accepted += accepted;
+				existing.rejected += rejected;
+			} else {
+				out.set(nodeId, { accepted, rejected });
+			}
+		}
+	};
+
+	if (out.size === 0) {
+		ingestByHandle(byHandle);
+		if (out.size === 0) ingestByHandle(fallbackByHandle);
+	}
+
+	return out;
+}
+
 function parseEdgeMetric(edgeMetrics: Record<string, unknown>, metricKey: string): QueueMetric {
 	return asRecord(edgeMetrics[metricKey]) as QueueMetric;
 }
@@ -243,6 +315,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 	const snapshot = asRecord(queueRuntime.schedulerSnapshot) as SchedulerSnapshot;
 	const blockedByNode = asRecord(queueRuntime.blockedByNode) as BlockedByNode;
 	const llmLease = asRecord(queueRuntime.llmLease) as LlmLease;
+	const runtimeNodeCounters = parseRuntimeNodeCounters(queueRuntime);
 	const perNodeMap = parseSchedulerPerNode(snapshot);
 	const edgeMetrics = asRecord(asRecord(queueRuntime.metrics).edges);
 	const inboundDepthByNode = buildInboundDepthByNode(input?.edges ?? [], edgeMetrics);
@@ -270,6 +343,13 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 				: null;
 		const pendingInputCount = Math.max(0, Number(schedulerRow?.pendingInputCount ?? 0));
 		const inflight = Math.max(0, Number(schedulerRow?.inflight ?? 0));
+		const processingPolicy = asRecord((node?.data as any)?.processingPolicy);
+		const consumeModeRaw = String(processingPolicy.consume_mode ?? 'once').trim().toLowerCase();
+		const consumeMode: 'once' | 'single_item' | 'batch' =
+			consumeModeRaw === 'single_item' || consumeModeRaw === 'batch' ? consumeModeRaw : 'once';
+		const nodeCounter = runtimeNodeCounters.get(nodeId);
+		const acceptedCount = Math.max(0, Number(nodeCounter?.accepted ?? 0));
+		const rejectedCount = Math.max(0, Number(nodeCounter?.rejected ?? 0));
 		const isLlmWaiting =
 			llmWaitingNodeIds.has(nodeId) || (llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId);
 
@@ -280,6 +360,10 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			lifecycle: projection.lifecycle,
 			execution: projection.execution,
 			freshness: projection.freshness,
+			consumeMode,
+			acceptedCount,
+			rejectedCount,
+			totalProcessed: acceptedCount + rejectedCount,
 			pendingInputCount,
 			inflight,
 			inboundDepth: Math.max(0, Number(inboundDepthByNode.get(nodeId) ?? 0)),

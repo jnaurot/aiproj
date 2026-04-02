@@ -5278,6 +5278,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<div class="runMonitorNodeHead" role="row">
 														<span>node</span>
 														<span>status</span>
+														<span>mode</span>
+														<span>processed</span>
 														<span>pending</span>
 														<span>depth</span>
 														<span>blocked</span>
@@ -5301,6 +5303,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															<span>
 																{row.lifecycle}
 																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
+															</span>
+															<span>{row.consumeMode === 'single_item' ? 'single' : row.consumeMode}</span>
+															<span>
+																{row.totalProcessed}
+																{#if row.rejectedCount > 0}
+																	<span class="mono"> ({row.acceptedCount}/{row.rejectedCount})</span>
+																{/if}
 															</span>
 															<span>{row.pendingInputCount}</span>
 															<span>{row.inboundDepth}</span>
@@ -7176,7 +7185,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.runMonitorNodeTable .runMonitorNodeRow,
 	.runMonitorHistoryTable .runMonitorNodeHead,
 	.runMonitorHistoryTable .runMonitorNodeRow {
-		grid-template-columns: 1.35fr 0.8fr 0.6fr 0.6fr 1.4fr;
+		grid-template-columns: 1.25fr 0.8fr 0.6fr 0.8fr 0.6fr 0.6fr 1.3fr;
 	}
 
 	.runMonitorHistoryTable .runMonitorNodeHead,
@@ -7186,7 +7195,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runMonitorEdgeTable .runMonitorNodeHead,
 	.runMonitorEdgeTable .runMonitorNodeRow {
-		grid-template-columns: 1.05fr 0.7fr 1fr 1fr 0.5fr 0.6fr;
+		grid-template-columns: 1.05fr 0.7fr 1fr 1fr 0.7fr 0.5fr 0.6fr;
 	}
 
 	.runMonitorAdaptiveTimelineHead,

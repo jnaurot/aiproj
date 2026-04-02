@@ -83,6 +83,7 @@ describe('runMonitorModel', () => {
 		expect(modelRow?.status).toBe('running');
 		expect(modelRow?.lifecycle).toBe('running');
 		expect(modelRow?.execution).toBe('running');
+		expect(modelRow?.consumeMode).toBe('once');
 		expect(letterRow?.isBlocked).toBe(true);
 		expect(letterRow?.blockedReasonCode).toBe('WAITING_REQUIRED_PARAM');
 		expect(letterRow?.isWaiting).toBe(true);
@@ -137,6 +138,10 @@ describe('runMonitorModel', () => {
 				lifecycle: 'completed',
 				execution: 'finished',
 				freshness: 'stale',
+				consumeMode: 'once',
+				acceptedCount: 0,
+				rejectedCount: 0,
+				totalProcessed: 0,
 				pendingInputCount: 2,
 				inflight: 0,
 				inboundDepth: 5,
@@ -157,6 +162,10 @@ describe('runMonitorModel', () => {
 				lifecycle: 'running',
 				execution: 'running',
 				freshness: 'unknown',
+				consumeMode: 'single_item',
+				acceptedCount: 2,
+				rejectedCount: 1,
+				totalProcessed: 3,
 				pendingInputCount: 0,
 				inflight: 1,
 				inboundDepth: 1,
@@ -177,6 +186,10 @@ describe('runMonitorModel', () => {
 				lifecycle: 'completed',
 				execution: 'finished',
 				freshness: 'stale',
+				consumeMode: 'batch',
+				acceptedCount: 4,
+				rejectedCount: 2,
+				totalProcessed: 6,
 				pendingInputCount: 3,
 				inflight: 0,
 				inboundDepth: 3,
@@ -253,5 +266,57 @@ describe('runMonitorModel', () => {
 		});
 		expect(rows[0]?.blockedReasonCode).toBe('CONTROL_GATE_BLOCKED');
 		expect(rows[0]?.blockedPlane).toBe('control');
+	});
+
+	it('projects consume mode and processed counts from runtime metrics', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_batch',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'transform',
+						label: 'BatchNode',
+						processingPolicy: { consume_mode: 'batch' },
+						params: {}
+					}
+				} as any,
+				{
+					id: 'n_single',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'transform',
+						label: 'SingleNode',
+						processingPolicy: { consume_mode: 'single_item' },
+						params: {}
+					}
+				} as any
+			],
+			edges: [],
+			nodeBindings: {
+				n_batch: { status: 'succeeded' },
+				n_single: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				runScoped: {
+					runtimeItemMetrics: {
+						nodeCounters: {
+							n_batch: { accepted: 5, rejected: 2 },
+							n_single: { accepted: 3, rejected: 0 }
+						}
+					}
+				}
+			}
+		});
+		const batch = rows.find((row) => row.nodeId === 'n_batch');
+		const single = rows.find((row) => row.nodeId === 'n_single');
+		expect(batch?.consumeMode).toBe('batch');
+		expect(batch?.acceptedCount).toBe(5);
+		expect(batch?.rejectedCount).toBe(2);
+		expect(batch?.totalProcessed).toBe(7);
+		expect(single?.consumeMode).toBe('single_item');
+		expect(single?.acceptedCount).toBe(3);
+		expect(single?.rejectedCount).toBe(0);
+		expect(single?.totalProcessed).toBe(3);
 	});
 });
