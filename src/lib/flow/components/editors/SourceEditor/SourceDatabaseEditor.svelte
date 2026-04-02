@@ -7,6 +7,8 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
+	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
+	import { effectiveConfigForSource } from './sourceEffectiveConfig';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceDatabasePatch = Partial<SourceDatabaseParams>;
@@ -33,6 +35,7 @@
 	$: partitionBindKey = asString(params?.partition?.bind_key, 'partition');
 	$: partitionParallelism = asNumberOrEmpty(params?.partition?.parallelism_cap ?? 2);
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
+	$: effectiveConfigLines = effectiveConfigForSource('database', params as Record<string, unknown>);
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
@@ -334,6 +337,7 @@
 		<p class="hint">
 			Backend requires: (connection_string OR connection_ref) AND (query OR table_name).
 		</p>
+		<SourceEffectivePreview lines={effectiveConfigLines} />
 	</Section>
 {/if}
 

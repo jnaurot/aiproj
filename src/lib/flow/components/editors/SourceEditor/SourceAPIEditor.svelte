@@ -10,6 +10,8 @@
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
+	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
+	import { effectiveConfigForSource } from './sourceEffectiveConfig';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type Method = SourceAPIParams['method'];
@@ -44,6 +46,8 @@
 		'text/plain': 'raw',
 		'application/xml': 'raw'
 	};
+	const ADJUSTMENT_LOG_LIMIT = 6;
+	const recentAdjustmentsByNode = new Map<string, string[]>();
 
 	$: _uiTick = $graphStore.inspector.uiByNodeId;
 	$: ui = selectedNode
@@ -181,6 +185,16 @@
 			contentType: nextType,
 			__managedHeaders: { ...(params?.__managedHeaders ?? {}), contentType: true }
 		});
+		const notices: string[] = [];
+		if (impliedMode !== bodyMode) {
+			notices.push(
+				`Content-Type auto-adjustment: bodyMode changed to ${impliedMode} for ${nextType}`
+			);
+		}
+		if (String(contentTypeValue ?? '') !== String(nextType)) {
+			notices.push(`Content-Type auto-adjustment: contentType set to ${nextType}`);
+		}
+		pushAdjustments(notices);
 		headersDraft = nextHeaders;
 		draft(patch);
 		commit(patch);
@@ -271,6 +285,16 @@
 			.sort(([a], [b]) => a.localeCompare(b))
 			.map(([k, v]) => `${k}: ${v}`);
 	})();
+	$: activeNodeId = asString(selectedNode?.id, '');
+	$: recentAdjustments = activeNodeId ? (recentAdjustmentsByNode.get(activeNodeId) ?? []) : [];
+	$: effectiveConfigLines = effectiveConfigForSource('api', params as Record<string, unknown>);
+
+	function pushAdjustments(entries: string[]): void {
+		if (!activeNodeId || entries.length === 0) return;
+		const current = recentAdjustmentsByNode.get(activeNodeId) ?? [];
+		const next = [...entries, ...current].slice(0, ADJUSTMENT_LOG_LIMIT);
+		recentAdjustmentsByNode.set(activeNodeId, next);
+	}
 </script>
 
 {#if selectedNode}
@@ -879,6 +903,11 @@
 				{/each}
 				<div><span class="muted">body mode:</span> {bodyMode}</div>
 			</div>
+			<SourceEffectivePreview
+				lines={effectiveConfigLines}
+				recentAdjustments={recentAdjustments}
+				title="Effective source config"
+			/>
 		</Disclosure>
 	</Section>
 {/if}

@@ -7,6 +7,8 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
+	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
+	import { effectiveConfigForSource } from './sourceEffectiveConfig';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceWarehousePatch = Partial<SourceWarehouseParams>;
@@ -28,6 +30,7 @@
 	$: query = asString(params?.query, '');
 	$: limit = asNumberOrEmpty(params?.limit);
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
+	$: effectiveConfigLines = effectiveConfigForSource('warehouse', params as Record<string, unknown>);
 
 	function draft(patch: SourceWarehousePatch): void {
 		onDraft?.(patch);
@@ -107,5 +110,6 @@
 				}}
 			/>
 		</Field>
+		<SourceEffectivePreview lines={effectiveConfigLines} />
 	</Section>
 {/if}

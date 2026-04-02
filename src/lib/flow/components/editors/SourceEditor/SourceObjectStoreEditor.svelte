@@ -7,6 +7,8 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
+	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
+	import { effectiveConfigForSource } from './sourceEffectiveConfig';
 	import { asString } from '$lib/flow/components/editors/shared';
 
 	type SourceObjectStorePatch = Partial<SourceObjectStoreParams>;
@@ -35,6 +37,7 @@
 	$: file_format = asString(params?.file_format, 'txt');
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: outputMode = (asString(params?.output?.mode, 'text') as SourceOutputMode) ?? 'text';
+	$: effectiveConfigLines = effectiveConfigForSource('object_store', params as Record<string, unknown>);
 
 	function draft(patch: SourceObjectStorePatch): void {
 		onDraft?.(patch);
@@ -131,5 +134,6 @@
 				}}
 			/>
 		</Field>
+		<SourceEffectivePreview lines={effectiveConfigLines} />
 	</Section>
 {/if}

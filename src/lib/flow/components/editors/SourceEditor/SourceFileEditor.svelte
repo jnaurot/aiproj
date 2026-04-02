@@ -7,11 +7,16 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
+	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
 	import {
 		asBoolean,
 		asString
 	} from '$lib/flow/components/editors/shared';
+	import {
+		effectiveConfigForSource,
+		fileAutoAdjustmentNotices
+	} from './sourceEffectiveConfig';
 	import {
 		type RecentSnapshot,
 		mergeRecentSnapshotOnUpload,
@@ -122,6 +127,8 @@
 		{ value: 'us-ascii', label: 'us-ascii' }
 	];
 	const RECENT_LIMIT = 10;
+	const ADJUSTMENT_LOG_LIMIT = 6;
+	const recentAdjustmentsByNode = new Map<string, string[]>();
 
 	let fileInputEl: HTMLInputElement | null = null;
 	let isUploading = false;
@@ -129,6 +136,7 @@
 	let isDragOver = false;
 	let loadingIds: string[] = [];
 	let hydrationSignature = '';
+	let recentAdjustments: string[] = [];
 
 	$: snapshotId = asString(params?.snapshotId, '').toLowerCase();
 	$: recentSnapshots = normalizeRecentSnapshots(
@@ -171,6 +179,9 @@
 	$: videoMaxFrames = Number((params as any)?.video_max_frames ?? 5);
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: cache_enabled = asBoolean(params?.cache_enabled, true);
+	$: activeNodeId = asString(selectedNode?.id, '');
+	$: recentAdjustments = activeNodeId ? (recentAdjustmentsByNode.get(activeNodeId) ?? []) : [];
+	$: effectiveConfigLines = effectiveConfigForSource('file', params as Record<string, unknown>);
 	$: void hydrateMissingRecentSnapshots(recentSnapshots);
 
 	function draft(patch: SourceFilePatch): void {
@@ -277,6 +288,14 @@
 
 	function optionLabel(entry: RecentSnapshot): string {
 		return recentOptionLabel(entry, loadingIds.includes(entry.id), shortHash);
+	}
+
+	function pushAdjustments(entries: string[]): void {
+		if (!activeNodeId || entries.length === 0) return;
+		const current = recentAdjustmentsByNode.get(activeNodeId) ?? [];
+		const next = [...entries, ...current].slice(0, ADJUSTMENT_LOG_LIMIT);
+		recentAdjustmentsByNode.set(activeNodeId, next);
+		recentAdjustments = next;
 	}
 
 	function patchForDetectedFormat(next: FileFormat | null, detectedFilename?: string): SourceFilePatch {
@@ -395,16 +414,18 @@
 				mimeType: asString(result.metadata?.mimeType, '') || undefined
 			};
 			const nextRecent = mergeRecentSnapshotOnUpload(incoming, recentSnapshots, RECENT_LIMIT);
+			const detectedPatch = patchForDetectedFormat(
+				detectFileFormatFromFilename(incoming.filename ?? file.name),
+				incoming.filename ?? file.name
+			);
 			const patch: SourceFilePatch = {
 				snapshotId: incoming.id,
 				snapshotMetadata: result.metadata,
 				filename: incoming.filename ?? file.name,
-				...patchForDetectedFormat(
-					detectFileFormatFromFilename(incoming.filename ?? file.name),
-					incoming.filename ?? file.name
-				),
+				...detectedPatch,
 				...withRecentPatch(nextRecent)
 			};
+			pushAdjustments(fileAutoAdjustmentNotices(params, detectedPatch, 'Upload auto-adjustment'));
 			commitSnapshot(canonicalFileParams(patch));
 		} catch (err) {
 			uploadError = err instanceof Error ? err.message : String(err);
@@ -464,6 +485,10 @@
 				resolved = selected;
 			}
 		}
+		const detectedPatch = patchForDetectedFormat(
+			detectFileFormatFromFilename(resolved?.filename),
+			resolved?.filename
+		);
 		const patch: SourceFilePatch = {
 			snapshotId: sid,
 			snapshotMetadata: {
@@ -474,28 +499,18 @@
 				mimeType: resolved?.mimeType
 			},
 			filename: resolved?.filename,
-			...patchForDetectedFormat(detectFileFormatFromFilename(resolved?.filename), resolved?.filename),
+			...detectedPatch,
 			...withRecentPatch(nextRecent)
 		};
+		pushAdjustments(fileAutoAdjustmentNotices(params, detectedPatch, 'Snapshot auto-adjustment'));
 		commitSnapshot(canonicalFileParams(patch));
 	}
 
 	function setFileFormat(nextFormat: string): void {
 		if (!fileFormatOptions.includes(nextFormat as FileFormat)) return;
-		const next = nextFormat as FileFormat;
-		const patch: SourceFilePatch = { file_format: next };
-
-		if (next === 'csv' || next === 'tsv') {
-			patch.delimiter = next === 'tsv' ? '\t' : ',';
-			patch.sheet_name = undefined;
-		} else if (next === 'excel') {
-			patch.sheet_name = params?.sheet_name ?? '';
-			patch.delimiter = undefined;
-		} else {
-			patch.delimiter = undefined;
-			patch.sheet_name = undefined;
-		}
-
+		const patch = patchForDetectedFormat(nextFormat as FileFormat);
+		pushAdjustments(fileAutoAdjustmentNotices(params, patch, 'Format auto-adjustment'));
+		draft(patch);
 		commit(patch);
 	}
 
@@ -868,6 +883,8 @@
 				}}
 			/>
 		</Field>
+
+		<SourceEffectivePreview lines={effectiveConfigLines} recentAdjustments={recentAdjustments} />
 	</Section>
 	</div>
 {/if}
