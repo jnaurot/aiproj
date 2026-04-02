@@ -33,6 +33,7 @@
 	export let params: Partial<SourceFileParams>;
 	export let onDraft: (patch: SourceFilePatch) => void;
 	export let onCommit: (patch: SourceFilePatch) => void;
+	export let nodeError: Record<string, unknown> | null = null;
 	export let onSnapshotCommit: ((patch: SourceFilePatch) => void | Promise<unknown>) | undefined =
 		undefined;
 
@@ -137,6 +138,7 @@
 	let loadingIds: string[] = [];
 	let hydrationSignature = '';
 	let recentAdjustments: string[] = [];
+	$: void nodeError;
 
 	$: snapshotId = asString(params?.snapshotId, '').toLowerCase();
 	$: recentSnapshots = normalizeRecentSnapshots(

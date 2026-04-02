@@ -13,6 +13,7 @@
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
 	export let sourceKind: SourceKind = 'file';
 	export let params: Record<string, unknown> = {};
+	export let nodeError: Record<string, unknown> | null = null;
 	export let onDraft: (patch: Record<string, unknown>) => void;
 	export let onCommit: (patch: Record<string, unknown>) => void;
 
@@ -38,6 +39,7 @@
 		value,
 		label: value
 	}));
+	$: void nodeError;
 
 	function draft(patch: Record<string, unknown>): void {
 		onDraft?.(patch);

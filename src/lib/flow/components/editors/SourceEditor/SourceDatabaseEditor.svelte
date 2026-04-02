@@ -9,6 +9,10 @@
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
 	import { effectiveConfigForSource } from './sourceEffectiveConfig';
+	import {
+		sourceControlFromParamPath,
+		sourceDatabaseValidationHints
+	} from './sourceValidationHints';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceDatabasePatch = Partial<SourceDatabaseParams>;
@@ -17,6 +21,7 @@
 	export let params: Partial<SourceDatabaseParams>;
 	export let onDraft: (patch: SourceDatabasePatch) => void;
 	export let onCommit: (patch: SourceDatabasePatch) => void;
+	export let nodeError: Record<string, unknown> | null = null;
 
 	$: void onCommit;
 	$: connection_string = asString(params?.connection_string, '');
@@ -36,6 +41,11 @@
 	$: partitionParallelism = asNumberOrEmpty(params?.partition?.parallelism_cap ?? 2);
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
 	$: effectiveConfigLines = effectiveConfigForSource('database', params as Record<string, unknown>);
+	$: validationHints = sourceDatabaseValidationHints(params);
+	$: highlightedControl = sourceControlFromParamPath(
+		'database',
+		asString((nodeError as any)?.paramPath, '')
+	);
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
@@ -62,6 +72,9 @@
 	<Section title="Database">
 		<SourceCapabilityBanner sourceKind="database" params={params as Record<string, unknown>} />
 		<Field label="connection_string">
+			{#if highlightedControl === 'connection'}
+				<div class="warn">Backend validation flagged connection settings for this node.</div>
+			{/if}
 			<Input
 				value={connection_string}
 				placeholder="postgresql://user:pass@host:5432/db"
@@ -84,6 +97,9 @@
 		</Field>
 
 		<Field label="query">
+			{#if highlightedControl === 'input'}
+				<div class="warn">Backend validation flagged input selection (query/table_name).</div>
+			{/if}
 			<Input
 				multiline={true}
 				rows={4}
@@ -337,6 +353,15 @@
 		<p class="hint">
 			Backend requires: (connection_string OR connection_ref) AND (query OR table_name).
 		</p>
+		{#if validationHints.length > 0}
+			<div class="hintList">
+				{#each validationHints as hint}
+					<div class={hint.level === 'error' ? 'warn' : 'hint'}>
+						[{hint.controlId}] {hint.message}
+					</div>
+				{/each}
+			</div>
+		{/if}
 		<SourceEffectivePreview lines={effectiveConfigLines} />
 	</Section>
 {/if}
@@ -346,5 +371,16 @@
 		margin-top: 8px;
 		font-size: 12px;
 		opacity: 0.75;
+	}
+
+	.hintList {
+		display: grid;
+		gap: 4px;
+		margin-top: 6px;
+	}
+
+	.warn {
+		font-size: 12px;
+		color: var(--color-danger, #f87171);
 	}
 </style>

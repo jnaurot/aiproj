@@ -19,6 +19,7 @@
 	export let params: Partial<SourceObjectStoreParams>;
 	export let onDraft: (patch: SourceObjectStorePatch) => void;
 	export let onCommit: (patch: SourceObjectStorePatch) => void;
+	export let nodeError: Record<string, unknown> | null = null;
 
 	const providers: Provider[] = ['s3', 'azure_blob', 'gcs'];
 	const providerOptions: ThemedSelectOption[] = providers.map((value) => ({ value, label: value }));
@@ -38,6 +39,7 @@
 	$: encoding = asString(params?.encoding, 'utf-8');
 	$: outputMode = (asString(params?.output?.mode, 'text') as SourceOutputMode) ?? 'text';
 	$: effectiveConfigLines = effectiveConfigForSource('object_store', params as Record<string, unknown>);
+	$: void nodeError;
 
 	function draft(patch: SourceObjectStorePatch): void {
 		onDraft?.(patch);

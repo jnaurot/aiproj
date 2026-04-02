@@ -18,6 +18,7 @@
 	export let params: Partial<SourceWarehouseParams>;
 	export let onDraft: (patch: SourceWarehousePatch) => void;
 	export let onCommit: (patch: SourceWarehousePatch) => void;
+	export let nodeError: Record<string, unknown> | null = null;
 
 	const providers: Provider[] = ['snowflake', 'bigquery', 'databricks_sql'];
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
@@ -31,6 +32,7 @@
 	$: limit = asNumberOrEmpty(params?.limit);
 	$: outputMode = (asString(params?.output?.mode, 'table') as SourceOutputMode) ?? 'table';
 	$: effectiveConfigLines = effectiveConfigForSource('warehouse', params as Record<string, unknown>);
+	$: void nodeError;
 
 	function draft(patch: SourceWarehousePatch): void {
 		onDraft?.(patch);

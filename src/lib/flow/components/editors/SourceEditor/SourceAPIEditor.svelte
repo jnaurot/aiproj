@@ -12,6 +12,7 @@
 	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
 	import { effectiveConfigForSource } from './sourceEffectiveConfig';
+	import { sourceApiValidationHints, sourceControlFromParamPath } from './sourceValidationHints';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type Method = SourceAPIParams['method'];
@@ -24,6 +25,7 @@
 	export let params: Partial<SourceAPIParams>;
 	export let onDraft: (patch: SourceAPIPatch) => void;
 	export let onCommit: (patch: SourceAPIPatch) => void;
+	export let nodeError: Record<string, unknown> | null = null;
 
 	const methods: Method[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'];
 	const authTypes: AuthType[] = ['none', 'bearer', 'basic', 'api_key'];
@@ -288,6 +290,8 @@
 	$: activeNodeId = asString(selectedNode?.id, '');
 	$: recentAdjustments = activeNodeId ? (recentAdjustmentsByNode.get(activeNodeId) ?? []) : [];
 	$: effectiveConfigLines = effectiveConfigForSource('api', params as Record<string, unknown>);
+	$: validationHints = sourceApiValidationHints(params);
+	$: highlightedControl = sourceControlFromParamPath('api', asString((nodeError as any)?.paramPath, ''));
 
 	function pushAdjustments(entries: string[]): void {
 		if (!activeNodeId || entries.length === 0) return;
@@ -330,6 +334,9 @@
 			</Field>
 
 			<Field label="Content-Type">
+				{#if highlightedControl === 'content_type'}
+					<div class="warn">Backend validation flagged Content-Type/body settings.</div>
+				{/if}
 				<ThemedSelect
 					value={selectedContentType}
 					options={contentTypeSelectOptions}
@@ -339,6 +346,15 @@
 			</Field>
 
 			<div class="hint">Selecting a Content-Type will write <code>Content-Type</code> into headers on Apply.</div>
+			{#if validationHints.length > 0}
+				<div class="hintList">
+					{#each validationHints as hint}
+						<div class={hint.level === 'error' ? 'warn' : 'hint'}>
+							[{hint.controlId}] {hint.message}
+						</div>
+					{/each}
+				</div>
+			{/if}
 
 			<Disclosure
 				title="Query params"
@@ -917,6 +933,17 @@
 		font-size: 11px;
 		opacity: 0.8;
 		margin-top: -4px;
+	}
+
+	.hintList {
+		display: grid;
+		gap: 4px;
+		margin-top: 6px;
+	}
+
+	.warn {
+		font-size: 11px;
+		color: var(--color-danger, #f87171);
 	}
 
 	.hint code {

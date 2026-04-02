@@ -1491,6 +1491,7 @@
 				{selectedNode}
 				sourceKind={sourceKind}
 				params={params as Record<string, unknown>}
+				{nodeError}
 				{onDraft}
 				{onCommit}
 			/>
@@ -1499,6 +1500,7 @@
 				this={SourceEditorByKind[sourceKind] ?? SourceEditorByKind.file}
 				{selectedNode}
 				{params}
+				{nodeError}
 				{onDraft}
 				{onCommit}
 			/>
