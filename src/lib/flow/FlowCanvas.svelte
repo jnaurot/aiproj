@@ -824,7 +824,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runMonitorNodeStatusOptions = Array.from(
 		new Set(
 			runMonitorNodeRows
-				.map((row) => String(row.status ?? '').trim())
+				.map((row) => String(row.lifecycle ?? '').trim())
 				.filter((value) => value.length > 0)
 		)
 	).sort((left, right) => left.localeCompare(right));
@@ -832,7 +832,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorNodeStatusFilters.length === 0
 			? runMonitorNodeRowsSorted
 			: runMonitorNodeRowsSorted.filter((row) =>
-					runMonitorNodeStatusFilters.includes(String(row.status ?? '').trim())
+					runMonitorNodeStatusFilters.includes(String(row.lifecycle ?? '').trim())
 				);
 	$: runMonitorNodeRowsVisible = runMonitorNodeRowsStatusFiltered.slice(0, 40);
 	$: runMonitorEdgeRows = buildRunMonitorEdgeRows({
@@ -5298,7 +5298,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 																	<span class="mono"> (llm-wait)</span>
 																{/if}
 															</span>
-															<span>{row.status}</span>
+															<span>
+																{row.lifecycle}
+																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
+															</span>
 															<span>{row.pendingInputCount}</span>
 															<span>{row.inboundDepth}</span>
 															<span>{row.blockedReasonCode ?? '-'}</span>

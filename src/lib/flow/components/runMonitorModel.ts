@@ -2,7 +2,14 @@ import type { Edge, Node } from '@xyflow/svelte';
 
 import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
 import { displayStatusFromBinding } from '$lib/flow/store/runScope';
-import { projectEdgeStatus, type EdgeLifecycleStatus } from '$lib/flow/store/statusModel';
+import {
+	projectEdgeStatus,
+	projectNodeStatus,
+	type EdgeLifecycleStatus,
+	type NodeExecutionStatus,
+	type NodeFreshnessStatus,
+	type NodeLifecycleStatus
+} from '$lib/flow/store/statusModel';
 
 type QueueMetric = {
 	depth?: unknown;
@@ -47,6 +54,9 @@ export type RunMonitorNodeRow = {
 	nodeId: string;
 	label: string;
 	status: string;
+	lifecycle: NodeLifecycleStatus;
+	execution: NodeExecutionStatus;
+	freshness: NodeFreshnessStatus;
 	pendingInputCount: number;
 	inflight: number;
 	inboundDepth: number;
@@ -249,6 +259,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 	return nodes.map((node) => {
 		const nodeId = String(node?.id ?? '').trim();
 		const schedulerRow = perNodeMap.get(nodeId);
+		const projection = projectNodeStatus(nodeBindings[nodeId] as any);
 		const blockedRow = asRecord(blockedByNode[nodeId]);
 		const blockedReasonCode = String(blockedRow.reasonCode ?? '').trim();
 		const blockedHandle = String(blockedRow.handle ?? '').trim();
@@ -266,6 +277,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			nodeId,
 			label: nodeLabel(node),
 			status: displayStatusFromBinding(nodeBindings[nodeId] as any),
+			lifecycle: projection.lifecycle,
+			execution: projection.execution,
+			freshness: projection.freshness,
 			pendingInputCount,
 			inflight,
 			inboundDepth: Math.max(0, Number(inboundDepthByNode.get(nodeId) ?? 0)),

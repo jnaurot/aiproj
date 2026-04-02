@@ -81,11 +81,14 @@ describe('runMonitorModel', () => {
 		expect(modelRow?.isLlmHolder).toBe(true);
 		expect(modelRow?.inboundDepth).toBe(0);
 		expect(modelRow?.status).toBe('running');
+		expect(modelRow?.lifecycle).toBe('running');
+		expect(modelRow?.execution).toBe('running');
 		expect(letterRow?.isBlocked).toBe(true);
 		expect(letterRow?.blockedReasonCode).toBe('WAITING_REQUIRED_PARAM');
 		expect(letterRow?.isWaiting).toBe(true);
 		expect(letterRow?.isLlmWaiting).toBe(true);
 		expect(letterRow?.inboundDepth).toBe(4);
+		expect(letterRow?.freshness).toBe('stale');
 	});
 
 	it('builds edge rows with queue metric details and labels', () => {
@@ -131,6 +134,9 @@ describe('runMonitorModel', () => {
 				nodeId: 'a',
 				label: 'A',
 				status: 'stale',
+				lifecycle: 'completed',
+				execution: 'finished',
+				freshness: 'stale',
 				pendingInputCount: 2,
 				inflight: 0,
 				inboundDepth: 5,
@@ -148,6 +154,9 @@ describe('runMonitorModel', () => {
 				nodeId: 'b',
 				label: 'B',
 				status: 'running',
+				lifecycle: 'running',
+				execution: 'running',
+				freshness: 'unknown',
 				pendingInputCount: 0,
 				inflight: 1,
 				inboundDepth: 1,
@@ -165,6 +174,9 @@ describe('runMonitorModel', () => {
 				nodeId: 'c',
 				label: 'C',
 				status: 'stale',
+				lifecycle: 'completed',
+				execution: 'finished',
+				freshness: 'stale',
 				pendingInputCount: 3,
 				inflight: 0,
 				inboundDepth: 3,
