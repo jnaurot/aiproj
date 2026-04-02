@@ -19,6 +19,10 @@ describe('projectNodeDisplayState', () => {
 		expect(projectNodeDisplayState({ status: 'canceled' }, 'canceled')).toBe('canceled');
 	});
 
+	it('maps skipped directly', () => {
+		expect(projectNodeDisplayState({ status: 'skipped' }, 'skipped')).toBe('skipped');
+	});
+
 	it('maps stale from explicit stale and isUpToDate false', () => {
 		expect(projectNodeDisplayState({ status: 'stale' }, 'stale')).toBe('stale');
 		expect(projectNodeDisplayState({ status: 'succeeded_up_to_date', isUpToDate: false })).toBe('stale');
