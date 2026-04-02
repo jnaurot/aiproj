@@ -18,11 +18,13 @@
 	export let onCommit: (patch: SourceObjectStorePatch) => void;
 
 	const providers: Provider[] = ['s3', 'azure_blob', 'gcs'];
+	const providerOptions: ThemedSelectOption[] = providers.map((value) => ({ value, label: value }));
 	const objectStoreModeOptions: ThemedSelectOption[] = [
 		{ value: 'provider', label: 'provider' },
 		{ value: 'mock', label: 'mock' }
 	];
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
+	const outputModeOptions: ThemedSelectOption[] = outputModes.map((value) => ({ value, label: value }));
 
 	$: provider = (asString(params?.provider, 's3') as Provider) ?? 's3';
 	$: object_store_mode = (asString(params?.object_store_mode, 'provider') as ObjectStoreMode) ?? 'provider';
@@ -45,26 +47,25 @@
 {#if selectedNode}
 	<Section title="Object Store">
 		<Field label="provider">
-			<select
+			<ThemedSelect
 				value={provider}
-				on:change={(event) => {
-					const value = (event.currentTarget as HTMLSelectElement).value as Provider;
+				options={providerOptions}
+				ariaLabel="object store provider"
+				onValueChange={(next) => {
+					const value = String(next) as Provider;
 					draft({ provider: value });
 					commit({ provider: value });
 				}}
-			>
-				{#each providers as p}
-					<option value={p}>{p}</option>
-				{/each}
-			</select>
+			/>
 		</Field>
 
 		<Field label="object_store_mode">
 			<ThemedSelect
 				value={object_store_mode}
 				options={objectStoreModeOptions}
-				on:change={(event) => {
-					const value = (event as CustomEvent<string>).detail as ObjectStoreMode;
+				ariaLabel="object store mode"
+				onValueChange={(next) => {
+					const value = String(next) as ObjectStoreMode;
 					draft({ object_store_mode: value });
 					commit({ object_store_mode: value });
 				}}
@@ -117,18 +118,16 @@
 		</Field>
 
 		<Field label="output mode">
-			<select
+			<ThemedSelect
 				value={outputMode}
-				on:change={(event) => {
-					const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+				options={outputModeOptions}
+				ariaLabel="object store output mode"
+				onValueChange={(next) => {
+					const mode = String(next) as SourceOutputMode;
 					draft({ output: { ...(params?.output ?? {}), mode } });
 					commit({ output: { ...(params?.output ?? {}), mode } });
 				}}
-			>
-				{#each outputModes as mode}
-					<option value={mode}>{mode}</option>
-				{/each}
-			</select>
+			/>
 		</Field>
 	</Section>
 {/if}

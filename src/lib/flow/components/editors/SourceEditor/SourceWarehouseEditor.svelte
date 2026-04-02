@@ -5,6 +5,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceWarehousePatch = Partial<SourceWarehouseParams>;
@@ -17,6 +18,8 @@
 
 	const providers: Provider[] = ['snowflake', 'bigquery', 'databricks_sql'];
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
+	const providerOptions: ThemedSelectOption[] = providers.map((value) => ({ value, label: value }));
+	const outputModeOptions: ThemedSelectOption[] = outputModes.map((value) => ({ value, label: value }));
 
 	$: provider = (asString(params?.provider, 'snowflake') as Provider) ?? 'snowflake';
 	$: connection_string = asString(params?.connection_string, '');
@@ -37,18 +40,16 @@
 {#if selectedNode}
 	<Section title="Warehouse">
 		<Field label="provider">
-			<select
+			<ThemedSelect
 				value={provider}
-				on:change={(event) => {
-					const value = (event.currentTarget as HTMLSelectElement).value as Provider;
+				options={providerOptions}
+				ariaLabel="warehouse provider"
+				onValueChange={(next) => {
+					const value = String(next) as Provider;
 					draft({ provider: value });
 					commit({ provider: value });
 				}}
-			>
-				{#each providers as p}
-					<option value={p}>{p}</option>
-				{/each}
-			</select>
+			/>
 		</Field>
 
 		<Field label="connection_string">
@@ -93,18 +94,16 @@
 		</Field>
 
 		<Field label="output mode">
-			<select
+			<ThemedSelect
 				value={outputMode}
-				on:change={(event) => {
-					const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+				options={outputModeOptions}
+				ariaLabel="warehouse output mode"
+				onValueChange={(next) => {
+					const mode = String(next) as SourceOutputMode;
 					draft({ output: { ...(params?.output ?? {}), mode } });
 					commit({ output: { ...(params?.output ?? {}), mode } });
 				}}
-			>
-				{#each outputModes as mode}
-					<option value={mode}>{mode}</option>
-				{/each}
-			</select>
+			/>
 		</Field>
 	</Section>
 {/if}

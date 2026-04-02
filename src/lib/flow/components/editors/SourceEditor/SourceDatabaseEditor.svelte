@@ -5,6 +5,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceDatabasePatch = Partial<SourceDatabaseParams>;
@@ -35,6 +36,14 @@
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
 	const partitionErrorPolicies = ['fail_fast', 'skip_failed'] as const;
+	const booleanOptions: ThemedSelectOption[] = [
+		{ value: 'false', label: 'false' },
+		{ value: 'true', label: 'true' }
+	];
+	const cursorTypeOptions: ThemedSelectOption[] = cursorTypes.map((value) => ({ value, label: value }));
+	const partitionKindOptions: ThemedSelectOption[] = partitionKinds.map((value) => ({ value, label: value }));
+	const partitionPolicyOptions: ThemedSelectOption[] = partitionErrorPolicies.map((value) => ({ value, label: value }));
+	const outputModeOptions: ThemedSelectOption[] = outputModes.map((value) => ({ value, label: value }));
 
 	function draft(patch: SourceDatabasePatch): void {
 		onDraft?.(patch);
@@ -121,10 +130,12 @@
 		</Field>
 
 		<Field label="incremental.enabled">
-			<select
+			<ThemedSelect
 				value={String(incrementalEnabled)}
-				on:change={(event) => {
-					const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+				options={booleanOptions}
+				ariaLabel="incremental enabled"
+				onValueChange={(next) => {
+					const enabled = String(next) === 'true';
 					const patch = {
 						incremental: {
 							...(params?.incremental ?? {}),
@@ -134,10 +145,7 @@
 					draft(patch);
 					commit(patch);
 				}}
-			>
-				<option value="false">false</option>
-				<option value="true">true</option>
-			</select>
+			/>
 		</Field>
 
 		{#if incrementalEnabled}
@@ -158,10 +166,11 @@
 			</Field>
 
 			<Field label="incremental.cursor_type">
-				<select
+				<ThemedSelect
 					value={incrementalCursorType}
-					on:change={(event) => {
-						const cursorType = (event.currentTarget as HTMLSelectElement).value;
+					options={cursorTypeOptions}
+					ariaLabel="incremental cursor type"
+					onValueChange={(cursorType) => {
 						const patch = {
 							incremental: {
 								...(params?.incremental ?? {}),
@@ -172,11 +181,7 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					{#each cursorTypes as ct}
-						<option value={ct}>{ct}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="incremental.state_key">
@@ -197,10 +202,12 @@
 		{/if}
 
 		<Field label="partition.enabled">
-			<select
+			<ThemedSelect
 				value={String(partitionEnabled)}
-				on:change={(event) => {
-					const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+				options={booleanOptions}
+				ariaLabel="partition enabled"
+				onValueChange={(next) => {
+					const enabled = String(next) === 'true';
 					const patch = {
 						partition: {
 							...(params?.partition ?? {}),
@@ -210,18 +217,16 @@
 					draft(patch);
 					commit(patch);
 				}}
-			>
-				<option value="false">false</option>
-				<option value="true">true</option>
-			</select>
+			/>
 		</Field>
 
 		{#if partitionEnabled}
 			<Field label="partition.kind">
-				<select
+				<ThemedSelect
 					value={partitionKind}
-					on:change={(event) => {
-						const kind = (event.currentTarget as HTMLSelectElement).value;
+					options={partitionKindOptions}
+					ariaLabel="partition kind"
+					onValueChange={(kind) => {
 						const patch = {
 							partition: {
 								...(params?.partition ?? {}),
@@ -232,18 +237,15 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					{#each partitionKinds as pk}
-						<option value={pk}>{pk}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="partition.on_error">
-				<select
+				<ThemedSelect
 					value={partitionOnError}
-					on:change={(event) => {
-						const on_error = (event.currentTarget as HTMLSelectElement).value;
+					options={partitionPolicyOptions}
+					ariaLabel="partition error policy"
+					onValueChange={(on_error) => {
 						const patch = {
 							partition: {
 								...(params?.partition ?? {}),
@@ -254,11 +256,7 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					{#each partitionErrorPolicies as policy}
-						<option value={policy}>{policy}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="partition.bind_key">
@@ -319,18 +317,16 @@
 		{/if}
 
 		<Field label="output mode">
-			<select
+			<ThemedSelect
 				value={outputMode}
-				on:change={(event) => {
-					const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+				options={outputModeOptions}
+				ariaLabel="database output mode"
+				onValueChange={(next) => {
+					const mode = String(next) as SourceOutputMode;
 					draft({ output: { ...(params?.output ?? {}), mode } });
 					commit({ output: { ...(params?.output ?? {}), mode } });
 				}}
-			>
-				{#each outputModes as mode}
-					<option value={mode}>{mode}</option>
-				{/each}
-			</select>
+			/>
 		</Field>
 
 		<p class="hint">

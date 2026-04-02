@@ -6,6 +6,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
@@ -15,6 +16,27 @@
 	export let onCommit: (patch: Record<string, unknown>) => void;
 
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
+	const outputModeOptions: ThemedSelectOption[] = outputModes.map((value) => ({ value, label: value }));
+	const boolOptions: ThemedSelectOption[] = [
+		{ value: 'true', label: 'true' },
+		{ value: 'false', label: 'false' }
+	];
+	const methodOptions: ThemedSelectOption[] = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].map((value) => ({
+		value,
+		label: value
+	}));
+	const authTypeOptions: ThemedSelectOption[] = ['none', 'bearer', 'basic', 'api_key'].map((value) => ({
+		value,
+		label: value
+	}));
+	const objectProviderOptions: ThemedSelectOption[] = ['s3', 'azure_blob', 'gcs'].map((value) => ({
+		value,
+		label: value
+	}));
+	const warehouseProviderOptions: ThemedSelectOption[] = ['snowflake', 'bigquery', 'databricks_sql'].map((value) => ({
+		value,
+		label: value
+	}));
 
 	function draft(patch: Record<string, unknown>): void {
 		onDraft?.(patch);
@@ -45,31 +67,28 @@
 				/>
 			</Field>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.output?.mode, 'text')}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="guided file output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 						commit({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 			<Field label="cache_enabled">
-				<select
+				<ThemedSelect
 					value={String(Boolean((params as any)?.cache_enabled ?? true))}
-					on:change={(event) => {
-						const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+					options={boolOptions}
+					ariaLabel="guided file cache enabled"
+					onValueChange={(next) => {
+						const enabled = String(next) === 'true';
 						draft({ cache_enabled: enabled });
 						commit({ cache_enabled: enabled });
 					}}
-				>
-					<option value="true">true</option>
-					<option value="false">false</option>
-				</select>
+				/>
 			</Field>
 		{:else if sourceKind === 'database'}
 			<Field label="connection_ref">
@@ -101,36 +120,28 @@
 				/>
 			</Field>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.output?.mode, 'table')}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="guided database output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 						commit({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 		{:else if sourceKind === 'api'}
 			<Field label="method">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.method, 'GET')}
-					on:change={(event) => {
-						const method = (event.currentTarget as HTMLSelectElement).value;
+					options={methodOptions}
+					ariaLabel="guided api method"
+					onValueChange={(method) => {
 						draft({ method });
 						commit({ method });
 					}}
-				>
-					<option value="GET">GET</option>
-					<option value="POST">POST</option>
-					<option value="PUT">PUT</option>
-					<option value="PATCH">PATCH</option>
-					<option value="DELETE">DELETE</option>
-					<option value="HEAD">HEAD</option>
-				</select>
+				/>
 			</Field>
 			<Field label="url">
 				<Input
@@ -141,19 +152,15 @@
 				/>
 			</Field>
 			<Field label="auth_type">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.auth_type, 'none')}
-					on:change={(event) => {
-						const auth_type = (event.currentTarget as HTMLSelectElement).value;
+					options={authTypeOptions}
+					ariaLabel="guided api auth type"
+					onValueChange={(auth_type) => {
 						draft({ auth_type });
 						commit({ auth_type });
 					}}
-				>
-					<option value="none">none</option>
-					<option value="bearer">bearer</option>
-					<option value="basic">basic</option>
-					<option value="api_key">api_key</option>
-				</select>
+				/>
 			</Field>
 			<Field label="auth_token_ref">
 				<Input
@@ -164,33 +171,28 @@
 				/>
 			</Field>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.output?.mode, 'json')}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="guided api output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 						commit({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 		{:else if sourceKind === 'object_store'}
 			<Field label="provider">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.provider, 's3')}
-					on:change={(event) => {
-						const provider = (event.currentTarget as HTMLSelectElement).value;
+					options={objectProviderOptions}
+					ariaLabel="guided object store provider"
+					onValueChange={(provider) => {
 						draft({ provider });
 						commit({ provider });
 					}}
-				>
-					<option value="s3">s3</option>
-					<option value="azure_blob">azure_blob</option>
-					<option value="gcs">gcs</option>
-				</select>
+				/>
 			</Field>
 			<Field label="bucket">
 				<Input
@@ -217,33 +219,28 @@
 				/>
 			</Field>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.output?.mode, 'text')}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="guided object store output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 						commit({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 		{:else}
 			<Field label="provider">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.provider, 'snowflake')}
-					on:change={(event) => {
-						const provider = (event.currentTarget as HTMLSelectElement).value;
+					options={warehouseProviderOptions}
+					ariaLabel="guided warehouse provider"
+					onValueChange={(provider) => {
 						draft({ provider });
 						commit({ provider });
 					}}
-				>
-					<option value="snowflake">snowflake</option>
-					<option value="bigquery">bigquery</option>
-					<option value="databricks_sql">databricks_sql</option>
-				</select>
+				/>
 			</Field>
 			<Field label="connection_ref">
 				<Input
@@ -274,18 +271,16 @@
 				/>
 			</Field>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={asString((params as any)?.output?.mode, 'table')}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="guided warehouse output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 						commit({ output: { ...(((params as any)?.output as Record<string, unknown>) ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 		{/if}
 	</Section>
