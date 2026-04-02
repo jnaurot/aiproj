@@ -175,6 +175,7 @@ export type RunMonitorTransitionRow = {
 
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
+export type RunMonitorEdgeFilter = 'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full';
 
 type RunMonitorProjectionInput = {
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
@@ -497,6 +498,35 @@ export function preferredMonitorEdgeFocusNodeId(sourceNodeId: string, targetNode
 	const target = String(targetNodeId ?? '').trim();
 	if (target) return target;
 	return String(sourceNodeId ?? '').trim();
+}
+
+export function edgeStatusesForFilter(row: RunMonitorEdgeRow): RunMonitorEdgeFilter[] {
+	const statuses: RunMonitorEdgeFilter[] = [];
+	if (row.lifecycle === 'running') {
+		statuses.push('running', 'active');
+	} else if (row.lifecycle === 'waiting') {
+		statuses.push('waiting');
+	} else if (row.lifecycle === 'done') {
+		statuses.push('done');
+	} else {
+		statuses.push('inactive');
+	}
+	if (row.blocked) statuses.push('blocked');
+	if (row.full) statuses.push('full');
+	return Array.from(new Set(statuses));
+}
+
+export function filterRunMonitorEdgeRows(
+	rows: RunMonitorEdgeRow[],
+	filters: RunMonitorEdgeFilter[]
+): RunMonitorEdgeRow[] {
+	const normalizedRows = Array.isArray(rows) ? rows : [];
+	const normalizedFilters = (Array.isArray(filters) ? filters : []).filter(Boolean);
+	if (normalizedFilters.length === 0) return normalizedRows;
+	return normalizedRows.filter((row) => {
+		const statuses = edgeStatusesForFilter(row);
+		return statuses.some((status) => normalizedFilters.includes(status));
+	});
 }
 
 export function buildRunMonitorAdaptiveDecisionRows(

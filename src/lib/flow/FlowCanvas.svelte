@@ -108,6 +108,7 @@ import {
 		buildRunMonitorTransitionRows,
 		filterRunMonitorAdaptiveDecisionRows,
 		filterAndSortRunMonitorNodes,
+		filterRunMonitorEdgeRows,
 		filterRunMonitorTransitionRows,
 		pickRunMonitorRegressionPairFromHistory,
 		preferredMonitorEdgeFocusNodeId,
@@ -346,7 +347,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
 	let runMonitorTab: 'live' | 'diagnostics' | 'history' = 'live';
 	let runMonitorNodeStatusFilters: string[] = [];
-	let runMonitorEdgeStatusFilters: Array<'active' | 'waiting' | 'blocked' | 'full'> = [];
+	let runMonitorEdgeStatusFilters: Array<
+		'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full'
+	> = [];
 	let runMonitorSlideoutOpen = true;
 	let runMonitorSlideoutWidth = 380;
 	let runMonitorResizeActive = false;
@@ -840,17 +843,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		edges: ($graphStore.edges ?? []) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
-	$: runMonitorEdgeRowsVisible = runMonitorEdgeRows
-		.filter((row) => {
-			if (runMonitorEdgeStatusFilters.length === 0) return true;
-			const statuses: Array<'active' | 'waiting' | 'blocked' | 'full'> = [];
-			if (row.blocked) statuses.push('blocked');
-			if (row.full) statuses.push('full');
-			if (row.lifecycle === 'waiting') statuses.push('waiting');
-			if (row.lifecycle === 'running') statuses.push('active');
-			return statuses.some((status) => runMonitorEdgeStatusFilters.includes(status));
-		})
-		.slice(0, 40);
+	$: runMonitorEdgeRowsVisible = filterRunMonitorEdgeRows(runMonitorEdgeRows, runMonitorEdgeStatusFilters).slice(
+		0,
+		40
+	);
 	$: runMonitorAdaptiveDecisionRowsLive = buildRunMonitorAdaptiveDecisionRows(
 		($graphStore.queueRuntime ?? {}) as any
 	);
@@ -3795,7 +3791,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		runMonitorNodeStatusFilters = [...runMonitorNodeStatusFilters, value];
 	}
 
-	function toggleEdgeStatusFilter(status: 'active' | 'waiting' | 'blocked' | 'full'): void {
+	function toggleEdgeStatusFilter(
+		status: 'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full'
+	): void {
 		if (runMonitorEdgeStatusFilters.includes(status)) {
 			runMonitorEdgeStatusFilters = runMonitorEdgeStatusFilters.filter((entry) => entry !== status);
 			return;
@@ -5237,7 +5235,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</div>
 										<div class="monitorChipRow">
 											<span class="monitorChipLabel">Edge status</span>
-											{#each (['active', 'waiting', 'blocked', 'full'] as const) as status (`edge-status-${status}`)}
+											{#each (['inactive', 'waiting', 'running', 'done', 'blocked', 'full'] as const) as status (`edge-status-${status}`)}
 												<button
 													type="button"
 													class={`pill pinBtn monitorChip ${runMonitorEdgeStatusFilters.includes(status) ? 'is-active' : ''}`}

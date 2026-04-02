@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildRunMonitorEdgeRows,
 	buildRunMonitorNodeRows,
+	edgeStatusesForFilter,
+	filterRunMonitorEdgeRows,
 	filterAndSortRunMonitorNodes,
 	preferredMonitorEdgeFocusNodeId
 } from './runMonitorModel';
@@ -318,5 +320,106 @@ describe('runMonitorModel', () => {
 		expect(single?.acceptedCount).toBe(3);
 		expect(single?.rejectedCount).toBe(0);
 		expect(single?.totalProcessed).toBe(3);
+	});
+
+	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {
+		expect(
+			edgeStatusesForFilter({
+				edgeId: 'e1',
+				handle: 'in',
+				sourceNodeId: 'a',
+				sourceLabel: 'A',
+				targetNodeId: 'b',
+				targetLabel: 'B',
+				lifecycle: 'running',
+				exec: 'active',
+				depth: 0,
+				blocked: false,
+				full: false,
+				oldestAgeSec: null
+			})
+		).toEqual(['running', 'active']);
+		expect(
+			edgeStatusesForFilter({
+				edgeId: 'e2',
+				handle: 'in',
+				sourceNodeId: 'a',
+				sourceLabel: 'A',
+				targetNodeId: 'b',
+				targetLabel: 'B',
+				lifecycle: 'done',
+				exec: 'done',
+				depth: 0,
+				blocked: true,
+				full: true,
+				oldestAgeSec: 1.2
+			})
+		).toEqual(['done', 'blocked', 'full']);
+	});
+
+	it('filters edge rows by lifecycle and diagnostics statuses', () => {
+		const rows = [
+			{
+				edgeId: 'e_inactive',
+				handle: 'in',
+				sourceNodeId: 'a',
+				sourceLabel: 'A',
+				targetNodeId: 'b',
+				targetLabel: 'B',
+				lifecycle: 'inactive',
+				exec: 'idle',
+				depth: 0,
+				blocked: false,
+				full: false,
+				oldestAgeSec: null
+			},
+			{
+				edgeId: 'e_waiting',
+				handle: 'in',
+				sourceNodeId: 'b',
+				sourceLabel: 'B',
+				targetNodeId: 'c',
+				targetLabel: 'C',
+				lifecycle: 'waiting',
+				exec: 'idle',
+				depth: 4,
+				blocked: false,
+				full: false,
+				oldestAgeSec: 3.2
+			},
+			{
+				edgeId: 'e_running',
+				handle: 'in',
+				sourceNodeId: 'c',
+				sourceLabel: 'C',
+				targetNodeId: 'd',
+				targetLabel: 'D',
+				lifecycle: 'running',
+				exec: 'active',
+				depth: 0,
+				blocked: false,
+				full: false,
+				oldestAgeSec: 0.2
+			},
+			{
+				edgeId: 'e_done',
+				handle: 'in',
+				sourceNodeId: 'd',
+				sourceLabel: 'D',
+				targetNodeId: 'e',
+				targetLabel: 'E',
+				lifecycle: 'done',
+				exec: 'done',
+				depth: 0,
+				blocked: true,
+				full: false,
+				oldestAgeSec: 0.1
+			}
+		] as const;
+		expect(filterRunMonitorEdgeRows(rows as any, ['inactive']).map((row) => row.edgeId)).toEqual(['e_inactive']);
+		expect(filterRunMonitorEdgeRows(rows as any, ['active']).map((row) => row.edgeId)).toEqual(['e_running']);
+		expect(filterRunMonitorEdgeRows(rows as any, ['running']).map((row) => row.edgeId)).toEqual(['e_running']);
+		expect(filterRunMonitorEdgeRows(rows as any, ['done']).map((row) => row.edgeId)).toEqual(['e_done']);
+		expect(filterRunMonitorEdgeRows(rows as any, ['blocked']).map((row) => row.edgeId)).toEqual(['e_done']);
 	});
 });
