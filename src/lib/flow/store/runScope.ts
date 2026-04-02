@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/svelte';
 
 import type { NodeStatus, PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
 import { projectNodeDisplayState, type NodeBindingProjectionInput } from './displayState';
+import { projectNodeStatus, type NodeStatusProjection } from './statusModel';
 
 export type ActiveRunMode = 'from_start' | 'from_selected_onward' | 'selected_only';
 
@@ -29,6 +30,10 @@ export function isBindingStale(binding: NodeBindingLike | null | undefined): boo
 
 export function displayStatusFromBinding(binding: NodeBindingLike | null | undefined): NodeStatus {
 	return projectNodeDisplayState(binding as NodeBindingProjectionInput | undefined, binding?.status);
+}
+
+export function statusProjectionFromBinding(binding: NodeBindingLike | null | undefined): NodeStatusProjection {
+	return projectNodeStatus(binding as NodeBindingProjectionInput | undefined, binding?.status);
 }
 
 function descendantIds(

@@ -2,7 +2,7 @@
 	import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
-	import { displayStatusFromBinding } from '$lib/flow/store/runScope';
+	import { displayStatusFromBinding, statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
 
 
@@ -17,7 +17,10 @@
 
 	// Status is derived from bindings; node.data.status is not authoritative.
 	$: binding = $graphStore.nodeBindings?.[id];
+	$: statusProjection = statusProjectionFromBinding(binding as any);
 	$: status = displayStatusFromBinding(binding as any);
+	$: lifecycleLabel = statusProjection.lifecycle;
+	$: freshnessHint = statusProjection.freshness === 'stale' ? ' (stale)' : '';
 	$: kind = data?.kind ?? 'node';
 	$: label = data?.label ?? 'Node';
 	$: freezeMeta = (data as any)?.meta?.freeze;
@@ -110,7 +113,7 @@
 	<slot />
 
 	<div class="footer">
-		<span class="status">{status}</span>
+		<span class="status">{lifecycleLabel}{freshnessHint}</span>
 		<div class="footerRight">
 			<slot name="footer-right" />
 		</div>

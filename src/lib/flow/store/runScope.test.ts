@@ -10,6 +10,7 @@ import {
 	getStaleFlipNodeIds,
 	isBindingStale,
 	mergeBindingsSticky,
+	statusProjectionFromBinding,
 	shouldUpdateBinding
 } from './runScope';
 
@@ -179,6 +180,19 @@ describe('runScope partial-run binding behavior', () => {
 		expect(isBindingStale({ status: 'succeeded' })).toBe(false);
 		expect(isBindingStale({ isUpToDate: false })).toBe(true);
 		expect(isBindingStale({ status: 'stale' })).toBe(true);
+	});
+
+	it('exposes canonical status projection from bindings', () => {
+		const projection = statusProjectionFromBinding({
+			status: 'succeeded_up_to_date',
+			isUpToDate: false,
+			current: { execKey: 'next', artifactId: 'a2' },
+			last: { execKey: 'prev', artifactId: 'a1' }
+		});
+		expect(projection.lifecycle).toBe('completed');
+		expect(projection.execution).toBe('finished');
+		expect(projection.freshness).toBe('stale');
+		expect(projection.display).toBe('stale');
 	});
 
 	it('run-start metadata updates do not flip stale flags', () => {
