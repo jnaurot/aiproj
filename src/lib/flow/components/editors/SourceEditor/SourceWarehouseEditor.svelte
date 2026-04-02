@@ -6,6 +6,7 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceWarehousePatch = Partial<SourceWarehouseParams>;
@@ -39,6 +40,7 @@
 
 {#if selectedNode}
 	<Section title="Warehouse">
+		<SourceCapabilityBanner sourceKind="warehouse" params={params as Record<string, unknown>} />
 		<Field label="provider">
 			<ThemedSelect
 				value={provider}

@@ -6,6 +6,7 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceDatabasePatch = Partial<SourceDatabaseParams>;
@@ -56,6 +57,7 @@
 
 {#if selectedNode}
 	<Section title="Database">
+		<SourceCapabilityBanner sourceKind="database" params={params as Record<string, unknown>} />
 		<Field label="connection_string">
 			<Input
 				value={connection_string}

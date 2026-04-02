@@ -32,4 +32,33 @@ describe('source capability descriptors', () => {
 		expect(notices.some((n) => n.toLowerCase().includes('mock mode'))).toBe(true);
 		expect(notices).toContain('Preview note');
 	});
+
+	it('test_source_editor_shows_capability_badge_per_kind', () => {
+		const kinds = ['file', 'database', 'api', 'object_store', 'warehouse'] as const;
+		for (const kind of kinds) {
+			const descriptor = resolveSourceCapabilityDescriptor(kind);
+			expect(descriptor.sourceKind).toBe(kind);
+			expect(['production', 'preview', 'mock_only']).toContain(descriptor.supportLevel);
+		}
+	});
+
+	it('test_source_editor_shows_mock_only_notice', () => {
+		const descriptor: SourceCapabilityDescriptor = {
+			sourceKind: 'api',
+			supportLevel: 'mock_only',
+			notes: []
+		};
+		const notices = buildSourceCapabilityNotices(descriptor, {});
+		expect(notices.some((n) => n.toLowerCase().includes('mock-only capability'))).toBe(true);
+	});
+
+	it('test_source_editor_shows_preview_notice', () => {
+		const descriptor: SourceCapabilityDescriptor = {
+			sourceKind: 'warehouse',
+			supportLevel: 'preview',
+			notes: []
+		};
+		const notices = buildSourceCapabilityNotices(descriptor, {});
+		expect(notices.some((n) => n.toLowerCase().includes('preview capability'))).toBe(true);
+	});
 });

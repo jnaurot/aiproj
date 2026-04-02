@@ -6,6 +6,7 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { asString } from '$lib/flow/components/editors/shared';
 
 	type SourceObjectStorePatch = Partial<SourceObjectStoreParams>;
@@ -46,6 +47,7 @@
 
 {#if selectedNode}
 	<Section title="Object Store">
+		<SourceCapabilityBanner sourceKind="object_store" params={params as Record<string, unknown>} />
 		<Field label="provider">
 			<ThemedSelect
 				value={provider}

@@ -6,6 +6,7 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
 	import {
 		asBoolean,
@@ -66,9 +67,9 @@
 	];
 	const fileFormatSelectOptions: ThemedSelectOption[] = [
 		...baseFileFormatOptions.map((value) => ({ value, label: value })),
-		...imageFileFormatOptions.map((value) => ({ value, label: `image · ${value}` })),
-		...audioFileFormatOptions.map((value) => ({ value, label: `audio · ${value}` })),
-		...videoFileFormatOptions.map((value) => ({ value, label: `video · ${value}` }))
+		...imageFileFormatOptions.map((value) => ({ value, label: `image - ${value}` })),
+		...audioFileFormatOptions.map((value) => ({ value, label: `audio - ${value}` })),
+		...videoFileFormatOptions.map((value) => ({ value, label: `video - ${value}` }))
 	];
 	const previousUploadOptions = (entries: RecentSnapshot[]): ThemedSelectOption[] => [
 		{ value: '', label: 'Choose a previous upload...', disabled: true },
@@ -507,6 +508,7 @@
 {#if selectedNode}
 	<div class="sourceFileEditor">
 	<Section title="File">
+		<SourceCapabilityBanner sourceKind="file" params={params as Record<string, unknown>} />
 		<Field>
 			<div
 				class={`dropzone ${isDragOver ? 'dragOver' : ''}`}

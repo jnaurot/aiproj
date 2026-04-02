@@ -7,6 +7,7 @@
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	export let selectedNode: Node<PipelineNodeData & Record<string, unknown>> | null;
@@ -49,6 +50,7 @@
 
 {#if selectedNode}
 	<Section title="Guided Source Setup">
+		<SourceCapabilityBanner sourceKind={sourceKind} params={params as Record<string, unknown>} />
 		{#if sourceKind === 'file'}
 			<Field label="filename">
 				<Input

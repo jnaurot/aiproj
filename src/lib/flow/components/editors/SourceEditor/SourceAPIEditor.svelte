@@ -9,6 +9,7 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
+	import SourceCapabilityBanner from './SourceCapabilityBanner.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type Method = SourceAPIParams['method'];
@@ -274,6 +275,7 @@
 
 {#if selectedNode}
 	<Section title="API">
+		<SourceCapabilityBanner sourceKind="api" params={params as Record<string, unknown>} />
 		<Disclosure
 			title="Request"
 			variant="primary"
