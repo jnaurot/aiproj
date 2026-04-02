@@ -5,6 +5,7 @@
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import { getSnapshotMeta, uploadSnapshot } from '$lib/flow/client/runs';
 	import {
 		asBoolean,
@@ -62,6 +63,62 @@
 		...imageFileFormatOptions,
 		...audioFileFormatOptions,
 		...videoFileFormatOptions
+	];
+	const fileFormatSelectOptions: ThemedSelectOption[] = [
+		...baseFileFormatOptions.map((value) => ({ value, label: value })),
+		...imageFileFormatOptions.map((value) => ({ value, label: `image · ${value}` })),
+		...audioFileFormatOptions.map((value) => ({ value, label: `audio · ${value}` })),
+		...videoFileFormatOptions.map((value) => ({ value, label: `video · ${value}` }))
+	];
+	const previousUploadOptions = (entries: RecentSnapshot[]): ThemedSelectOption[] => [
+		{ value: '', label: 'Choose a previous upload...', disabled: true },
+		...entries.map((entry) => ({
+			value: entry.id,
+			label: optionLabel(entry)
+		}))
+	];
+	const hasHeaderOptions: ThemedSelectOption[] = [
+		{ value: 'auto', label: 'auto' },
+		{ value: 'yes', label: 'yes' },
+		{ value: 'no', label: 'no' }
+	];
+	const malformedRowOptions: ThemedSelectOption[] = [
+		{ value: 'fail', label: 'fail' },
+		{ value: 'skip', label: 'skip' },
+		{ value: 'warn', label: 'warn' }
+	];
+	const decimalSeparatorOptions: ThemedSelectOption[] = [
+		{ value: '.', label: '.' },
+		{ value: ',', label: ',' }
+	];
+	const jsonModeOptions: ThemedSelectOption[] = [
+		{ value: 'auto', label: 'auto' },
+		{ value: 'document', label: 'document' },
+		{ value: 'ndjson', label: 'ndjson' }
+	];
+	const txtRecordModeOptions: ThemedSelectOption[] = [
+		{ value: 'raw', label: 'raw' },
+		{ value: 'lines', label: 'lines' },
+		{ value: 'paragraphs', label: 'paragraphs' },
+		{ value: 'fixed_chunk', label: 'fixed_chunk' }
+	];
+	const audioTranscodeOptions: ThemedSelectOption[] = [
+		{ value: '', label: 'none' },
+		...audioFileFormatOptions.map((value) => ({ value, label: value }))
+	];
+	const videoFrameModeOptions: ThemedSelectOption[] = [
+		{ value: 'none', label: 'none' },
+		{ value: 'keyframes', label: 'keyframes' },
+		{ value: 'interval', label: 'interval' }
+	];
+	const encodingOptions: ThemedSelectOption[] = [
+		{ value: 'utf-8', label: 'utf-8' },
+		{ value: 'windows-1252', label: 'windows-1252' },
+		{ value: 'iso-8859-1', label: 'iso-8859-1' },
+		{ value: 'iso-8859-15', label: 'iso-8859-15' },
+		{ value: 'utf-16le', label: 'utf-16le' },
+		{ value: 'utf-16be', label: 'utf-16be' },
+		{ value: 'us-ascii', label: 'us-ascii' }
 	];
 	const RECENT_LIMIT = 10;
 
@@ -382,8 +439,7 @@
 		isDragOver = false;
 	}
 
-	async function onSelectPrevious(event: Event): Promise<void> {
-		const value = (event.currentTarget as HTMLSelectElement).value;
+	async function onSelectPrevious(value: string): Promise<void> {
 		const sid = asString(value, '').trim().toLowerCase();
 		if (!/^[a-f0-9]{64}$/.test(sid)) return;
 		const selected = recentSnapshots.find((s) => s.id === sid);
@@ -498,39 +554,21 @@
 		</Field>
 
 		<Field label="previous uploads" stacked>
-			<select class="full" value={snapshotId || ''} on:change={onSelectPrevious}>
-				<option value="" disabled>Choose a previous upload...</option>
-				{#each displayRecentSnapshots as entry}
-					<option value={entry.id}>{optionLabel(entry)}</option>
-				{/each}
-			</select>
+			<ThemedSelect
+				value={snapshotId || ''}
+				options={previousUploadOptions(displayRecentSnapshots)}
+				ariaLabel="previous uploads"
+				onValueChange={onSelectPrevious}
+			/>
 		</Field>
 
 		<Field label="file format">
-			<select
-				class="full"
+			<ThemedSelect
 				value={file_format}
-				on:change={(event) => setFileFormat((event.currentTarget as HTMLSelectElement).value)}
-			>
-				{#each baseFileFormatOptions as option}
-					<option value={option}>{option}</option>
-				{/each}
-				<optgroup label="Image">
-					{#each imageFileFormatOptions as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</optgroup>
-				<optgroup label="Audio">
-					{#each audioFileFormatOptions as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</optgroup>
-				<optgroup label="Video">
-					{#each videoFileFormatOptions as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</optgroup>
-			</select>
+				options={fileFormatSelectOptions}
+				ariaLabel="file format"
+				onValueChange={setFileFormat}
+			/>
 		</Field>
 
 		{#if file_format === 'csv' || file_format === 'tsv'}
@@ -544,20 +582,16 @@
 				/>
 			</Field>
 			<Field label="first row is header">
-				<select
-					class="full"
+				<ThemedSelect
 					value={hasHeaderMode}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value;
+					options={hasHeaderOptions}
+					ariaLabel="csv header mode"
+					onValueChange={(value) => {
 						const has_header = value === 'yes' ? true : value === 'no' ? false : undefined;
 						draft({ has_header });
 						commit({ has_header });
 					}}
-				>
-					<option value="auto">auto</option>
-					<option value="yes">yes</option>
-					<option value="no">no</option>
-				</select>
+				/>
 			</Field>
 			<Field label="quote character">
 				<Input
@@ -576,33 +610,26 @@
 				/>
 			</Field>
 			<Field label="malformed row policy">
-				<select
-					class="full"
+				<ThemedSelect
 					value={malformedRowPolicy}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as 'fail' | 'skip' | 'warn';
+					options={malformedRowOptions}
+					ariaLabel="csv malformed row policy"
+					onValueChange={(value) => {
 						draft({ malformed_row_policy: value as any });
 						commit({ malformed_row_policy: value as any });
 					}}
-				>
-					<option value="fail">fail</option>
-					<option value="skip">skip</option>
-					<option value="warn">warn</option>
-				</select>
+				/>
 			</Field>
 			<Field label="decimal separator">
-				<select
-					class="full"
+				<ThemedSelect
 					value={decimalSeparator}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as '.' | ',';
+					options={decimalSeparatorOptions}
+					ariaLabel="csv decimal separator"
+					onValueChange={(value) => {
 						draft({ decimal_separator: value as any });
 						commit({ decimal_separator: value as any });
 					}}
-				>
-					<option value=".">.</option>
-					<option value=",">,</option>
-				</select>
+				/>
 			</Field>
 			<Field label="thousands separator">
 				<Input
@@ -638,38 +665,30 @@
 
 		{#if file_format === 'json'}
 			<Field label="json mode">
-				<select
-					class="full"
+				<ThemedSelect
 					value={jsonMode}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as 'document' | 'ndjson' | 'auto';
+					options={jsonModeOptions}
+					ariaLabel="json mode"
+					onValueChange={(value) => {
 						draft({ json_mode: value as any });
 						commit({ json_mode: value as any });
 					}}
-				>
-					<option value="auto">auto</option>
-					<option value="document">document</option>
-					<option value="ndjson">ndjson</option>
-				</select>
+				/>
 			</Field>
 		{/if}
 
 		{#if file_format === 'excel'}
 			<Field label="first row is header">
-				<select
-					class="full"
+				<ThemedSelect
 					value={hasHeaderMode}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value;
+					options={hasHeaderOptions}
+					ariaLabel="excel header mode"
+					onValueChange={(value) => {
 						const has_header = value === 'yes' ? true : value === 'no' ? false : undefined;
 						draft({ has_header });
 						commit({ has_header });
 					}}
-				>
-					<option value="auto">auto</option>
-					<option value="yes">yes</option>
-					<option value="no">no</option>
-				</select>
+				/>
 			</Field>
 			<Field label="sheet_name">
 				<Input
@@ -686,24 +705,15 @@
 
 		{#if file_format === 'txt'}
 			<Field label="record mode">
-				<select
-					class="full"
+				<ThemedSelect
 					value={txtRecordMode}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as
-							| 'raw'
-							| 'lines'
-							| 'paragraphs'
-							| 'fixed_chunk';
+					options={txtRecordModeOptions}
+					ariaLabel="text record mode"
+					onValueChange={(value) => {
 						draft({ txt_record_mode: value as any });
 						commit({ txt_record_mode: value as any });
 					}}
-				>
-					<option value="raw">raw</option>
-					<option value="lines">lines</option>
-					<option value="paragraphs">paragraphs</option>
-					<option value="fixed_chunk">fixed_chunk</option>
-				</select>
+				/>
 			</Field>
 			{#if txtRecordMode === 'fixed_chunk'}
 				<Field label="chunk size">
@@ -762,20 +772,16 @@
 				</Field>
 			{/if}
 			<Field label="transcode format">
-				<select
-					class="full"
+				<ThemedSelect
 					value={audioTranscodeFormat || ''}
-					on:change={(event) => {
-						const value = asString((event.currentTarget as HTMLSelectElement).value, '');
+					options={audioTranscodeOptions}
+					ariaLabel="audio transcode format"
+					onValueChange={(raw) => {
+						const value = asString(raw, '');
 						draft({ audio_transcode_format: value || undefined });
 						commit({ audio_transcode_format: value || undefined });
 					}}
-				>
-					<option value="">none</option>
-					{#each audioFileFormatOptions as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 		{/if}
 
@@ -792,19 +798,16 @@
 				/>
 			</Field>
 			<Field label="frame extraction mode">
-				<select
-					class="full"
+				<ThemedSelect
 					value={videoFrameMode}
-					on:change={(event) => {
-						const value = asString((event.currentTarget as HTMLSelectElement).value, 'none');
+					options={videoFrameModeOptions}
+					ariaLabel="video frame extraction mode"
+					onValueChange={(raw) => {
+						const value = asString(raw, 'none');
 						draft({ video_frame_mode: value as any });
 						commit({ video_frame_mode: value as any });
 					}}
-				>
-					<option value="none">none</option>
-					<option value="keyframes">keyframes</option>
-					<option value="interval">interval</option>
-				</select>
+				/>
 			</Field>
 			{#if videoFrameMode === 'interval'}
 				<Field label="frame interval sec">
@@ -841,23 +844,15 @@
 		{/if}
 
 		<Field label="encoding">
-			<select
-				class="full"
+			<ThemedSelect
 				value={encoding || 'utf-8'}
-				on:change={(event) => {
-					const value = (event.currentTarget as HTMLSelectElement).value;
+				options={encodingOptions}
+				ariaLabel="file encoding"
+				onValueChange={(value) => {
 					draft({ encoding: value });
 					commit({ encoding: value });
 				}}
-			>
-				<option value="utf-8">utf-8</option>
-				<option value="windows-1252">windows-1252</option>
-				<option value="iso-8859-1">iso-8859-1</option>
-				<option value="iso-8859-15">iso-8859-15</option>
-				<option value="utf-16le">utf-16le</option>
-				<option value="utf-16be">utf-16be</option>
-				<option value="us-ascii">us-ascii</option>
-			</select>
+			/>
 		</Field>
 
 		<Field label="cache enabled">

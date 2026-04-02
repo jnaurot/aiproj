@@ -7,6 +7,7 @@
 	import Disclosure from '$lib/flow/components/ui/Disclosure.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
@@ -96,6 +97,22 @@
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
 	const partitionErrorPolicies = ['fail_fast', 'skip_failed'] as const;
+	const boolOptions: ThemedSelectOption[] = [
+		{ value: 'false', label: 'false' },
+		{ value: 'true', label: 'true' }
+	];
+	const methodOptions: ThemedSelectOption[] = methods.map((value) => ({ value, label: value }));
+	const authTypeOptions: ThemedSelectOption[] = authTypes.map((value) => ({ value, label: value }));
+	const outputModeOptions: ThemedSelectOption[] = outputModes.map((value) => ({ value, label: value }));
+	const bodyModeOptions: ThemedSelectOption[] = bodyModes.map((value) => ({ value, label: value }));
+	const contentTypeSelectOptions: ThemedSelectOption[] = contentTypeOptions.map((option) => ({
+		value: option.value,
+		label: option.label
+	}));
+	const cursorTypeOptions: ThemedSelectOption[] = cursorTypes.map((value) => ({ value, label: value }));
+	const partitionKindOptions: ThemedSelectOption[] = partitionKinds.map((value) => ({ value, label: value }));
+	const partitionPolicyOptions: ThemedSelectOption[] = partitionErrorPolicies.map((value) => ({ value, label: value }));
+	const cacheModeOptions: ThemedSelectOption[] = cacheModes.map((value) => ({ value, label: value }));
 
 	let headersDraft: Record<string, string> = headers;
 	let queryDraft: Record<string, string> = query;
@@ -265,18 +282,16 @@
 			summaryRight={requestSummary}
 		>
 			<Field label="method">
-				<select
+				<ThemedSelect
 					value={method}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as Method;
+					options={methodOptions}
+					ariaLabel="api method"
+					onValueChange={(next) => {
+						const value = String(next) as Method;
 						draft({ method: value });
 						commit({ method: value });
 					}}
-				>
-					{#each methods as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="url" stacked={true}>
@@ -289,15 +304,12 @@
 			</Field>
 
 			<Field label="Content-Type">
-				<select
+				<ThemedSelect
 					value={selectedContentType}
-					on:change={(event) =>
-						setContentType((event.currentTarget as HTMLSelectElement).value as ContentType | 'none')}
-				>
-					{#each contentTypeOptions as option}
-						<option value={option.value}>{option.label}</option>
-					{/each}
-				</select>
+					options={contentTypeSelectOptions}
+					ariaLabel="api content type"
+					onValueChange={(next) => setContentType(String(next) as ContentType | 'none')}
+				/>
 			</Field>
 
 			<div class="hint">Selecting a Content-Type will write <code>Content-Type</code> into headers on Apply.</div>
@@ -358,19 +370,17 @@
 				summaryRight={bodySummary}
 			>
 				<Field label="body mode">
-					<select
+					<ThemedSelect
 						value={bodyMode}
-						on:change={(event) => {
-							const mode = (event.currentTarget as HTMLSelectElement).value as BodyMode;
+						options={bodyModeOptions}
+						ariaLabel="api body mode"
+						onValueChange={(next) => {
+							const mode = String(next) as BodyMode;
 							const patch = buildBodyPatch(mode);
 							draft(patch);
 							commit(patch);
 						}}
-					>
-						{#each bodyModes as mode}
-							<option value={mode}>{mode}</option>
-						{/each}
-					</select>
+					/>
 				</Field>
 
 				{#if bodyMode === 'none'}
@@ -435,18 +445,16 @@
 			summaryRight={authSummary}
 		>
 			<Field label="auth_type">
-				<select
+				<ThemedSelect
 					value={auth_type}
-					on:change={(event) => {
-						const value = (event.currentTarget as HTMLSelectElement).value as AuthType;
+					options={authTypeOptions}
+					ariaLabel="api auth type"
+					onValueChange={(next) => {
+						const value = String(next) as AuthType;
 						draft({ auth_type: value });
 						commit({ auth_type: value });
 					}}
-				>
-					{#each authTypes as option}
-						<option value={option}>{option}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="auth_token_ref" stacked={true}>
@@ -583,10 +591,12 @@
 			</Field>
 
 			<Field label="incremental.enabled">
-				<select
+				<ThemedSelect
 					value={String(incrementalEnabled)}
-					on:change={(event) => {
-						const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+					options={boolOptions}
+					ariaLabel="api incremental enabled"
+					onValueChange={(next) => {
+						const enabled = String(next) === 'true';
 						const patch = {
 							incremental: {
 								...(params?.incremental ?? {}),
@@ -596,10 +606,7 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					<option value="false">false</option>
-					<option value="true">true</option>
-				</select>
+				/>
 			</Field>
 
 			{#if incrementalEnabled}
@@ -620,10 +627,11 @@
 				</Field>
 
 				<Field label="incremental.cursor_type">
-					<select
+					<ThemedSelect
 						value={incrementalCursorType}
-						on:change={(event) => {
-							const cursorType = (event.currentTarget as HTMLSelectElement).value;
+						options={cursorTypeOptions}
+						ariaLabel="api incremental cursor type"
+						onValueChange={(cursorType) => {
 							const patch = {
 								incremental: {
 									...(params?.incremental ?? {}),
@@ -634,11 +642,7 @@
 							draft(patch);
 							commit(patch);
 						}}
-					>
-						{#each cursorTypes as ct}
-							<option value={ct}>{ct}</option>
-						{/each}
-					</select>
+					/>
 				</Field>
 
 				<Field label="incremental.state_key">
@@ -659,10 +663,12 @@
 			{/if}
 
 			<Field label="partition.enabled">
-				<select
+				<ThemedSelect
 					value={String(partitionEnabled)}
-					on:change={(event) => {
-						const enabled = (event.currentTarget as HTMLSelectElement).value === 'true';
+					options={boolOptions}
+					ariaLabel="api partition enabled"
+					onValueChange={(next) => {
+						const enabled = String(next) === 'true';
 						const patch = {
 							partition: {
 								...(params?.partition ?? {}),
@@ -672,18 +678,16 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					<option value="false">false</option>
-					<option value="true">true</option>
-				</select>
+				/>
 			</Field>
 
 			{#if partitionEnabled}
 			<Field label="partition.kind">
-					<select
+					<ThemedSelect
 						value={partitionKind}
-						on:change={(event) => {
-							const kind = (event.currentTarget as HTMLSelectElement).value;
+						options={partitionKindOptions}
+						ariaLabel="api partition kind"
+						onValueChange={(kind) => {
 							const patch = {
 								partition: {
 									...(params?.partition ?? {}),
@@ -694,11 +698,7 @@
 							draft(patch);
 							commit(patch);
 						}}
-					>
-						{#each partitionKinds as pk}
-							<option value={pk}>{pk}</option>
-						{/each}
-					</select>
+					/>
 				</Field>
 
 				<Field label="partition.bind_key">
@@ -767,18 +767,16 @@
 			summaryRight={advancedSummary}
 		>
 			<Field label="output mode">
-				<select
+				<ThemedSelect
 					value={outputMode}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as SourceOutputMode;
+					options={outputModeOptions}
+					ariaLabel="api output mode"
+					onValueChange={(next) => {
+						const mode = String(next) as SourceOutputMode;
 						draft({ output: { ...(params?.output ?? {}), mode } });
 						commit({ output: { ...(params?.output ?? {}), mode } });
 					}}
-				>
-					{#each outputModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			{#if outputMode === 'json'}
@@ -805,10 +803,11 @@
 			{/if}
 
 			<Field label="partition.on_error">
-				<select
+				<ThemedSelect
 					value={partitionOnError}
-					on:change={(event) => {
-						const on_error = (event.currentTarget as HTMLSelectElement).value;
+					options={partitionPolicyOptions}
+					ariaLabel="api partition on error"
+					onValueChange={(on_error) => {
 						const patch = {
 							partition: {
 								...(params?.partition ?? {}),
@@ -819,18 +818,16 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					{#each partitionErrorPolicies as policy}
-						<option value={policy}>{policy}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			<Field label="cache_policy.mode">
-				<select
+				<ThemedSelect
 					value={cacheMode}
-					on:change={(event) => {
-						const mode = (event.currentTarget as HTMLSelectElement).value as (typeof cacheModes)[number];
+					options={cacheModeOptions}
+					ariaLabel="api cache mode"
+					onValueChange={(next) => {
+						const mode = String(next) as (typeof cacheModes)[number];
 						const patch = {
 							cache_policy: {
 								...(params?.cache_policy ?? {}),
@@ -841,11 +838,7 @@
 						draft(patch);
 						commit(patch);
 					}}
-				>
-					{#each cacheModes as mode}
-						<option value={mode}>{mode}</option>
-					{/each}
-				</select>
+				/>
 			</Field>
 
 			{#if cacheMode === 'ttl'}
