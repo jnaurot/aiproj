@@ -101,6 +101,7 @@ async def test_partition_api_exec_runs_concurrently(monkeypatch):
 					"enabled": True,
 					"kind": "static_list",
 					"bind_key": "partition",
+					"on_error": "skip_failed",
 					"parallelism_cap": 3,
 					"static_values": [1, 2, 3],
 				},
