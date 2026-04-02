@@ -4,6 +4,11 @@
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
 	import { displayStatusFromBinding, statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
+	import {
+		buildNodeExecutionBadge,
+		normalizeConsumeMode,
+		resolveNodeRuntimeCounts
+	} from './nodeExecutionBadge';
 
 
 	// xyflow passes these props into node components
@@ -30,6 +35,11 @@
 			: null;
 	$: freezeIcon = freezeMode === 'sticky' ? '#' : '';
 	$: freezeClass = freezeMode === 'sticky' ? 'freeze-sticky' : freezeMode === 'per_run' ? 'freeze-per-run' : '';
+	$: processingPolicy = (data as any)?.processingPolicy ?? {};
+	$: consumeMode = normalizeConsumeMode(processingPolicy);
+	$: batchSize = Math.max(1, Number((processingPolicy as any)?.batch_size ?? 1) || 1);
+	$: runtimeCounts = resolveNodeRuntimeCounts(($graphStore as any)?.queueRuntime, id);
+	$: executionBadge = buildNodeExecutionBadge(consumeMode, runtimeCounts, batchSize);
 
 	// IO contracts are derived from node kind/params.
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
@@ -115,6 +125,9 @@
 	<div class="footer">
 		<span class="status">{lifecycleLabel}{freshnessHint}</span>
 		<div class="footerRight">
+			<span class="modeBadge mono" title={`mode=${executionBadge.mode}`}>
+				{executionBadge.label} {executionBadge.detail}
+			</span>
 			<slot name="footer-right" />
 		</div>
 	</div>
@@ -191,6 +204,29 @@
 		min-width: 0;
 		text-align: right;
 		opacity: 0.85;
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+
+	.modeBadge {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		border: 1px solid #283044;
+		border-radius: 999px;
+		padding: 1px 8px;
+		line-height: 1.45;
+		font-size: 11px;
+		color: #d5def0;
+		background: rgba(21, 32, 52, 0.65);
+		white-space: nowrap;
+	}
+
+	.mono {
+		font-variant-numeric: tabular-nums;
 	}
 
 	:global(.portHandle) {
