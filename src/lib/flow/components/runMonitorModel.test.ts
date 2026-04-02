@@ -116,6 +116,8 @@ describe('runMonitorModel', () => {
 			edgeId: 'e_1',
 			sourceLabel: 'Model A',
 			targetLabel: 'JobDescription',
+			lifecycle: 'waiting',
+			exec: 'idle',
 			depth: 6,
 			blocked: true,
 			full: false
@@ -192,6 +194,27 @@ describe('runMonitorModel', () => {
 		expect(preferredMonitorEdgeFocusNodeId('n_source', 'n_target')).toBe('n_target');
 		expect(preferredMonitorEdgeFocusNodeId('n_source', '')).toBe('n_source');
 		expect(preferredMonitorEdgeFocusNodeId('', '')).toBe('');
+	});
+
+	it('marks active work edges as running lifecycle', () => {
+		const rows = buildRunMonitorEdgeRows({
+			nodes: [
+				{ id: 'n1', position: { x: 0, y: 0 }, data: { kind: 'source', label: 'src', params: {} } } as any,
+				{ id: 'n2', position: { x: 0, y: 0 }, data: { kind: 'transform', label: 'dst', params: {} } } as any
+			],
+			edges: [
+				{
+					id: 'e_active',
+					source: 'n1',
+					target: 'n2',
+					targetHandle: 'in',
+					data: { exec: 'active', mode: 'work' }
+				} as any
+			],
+			queueRuntime: { metrics: { edges: { 'e_active:in': { depth: 0, blocked: false, full: false } } } }
+		});
+		expect(rows[0]?.lifecycle).toBe('running');
+		expect(rows[0]?.exec).toBe('active');
 	});
 
 	it('preserves control-gate blocked reason in monitor rows', () => {

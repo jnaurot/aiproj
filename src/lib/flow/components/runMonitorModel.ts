@@ -2,6 +2,7 @@ import type { Edge, Node } from '@xyflow/svelte';
 
 import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
 import { displayStatusFromBinding } from '$lib/flow/store/runScope';
+import { projectEdgeStatus, type EdgeLifecycleStatus } from '$lib/flow/store/statusModel';
 
 type QueueMetric = {
 	depth?: unknown;
@@ -67,6 +68,8 @@ export type RunMonitorEdgeRow = {
 	sourceLabel: string;
 	targetNodeId: string;
 	targetLabel: string;
+	lifecycle: EdgeLifecycleStatus;
+	exec: 'idle' | 'active' | 'done';
 	depth: number;
 	blocked: boolean;
 	full: boolean;
@@ -302,9 +305,16 @@ export function buildRunMonitorEdgeRows(input: RunMonitorProjectionInput): RunMo
 		const targetNodeId = String((edge as any)?.target ?? '').trim();
 		const handle = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
 		const metric = parseEdgeMetric(edgeMetrics, `${edgeId}:${handle}`);
-		const depth = Math.max(0, Number(metric.depth ?? 0));
-		const blocked = Boolean(metric.blocked ?? false);
-		const full = Boolean(metric.full ?? false);
+		const edgeStatus = projectEdgeStatus({
+			exec: (edge?.data as any)?.exec,
+			mode: (edge?.data as any)?.mode,
+			depth: metric.depth,
+			blocked: metric.blocked,
+			full: metric.full
+		});
+		const depth = edgeStatus.diagnostics.depth;
+		const blocked = edgeStatus.diagnostics.blocked;
+		const full = edgeStatus.diagnostics.full;
 		const rawAge = metric.oldestAgeSec;
 		const oldestAgeSec = Number.isFinite(Number(rawAge)) ? Math.max(0, Number(rawAge)) : null;
 		out.push({
@@ -314,6 +324,8 @@ export function buildRunMonitorEdgeRows(input: RunMonitorProjectionInput): RunMo
 			sourceLabel: String((labelById.get(sourceNodeId) ?? sourceNodeId) || '(unknown node)'),
 			targetNodeId,
 			targetLabel: String((labelById.get(targetNodeId) ?? targetNodeId) || '(unknown node)'),
+			lifecycle: edgeStatus.lifecycle,
+			exec: edgeStatus.exec,
 			depth,
 			blocked,
 			full,

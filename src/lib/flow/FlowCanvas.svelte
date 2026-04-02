@@ -846,8 +846,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			const statuses: Array<'active' | 'waiting' | 'blocked' | 'full'> = [];
 			if (row.blocked) statuses.push('blocked');
 			if (row.full) statuses.push('full');
-			if (row.depth <= 0) statuses.push('waiting');
-			if (row.depth > 0 && !row.blocked) statuses.push('active');
+			if (row.lifecycle === 'waiting') statuses.push('waiting');
+			if (row.lifecycle === 'running') statuses.push('active');
 			return statuses.some((status) => runMonitorEdgeStatusFilters.includes(status));
 		})
 		.slice(0, 40);
