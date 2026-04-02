@@ -5276,6 +5276,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<div class="runMonitorNodeHead" role="row">
 														<span>node</span>
 														<span>status</span>
+														<span>exec</span>
 														<span>mode</span>
 														<span>processed</span>
 														<span>pending</span>
@@ -5302,6 +5303,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 																{row.lifecycle}
 																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
 															</span>
+															<span>{row.execution}</span>
 															<span>{row.consumeMode === 'single_item' ? 'single' : row.consumeMode}</span>
 															<span>
 																{row.totalProcessed}
@@ -7183,7 +7185,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	.runMonitorNodeTable .runMonitorNodeRow,
 	.runMonitorHistoryTable .runMonitorNodeHead,
 	.runMonitorHistoryTable .runMonitorNodeRow {
-		grid-template-columns: 1.25fr 0.8fr 0.6fr 0.8fr 0.6fr 0.6fr 1.3fr;
+		grid-template-columns: 1.2fr 0.8fr 0.65fr 0.6fr 0.8fr 0.6fr 0.6fr 1.25fr;
 	}
 
 	.runMonitorHistoryTable .runMonitorNodeHead,
