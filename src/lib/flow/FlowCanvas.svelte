@@ -5323,6 +5323,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													<span>port</span>
 													<span>from</span>
 													<span>to</span>
+													<span>status</span>
 													<span>depth</span>
 													<span>age</span>
 												</div>
@@ -5341,6 +5342,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 															<span class="runMonitorEdgePort">{row.handle}</span>
 															<span>{row.sourceLabel}</span>
 															<span>{row.targetLabel}</span>
+															<span>{row.lifecycle}</span>
 															<span>{row.depth}{row.blocked ? ' b' : ''}{row.full ? ' f' : ''}</span>
 															<span>{row.oldestAgeSec === null ? '-' : row.oldestAgeSec.toFixed(1)}</span>
 														</button>
