@@ -50,6 +50,7 @@ describe('statusModel node projection', () => {
 	it('normalizes supported runtime statuses only', () => {
 		expect(normalizeRuntimeStatus('RUNNING')).toBe('running');
 		expect(normalizeRuntimeStatus('skipped')).toBe('skipped');
+		expect(normalizeRuntimeStatus('cancelled')).toBe('canceled');
 		expect(normalizeRuntimeStatus('unknown')).toBeNull();
 	});
 });
@@ -80,4 +81,3 @@ describe('toDisplayNodeStatus', () => {
 		expect(toDisplayNodeStatus('canceled')).toBe('canceled');
 	});
 });
-

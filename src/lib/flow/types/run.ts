@@ -14,6 +14,13 @@ export type RunRequest = {
   runMode?: "from_start" | "from_selected_onward" | "selected_only";
 };
 
+export type NodeFinishedStatus =
+	| "succeeded"
+	| "failed"
+	| "skipped"
+	| "canceled"
+	| "stale";
+
 export type KnownRunEvent =
   | {
       type: "run_started";
@@ -79,7 +86,7 @@ export type KnownRunEvent =
       runId: string;
       at: string;
       nodeId: string;
-      status: RunStatus;
+      status: NodeFinishedStatus;
       error?: string;
       errorCode?: string;
       errorDetails?: {

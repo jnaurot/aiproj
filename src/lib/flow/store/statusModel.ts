@@ -83,6 +83,7 @@ export function normalizeRuntimeStatus(raw: unknown): RuntimeNodeStatus | null {
 	if (value === 'succeeded') return 'succeeded';
 	if (value === 'failed') return 'failed';
 	if (value === 'canceled') return 'canceled';
+	if (value === 'cancelled') return 'canceled';
 	if (value === 'skipped') return 'skipped';
 	if (value === 'stale') return 'stale';
 	if (value === 'busy') return 'busy';
