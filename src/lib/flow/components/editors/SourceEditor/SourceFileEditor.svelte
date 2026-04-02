@@ -25,6 +25,7 @@
 		sortRecentSnapshotsForDisplay,
 		updateRecentSnapshotInPlace
 	} from './sourceFileSnapshots';
+	import { emitSourceEditorTelemetry, makeAutoAdjustmentEvent } from './sourceEditorTelemetry';
 	import { detectFileFormatFromFilename } from './fileFormatDetect';
 
 	type FileFormat = SourceFileParams['file_format'];
@@ -294,6 +295,15 @@
 
 	function pushAdjustments(entries: string[]): void {
 		if (!activeNodeId || entries.length === 0) return;
+		for (const entry of entries) {
+			emitSourceEditorTelemetry(
+				makeAutoAdjustmentEvent('file', activeNodeId, entry, {
+					file_format,
+					filename: resolveFilename(),
+					snapshotId
+				})
+			);
+		}
 		const current = recentAdjustmentsByNode.get(activeNodeId) ?? [];
 		const next = [...entries, ...current].slice(0, ADJUSTMENT_LOG_LIMIT);
 		recentAdjustmentsByNode.set(activeNodeId, next);

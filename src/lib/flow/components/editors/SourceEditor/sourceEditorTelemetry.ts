@@ -24,6 +24,10 @@ export type SourceEditorTelemetryEvent =
 			redactedContext: Record<string, unknown>;
 	  };
 
+type TelemetrySink = (event: SourceEditorTelemetryEvent) => void;
+
+let telemetrySink: TelemetrySink | null = null;
+
 const SECRET_KEY_PATTERN = /(token|secret|password|key|connection_string|auth)/i;
 
 export function redactTelemetryContext(
@@ -74,3 +78,16 @@ export function makeAutoAdjustmentEvent(
 	};
 }
 
+export function setSourceEditorTelemetrySink(sink: TelemetrySink | null): void {
+	telemetrySink = sink;
+}
+
+export function emitSourceEditorTelemetry(event: SourceEditorTelemetryEvent): void {
+	if (telemetrySink) {
+		telemetrySink(event);
+		return;
+	}
+	if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+		window.dispatchEvent(new CustomEvent('source-editor-telemetry', { detail: event }));
+	}
+}

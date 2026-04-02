@@ -1403,6 +1403,10 @@
 		});
 		newPortHandle = '';
 	}
+
+	function openSourceFullEditor(): void {
+		sourceGuidedMode = false;
+	}
 </script>
 
 {#if selectedNode}
@@ -1468,6 +1472,11 @@
 							<div class="guidedAssistDesc">{control.description}</div>
 						</div>
 					{/each}
+				</div>
+				<div class="assistActionRow">
+					<button type="button" class="small" on:click={openSourceFullEditor}>
+						Open full editor
+					</button>
 				</div>
 			</div>
 		{/if}

@@ -1,9 +1,11 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import {
+	emitSourceEditorTelemetry,
 	makeAutoAdjustmentEvent,
 	makeSectionToggleEvent,
-	makeValidationEvent
+	makeValidationEvent,
+	setSourceEditorTelemetrySink
 } from '$lib/flow/components/editors/SourceEditor/sourceEditorTelemetry';
 
 describe('source editor telemetry helpers', () => {
@@ -47,5 +49,37 @@ describe('source editor telemetry helpers', () => {
 		expect(events[1]).toHaveProperty('controlId');
 		expect(events[2]).toHaveProperty('redactedContext');
 	});
-});
 
+	test('emits through explicit telemetry sink when configured', () => {
+		const captured: unknown[] = [];
+		setSourceEditorTelemetrySink((event) => captured.push(event));
+		const event = makeSectionToggleEvent('api', 'node-1', 'request', true);
+		emitSourceEditorTelemetry(event);
+		expect(captured).toHaveLength(1);
+		expect(captured[0]).toEqual(event);
+		setSourceEditorTelemetrySink(null);
+	});
+
+	test('dispatches browser custom event when no telemetry sink configured', () => {
+		setSourceEditorTelemetrySink(null);
+		const priorWindow = (globalThis as any).window;
+		const shimWindow = new EventTarget() as EventTarget & {
+			dispatchEvent: (event: Event) => boolean;
+			addEventListener: (type: string, listener: EventListenerOrEventListenerObject | null) => void;
+			removeEventListener: (type: string, listener: EventListenerOrEventListenerObject | null) => void;
+		};
+		(globalThis as any).window = shimWindow;
+		const listener = vi.fn();
+		shimWindow.addEventListener('source-editor-telemetry', listener as EventListener);
+		try {
+			const event = makeValidationEvent('api', 'node-1', 'content_type', 'warning', 'shown');
+			emitSourceEditorTelemetry(event);
+			expect(listener).toHaveBeenCalledTimes(1);
+			const customEvent = listener.mock.calls[0]?.[0] as CustomEvent;
+			expect(customEvent?.detail).toEqual(event);
+		} finally {
+			shimWindow.removeEventListener('source-editor-telemetry', listener as EventListener);
+			(globalThis as any).window = priorWindow;
+		}
+	});
+});

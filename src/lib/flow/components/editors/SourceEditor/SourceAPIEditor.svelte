@@ -13,6 +13,12 @@
 	import SourceEffectivePreview from './SourceEffectivePreview.svelte';
 	import { effectiveConfigForSource } from './sourceEffectiveConfig';
 	import { sourceApiValidationHints, sourceControlFromParamPath } from './sourceValidationHints';
+	import {
+		emitSourceEditorTelemetry,
+		makeAutoAdjustmentEvent,
+		makeSectionToggleEvent,
+		makeValidationEvent
+	} from './sourceEditorTelemetry';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type Method = SourceAPIParams['method'];
@@ -292,9 +298,60 @@
 	$: effectiveConfigLines = effectiveConfigForSource('api', params as Record<string, unknown>);
 	$: validationHints = sourceApiValidationHints(params);
 	$: highlightedControl = sourceControlFromParamPath('api', asString((nodeError as any)?.paramPath, ''));
+	let previousValidationHintKeys = new Set<string>();
+
+	$: {
+		const nextKeys = new Set<string>();
+		for (const hint of validationHints) {
+			const key = `${hint.controlId}::${hint.level}::${hint.message}`;
+			nextKeys.add(key);
+			if (activeNodeId && !previousValidationHintKeys.has(key)) {
+				emitSourceEditorTelemetry(
+					makeValidationEvent(
+						'api',
+						activeNodeId,
+						hint.controlId,
+						hint.level as 'info' | 'warning' | 'error',
+						'shown'
+					)
+				);
+			}
+		}
+		if (activeNodeId) {
+			for (const key of previousValidationHintKeys) {
+				if (nextKeys.has(key)) continue;
+				const [controlId, level] = key.split('::');
+				emitSourceEditorTelemetry(
+					makeValidationEvent(
+						'api',
+						activeNodeId,
+						controlId ?? 'unknown',
+						((level as 'info' | 'warning' | 'error') ?? 'warning'),
+						'resolved'
+					)
+				);
+			}
+		}
+		previousValidationHintKeys = nextKeys;
+	}
+
+	function toggleSection(sectionId: string, open: boolean, patch: Record<string, boolean>): void {
+		setUi(patch);
+		if (!activeNodeId) return;
+		emitSourceEditorTelemetry(makeSectionToggleEvent('api', activeNodeId, sectionId, open));
+	}
 
 	function pushAdjustments(entries: string[]): void {
 		if (!activeNodeId || entries.length === 0) return;
+		for (const entry of entries) {
+			emitSourceEditorTelemetry(
+				makeAutoAdjustmentEvent('api', activeNodeId, entry, {
+					method,
+					bodyMode,
+					contentType: selectedContentType
+				})
+			);
+		}
 		const current = recentAdjustmentsByNode.get(activeNodeId) ?? [];
 		const next = [...entries, ...current].slice(0, ADJUSTMENT_LOG_LIMIT);
 		recentAdjustmentsByNode.set(activeNodeId, next);
@@ -308,7 +365,7 @@
 			title="Request"
 			variant="primary"
 			open={ui.requestOpen}
-			onToggle={(open) => setUi({ requestOpen: open })}
+			onToggle={(open) => toggleSection('request', open, { requestOpen: open })}
 			summaryRight={requestSummary}
 		>
 			<Field label="method">
@@ -360,7 +417,7 @@
 				title="Query params"
 				variant="sub"
 				open={ui.queryOpen}
-				onToggle={(open) => setUi({ queryOpen: open })}
+				onToggle={(open) => toggleSection('query', open, { queryOpen: open })}
 				summaryRight={querySummary}
 			>
 				<KeyValueEditor
@@ -391,7 +448,7 @@
 				title="Headers"
 				variant="sub"
 				open={ui.headersOpen}
-				onToggle={(open) => setUi({ headersOpen: open })}
+				onToggle={(open) => toggleSection('headers', open, { headersOpen: open })}
 				summaryRight={headersSummary}
 			>
 				<KeyValueEditor
@@ -408,7 +465,7 @@
 				title="Body"
 				variant="sub"
 				open={ui.bodyOpen}
-				onToggle={(open) => setUi({ bodyOpen: open })}
+				onToggle={(open) => toggleSection('body', open, { bodyOpen: open })}
 				summaryRight={bodySummary}
 			>
 				<Field label="body mode">
@@ -483,7 +540,7 @@
 			title="Auth"
 			variant="primary"
 			open={ui.authOpen}
-			onToggle={(open) => setUi({ authOpen: open })}
+			onToggle={(open) => toggleSection('auth', open, { authOpen: open })}
 			summaryRight={authSummary}
 		>
 			<Field label="auth_type">
@@ -516,7 +573,7 @@
 			title="Transport"
 			variant="primary"
 			open={ui.transportOpen}
-			onToggle={(open) => setUi({ transportOpen: open })}
+			onToggle={(open) => toggleSection('transport', open, { transportOpen: open })}
 			summaryRight={transportSummary}
 		>
 			<Field label="timeout_seconds">
@@ -805,7 +862,7 @@
 			title="Advanced"
 			variant="primary"
 			open={ui.executionOpen}
-			onToggle={(open) => setUi({ executionOpen: open })}
+			onToggle={(open) => toggleSection('advanced', open, { executionOpen: open })}
 			summaryRight={advancedSummary}
 		>
 			<Field label="output mode">
@@ -908,7 +965,7 @@
 			title="Debug"
 			variant="primary"
 			open={ui.debugOpen}
-			onToggle={(open) => setUi({ debugOpen: open })}
+			onToggle={(open) => toggleSection('debug', open, { debugOpen: open })}
 			summaryRight="effective request"
 		>
 			<div class="previewMono">

@@ -13,6 +13,7 @@
 		sourceControlFromParamPath,
 		sourceDatabaseValidationHints
 	} from './sourceValidationHints';
+	import { emitSourceEditorTelemetry, makeValidationEvent } from './sourceEditorTelemetry';
 	import { asNumberOrEmpty, asString, parseOptionalInt } from '$lib/flow/components/editors/shared';
 
 	type SourceDatabasePatch = Partial<SourceDatabaseParams>;
@@ -46,6 +47,42 @@
 		'database',
 		asString((nodeError as any)?.paramPath, '')
 	);
+	$: activeNodeId = asString(selectedNode?.id, '');
+	let previousValidationHintKeys = new Set<string>();
+	$: {
+		const nextKeys = new Set<string>();
+		for (const hint of validationHints) {
+			const key = `${hint.controlId}::${hint.level}::${hint.message}`;
+			nextKeys.add(key);
+			if (activeNodeId && !previousValidationHintKeys.has(key)) {
+				emitSourceEditorTelemetry(
+					makeValidationEvent(
+						'database',
+						activeNodeId,
+						hint.controlId,
+						hint.level as 'info' | 'warning' | 'error',
+						'shown'
+					)
+				);
+			}
+		}
+		if (activeNodeId) {
+			for (const key of previousValidationHintKeys) {
+				if (nextKeys.has(key)) continue;
+				const [controlId, level] = key.split('::');
+				emitSourceEditorTelemetry(
+					makeValidationEvent(
+						'database',
+						activeNodeId,
+						controlId ?? 'unknown',
+						((level as 'info' | 'warning' | 'error') ?? 'warning'),
+						'resolved'
+					)
+				);
+			}
+		}
+		previousValidationHintKeys = nextKeys;
+	}
 	const outputModes: SourceOutputMode[] = ['table', 'text', 'json', 'binary'];
 	const cursorTypes = ['auto', 'int', 'float', 'datetime', 'string'] as const;
 	const partitionKinds = ['static_list', 'numeric_shards', 'date_range'] as const;
