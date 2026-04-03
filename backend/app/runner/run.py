@@ -10056,8 +10056,19 @@ async def run_graph(
                                     reason_code=empty_reason,
                                 )
 
-        for edge_id, state in sorted(edge_control_state_by_edge_id.items(), key=lambda item: item[0]):
-            if not bool((state or {}).get("closed")):
+        all_run_work_edges = sorted(
+            {
+                str(edge_id)
+                for edge_id, edge in edges.items()
+                if str(edge_id or "").strip()
+                and str(edge.get("source") or "").strip() in sub
+                and str(edge.get("target") or "").strip() in sub
+                and _edge_mode(edge or {}) == "work"
+            }
+        )
+        for edge_id in all_run_work_edges:
+            state = edge_control_state_by_edge_id.get(edge_id) or {}
+            if not bool(state.get("closed")):
                 await _emit(
                     {
                         "type": "control_signal",
@@ -10069,6 +10080,25 @@ async def run_graph(
                 )
         for node_id in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
             await _maybe_emit_node_terminal(str(node_id), "completed")
+
+        missing_terminal_nodes = sorted(
+            [str(node_id) for node_id in sub if str(node_id) not in node_terminal_emitted],
+            key=lambda n: order_index.get(n, 10**9),
+        )
+        if missing_terminal_nodes:
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "error",
+                    "message": (
+                        "[control-plane] terminality_incomplete "
+                        f"missing_nodes={','.join(missing_terminal_nodes)}"
+                    ),
+                }
+            )
+            run_failed = True
 
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 
