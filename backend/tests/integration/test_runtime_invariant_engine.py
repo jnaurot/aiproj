@@ -44,3 +44,34 @@ async def test_runtime_emits_invariant_summary_on_finish(monkeypatch):
 	payload = summaries[-1].get("payload") if isinstance(summaries[-1].get("payload"), dict) else {}
 	assert payload.get("status") == "succeeded"
 	assert isinstance(payload.get("violations"), int)
+
+
+@pytest.mark.asyncio
+async def test_runtime_emits_control_plane_invariant_violations(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-control-plane-invariant"
+	handle = rt.create_run(run_id)
+
+	await handle.bus.emit({"type": "run_started"})
+	await handle.bus.emit(
+		{
+			"type": "run_telemetry",
+			"controlPlane": {
+				"monotonicViolation": True,
+				"terminalWithInflightNodeIds": ["n1"],
+			},
+		}
+	)
+	await asyncio.sleep(0)
+
+	events = await rt.list_run_events(run_id, after_id=0, limit=500)
+	violations = [e for e in events if str(e.get("type") or "") == "state_invariant_violation"]
+	assert violations
+	codes = {
+		str((evt.get("payload") or {}).get("code") or "")
+		for evt in violations
+		if isinstance(evt.get("payload"), dict)
+	}
+	assert "CONTROL_SIGNAL_SEQ_NON_MONOTONIC" in codes
+	assert "NODE_TERMINAL_WITH_INFLIGHT" in codes

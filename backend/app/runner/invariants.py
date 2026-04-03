@@ -83,4 +83,79 @@ def evaluate_runtime_invariants(
 				)
 			)
 
+	control_plane = telemetry.get("controlPlane") if isinstance(telemetry.get("controlPlane"), dict) else {}
+	if bool(control_plane.get("monotonicViolation")):
+		violations.append(
+			InvariantViolation(
+				code="CONTROL_SIGNAL_SEQ_NON_MONOTONIC",
+				message="Control signal sequence must be strictly monotonic within a run.",
+				severity="error",
+				node_ids=(),
+			)
+		)
+
+	duplicate_terminal = tuple(
+		sorted(str(node_id) for node_id in (control_plane.get("duplicateNodeTerminalIds") or []) if str(node_id).strip())
+	)
+	if duplicate_terminal:
+		violations.append(
+			InvariantViolation(
+				code="NODE_TERMINAL_DUPLICATE",
+				message="NODE_TERMINAL must be emitted once per node per run.",
+				severity="error",
+				node_ids=duplicate_terminal,
+			)
+		)
+
+	terminal_with_inflight = tuple(
+		sorted(
+			str(node_id)
+			for node_id in (control_plane.get("terminalWithInflightNodeIds") or [])
+			if str(node_id).strip()
+		)
+	)
+	if terminal_with_inflight:
+		violations.append(
+			InvariantViolation(
+				code="NODE_TERMINAL_WITH_INFLIGHT",
+				message="Node terminal implies inflight=0.",
+				severity="error",
+				node_ids=terminal_with_inflight,
+			)
+		)
+
+	terminal_with_lease = tuple(
+		sorted(
+			str(node_id)
+			for node_id in (control_plane.get("terminalWithActiveLeaseNodeIds") or [])
+			if str(node_id).strip()
+		)
+	)
+	if terminal_with_lease:
+		violations.append(
+			InvariantViolation(
+				code="NODE_TERMINAL_WITH_ACTIVE_LEASE",
+				message="Node terminal implies no active execution lease.",
+				severity="error",
+				node_ids=terminal_with_lease,
+			)
+		)
+
+	completed_not_settled = tuple(
+		sorted(
+			str(node_id)
+			for node_id in (control_plane.get("completedTerminalInputNotSettledNodeIds") or [])
+			if str(node_id).strip()
+		)
+	)
+	if completed_not_settled:
+		violations.append(
+			InvariantViolation(
+				code="COMPLETED_TERMINAL_INPUT_NOT_SETTLED",
+				message="Completed terminal requires required work inputs closed+drained.",
+				severity="error",
+				node_ids=completed_not_settled,
+			)
+		)
+
 	return violations

@@ -3299,7 +3299,7 @@ async def run_graph(
         return names or None
 
     async def _emit(evt: Dict[str, Any]) -> None:
-        nonlocal control_signal_seq
+        nonlocal control_signal_seq, control_signal_monotonic_violation, last_emitted_control_signal_seq
         payload = enrich_control_signal_event(evt) if isinstance(evt, dict) else evt
         if payload is None:
             logger.warning("control_signal_rejected_unknown_signal")
@@ -3313,12 +3313,23 @@ async def run_graph(
                 payload["seq"] = int(control_signal_seq)
             else:
                 control_signal_seq = max(int(control_signal_seq), int(payload.get("seq") or 0))
+            emitted_seq = max(0, int(payload.get("seq") or 0))
+            if emitted_seq > 0:
+                if int(last_emitted_control_signal_seq) > 0 and emitted_seq <= int(last_emitted_control_signal_seq):
+                    control_signal_monotonic_violation = True
+                last_emitted_control_signal_seq = max(int(last_emitted_control_signal_seq), emitted_seq)
             signal = str(payload.get("signal") or "").strip().lower()
             node_id = str(payload.get("nodeId") or "").strip()
             if signal == "llm_acquired" and node_id:
                 active_llm_lease_nodes.add(node_id)
             elif signal == "llm_released" and node_id:
                 active_llm_lease_nodes.discard(node_id)
+            elif signal == "node_terminal" and node_id:
+                node_terminal_signal_counts[node_id] = int(node_terminal_signal_counts.get(node_id, 0)) + 1
+                if int(node_inflight_counts.get(node_id, 0)) > 0:
+                    node_terminal_with_inflight.add(node_id)
+                if node_id in active_llm_lease_nodes:
+                    node_terminal_with_active_lease.add(node_id)
             edge_id = str(payload.get("edgeId") or "").strip()
             if edge_id:
                 edge_control_state_by_edge_id[edge_id] = reduce_edge_control_state(
@@ -3442,6 +3453,12 @@ async def run_graph(
     total_succeeded = 0
     total_failed = 0
     control_signal_seq = 0
+    control_signal_monotonic_violation = False
+    last_emitted_control_signal_seq = 0
+    node_terminal_signal_counts: Dict[str, int] = {}
+    node_terminal_with_inflight: set[str] = set()
+    node_terminal_with_active_lease: set[str] = set()
+    completed_terminal_input_not_settled: set[str] = set()
     active_llm_lease_nodes: set[str] = set()
     edge_control_state_by_edge_id: Dict[str, Dict[str, Any]] = {}
 
@@ -3473,6 +3490,20 @@ async def run_graph(
             "schema_infer": schema_delta,
             "strict_schema_edge_checks": strict_schema_edge_checks,
             "strict_coercion_policy": strict_coercion_policy,
+            "controlPlane": {
+                "lastControlSeq": int(control_signal_seq),
+                "monotonicViolation": bool(control_signal_monotonic_violation),
+                "duplicateNodeTerminalIds": sorted(
+                    str(node_id)
+                    for node_id, count in node_terminal_signal_counts.items()
+                    if str(node_id or "").strip() and int(count or 0) > 1
+                ),
+                "terminalWithInflightNodeIds": sorted(str(node_id) for node_id in node_terminal_with_inflight),
+                "terminalWithActiveLeaseNodeIds": sorted(str(node_id) for node_id in node_terminal_with_active_lease),
+                "completedTerminalInputNotSettledNodeIds": sorted(
+                    str(node_id) for node_id in completed_terminal_input_not_settled
+                ),
+            },
             "reproducibility": reproducibility_metadata,
         })
 
@@ -8094,6 +8125,7 @@ async def run_graph(
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
         control_gate_state_by_node: Dict[str, Dict[str, Any]] = {}
         node_terminal_emitted: set[str] = set()
+        node_terminal_reason_by_node: Dict[str, str] = {}
 
         def _kind_cap_key(raw_kind: Any) -> str:
             kind_value = str(raw_kind or "").strip().lower()
@@ -9031,6 +9063,7 @@ async def run_graph(
             if node_key in node_terminal_emitted:
                 return
             node_terminal_emitted.add(node_key)
+            node_terminal_reason_by_node[node_key] = str(reason or "completed")
             await _emit(
                 {
                     "type": "control_signal",
@@ -10167,6 +10200,36 @@ async def run_graph(
                 )
         for node_id in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
             await _maybe_emit_node_terminal(str(node_id), "completed")
+
+        for node_id, reason_code in sorted(node_terminal_reason_by_node.items(), key=lambda item: order_index.get(item[0], 10**9)):
+            if str(reason_code or "").strip().lower() != "completed":
+                continue
+            policy = _effective_node_runtime_policy(node_id)
+            consume_mode = str(policy.get("consume_mode") or "once")
+            if consume_mode == "once":
+                continue
+            required_edge_ids = [str(info.get("edgeId") or "") for info in _incoming_work_edge_infos(node_id)]
+            if not can_node_terminalize(
+                required_work_edge_ids=required_edge_ids,
+                edge_control_state=edge_control_state_by_edge_id,
+                inflight_count=int(node_inflight_counts.get(node_id, 0)),
+                has_active_lease=bool(node_id in active_llm_lease_nodes),
+            ):
+                completed_terminal_input_not_settled.add(str(node_id))
+        if completed_terminal_input_not_settled:
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "error",
+                    "message": (
+                        "[control-plane] completed_terminal_input_not_settled "
+                        f"node_ids={','.join(sorted(completed_terminal_input_not_settled, key=lambda n: order_index.get(n, 10**9)))}"
+                    ),
+                }
+            )
+            run_failed = True
 
         missing_terminal_nodes = sorted(
             [str(node_id) for node_id in sub if str(node_id) not in node_terminal_emitted],
