@@ -161,6 +161,11 @@ export function projectNodeStatus(
 	} else if (runtime === 'stale') {
 		lifecycle = 'completed';
 		execution = 'inactive';
+	} else if (runtime === 'idle' && hasArtifact) {
+		// Preserve completed lifecycle once a node has produced/bound artifact history.
+		// The next run can still transition it via normal run-start/run-event updates.
+		lifecycle = 'completed';
+		execution = 'finished';
 	} else if (!runtime && hasArtifact) {
 		lifecycle = 'completed';
 		execution = 'finished';

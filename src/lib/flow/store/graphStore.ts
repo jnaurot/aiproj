@@ -5638,20 +5638,30 @@ function resetRunUiState(state: GraphState): GraphState {
 	const edges = resetEdgesExec(state.edges);
 	const nodes = applyLlmHolderToNodes(state.nodes, null);
 	const normalizedBindings = ensureNormalizedBindingsForNodes(nodes as any, state.nodeBindings ?? {});
-	const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(nodes as any));
 	const nodeBindings: Record<string, NormalizedNodeBinding> = {};
 	for (const [nodeId, binding] of Object.entries(normalizedBindings)) {
 		const nodeIdNorm = String(nodeId ?? '').trim();
 		if (!nodeIdNorm) continue;
-		if (pinnedNodeIds.has(nodeIdNorm)) {
-			nodeBindings[nodeIdNorm] = binding;
-			continue;
-		}
 		nodeBindings[nodeIdNorm] = {
 			...binding,
-			status: 'stale',
+			status: 'idle',
 			isUpToDate: false,
-			staleReason: 'RESET'
+			cacheValid: false,
+			currentRunId: null,
+			lastRunId: null,
+			staleReason: null,
+			current: {
+				execKey: null,
+				artifactId: null
+			},
+			last: {
+				execKey: null,
+				artifactId: null
+			},
+			currentExecKey: null,
+			currentArtifactId: null,
+			lastExecKey: null,
+			lastArtifactId: null
 		};
 	}
 	return withGraphMeta({

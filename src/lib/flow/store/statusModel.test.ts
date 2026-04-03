@@ -48,6 +48,13 @@ describe('statusModel node projection', () => {
 		expect(projection.display).toBe('succeeded');
 	});
 
+	it('keeps idle runtime with artifact history as completed', () => {
+		const projection = projectNodeStatus({ status: 'idle', currentArtifactId: 'art-1' });
+		expect(projection.lifecycle).toBe('completed');
+		expect(projection.execution).toBe('finished');
+		expect(projection.display).toBe('succeeded');
+	});
+
 	it('normalizes supported runtime statuses only', () => {
 		expect(normalizeRuntimeStatus('RUNNING')).toBe('running');
 		expect(normalizeRuntimeStatus('skipped')).toBe('skipped');
