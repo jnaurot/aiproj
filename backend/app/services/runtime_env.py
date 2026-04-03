@@ -32,6 +32,10 @@ class EnvVarSpec:
 _SUPPORTED_ENV_SPECS: List[EnvVarSpec] = [
 	EnvVarSpec("ARTIFACT_STORE", "Artifact storage backend (disk|memory).", "disk", restart_required=True, category="storage"),
 	EnvVarSpec("ARTIFACT_DIR", "Artifact root directory when ARTIFACT_STORE=disk.", "./data/artifacts", restart_required=True, category="storage"),
+	EnvVarSpec("ARTIFACT_RETENTION_MODE", "Artifact retention mode (off|by_run).", "by_run", category="storage"),
+	EnvVarSpec("ARTIFACT_KEEP_RECENT_RUNS", "How many recent terminal runs to retain artifacts for.", "5", category="storage"),
+	EnvVarSpec("ARTIFACT_RETENTION_INCLUDE_FAILED", "Include failed runs in run-scoped artifact retention.", "1", category="storage"),
+	EnvVarSpec("ARTIFACT_RETENTION_INCLUDE_CANCELED", "Include canceled runs in run-scoped artifact retention.", "1", category="storage"),
 	EnvVarSpec("ENABLE_MAINTENANCE_ENDPOINTS", "Enables maintenance endpoints.", "0", category="api"),
 	EnvVarSpec("MODEL_REGISTRY_REQUIRE_ADMIN", "Require admin header for model registry mutations.", "0", category="api"),
 	EnvVarSpec("NO_CUDA_GUARD_DISABLED", "Disable CUDA guard checks at startup.", "0", restart_required=True, category="runtime"),

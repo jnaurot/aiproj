@@ -123,6 +123,13 @@ When there is ambiguity, prefer these rules over ad-hoc assumptions.
 2. During active runs, user manual log scrolling must be respected (no forced autoscroll lock unless user is at bottom).
 3. Debug logging should not flood indefinitely after run completion.
 
+## Artifact Retention Rules
+
+1. Artifacts emitted during an active run must not be pruned mid-run.
+2. Artifact pruning is run-scoped (not per-node output-count scoped).
+3. Retention pruning executes only after run terminalization (`succeeded`/`failed`/`canceled`/`skipped`).
+4. Artifact links emitted in run logs should remain valid through run completion for retained runs.
+
 ## Implementation Process Preferences
 
 1. Ask clarifying questions before coding when requirements are ambiguous.

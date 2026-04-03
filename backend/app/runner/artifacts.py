@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _PAYLOAD_TYPES = {"table", "json", "text", "binary", "embeddings", "image", "audio", "video"}
 _ARTIFACT_METADATA_VERSION = 1
+_TERMINAL_RUN_STATUSES = {"succeeded", "failed", "canceled", "cancelled", "skipped"}
 _REQUIRED_ARTIFACT_META_KEYS = {
     "metadataVersion",
     "execKey",
@@ -32,6 +33,55 @@ _REQUIRED_ARTIFACT_META_KEYS = {
     "payloadType",
     "createdAt",
 }
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _retention_mode() -> str:
+    mode = str(os.getenv("ARTIFACT_RETENTION_MODE", "by_run") or "by_run").strip().lower()
+    return mode if mode in {"off", "by_run"} else "by_run"
+
+
+def _retention_keep_recent_runs() -> int:
+    raw = str(os.getenv("ARTIFACT_KEEP_RECENT_RUNS", "5") or "5").strip()
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return 5
+
+
+def _retention_include_failed() -> bool:
+    return _bool_env("ARTIFACT_RETENTION_INCLUDE_FAILED", True)
+
+
+def _retention_include_canceled() -> bool:
+    return _bool_env("ARTIFACT_RETENTION_INCLUDE_CANCELED", True)
+
+
+def _is_terminal_status(status: str) -> bool:
+    return str(status or "").strip().lower() in _TERMINAL_RUN_STATUSES
+
+
+def _should_include_status_for_retention(status: str) -> bool:
+    s = str(status or "").strip().lower()
+    if s == "succeeded":
+        return True
+    if s in {"failed"}:
+        return _retention_include_failed()
+    if s in {"canceled", "cancelled"}:
+        return _retention_include_canceled()
+    if s == "skipped":
+        return True
+    return False
 
 
 def _normalize_payload_schema(payload_schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -323,27 +373,33 @@ class MemoryArtifactStore:
             raise RuntimeError(
                 f"Artifact commit validation failed (size mismatch): {artifact.artifact_id}"
             )
-        self._prune_node_artifacts(
-            graph_id=str(artifact.graph_id or ""),
-            node_id=str(artifact.node_id or ""),
-            keep_last=5,
-        )
         return artifact.artifact_id
 
     async def record_run(self, run_id: str, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        is_terminal = _is_terminal_status(status)
         self._runs[run_id] = {
             "run_id": run_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now,
+            "updated_at": now,
+            "completed_at": now if is_terminal else None,
             "status": status,
             "deleted_at": None,
         }
 
     async def update_run_status(self, run_id: str, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        is_terminal = _is_terminal_status(status)
         rec = self._runs.get(run_id)
         if not rec:
             await self.record_run(run_id, status)
-            return
-        rec["status"] = status
+        else:
+            rec["status"] = status
+            rec["updated_at"] = now
+            if is_terminal:
+                rec["completed_at"] = now
+        if is_terminal:
+            await self._apply_run_retention(trigger_run_id=run_id)
 
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         return self._runs.get(run_id)
@@ -352,8 +408,62 @@ class MemoryArtifactStore:
         runs = list(self._runs.values())
         if not include_deleted:
             runs = [r for r in runs if r.get("status") != "deleted"]
-        runs.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        runs.sort(key=lambda r: r.get("completed_at") or r.get("created_at", ""), reverse=True)
         return runs
+
+    async def _apply_run_retention(self, *, trigger_run_id: str) -> None:
+        if _retention_mode() != "by_run":
+            return
+        keep_recent = _retention_keep_recent_runs()
+        active_statuses = {"pending", "running", "cancel_requested", "pausing", "paused", "resuming"}
+        candidates = []
+        for run_id, rec in list(self._runs.items()):
+            status = str(rec.get("status") or "").strip().lower()
+            if status == "deleted" or status in active_statuses:
+                continue
+            if not _is_terminal_status(status):
+                continue
+            if not _should_include_status_for_retention(status):
+                continue
+            candidates.append(
+                {
+                    "run_id": run_id,
+                    "status": status,
+                    "completed_at": str(rec.get("completed_at") or rec.get("created_at") or ""),
+                }
+            )
+        candidates.sort(key=lambda row: row.get("completed_at") or "", reverse=True)
+        keep_ids = {str(row.get("run_id") or "") for row in candidates[:keep_recent]}
+        prune_ids = [str(row.get("run_id") or "") for row in candidates if str(row.get("run_id") or "") not in keep_ids]
+        if not prune_ids:
+            return
+        logger.info(
+            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s",
+            keep_recent,
+            trigger_run_id,
+            len(candidates),
+            len(prune_ids),
+        )
+        pruned_run_ids: List[str] = []
+        removed_artifacts = 0
+        for rid in prune_ids:
+            out = await self.delete_run(rid, mode="hard", gc="unreferenced")
+            if bool(out.get("runDeleted")):
+                pruned_run_ids.append(rid)
+                removed_artifacts += int(out.get("artifactsRemoved") or 0)
+                logger.info(
+                    "artifact_retention_run_pruned run_id=%s artifacts_removed=%s blobs_deleted=%s",
+                    rid,
+                    int(out.get("artifactsRemoved") or 0),
+                    int(out.get("blobsDeleted") or 0),
+                )
+        logger.info(
+            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s artifacts_removed=%s",
+            keep_recent,
+            trigger_run_id,
+            len(pruned_run_ids),
+            removed_artifacts,
+        )
 
     async def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None:
         rid = str(run_id or "").strip()
@@ -758,13 +868,21 @@ class _SqliteArtifactIndex:
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
                     created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    completed_at TEXT,
                     status TEXT NOT NULL,
                     deleted_at TEXT
                 )
                 """
             )
+            run_cols = [r[1] for r in cur.execute("PRAGMA table_info(runs)").fetchall()]
+            if "updated_at" not in run_cols:
+                cur.execute("ALTER TABLE runs ADD COLUMN updated_at TEXT")
+            if "completed_at" not in run_cols:
+                cur.execute("ALTER TABLE runs ADD COLUMN completed_at TEXT")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_created_at ON runs(created_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_runs_completed_at ON runs(completed_at)")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS run_pause_snapshots (
@@ -886,13 +1004,6 @@ class _SqliteArtifactIndex:
                     artifact.exec_key,
                 ),
             )
-            if artifact.graph_id and artifact.node_id:
-                self._prune_node_artifacts_locked(
-                    cur=cur,
-                    graph_id=str(artifact.graph_id),
-                    node_id=str(artifact.node_id),
-                    keep_last=5,
-                )
             self._conn.commit()
 
     def _prune_node_artifacts_locked(
@@ -998,36 +1109,51 @@ class _SqliteArtifactIndex:
         }
 
     def record_run(self, run_id: str, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        is_terminal = _is_terminal_status(status)
         with self._lock:
             cur = self._conn.cursor()
             cur.execute(
                 """
-                INSERT INTO runs (run_id, created_at, status, deleted_at)
-                VALUES (?, ?, ?, NULL)
-                ON CONFLICT(run_id) DO UPDATE SET status=excluded.status
+                INSERT INTO runs (run_id, created_at, updated_at, completed_at, status, deleted_at)
+                VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    updated_at=excluded.updated_at,
+                    completed_at=COALESCE(excluded.completed_at, runs.completed_at),
+                    status=excluded.status
                 """,
-                (run_id, datetime.now(timezone.utc).isoformat(), status),
+                (run_id, now, now, now if is_terminal else None, status),
             )
             self._conn.commit()
 
     def update_run_status(self, run_id: str, status: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        is_terminal = _is_terminal_status(status)
         with self._lock:
             cur = self._conn.cursor()
             cur.execute(
                 """
-                INSERT INTO runs (run_id, created_at, status, deleted_at)
-                VALUES (?, ?, ?, NULL)
-                ON CONFLICT(run_id) DO UPDATE SET status=excluded.status
+                INSERT INTO runs (run_id, created_at, updated_at, completed_at, status, deleted_at)
+                VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    updated_at=excluded.updated_at,
+                    completed_at=CASE
+                        WHEN excluded.completed_at IS NOT NULL THEN excluded.completed_at
+                        ELSE runs.completed_at
+                    END,
+                    status=excluded.status
                 """,
-                (run_id, datetime.now(timezone.utc).isoformat(), status),
+                (run_id, now, now, now if is_terminal else None, status),
             )
+            if is_terminal:
+                self._apply_run_retention_locked(cur=cur, trigger_run_id=run_id)
             self._conn.commit()
 
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             cur = self._conn.cursor()
             row = cur.execute(
-                "SELECT run_id, created_at, status, deleted_at FROM runs WHERE run_id=?",
+                "SELECT run_id, created_at, updated_at, completed_at, status, deleted_at FROM runs WHERE run_id=?",
                 (run_id,),
             ).fetchone()
         if not row:
@@ -1035,8 +1161,10 @@ class _SqliteArtifactIndex:
         return {
             "run_id": row[0],
             "created_at": row[1],
-            "status": row[2],
-            "deleted_at": row[3],
+            "updated_at": row[2],
+            "completed_at": row[3],
+            "status": row[4],
+            "deleted_at": row[5],
         }
 
     def list_runs(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
@@ -1045,14 +1173,21 @@ class _SqliteArtifactIndex:
             cur = self._conn.cursor()
             rows = cur.execute(
                 f"""
-                SELECT run_id, created_at, status, deleted_at
+                SELECT run_id, created_at, updated_at, completed_at, status, deleted_at
                 FROM runs
                 {where}
-                ORDER BY created_at DESC
+                ORDER BY COALESCE(completed_at, created_at) DESC
                 """
             ).fetchall()
         return [
-            {"run_id": r[0], "created_at": r[1], "status": r[2], "deleted_at": r[3]}
+            {
+                "run_id": r[0],
+                "created_at": r[1],
+                "updated_at": r[2],
+                "completed_at": r[3],
+                "status": r[4],
+                "deleted_at": r[5],
+            }
             for r in rows
         ]
 
@@ -1327,6 +1462,85 @@ class _SqliteArtifactIndex:
             for r in rows
         ]
 
+    def _delete_run_locked(self, *, cur: sqlite3.Cursor, run_id: str) -> Dict[str, Any]:
+        rows = cur.execute(
+            "SELECT artifact_id, content_hash FROM artifacts WHERE run_id=?",
+            (run_id,),
+        ).fetchall()
+        artifact_ids = [r[0] for r in rows]
+        candidate_hashes = {r[1] for r in rows if r[1]}
+
+        cur.execute("DELETE FROM artifact_consumers WHERE consumer_run_id=?", (run_id,))
+        if artifact_ids:
+            cur.execute(
+                f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({','.join(['?'] * len(artifact_ids))})",
+                tuple(artifact_ids),
+            )
+        cur.execute("DELETE FROM artifacts WHERE run_id=?", (run_id,))
+        artifacts_removed = int(cur.rowcount or 0)
+        cur.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+        deleted_run_rows = int(cur.rowcount or 0)
+        cur.execute("DELETE FROM run_experiments WHERE run_id=?", (run_id,))
+        cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (run_id,))
+        return {
+            "runDeleted": bool(deleted_run_rows) or bool(artifacts_removed),
+            "artifactsRemoved": artifacts_removed,
+            "artifactIdsRemoved": artifact_ids,
+            "candidateHashes": candidate_hashes,
+        }
+
+    def _apply_run_retention_locked(self, *, cur: sqlite3.Cursor, trigger_run_id: str) -> None:
+        if _retention_mode() != "by_run":
+            return
+        keep_recent = _retention_keep_recent_runs()
+        active_statuses = {"pending", "running", "cancel_requested", "pausing", "paused", "resuming"}
+        rows = cur.execute(
+            """
+            SELECT run_id, status, COALESCE(completed_at, created_at) AS sort_ts
+            FROM runs
+            WHERE status <> 'deleted'
+            ORDER BY sort_ts DESC
+            """
+        ).fetchall()
+        candidates: List[Tuple[str, str, str]] = []
+        for row in rows:
+            run_id = str(row[0] or "").strip()
+            status = str(row[1] or "").strip().lower()
+            sort_ts = str(row[2] or "")
+            if not run_id:
+                continue
+            if status in active_statuses:
+                continue
+            if not _is_terminal_status(status):
+                continue
+            if not _should_include_status_for_retention(status):
+                continue
+            candidates.append((run_id, status, sort_ts))
+        keep_ids = {rid for rid, _, _ in candidates[:keep_recent]}
+        prune_ids = [rid for rid, _, _ in candidates if rid not in keep_ids]
+        if not prune_ids:
+            return
+        logger.info(
+            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s",
+            keep_recent,
+            trigger_run_id,
+            len(candidates),
+            len(prune_ids),
+        )
+        for rid in prune_ids:
+            deleted = self._delete_run_locked(cur=cur, run_id=rid)
+            logger.info(
+                "artifact_retention_run_pruned run_id=%s artifacts_removed=%s",
+                rid,
+                int(deleted.get("artifactsRemoved") or 0),
+            )
+        logger.info(
+            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s",
+            keep_recent,
+            trigger_run_id,
+            len(prune_ids),
+        )
+
     def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         mode = (mode or "soft").lower()
         gc = (gc or "none").lower()
@@ -1338,9 +1552,10 @@ class _SqliteArtifactIndex:
         if mode == "soft":
             with self._lock:
                 cur = self._conn.cursor()
+                now = datetime.now(timezone.utc).isoformat()
                 cur.execute(
-                    "UPDATE runs SET status='deleted', deleted_at=? WHERE run_id=?",
-                    (datetime.now(timezone.utc).isoformat(), run_id),
+                    "UPDATE runs SET status='deleted', deleted_at=?, updated_at=? WHERE run_id=?",
+                    (now, now, run_id),
                 )
                 cur.execute(
                     "UPDATE run_experiments SET status='deleted' WHERE run_id=?",
@@ -1360,25 +1575,11 @@ class _SqliteArtifactIndex:
 
         with self._lock:
             cur = self._conn.cursor()
-            rows = cur.execute(
-                "SELECT artifact_id, content_hash FROM artifacts WHERE run_id=?",
-                (run_id,),
-            ).fetchall()
-            artifact_ids = [r[0] for r in rows]
-            candidate_hashes = {r[1] for r in rows if r[1]}
-
-            cur.execute("DELETE FROM artifact_consumers WHERE consumer_run_id=?", (run_id,))
-            if artifact_ids:
-                cur.execute(
-                    f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({','.join(['?'] * len(artifact_ids))})",
-                    tuple(artifact_ids),
-                )
-            cur.execute("DELETE FROM artifacts WHERE run_id=?", (run_id,))
-            artifacts_removed = cur.rowcount
-            cur.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
-            cur.execute("DELETE FROM run_experiments WHERE run_id=?", (run_id,))
-            cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (run_id,))
-            run_deleted = (cur.rowcount > 0) or bool(artifacts_removed)
+            deleted = self._delete_run_locked(cur=cur, run_id=run_id)
+            artifact_ids = list(deleted.get("artifactIdsRemoved") or [])
+            candidate_hashes = set(deleted.get("candidateHashes") or set())
+            artifacts_removed = int(deleted.get("artifactsRemoved") or 0)
+            run_deleted = bool(deleted.get("runDeleted"))
             self._conn.commit()
 
         blobs_deleted = 0
