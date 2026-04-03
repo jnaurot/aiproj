@@ -42,6 +42,11 @@ from .adaptive_scheduler import (
     apply_adaptive_policy,
     normalize_mode as normalize_adaptive_mode,
 )
+from .control_plane import (
+    can_node_terminalize,
+    enrich_control_signal_event,
+    reduce_edge_control_state,
+)
 from .contracts import (
     TABLE_V1,
     canonical_table_columns,
@@ -3287,15 +3292,35 @@ async def run_graph(
         return names or None
 
     async def _emit(evt: Dict[str, Any]) -> None:
-        payload = evt
+        nonlocal control_signal_seq
+        payload = enrich_control_signal_event(evt) if isinstance(evt, dict) else evt
+        if payload is None:
+            logger.warning("control_signal_rejected_unknown_signal")
+            return
         payload_type = str(payload.get("type") or "")
         if payload_type == "control_signal":
+            if not str(payload.get("graphId") or "").strip():
+                payload["graphId"] = str(graph_id or "")
+            if int(payload.get("seq") or 0) <= 0:
+                control_signal_seq = int(control_signal_seq) + 1
+                payload["seq"] = int(control_signal_seq)
+            else:
+                control_signal_seq = max(int(control_signal_seq), int(payload.get("seq") or 0))
             signal = str(payload.get("signal") or "").strip().lower()
             node_id = str(payload.get("nodeId") or "").strip()
             if signal == "llm_acquired" and node_id:
                 active_llm_lease_nodes.add(node_id)
             elif signal == "llm_released" and node_id:
                 active_llm_lease_nodes.discard(node_id)
+            edge_id = str(payload.get("edgeId") or "").strip()
+            if edge_id:
+                edge_control_state_by_edge_id[edge_id] = reduce_edge_control_state(
+                    edge_control_state_by_edge_id.get(edge_id),
+                    edge_id=edge_id,
+                    signal_type=str(payload.get("signal") or ""),
+                    seq=int(payload.get("seq") or 0),
+                    at=str(payload.get("at") or ""),
+                )
         elif payload_type == "llm_lease":
             state = str(payload.get("state") or "").strip().lower()
             node_id = str(payload.get("nodeId") or "").strip()
@@ -3405,7 +3430,9 @@ async def run_graph(
     total_cached = 0
     total_succeeded = 0
     total_failed = 0
+    control_signal_seq = 0
     active_llm_lease_nodes: set[str] = set()
+    edge_control_state_by_edge_id: Dict[str, Dict[str, Any]] = {}
 
     async def _emit_run_telemetry_once() -> None:
         nonlocal run_telemetry_emitted
@@ -4263,6 +4290,15 @@ async def run_graph(
                     "at": iso_now(),
                     "nodeId": node_id
                 })
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "node_active",
+                        "nodeId": node_id,
+                    }
+                )
                 # Running edge visuals are reserved for work-plane execution only.
                 for edge_id in incoming_work_edge_ids:
                     await _emit({
@@ -7877,6 +7913,15 @@ async def run_graph(
                                 "nodeId": node_id,
                             }
                         )
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "node_quiescent",
+                                "nodeId": node_id,
+                            }
+                        )
                         inflight_current -= 1
                 try:
                     async with kind_sem:
@@ -7950,6 +7995,15 @@ async def run_graph(
                             "nodeId": node_id,
                         }
                     )
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "node_quiescent",
+                            "nodeId": node_id,
+                        }
+                    )
                     inflight_current -= 1
 
         # Queue-oriented scheduler (replaces levelized execution).
@@ -8014,6 +8068,7 @@ async def run_graph(
         warning_counters: Dict[str, Dict[str, Any]] = {}
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
         control_gate_state_by_node: Dict[str, Dict[str, Any]] = {}
+        node_terminal_emitted: set[str] = set()
 
         def _kind_cap_key(raw_kind: Any) -> str:
             kind_value = str(raw_kind or "").strip().lower()
@@ -8773,6 +8828,19 @@ async def run_graph(
             if isinstance(details, dict) and details:
                 evt["details"] = details
             await _emit(evt)
+            if reason == "WAITING_REQUIRED_INPUT" and missing:
+                for edge_id in missing:
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "input_blocked",
+                            "nodeId": str(node_id),
+                            "edgeId": str(edge_id),
+                            "handle": handle_norm or "in",
+                        }
+                    )
 
         def _has_control_gate_edges(node_id: str) -> bool:
             return len(_incoming_control_gate_edge_infos(node_id)) > 0
@@ -8871,8 +8939,41 @@ async def run_graph(
                     "runnableNodeCount": int(runnable_count),
                     "stalled": bool(stalled),
                     "perNode": per_node,
+                    "controlPlaneEdgeState": edge_control_state_by_edge_id,
+                    "lastControlSeq": int(control_signal_seq),
                 }
             )
+
+        async def _emit_node_terminal_once(node_id: str, reason: str) -> None:
+            node_key = str(node_id or "").strip()
+            if not node_key:
+                return
+            if node_key in node_terminal_emitted:
+                return
+            node_terminal_emitted.add(node_key)
+            await _emit(
+                {
+                    "type": "control_signal",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "signal": "node_terminal",
+                    "nodeId": node_key,
+                    "reasonCode": str(reason or "completed"),
+                }
+            )
+
+        async def _maybe_emit_node_terminal(node_id: str, reason: str) -> None:
+            node_key = str(node_id or "").strip()
+            if not node_key:
+                return
+            required_edge_ids = [str(info.get("edgeId") or "") for info in _incoming_work_edge_infos(node_key)]
+            if can_node_terminalize(
+                required_work_edge_ids=required_edge_ids,
+                edge_control_state=edge_control_state_by_edge_id,
+                inflight_count=int(node_inflight_counts.get(node_key, 0)),
+                has_active_lease=bool(node_key in active_llm_lease_nodes),
+            ):
+                await _emit_node_terminal_once(node_key, reason)
 
         async def _dequeue_work_batch(node_id: str) -> List[Dict[str, Any]]:
             incoming = _incoming_work_edge_infos(node_id)
@@ -8953,7 +9054,30 @@ async def run_graph(
                     field="itemsDequeued",
                     amount=1,
                 )
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "input_ready",
+                        "nodeId": node_id,
+                        "edgeId": str(incoming_info.get("edgeId") or ""),
+                        "handle": handle,
+                    }
+                )
                 out.append(item if isinstance(item, dict) else {"item": item})
+                if queue_registry.depth(str(incoming_info.get("edgeId") or ""), handle) <= 0:
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "input_drained",
+                            "nodeId": node_id,
+                            "edgeId": str(incoming_info.get("edgeId") or ""),
+                            "handle": handle,
+                        }
+                    )
                 await _emit_handle_satisfaction_if_changed(node_id, handle)
             return out
 
@@ -9465,6 +9589,7 @@ async def run_graph(
                 if canceled:
                     total_failed += 1
                     run_failed = True
+                    await _maybe_emit_node_terminal(node_id, "canceled")
                 elif cached:
                     total_cached += 1
                 elif ok:
@@ -9549,11 +9674,15 @@ async def run_graph(
                                 "metrics": queue_registry.metrics(),
                                 "nodeMetrics": node_runtime_metrics,
                                 "runtimeItemMetrics": runtime_item_metrics,
+                                "controlPlaneEdgeState": edge_control_state_by_edge_id,
+                                "lastControlSeq": int(control_signal_seq),
                             }
                         )
+                        await _maybe_emit_node_terminal(node_id, "failed")
                         continue
                     if node_fatal:
                         run_failed = True
+                        await _maybe_emit_node_terminal(node_id, "failed")
                         break
                     # Localized failure: block transitive descendants on this branch.
                     cascade_reason = str(result.get("errorCode") or "").strip()
@@ -9608,6 +9737,7 @@ async def run_graph(
                                         "nodeId": blocked_id,
                                     }
                                 )
+                    await _maybe_emit_node_terminal(node_id, "failed")
                     continue
                 # decision / reject semantics
                 decision = str(result.get("decision") or "accept").strip().lower() if isinstance(result, dict) else "accept"
@@ -9713,8 +9843,11 @@ async def run_graph(
                             "metrics": queue_registry.metrics(),
                             "nodeMetrics": node_runtime_metrics,
                             "runtimeItemMetrics": runtime_item_metrics,
+                            "controlPlaneEdgeState": edge_control_state_by_edge_id,
+                            "lastControlSeq": int(control_signal_seq),
                         }
                     )
+                    await _maybe_emit_node_terminal(node_id, "skipped")
                     if reject_fatal:
                         await _emit(
                             {
@@ -9768,6 +9901,17 @@ async def run_graph(
                         edge_id=edge_id,
                         target_handle=target_handle,
                     )
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "upstream_opened",
+                            "nodeId": nb,
+                            "edgeId": edge_id,
+                            "handle": target_handle,
+                        }
+                    )
                     overflow_mode = str(
                         (((edge_obj.get("data") or {}) if isinstance(edge_obj.get("data"), dict) else {}).get("queue") or {}).get("overflow")
                         or "block"
@@ -9788,6 +9932,17 @@ async def run_graph(
                             field="itemsEnqueued",
                             amount=1,
                         )
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "item_enqueued",
+                                "nodeId": nb,
+                                "edgeId": edge_id,
+                                "handle": target_handle,
+                            }
+                        )
                     if not bool(edge_dependency_released.get(edge_id, False)):
                         edge_dependency_released[edge_id] = True
                         indeg[nb] = max(0, indeg.get(nb, 0) - 1)
@@ -9806,8 +9961,11 @@ async def run_graph(
                         "metrics": queue_registry.metrics(),
                         "nodeMetrics": node_runtime_metrics,
                         "runtimeItemMetrics": runtime_item_metrics,
+                        "controlPlaneEdgeState": edge_control_state_by_edge_id,
+                        "lastControlSeq": int(control_signal_seq),
                     }
                 )
+                await _maybe_emit_node_terminal(node_id, "completed")
 
             if run_failed:
                 for task in list(inflight.keys()):
@@ -9897,6 +10055,20 @@ async def run_graph(
                                     upstream_node_id=upstream_node,
                                     reason_code=empty_reason,
                                 )
+
+        for edge_id, state in sorted(edge_control_state_by_edge_id.items(), key=lambda item: item[0]):
+            if not bool((state or {}).get("closed")):
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "signal": "upstream_closed",
+                        "edgeId": str(edge_id),
+                    }
+                )
+        for node_id in sorted(sub, key=lambda n: order_index.get(n, 10**9)):
+            await _maybe_emit_node_terminal(str(node_id), "completed")
 
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 

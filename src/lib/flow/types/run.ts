@@ -21,6 +21,25 @@ export type NodeFinishedStatus =
 	| "canceled"
 	| "stale";
 
+export type ControlPlaneSignalType =
+	| "UPSTREAM_OPENED"
+	| "ITEM_ENQUEUED"
+	| "INPUT_DRAINED"
+	| "UPSTREAM_CLOSED"
+	| "INPUT_READY"
+	| "INPUT_BLOCKED"
+	| "NODE_ACTIVE"
+	| "NODE_QUIESCENT"
+	| "NODE_TERMINAL"
+	| "READY"
+	| "BUSY"
+	| "DRAIN"
+	| "PAUSE"
+	| "BLOCKED"
+	| "RESUME"
+	| "LLM_ACQUIRED"
+	| "LLM_RELEASED";
+
 export type KnownRunEvent =
   | {
       type: "run_started";
@@ -152,9 +171,28 @@ export type KnownRunEvent =
         | "blocked"
         | "resume"
         | "llm_acquired"
-        | "llm_released";
+        | "llm_released"
+		| "upstream_opened"
+		| "item_enqueued"
+		| "input_drained"
+		| "upstream_closed"
+		| "input_ready"
+		| "input_blocked"
+		| "node_active"
+		| "node_quiescent"
+		| "node_terminal";
       nodeId?: string;
+      edgeId?: string;
       handle?: string;
+      event_version?: number;
+      payload_type?: "control_signal.v1" | string;
+      control_signal?: {
+        version: number;
+        signalType: ControlPlaneSignalType;
+        runId?: string;
+        graphId?: string;
+        nodeId?: string;
+      };
     }
   | {
       type: "branch_cascade";
@@ -171,6 +209,8 @@ export type KnownRunEvent =
       metrics?: Record<string, unknown>;
       nodeMetrics?: Record<string, unknown>;
       runtimeItemMetrics?: Record<string, unknown>;
+      controlPlaneEdgeState?: Record<string, unknown>;
+      lastControlSeq?: number;
     }
   | {
       type: "node_decision";
@@ -261,6 +301,8 @@ export type KnownRunEvent =
       pendingQueueDepth: number;
       runnableNodeCount: number;
       stalled: boolean;
+      controlPlaneEdgeState?: Record<string, unknown>;
+      lastControlSeq?: number;
       perNode?: Array<{
         nodeId: string;
         readyWork: boolean;

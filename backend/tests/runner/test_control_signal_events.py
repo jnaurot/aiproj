@@ -52,7 +52,19 @@ async def test_control_signals_and_queue_metrics_are_emitted(monkeypatch) -> Non
 	assert "ready" in signals
 	assert "busy" in signals
 	assert "drain" in signals
-	assert any(e.get("type") == "queue_metrics" for e in events)
+	assert "node_active" in signals
+	assert "node_quiescent" in signals
+	assert "node_terminal" in signals
+	control_events = [e for e in events if e.get("type") == "control_signal"]
+	seqs = [int(e.get("seq") or 0) for e in control_events]
+	assert all(seq > 0 for seq in seqs)
+	assert seqs == sorted(seqs)
+	assert all(int(e.get("event_version") or 0) == 1 for e in control_events)
+	assert all(str(e.get("payload_type") or "") == "control_signal.v1" for e in control_events)
+	queue_events = [e for e in events if e.get("type") == "queue_metrics"]
+	assert queue_events
+	assert isinstance(queue_events[-1].get("controlPlaneEdgeState"), dict)
+	assert int(queue_events[-1].get("lastControlSeq") or 0) > 0
 
 
 @pytest.mark.asyncio
@@ -103,3 +115,49 @@ async def test_control_edge_runtime_ignores_payload_type_mismatch(monkeypatch) -
 		evt.get("type") == "log" and "CONTRACT_EDGE_PAYLOAD_TYPE_MISMATCH" in str(evt.get("message") or "")
 		for evt in events
 	)
+
+
+@pytest.mark.asyncio
+async def test_node_terminal_control_signal_emits_once_per_node(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e1", "source": "a", "target": "b"}],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-terminal-once",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-terminal-once", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-terminal-once",
+	)
+	terminal = [
+		e
+		for e in events
+		if e.get("type") == "control_signal" and str(e.get("signal") or "") == "node_terminal"
+	]
+	seen: dict[str, int] = {}
+	for evt in terminal:
+		node_id = str(evt.get("nodeId") or "")
+		if not node_id:
+			continue
+		seen[node_id] = int(seen.get(node_id, 0)) + 1
+	assert seen
+	assert all(count == 1 for count in seen.values())

@@ -40,6 +40,50 @@ describe('graphStore handle state timeline projection', () => {
 		expect(timeline[timeline.length - 1]?.signal).toBe('ready');
 	});
 
+	it('accepts v1 control signal envelope signalType and normalizes it', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('tool', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		const next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'control_signal',
+				runId: 'run_control_v1',
+				at: '2026-04-02T10:00:00.000Z',
+				nodeId,
+				handle: 'in',
+				signal: 'busy',
+				control_signal: {
+					version: 1,
+					signalType: 'INPUT_READY'
+				}
+			} as any,
+			'run_control_v1'
+		);
+		const key = `${nodeId}:in`;
+		expect((next as any)?.queueRuntime?.handleStates?.[key]?.state).toBe('input_ready');
+	});
+
+	it('ignores unknown control signals', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('tool', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		const next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'control_signal',
+				runId: 'run_control_unknown',
+				at: '2026-04-02T10:00:00.000Z',
+				nodeId,
+				handle: 'in',
+				signal: 'not_a_real_signal'
+			} as any,
+			'run_control_unknown'
+		);
+		const key = `${nodeId}:in`;
+		expect((next as any)?.queueRuntime?.handleStates?.[key]).toBeUndefined();
+	});
+
 	it('does not toggle llmAllocated meta from llm control signals (lease events own star projection)', () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('model', { x: 0, y: 0 });

@@ -1177,6 +1177,18 @@ export type GraphState = {
 				lastAt?: string;
 			}
 		>;
+		controlPlaneEdgeState?: Record<
+			string,
+			{
+				edgeId: string;
+				open: boolean;
+				closed: boolean;
+				depth: number;
+				blocked: boolean;
+				lastSeq: number;
+				updatedAt?: string;
+			}
+		>;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2001,6 +2013,103 @@ function assertRunStartedBindingTouchInScope(prev: GraphState, next: GraphState)
 
 const RUN_MONITOR_HISTORY_LIMIT = 20;
 
+const CONTROL_SIGNAL_ALLOWED = new Set([
+	'ready',
+	'busy',
+	'drain',
+	'pause',
+	'blocked',
+	'resume',
+	'llm_acquired',
+	'llm_released',
+	'upstream_opened',
+	'item_enqueued',
+	'input_drained',
+	'upstream_closed',
+	'input_ready',
+	'input_blocked',
+	'node_active',
+	'node_quiescent',
+	'node_terminal'
+]);
+
+function normalizeControlSignal(evt: Extract<KnownRunEvent, { type: 'control_signal' }>): string | null {
+	const v1 = String((evt as any)?.control_signal?.signalType ?? '')
+		.trim()
+		.toLowerCase();
+	const raw = String((evt as any)?.signal ?? '')
+		.trim()
+		.toLowerCase();
+	const normalized = v1 || raw;
+	if (!normalized) return null;
+	return CONTROL_SIGNAL_ALLOWED.has(normalized) ? normalized : null;
+}
+
+function applyControlPlaneEdgeState(
+	prevQueueRuntime: NonNullable<GraphState['queueRuntime']>,
+	evt: Extract<KnownRunEvent, { type: 'control_signal' }>,
+	signal: string
+): NonNullable<GraphState['queueRuntime']> {
+	const edgeId = String((evt as any)?.edgeId ?? '').trim();
+	if (!edgeId) return prevQueueRuntime;
+	const priorMap =
+		prevQueueRuntime.controlPlaneEdgeState && typeof prevQueueRuntime.controlPlaneEdgeState === 'object'
+			? prevQueueRuntime.controlPlaneEdgeState
+			: {};
+	const prior =
+		(priorMap as Record<string, any>)[edgeId] ??
+		({
+			edgeId,
+			open: false,
+			closed: false,
+			depth: 0,
+			blocked: false,
+			lastSeq: 0
+		} as any);
+	const next = {
+		edgeId,
+		open: Boolean(prior.open),
+		closed: Boolean(prior.closed),
+		depth: Math.max(0, Number(prior.depth ?? 0)),
+		blocked: Boolean(prior.blocked),
+		lastSeq: Math.max(0, Number((evt as any)?.seq ?? prior.lastSeq ?? 0)),
+		updatedAt: String((evt as any)?.at ?? '')
+	};
+	const incomingSeq = Math.max(0, Number((evt as any)?.seq ?? 0));
+	const priorSeq = Math.max(0, Number(prior.lastSeq ?? 0));
+	if (incomingSeq > 0 && priorSeq > 0 && incomingSeq <= priorSeq) {
+		return prevQueueRuntime;
+	}
+	if (signal === 'upstream_opened') {
+		next.open = true;
+		next.closed = false;
+	}
+	if (signal === 'item_enqueued') {
+		next.open = true;
+		next.depth = Math.max(0, next.depth + 1);
+	}
+	if (signal === 'input_drained') {
+		next.depth = 0;
+	}
+	if (signal === 'upstream_closed') {
+		next.open = false;
+		next.closed = true;
+	}
+	if (signal === 'input_blocked') {
+		next.blocked = true;
+	}
+	if (signal === 'input_ready') {
+		next.blocked = false;
+	}
+	return {
+		...prevQueueRuntime,
+		controlPlaneEdgeState: {
+			...(priorMap as Record<string, any>),
+			[edgeId]: next
+		}
+	};
+}
+
 function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
 	const evtGraphId = (evt as any)?.graphId;
 	if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== state.graphId) {
@@ -2225,6 +2334,8 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							},
 							blockedByNode: {},
 							softFailByNode: {}
+							,
+							controlPlaneEdgeState: {}
 						}
 					},
 					'info',
@@ -2453,11 +2564,15 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			return { ...state, edges };
 		}
 		case 'control_signal': {
-			if (evt.nodeId && evt.signal === 'llm_acquired') {
-				// LLM star ownership is driven by llm_lease holder events (single source of truth).
-				return logPush(state, 'info', `[control] ${evt.signal} node=${evt.nodeId}`, evt.nodeId);
+			const signal = normalizeControlSignal(evt);
+			if (!signal) {
+				return logPush(state, 'warn', `[control] ignored unknown signal`, evt.nodeId);
 			}
-			if (evt.nodeId && evt.signal === 'llm_released') {
+			if (evt.nodeId && signal === 'llm_acquired') {
+				// LLM star ownership is driven by llm_lease holder events (single source of truth).
+				return logPush(state, 'info', `[control] ${signal} node=${evt.nodeId}`, evt.nodeId);
+			}
+			if (evt.nodeId && signal === 'llm_released') {
 				const nodeId = String(evt.nodeId ?? '').trim();
 				const prevBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
 				const nextBinding =
@@ -2476,17 +2591,28 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						[nodeId]: nextBinding
 					}
 				};
-				return logPush(nextState, 'info', `[control] ${evt.signal} node=${nodeId}`, nodeId);
+				return logPush(nextState, 'info', `[control] ${signal} node=${nodeId}`, nodeId);
 			}
 			const nodePart = evt.nodeId ? ` node=${evt.nodeId}` : '';
 			const handle = String((evt as any)?.handle ?? '').trim();
 			const handlePart = handle ? ` handle=${handle}` : '';
-			if (!evt.nodeId || !handle) {
-				return logPush(state, 'info', `[control] ${evt.signal}${nodePart}${handlePart}`, evt.nodeId);
-			}
-			const key = `${evt.nodeId}:${handle}`;
 			const prevQueueRuntime =
 				state.queueRuntime && typeof state.queueRuntime === 'object' ? state.queueRuntime : {};
+			const queueRuntimeWithControlState = applyControlPlaneEdgeState(prevQueueRuntime as any, evt, signal);
+			if (!evt.nodeId || !handle) {
+				return logPush(
+					{
+						...state,
+						queueRuntime: {
+							...queueRuntimeWithControlState
+						}
+					},
+					'info',
+					`[control] ${signal}${nodePart}${handlePart}`,
+					evt.nodeId
+				);
+			}
+			const key = `${evt.nodeId}:${handle}`;
 			const prevHandleStates =
 				prevQueueRuntime.handleStates && typeof prevQueueRuntime.handleStates === 'object'
 					? prevQueueRuntime.handleStates
@@ -2495,11 +2621,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const nextState = {
 				...state,
 				queueRuntime: {
-					...prevQueueRuntime,
+					...queueRuntimeWithControlState,
 					handleStates: {
 						...prevHandleStates,
 						[key]: {
-							state: String(evt.signal ?? '').trim(),
+							state: signal,
 							updatedAt: String((evt as any)?.at ?? '')
 						}
 					},
@@ -2508,13 +2634,13 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						{
 							nodeId: String(evt.nodeId),
 							handle,
-							signal: String(evt.signal ?? '').trim(),
+							signal,
 							at: String((evt as any)?.at ?? '')
 						}
 					]
 				}
 			};
-			return logPush(nextState, 'info', `[control] ${evt.signal}${nodePart}${handlePart}`, evt.nodeId);
+			return logPush(nextState, 'info', `[control] ${signal}${nodePart}${handlePart}`, evt.nodeId);
 		}
 		case 'branch_cascade': {
 			const originNodeId = String((evt as any)?.originNodeId ?? '').trim();
@@ -2851,7 +2977,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						(state.queueRuntime?.blockedByNode &&
 						typeof state.queueRuntime.blockedByNode === 'object'
 							? state.queueRuntime.blockedByNode
-							: {}) ?? {}
+							: {}) ?? {},
+					controlPlaneEdgeState:
+						((evt as any)?.controlPlaneEdgeState &&
+						typeof (evt as any).controlPlaneEdgeState === 'object'
+							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
 				}
 			};
 			return logPush(
@@ -2918,7 +3049,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						stalled,
 						perNode,
 						updatedAt: String((evt as any)?.at ?? '')
-					}
+					},
+					controlPlaneEdgeState:
+						((evt as any)?.controlPlaneEdgeState &&
+						typeof (evt as any).controlPlaneEdgeState === 'object'
+							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
 				}
 			};
 			return logPush(

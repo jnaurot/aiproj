@@ -32,6 +32,7 @@ REQUIRED_BY_TYPE = {
     "cache_summary": {"schema_version", "runId", "at", "cache_hit", "cache_miss", "cache_hit_contract_mismatch"},
     "edge_exec": {"runId", "at", "edgeId", "exec"},
     "log": {"runId", "at", "level", "message"},
+    "control_signal": {"runId", "at", "signal", "event_version", "payload_type", "control_signal", "seq", "graphId"},
 }
 
 ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
@@ -46,6 +47,7 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "invariant_summary",
     "run_telemetry",
     "node_not_resumable",
+    "control_signal",
 }
 
 ALLOWED_CACHE_REASONS = {
@@ -138,3 +140,13 @@ async def test_event_schema_smoke(monkeypatch, tmp_path):
             assert evt.get("reason") in ALLOWED_CACHE_REASONS
         if evt["type"] == "cache_summary":
             assert evt.get("schema_version") == 1
+        if evt["type"] == "control_signal":
+            assert evt.get("event_version") == 1
+            assert evt.get("payload_type") == "control_signal.v1"
+            assert int(evt.get("seq") or 0) > 0
+            assert isinstance(evt.get("graphId"), str) and str(evt.get("graphId") or "")
+            envelope = evt.get("control_signal")
+            assert isinstance(envelope, dict)
+            assert envelope.get("version") == 1
+            assert isinstance(envelope.get("signalType"), str) and envelope.get("signalType")
+            assert isinstance(envelope.get("graphId"), str)
