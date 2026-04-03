@@ -1189,6 +1189,7 @@ export type GraphState = {
 				updatedAt?: string;
 			}
 		>;
+		appliedControlSeq?: number;
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
@@ -2335,7 +2336,8 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							blockedByNode: {},
 							softFailByNode: {}
 							,
-							controlPlaneEdgeState: {}
+							controlPlaneEdgeState: {},
+							appliedControlSeq: 0
 						}
 					},
 					'info',
@@ -2568,9 +2570,26 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			if (!signal) {
 				return logPush(state, 'warn', `[control] ignored unknown signal`, evt.nodeId);
 			}
+			const incomingSeq = Math.max(0, Number((evt as any)?.seq ?? 0));
+			const appliedSeq = Math.max(0, Number((state.queueRuntime as any)?.appliedControlSeq ?? 0));
+			if (incomingSeq > 0 && incomingSeq <= appliedSeq) {
+				return state;
+			}
+			const nextAppliedSeq = Math.max(appliedSeq, incomingSeq);
 			if (evt.nodeId && signal === 'llm_acquired') {
 				// LLM star ownership is driven by llm_lease holder events (single source of truth).
-				return logPush(state, 'info', `[control] ${signal} node=${evt.nodeId}`, evt.nodeId);
+				return logPush(
+					{
+						...state,
+						queueRuntime: {
+							...(state.queueRuntime ?? {}),
+							appliedControlSeq: nextAppliedSeq
+						}
+					},
+					'info',
+					`[control] ${signal} node=${evt.nodeId}`,
+					evt.nodeId
+				);
 			}
 			if (evt.nodeId && signal === 'llm_released') {
 				const nodeId = String(evt.nodeId ?? '').trim();
@@ -2589,6 +2608,10 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					nodeBindings: {
 						...state.nodeBindings,
 						[nodeId]: nextBinding
+					},
+					queueRuntime: {
+						...(state.queueRuntime ?? {}),
+						appliedControlSeq: nextAppliedSeq
 					}
 				};
 				return logPush(nextState, 'info', `[control] ${signal} node=${nodeId}`, nodeId);
@@ -2604,9 +2627,11 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					{
 						...state,
 						queueRuntime: {
-							...queueRuntimeWithControlState
-						}
-					},
+						...queueRuntimeWithControlState
+						,
+						appliedControlSeq: nextAppliedSeq
+					}
+				},
 					'info',
 					`[control] ${signal}${nodePart}${handlePart}`,
 					evt.nodeId
@@ -2637,7 +2662,8 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							signal,
 							at: String((evt as any)?.at ?? '')
 						}
-					]
+					],
+					appliedControlSeq: nextAppliedSeq
 				}
 			};
 			return logPush(nextState, 'info', `[control] ${signal}${nodePart}${handlePart}`, evt.nodeId);
@@ -2982,7 +3008,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
+					appliedControlSeq: Math.max(
+						0,
+						Number((state.queueRuntime as any)?.appliedControlSeq ?? 0),
+						Number((evt as any)?.lastControlSeq ?? 0)
+					)
 				}
 			};
 			return logPush(
@@ -3054,7 +3085,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
+					appliedControlSeq: Math.max(
+						0,
+						Number((state.queueRuntime as any)?.appliedControlSeq ?? 0),
+						Number((evt as any)?.lastControlSeq ?? 0)
+					)
 				}
 			};
 			return logPush(

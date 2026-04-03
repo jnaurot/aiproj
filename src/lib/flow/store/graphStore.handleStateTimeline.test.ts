@@ -84,6 +84,43 @@ describe('graphStore handle state timeline projection', () => {
 		expect((next as any)?.queueRuntime?.handleStates?.[key]).toBeUndefined();
 	});
 
+	it('drops stale replayed control signals when applied seq is newer', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('tool', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		let next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'scheduler_snapshot',
+				runId: 'run_seq_gate',
+				at: '2026-04-03T00:00:00.000Z',
+				readyCount: 0,
+				inflightCount: 0,
+				pendingQueueDepth: 0,
+				runnableNodeCount: 0,
+				stalled: false,
+				lastControlSeq: 25
+			} as any,
+			'run_seq_gate'
+		);
+		next = __applyRunEventForTest(
+			next as any,
+			{
+				type: 'control_signal',
+				runId: 'run_seq_gate',
+				at: '2026-04-03T00:00:01.000Z',
+				nodeId,
+				handle: 'in',
+				signal: 'input_ready',
+				seq: 20
+			} as any,
+			'run_seq_gate'
+		);
+		const key = `${nodeId}:in`;
+		expect((next as any)?.queueRuntime?.handleStates?.[key]).toBeUndefined();
+		expect(Number((next as any)?.queueRuntime?.appliedControlSeq ?? 0)).toBe(25);
+	});
+
 	it('does not toggle llmAllocated meta from llm control signals (lease events own star projection)', () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('model', { x: 0, y: 0 });
