@@ -41,6 +41,17 @@ type LlmLease = {
 	waitingNodeIds?: unknown;
 };
 
+type ControlPlaneNodeState = Record<
+	string,
+	{
+		nodeId?: string;
+		lastSignal?: string;
+		terminalReasonCode?: string;
+		lastSeq?: number;
+		updatedAt?: string;
+	}
+>;
+
 type BlockedByNode = Record<
 	string,
 	{
@@ -71,6 +82,7 @@ export type RunMonitorNodeRow = {
 	blockedHandle: string | null;
 	blockedPlane: 'work' | 'param' | 'control' | null;
 	updatedAt: string | null;
+	terminalReasonCode: string | null;
 	isBlocked: boolean;
 	isWaiting: boolean;
 	isLlmHolder: boolean;
@@ -188,6 +200,7 @@ type RunMonitorProjectionInput = {
 		schedulerSnapshot?: SchedulerSnapshot;
 		llmLease?: LlmLease;
 		blockedByNode?: BlockedByNode;
+		controlPlaneNodeState?: ControlPlaneNodeState;
 	};
 	runStatus?: RunActivityStatus;
 };
@@ -318,6 +331,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 	const queueRuntime = asRecord(input?.queueRuntime);
 	const snapshot = asRecord(queueRuntime.schedulerSnapshot) as SchedulerSnapshot;
 	const blockedByNode = asRecord(queueRuntime.blockedByNode) as BlockedByNode;
+	const controlPlaneNodeState = asRecord(queueRuntime.controlPlaneNodeState) as ControlPlaneNodeState;
 	const llmLease = asRecord(queueRuntime.llmLease) as LlmLease;
 	const runtimeNodeCounters = parseRuntimeNodeCounters(queueRuntime);
 	const perNodeMap = parseSchedulerPerNode(snapshot);
@@ -338,7 +352,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const schedulerRow = perNodeMap.get(nodeId);
 		const projection = projectNodeStatus(nodeBindings[nodeId] as any);
 		const blockedRow = asRecord(blockedByNode[nodeId]);
+		const controlNodeState = asRecord(controlPlaneNodeState[nodeId]);
 		const blockedReasonCode = String(blockedRow.reasonCode ?? '').trim();
+		const terminalReasonCode = String(controlNodeState.terminalReasonCode ?? '').trim();
 		const blockedHandle = String(blockedRow.handle ?? '').trim();
 		const blockedPlaneRaw = String(blockedRow.plane ?? '').trim().toLowerCase();
 		const blockedPlane =
@@ -385,6 +401,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			blockedHandle: blockedHandle || null,
 			blockedPlane,
 			updatedAt: String(blockedRow.updatedAt ?? '').trim() || null,
+			terminalReasonCode: terminalReasonCode || null,
 			isBlocked: Boolean(blockedReasonCode),
 			isWaiting: pendingInputCount > 0 && inflight === 0,
 			isLlmHolder: llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId,

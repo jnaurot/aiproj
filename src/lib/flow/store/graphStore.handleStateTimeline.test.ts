@@ -181,4 +181,27 @@ describe('graphStore handle state timeline projection', () => {
 		const finalNode = ((next as any)?.nodes ?? []).find((n: any) => String(n?.id) === String(nodeId));
 		expect(Boolean(finalNode?.data?.meta?.llmAllocated)).toBe(false);
 	});
+
+	it('stores node_terminal reason in control-plane node state map', () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('tool', { x: 0, y: 0 });
+		const base = get(graphStore as any);
+		const next = __applyRunEventForTest(
+			base as any,
+			{
+				type: 'control_signal',
+				runId: 'run_terminal_reason',
+				at: '2026-04-03T12:00:00.000Z',
+				nodeId,
+				signal: 'node_terminal',
+				reasonCode: 'completed',
+				seq: 14
+			} as any,
+			'run_terminal_reason'
+		);
+		const controlNodeState = ((next as any)?.queueRuntime?.controlPlaneNodeState ?? {}) as Record<string, any>;
+		expect(controlNodeState[nodeId]?.lastSignal).toBe('node_terminal');
+		expect(controlNodeState[nodeId]?.terminalReasonCode).toBe('completed');
+		expect(Number(controlNodeState[nodeId]?.lastSeq ?? 0)).toBe(14);
+	});
 });

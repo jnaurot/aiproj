@@ -1189,6 +1189,16 @@ export type GraphState = {
 				updatedAt?: string;
 			}
 		>;
+		controlPlaneNodeState?: Record<
+			string,
+			{
+				nodeId: string;
+				lastSignal: string;
+				terminalReasonCode?: string;
+				lastSeq: number;
+				updatedAt?: string;
+			}
+		>;
 		appliedControlSeq?: number;
 	};
 	editingContext: EditorContext;
@@ -2337,6 +2347,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 							softFailByNode: {}
 							,
 							controlPlaneEdgeState: {},
+							controlPlaneNodeState: {},
 							appliedControlSeq: 0
 						}
 					},
@@ -2622,6 +2633,34 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const prevQueueRuntime =
 				state.queueRuntime && typeof state.queueRuntime === 'object' ? state.queueRuntime : {};
 			const queueRuntimeWithControlState = applyControlPlaneEdgeState(prevQueueRuntime as any, evt, signal);
+			const prevNodeStateMap =
+				prevQueueRuntime.controlPlaneNodeState && typeof prevQueueRuntime.controlPlaneNodeState === 'object'
+					? (prevQueueRuntime.controlPlaneNodeState as Record<string, unknown>)
+					: {};
+			let nextNodeStateMap = prevNodeStateMap;
+			const controlNodeId = String((evt as any)?.nodeId ?? '').trim();
+			if (
+				controlNodeId &&
+				(signal === 'node_active' || signal === 'node_quiescent' || signal === 'node_terminal')
+			) {
+				const prior =
+					prevNodeStateMap[controlNodeId] && typeof prevNodeStateMap[controlNodeId] === 'object'
+						? (prevNodeStateMap[controlNodeId] as Record<string, unknown>)
+						: {};
+				nextNodeStateMap = {
+					...prevNodeStateMap,
+					[controlNodeId]: {
+						nodeId: controlNodeId,
+						lastSignal: signal,
+						terminalReasonCode:
+							signal === 'node_terminal'
+								? (String((evt as any)?.reasonCode ?? '').trim() || undefined)
+								: (String(prior.terminalReasonCode ?? '').trim() || undefined),
+						lastSeq: nextAppliedSeq,
+						updatedAt: String((evt as any)?.at ?? '')
+					}
+				};
+			}
 			if (!evt.nodeId || !handle) {
 				return logPush(
 					{
@@ -2629,6 +2668,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						queueRuntime: {
 						...queueRuntimeWithControlState
 						,
+						controlPlaneNodeState: nextNodeStateMap as any,
 						appliedControlSeq: nextAppliedSeq
 					}
 				},
@@ -2647,6 +2687,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 				...state,
 				queueRuntime: {
 					...queueRuntimeWithControlState,
+					controlPlaneNodeState: nextNodeStateMap as any,
 					handleStates: {
 						...prevHandleStates,
 						[key]: {
@@ -3004,6 +3045,14 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						typeof state.queueRuntime.blockedByNode === 'object'
 							? state.queueRuntime.blockedByNode
 							: {}) ?? {},
+					controlPlaneNodeState:
+						((evt as any)?.controlPlaneNodeState &&
+						typeof (evt as any).controlPlaneNodeState === 'object'
+							? ((evt as any).controlPlaneNodeState as Record<string, unknown>)
+							: (state.queueRuntime?.controlPlaneNodeState &&
+								typeof state.queueRuntime.controlPlaneNodeState === 'object'
+									? state.queueRuntime.controlPlaneNodeState
+									: {})) ?? {},
 					controlPlaneEdgeState:
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'

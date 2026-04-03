@@ -92,6 +92,7 @@ describe('runMonitorModel', () => {
 		expect(letterRow?.isLlmWaiting).toBe(true);
 		expect(letterRow?.inboundDepth).toBe(4);
 		expect(letterRow?.freshness).toBe('stale');
+		expect(letterRow?.terminalReasonCode).toBe(null);
 	});
 
 	it('builds edge rows with queue metric details and labels', () => {
@@ -268,6 +269,31 @@ describe('runMonitorModel', () => {
 		});
 		expect(rows[0]?.blockedReasonCode).toBe('CONTROL_GATE_BLOCKED');
 		expect(rows[0]?.blockedPlane).toBe('control');
+	});
+
+	it('surfaces control-plane terminal reason for live monitor rows', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_done',
+					position: { x: 0, y: 0 },
+					data: { kind: 'tool', label: 'Done Node', params: {} }
+				} as any
+			],
+			edges: [],
+			nodeBindings: { n_done: { status: 'succeeded' } },
+			queueRuntime: {
+				controlPlaneNodeState: {
+					n_done: {
+						nodeId: 'n_done',
+						lastSignal: 'node_terminal',
+						terminalReasonCode: 'completed',
+						lastSeq: 44
+					}
+				}
+			}
+		});
+		expect(rows[0]?.terminalReasonCode).toBe('completed');
 	});
 
 	it('projects consume mode and processed counts from runtime metrics', () => {
