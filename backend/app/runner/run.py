@@ -4308,6 +4308,20 @@ async def run_graph(
                         "edgeId": edge_id,
                         "exec": "active"
                     })
+                policy = _effective_node_runtime_policy(node_id)
+                if str(policy.get("consume_mode") or "once") == "once":
+                    for edge_id in incoming_work_edge_ids:
+                        await _emit(
+                            {
+                                "type": "control_signal",
+                                "runId": run_id,
+                                "at": iso_now(),
+                                "signal": "input_drained",
+                                "nodeId": node_id,
+                                "edgeId": edge_id,
+                                "handle": "in",
+                            }
+                        )
 
             work_batch_list = work_batch if isinstance(work_batch, list) else []
             override_map: Dict[str, str] = {}

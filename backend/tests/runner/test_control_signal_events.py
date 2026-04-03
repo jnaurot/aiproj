@@ -161,3 +161,54 @@ async def test_node_terminal_control_signal_emits_once_per_node(monkeypatch) -> 
 		seen[node_id] = int(seen.get(node_id, 0)) + 1
 	assert seen
 	assert all(count == 1 for count in seen.values())
+
+
+@pytest.mark.asyncio
+async def test_node_terminal_emits_after_edge_drain_and_close(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e1", "source": "a", "target": "b"}],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-terminal-order",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-terminal-order", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-terminal-order",
+	)
+	control = [e for e in events if e.get("type") == "control_signal"]
+	node_terminal_index = next(
+		(i for i, evt in enumerate(control) if str(evt.get("signal") or "") == "node_terminal" and str(evt.get("nodeId") or "") == "b"),
+		-1,
+	)
+	input_drained_index = next(
+		(i for i, evt in enumerate(control) if str(evt.get("signal") or "") == "input_drained" and str(evt.get("edgeId") or "") == "e1"),
+		-1,
+	)
+	upstream_closed_index = next(
+		(i for i, evt in enumerate(control) if str(evt.get("signal") or "") == "upstream_closed" and str(evt.get("edgeId") or "") == "e1"),
+		-1,
+	)
+	assert node_terminal_index >= 0
+	assert input_drained_index >= 0
+	assert upstream_closed_index >= 0
+	assert node_terminal_index > input_drained_index
+	assert node_terminal_index > upstream_closed_index
