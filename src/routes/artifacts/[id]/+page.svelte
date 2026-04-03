@@ -1,18 +1,53 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
+	import { getRun } from '$lib/flow/client/runs';
 	import ArtifactViewer from '$lib/flow/components/ArtifactViewer.svelte';
 
 	$: artifactId = $page.params.id ?? '';
+	$: graphId = ($page.url.searchParams.get('graphId') ?? '').trim();
+	$: runId = ($page.url.searchParams.get('runId') ?? '').trim();
+	let resolvedGraphId = '';
+	$: resolvedGraphId = graphId;
+	$: source = ($page.url.searchParams.get('source') ?? '').trim();
+
+	onMount(() => {
+		if (!runId) return;
+		void (async () => {
+			try {
+				const run = await getRun(runId);
+				const runGraphId = String((run as any)?.graphId ?? '').trim();
+				if (runGraphId) {
+					resolvedGraphId = runGraphId;
+				}
+			} catch {
+				// Keep URL-provided graphId when run lookup is unavailable.
+			}
+		})();
+	});
+
+	function handleReturnToCanvas(event: MouseEvent): void {
+		event.preventDefault();
+		const openedFromRunLog = source === 'run_log';
+		if (openedFromRunLog) {
+			window.close();
+			setTimeout(() => {
+				window.location.assign('/');
+			}, 40);
+			return;
+		}
+		window.location.assign('/');
+	}
 </script>
 
 <main class="wrap">
 	<header class="head">
-		<a href="/">Back to Canvas</a>
+		<a href="/" on:click={handleReturnToCanvas}>Back to Canvas</a>
 		<div class="id">{artifactId}</div>
 	</header>
 
 	{#if artifactId}
-		<ArtifactViewer artifactId={artifactId} />
+		<ArtifactViewer artifactId={artifactId} graphId={resolvedGraphId} />
 	{:else}
 		<div class="muted">Missing artifact id.</div>
 	{/if}

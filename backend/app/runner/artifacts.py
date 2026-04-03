@@ -174,6 +174,7 @@ class ArtifactStore(Protocol):
     ) -> Optional[str]: ...
     async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None: ...
     async def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]: ...
+    async def get_run_graph_id(self, run_id: str) -> Optional[str]: ...
     async def list_run_experiments(
         self,
         *,
@@ -595,6 +596,23 @@ class MemoryArtifactStore:
             metrics = out.get("metrics") if isinstance(out.get("metrics"), dict) else {}
             out["analytics"] = metrics.get("__analytics") if isinstance(metrics.get("__analytics"), dict) else {}
         return out
+
+    async def get_run_graph_id(self, run_id: str) -> Optional[str]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        experiment = self._experiments.get(rid)
+        if isinstance(experiment, dict):
+            from_experiment = str(experiment.get("graphId") or "").strip()
+            if from_experiment:
+                return from_experiment
+        for art in self._meta.values():
+            if str(art.run_id or "").strip() != rid:
+                continue
+            gid = str(art.graph_id or "").strip()
+            if gid:
+                return gid
+        return None
 
     async def list_run_experiments(
         self,
@@ -1167,6 +1185,32 @@ class _SqliteArtifactIndex:
             "artifactIds": json.loads(row[8] or "[]"),
         }
 
+    def get_run_graph_id(self, run_id: str) -> Optional[str]:
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        exp = self.get_run_experiment(rid)
+        if isinstance(exp, dict):
+            exp_gid = str(exp.get("graphId") or "").strip()
+            if exp_gid:
+                return exp_gid
+        with self._lock:
+            cur = self._conn.cursor()
+            row = cur.execute(
+                """
+                SELECT graph_id
+                FROM artifacts
+                WHERE run_id=? AND graph_id IS NOT NULL AND graph_id <> ''
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (rid,),
+            ).fetchone()
+        if not row:
+            return None
+        gid = str(row[0] or "").strip()
+        return gid or None
+
     def list_run_experiments(
         self,
         *,
@@ -1674,6 +1718,9 @@ class DiskArtifactStore:
 
     async def get_run_experiment(self, run_id: str) -> Optional[Dict[str, Any]]:
         return self._index.get_run_experiment(run_id)
+
+    async def get_run_graph_id(self, run_id: str) -> Optional[str]:
+        return self._index.get_run_graph_id(run_id)
 
     async def list_run_experiments(
         self,

@@ -12,7 +12,6 @@
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformSqlParams>;
 	export let onDraft: (patch: Partial<TransformSqlParams>) => void;
-	export let onCommit: (patch: Partial<TransformSqlParams>) => void;
 
 	const defaults: TransformSqlParams = {
 		dialect: 'duckdb',

@@ -1470,10 +1470,17 @@ async def get_run(run_id: str, request: Request):
             raise HTTPException(404, "Unknown runId")
         if rec.get("status") == "deleted":
             raise HTTPException(404, "Unknown runId")
+        persisted_graph_id = None
+        resolve_graph_id_fn = getattr(rt.artifact_store, "get_run_graph_id", None)
+        if callable(resolve_graph_id_fn):
+            try:
+                persisted_graph_id = await resolve_graph_id_fn(run_id)
+            except Exception:
+                persisted_graph_id = None
         return {
             "schemaVersion": 1,
             "runId": rec.get("run_id", run_id),
-            "graphId": None,
+            "graphId": persisted_graph_id,
             "status": rec.get("status", "unknown"),
             "error": None,
             "createdAt": rec.get("created_at"),

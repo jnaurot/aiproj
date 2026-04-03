@@ -2449,6 +2449,157 @@ def _schema_fp_for_artifact(
     return contract_schema_fingerprint(schema_payload)
 
 
+def _node_debug_log_raw_output_enabled(params: Any) -> bool:
+    if not isinstance(params, dict):
+        return False
+    dbg = params.get("debug")
+    if not isinstance(dbg, dict):
+        return False
+    enabled = bool(dbg.get("enabled"))
+    raw_enabled = bool(
+        dbg.get("log_raw_output")
+        or dbg.get("logRawOutput")
+        or dbg.get("log_raw_outputs")
+        or dbg.get("logRawOutputs")
+    )
+    return enabled and raw_enabled
+
+
+def _payload_type_from_mime(mime_type: str) -> str:
+    mt = str(mime_type or "").strip().lower()
+    if "json" in mt:
+        return "json"
+    if mt.startswith("text/") or "markdown" in mt:
+        return "text"
+    if mt.startswith("image/"):
+        return "image"
+    if mt.startswith("audio/"):
+        return "audio"
+    if mt.startswith("video/"):
+        return "video"
+    return "binary"
+
+
+def _debug_raw_bytes_and_mime(
+    *,
+    raw_output: Any,
+    fallback_bytes: bytes,
+    fallback_mime: str,
+) -> tuple[bytes, str]:
+    fallback_payload = bytes(fallback_bytes or b"")
+    fallback_mime_norm = str(fallback_mime or "").strip() or "application/octet-stream"
+    if raw_output is None:
+        return fallback_payload, fallback_mime_norm
+    if isinstance(raw_output, (bytes, bytearray)):
+        return bytes(raw_output), fallback_mime_norm
+    if isinstance(raw_output, str):
+        return raw_output.encode("utf-8"), "text/plain; charset=utf-8"
+    try:
+        return json.dumps(raw_output, ensure_ascii=False).encode("utf-8"), "application/json"
+    except Exception:
+        return str(raw_output).encode("utf-8"), "text/plain; charset=utf-8"
+
+
+async def _write_debug_raw_output_artifact(
+    *,
+    context: GraphContext,
+    run_id: str,
+    node_id: str,
+    kind: str,
+    params: Dict[str, Any],
+    node_impl_version: str,
+    node_state_hash: str,
+    exec_key: str,
+    determinism_env: Dict[str, Any],
+    contract_fingerprint: str,
+    source_artifact_id: str,
+    raw_output: Any,
+    fallback_bytes: bytes,
+    fallback_mime: str,
+) -> Optional[str]:
+    if not _node_debug_log_raw_output_enabled(params):
+        return None
+
+    raw_bytes, raw_mime = _debug_raw_bytes_and_mime(
+        raw_output=raw_output,
+        fallback_bytes=fallback_bytes,
+        fallback_mime=fallback_mime,
+    )
+    debug_exec_key = f"{str(exec_key or '').strip()}::debug_raw"
+    debug_artifact_id = debug_exec_key
+    payload_type = _payload_type_from_mime(raw_mime)
+    payload_schema: Dict[str, Any] = {
+        "schema_version": 1,
+        "type": payload_type,
+        "debug": {
+            "kind": "raw_output",
+            "sourceArtifactId": str(source_artifact_id or ""),
+        },
+    }
+    if payload_type == "json":
+        try:
+            payload_schema["schema"] = _json_payload_value_schema(
+                json.loads(raw_bytes.decode("utf-8"))
+            )
+        except Exception:
+            payload_schema["schema"] = {"type": "unknown"}
+    schema_fp = _schema_fp_for_artifact(payload_schema=payload_schema)
+    created_at_dt = datetime.now(timezone.utc)
+    lineage_v1 = await _artifact_lineage_v1(
+        artifact_id=debug_artifact_id,
+        upstream_artifact_ids=[str(source_artifact_id or "")] if str(source_artifact_id or "").strip() else [],
+        node_params=params if isinstance(params, dict) else {},
+        node_id=node_id,
+        run_id=run_id,
+        graph_id=context.graph_id,
+        exec_key=debug_exec_key,
+        artifact_store=context.artifact_store,
+    )
+    payload_schema["artifactMetadataV1"] = _artifact_metadata_v1(
+        exec_key=debug_exec_key,
+        node_id=node_id,
+        node_type=kind,
+        node_impl_version=node_impl_version,
+        params_fingerprint=node_state_hash,
+        upstream_artifact_ids=[str(source_artifact_id or "")] if str(source_artifact_id or "").strip() else [],
+        contract_fingerprint=str(contract_fingerprint or schema_fp),
+        schema_fingerprint=schema_fp,
+        mime_type=raw_mime,
+        payload_type=payload_type,
+        schema=payload_schema.get("schema") if isinstance(payload_schema.get("schema"), dict) else None,
+        created_at_iso=created_at_dt.isoformat(),
+        run_id=run_id,
+        graph_id=context.graph_id,
+        determinism_fingerprint=_determinism_fingerprint(determinism_env),
+        code_hash=_determinism_code_hash_from_env(determinism_env),
+        profile_lock=_determinism_profile_lock_from_env(determinism_env),
+        component_context=(
+            (params.get("_componentContext") if isinstance(params, dict) else None)
+            if isinstance((params.get("_componentContext") if isinstance(params, dict) else None), dict)
+            else None
+        ),
+        lineage_v1=lineage_v1,
+    )
+    debug_artifact = Artifact(
+        artifact_id=debug_artifact_id,
+        node_kind=kind,
+        params_hash=node_state_hash,
+        upstream_ids=[str(source_artifact_id or "")] if str(source_artifact_id or "").strip() else [],
+        created_at=created_at_dt,
+        execution_version=context.execution_version,
+        mime_type=raw_mime,
+        payload_type=payload_type,
+        size_bytes=len(raw_bytes),
+        storage_uri=f"artifact://{debug_artifact_id}",
+        payload_schema=payload_schema,
+        run_id=run_id,
+        graph_id=context.graph_id,
+        node_id=node_id,
+        exec_key=debug_exec_key,
+    )
+    return await context.artifact_store.write(debug_artifact, raw_bytes)
+
+
 def _normalize_mime_strict(mime_type: str) -> str:
     return str(mime_type or "").strip().lower()
 
@@ -3351,6 +3502,34 @@ async def run_graph(
             if component_path and "componentPath" not in payload:
                 payload = {**payload, "componentPath": component_path}
         await context.bus.emit(payload)
+
+    async def _emit_output_artifact_log(
+        *,
+        run_id: str,
+        node_id: str,
+        artifact_id: str,
+        handle: str | None = None,
+        cached: bool = False,
+    ) -> None:
+        artifact_value = str(artifact_id or "").strip()
+        if not artifact_value:
+            return
+        handle_value = str(handle or "").strip()
+        suffix = ""
+        if handle_value:
+            suffix += f" handle={handle_value}"
+        if bool(cached):
+            suffix += " cached=true"
+        await _emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "nodeId": node_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": f"[output] artifactId={artifact_value}{suffix}",
+            }
+        )
 
     cache = cache or ExecutionCache()
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
@@ -4431,6 +4610,12 @@ async def run_graph(
                         "primingArtifact": _source_priming_artifact_from_artifact(pinned_art),
                         "cached": True,
                     })
+                    await _emit_output_artifact_log(
+                        run_id=run_id,
+                        node_id=node_id,
+                        artifact_id=str(pinned_artifact_id or ""),
+                        cached=True,
+                    )
                     await _emit({
                         "type": "node_finished",
                         "runId": run_id,
@@ -4773,6 +4958,12 @@ async def run_graph(
                         "primingArtifact": _source_priming_artifact_from_artifact(cached_art),
                         "cached": True,
                     })
+                    await _emit_output_artifact_log(
+                        run_id=run_id,
+                        node_id=node_id,
+                        artifact_id=str(cached_artifact_id or ""),
+                        cached=True,
+                    )
 
                     await _emit({
                         "type": "node_finished",
@@ -6681,6 +6872,12 @@ async def run_graph(
                                     "primingArtifact": _source_priming_artifact_from_artifact(output_artifact),
                                 }
                             )
+                            await _emit_output_artifact_log(
+                                run_id=run_id,
+                                node_id=node_id,
+                                artifact_id=str(committed_output_artifact_id or ""),
+                                handle=str(handle or ""),
+                            )
 
                         # cache index
                         await cache.store_artifact_id(exec_key, committed_artifact_id)
@@ -6704,6 +6901,41 @@ async def run_graph(
                             "sourceObservability": _source_observability_from_artifact(artifact),
                             "primingArtifact": _source_priming_artifact_from_artifact(artifact),
                         })
+                        await _emit_output_artifact_log(
+                            run_id=run_id,
+                            node_id=node_id,
+                            artifact_id=str(committed_artifact_id or ""),
+                        )
+                        debug_raw_artifact_id = await _write_debug_raw_output_artifact(
+                            context=context,
+                            run_id=run_id,
+                            node_id=node_id,
+                            kind=kind,
+                            params=params if isinstance(params, dict) else {},
+                            node_impl_version=node_impl_version,
+                            node_state_hash=node_state_hash,
+                            exec_key=str(exec_key or ""),
+                            determinism_env=determinism_env if isinstance(determinism_env, dict) else {},
+                            contract_fingerprint=contract_fingerprint,
+                            source_artifact_id=str(committed_artifact_id or ""),
+                            raw_output=None,
+                            fallback_bytes=bytes(res.payload_bytes or b""),
+                            fallback_mime=str(res.mime_type or "application/octet-stream"),
+                        )
+                        if isinstance(debug_raw_artifact_id, str) and debug_raw_artifact_id.strip():
+                            await _emit(
+                                {
+                                    "type": "log",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "level": "info",
+                                    "message": (
+                                        f"[debug] raw_output artifactId={debug_raw_artifact_id} "
+                                        f"sourceArtifactId={committed_artifact_id} bytes={len(bytes(res.payload_bytes or b''))}"
+                                    ),
+                                }
+                            )
 
                         # return a NodeOutput for legacy metadata flow
                         output = NodeOutput(
@@ -7437,6 +7669,51 @@ async def run_graph(
                         "sourceObservability": _source_observability_from_artifact(artifact),
                         "primingArtifact": _source_priming_artifact_from_artifact(artifact),
                     })
+                    await _emit_output_artifact_log(
+                        run_id=run_id,
+                        node_id=node_id,
+                        artifact_id=str(committed_artifact_id or ""),
+                    )
+                    debug_raw_candidate: Any = None
+                    if kind in {"llm", "model"}:
+                        obs = (
+                            output.metadata.observability
+                            if getattr(output, "metadata", None) is not None
+                            and isinstance(getattr(output.metadata, "observability", None), dict)
+                            else {}
+                        )
+                        if isinstance(obs, dict) and "raw_output" in obs:
+                            debug_raw_candidate = obs.get("raw_output")
+                    debug_raw_artifact_id = await _write_debug_raw_output_artifact(
+                        context=context,
+                        run_id=run_id,
+                        node_id=node_id,
+                        kind=kind,
+                        params=params if isinstance(params, dict) else {},
+                        node_impl_version=node_impl_version,
+                        node_state_hash=node_state_hash,
+                        exec_key=str(exec_key or ""),
+                        determinism_env=determinism_env if isinstance(determinism_env, dict) else {},
+                        contract_fingerprint=contract_fingerprint,
+                        source_artifact_id=str(committed_artifact_id or ""),
+                        raw_output=debug_raw_candidate,
+                        fallback_bytes=bytes(payload_bytes or b""),
+                        fallback_mime=str(mime_type or "application/octet-stream"),
+                    )
+                    if isinstance(debug_raw_artifact_id, str) and debug_raw_artifact_id.strip():
+                        await _emit(
+                            {
+                                "type": "log",
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "at": iso_now(),
+                                "level": "info",
+                                "message": (
+                                    f"[debug] raw_output artifactId={debug_raw_artifact_id} "
+                                    f"sourceArtifactId={committed_artifact_id} bytes={len(bytes(payload_bytes or b''))}"
+                                ),
+                            }
+                        )
 
                     # Update cache index
                     if use_cache_for_node:

@@ -482,6 +482,7 @@ async def exec_llm_ollama(
                     error="Ollama returned empty output content",
                 )
 
+            raw_output_for_debug = data
             if output_mode == "json":
                 try:
                     json_data = json.loads(data) if data else None
@@ -595,6 +596,23 @@ async def exec_llm_ollama(
                 params_payload = dict(params)
             params_hash = _sha256_json(params_payload)
 
+            observability = {
+                "provider": "ollama",
+                "model": params.model,
+                "prompt_revision_id": params.prompt_revision_id,
+                "output_mode": output_mode,
+                "retries": int(attempt),
+                "latency_ms": max(0.0, (asyncio.get_event_loop().time() - t0) * 1000.0),
+                "input_chars": int(len(text or "")),
+                "output_chars": int(len(data or "")),
+                "input_tokens_est": _token_estimate(text or ""),
+                "output_tokens_est": _token_estimate(data or ""),
+                "total_tokens_est": _token_estimate(text or "") + _token_estimate(data or ""),
+                "cost_estimate_usd": 0.0,
+                "cache_decision": "executed",
+            }
+            if _debug_flag(params, "enabled") and _debug_flag(params, "log_raw_output"):
+                observability["raw_output"] = raw_output_for_debug
             meta = FileMetadata(
                 file_path=file_path,
                 file_type=file_type,                 # must match your enum/literal
@@ -604,21 +622,7 @@ async def exec_llm_ollama(
                 content_hash=content_hash,
                 node_id=node_id,
                 params_hash=params_hash,
-                observability={
-                    "provider": "ollama",
-                    "model": params.model,
-                    "prompt_revision_id": params.prompt_revision_id,
-                    "output_mode": output_mode,
-                    "retries": int(attempt),
-                    "latency_ms": max(0.0, (asyncio.get_event_loop().time() - t0) * 1000.0),
-                    "input_chars": int(len(text or "")),
-                    "output_chars": int(len(data or "")),
-                    "input_tokens_est": _token_estimate(text or ""),
-                    "output_tokens_est": _token_estimate(data or ""),
-                    "total_tokens_est": _token_estimate(text or "") + _token_estimate(data or ""),
-                    "cost_estimate_usd": 0.0,
-                    "cache_decision": "executed",
-                },
+                observability=observability,
                 )
 
             await context.bus.emit(

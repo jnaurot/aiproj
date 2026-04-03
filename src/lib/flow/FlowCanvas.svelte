@@ -49,6 +49,7 @@
 		getExperimentAdaptiveDecisions,
 		getExperimentBottlenecks,
 		getExperimentNodeTrends,
+		getRun,
 		getExperimentRunSummary,
 		getExperimentRunTrends,
 		getExperimentRegressions,
@@ -824,6 +825,61 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const abbrev = `${nodeToken(sourceName)}-${nodeToken(targetName)}`;
 		return `${edgeId} ${abbrev}`;
 	}
+
+	function artifactIdFromLogMessage(message: string): string | null {
+		const src = String(message ?? '');
+		if (!src) return null;
+		const candidates = [
+			src.match(/\bartifactId["'\s:=]+([^\s"',\]}]+)/i)?.[1],
+			src.match(/\bartifact_id["'\s:=]+([^\s"',\]}]+)/i)?.[1],
+			src.match(/"artifactId"\s*:\s*"([^"\s]+)"/i)?.[1],
+			src.match(/"artifact_id"\s*:\s*"([^"\s]+)"/i)?.[1],
+			src.match(/\bartifact["'\s:=]+([^\s"',\]}]+)/i)?.[1],
+		].filter((value): value is string => typeof value === 'string' && value.length > 0);
+		for (const raw of candidates) {
+			const value = String(raw).trim();
+			// Runtime artifact ids are either 64-hex hashes or hash + handle suffix (e.g. ::debug_raw).
+			if (/^[a-f0-9]{64}$/i.test(value)) return value;
+			if (/^[a-f0-9]{64}::[A-Za-z0-9_-]+$/i.test(value)) return value;
+		}
+		return null;
+	}
+
+	function runLogArtifactId(entry: { message?: string }): string | null {
+		return artifactIdFromLogMessage(String(entry.message ?? ''));
+	}
+
+	const runLogGraphIdByRunId = new Map<string, string>();
+
+	async function openArtifactFromRunLog(artifactId: string, runId?: string | null): Promise<void> {
+		const aid = String(artifactId ?? '').trim();
+		if (!aid) return;
+		const resolvedRunId = String(runId ?? '').trim();
+		let gid = String($graphStore.graphId ?? '').trim();
+		if (resolvedRunId) {
+			const cached = String(runLogGraphIdByRunId.get(resolvedRunId) ?? '').trim();
+			if (cached) {
+				gid = cached;
+			} else {
+				try {
+					const run = await getRun(resolvedRunId);
+					const resolvedGraphId = String((run as any)?.graphId ?? '').trim();
+					if (resolvedGraphId) {
+						runLogGraphIdByRunId.set(resolvedRunId, resolvedGraphId);
+						gid = resolvedGraphId;
+					}
+				} catch {
+					// Fallback to current graph id when run lookup is unavailable.
+				}
+			}
+		}
+		const params = new URLSearchParams();
+		if (gid.length > 0) params.set('graphId', gid);
+		if (resolvedRunId.length > 0) params.set('runId', resolvedRunId);
+		params.set('source', 'run_log');
+		const url = `/artifacts/${encodeURIComponent(aid)}?${params.toString()}`;
+		window.open(url, '_blank', 'noopener,noreferrer');
+	}
 	$: warningSummaryRows = Object.values(($graphStore.queueRuntime?.warningSummary ?? {}) as Record<string, any>)
 		.filter((row) => Number((row as any)?.count ?? 0) > 1)
 		.sort(
@@ -1390,7 +1446,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		await Promise.all(
 			uniqueIds.map(async (artifactId) => {
 				try {
-					const res = await fetch(getArtifactMetaUrl(graphId, artifactId));
+					const res = await fetch(getArtifactMetaUrl(artifactId, graphId));
 					if (!res.ok) return;
 					const meta = await res.json();
 					next[artifactId] = {
@@ -5168,6 +5224,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									<span class="nid">[edge: {runLogEdgeTag(l)}]</span>
 								{/if}
 								{l.message}
+								{#if runLogArtifactId(l)}
+									<button
+										type="button"
+										class="logArtifactBtn"
+										on:click={() => {
+											const artifactId = runLogArtifactId(l);
+											if (artifactId) void openArtifactFromRunLog(artifactId, String((l as any)?.runId ?? ''));
+										}}
+									>
+										Open Artifact
+									</button>
+								{/if}
 							</span>
 						</div>
 					{/each}
@@ -7897,6 +7965,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 	.log.warn {
 		color: #f2cc60;
+	}
+
+	.logArtifactBtn {
+		margin-left: 8px;
+		font-size: 11px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid var(--color-control-border, #2c3444);
+		background: color-mix(in srgb, var(--color-accent, #4b8cff) 14%, transparent);
+		color: var(--color-text-primary, #e6e6e6);
+		cursor: pointer;
+	}
+
+	.logArtifactBtn:hover,
+	.logArtifactBtn:focus-visible {
+		background: color-mix(in srgb, var(--color-accent, #4b8cff) 24%, transparent);
+		border-color: var(--color-control-border-focus, #46639a);
+		outline: none;
 	}
 
 	.editorCard {
