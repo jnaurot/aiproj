@@ -1911,11 +1911,15 @@ class RuntimeManager:
             return
 
         if t == "run_pause_requested":
+            if str(handle.status or "").strip().lower() == "pausing":
+                return
             if self._set_run_status(handle, "pausing", reason="event:run_pause_requested"):
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
             return
 
         if t == "run_pausing":
+            if str(handle.status or "").strip().lower() == "pausing":
+                return
             if self._set_run_status(handle, "pausing", reason="event:run_pausing"):
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "pausing"))
             return
@@ -1934,11 +1938,15 @@ class RuntimeManager:
             return
 
         if t == "run_resume_requested":
+            if str(handle.status or "").strip().lower() == "resuming":
+                return
             if self._set_run_status(handle, "resuming", reason="event:run_resume_requested"):
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
             return
 
         if t == "run_resuming":
+            if str(handle.status or "").strip().lower() == "resuming":
+                return
             if self._set_run_status(handle, "resuming", reason="event:run_resuming"):
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, "resuming"))
             return

@@ -54,3 +54,33 @@ async def test_legal_pause_resume_cancel_transition_chain_still_succeeds(monkeyp
 	events = await rt.list_run_events(run_id, after_id=0, limit=500)
 	violation_count = sum(1 for e in events if str(e.get("type") or "") == "state_transition_violation")
 	assert violation_count == 0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_pause_resume_transitional_events_are_idempotent(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-duplicate-transitional-events"
+	handle = rt.create_run(run_id)
+
+	await handle.bus.emit({"type": "run_started"})
+	assert handle.status == "running"
+	await handle.bus.emit({"type": "run_pause_requested"})
+	assert handle.status == "pausing"
+	# duplicate transition events should be ignored (not violations)
+	await handle.bus.emit({"type": "run_pause_requested"})
+	await handle.bus.emit({"type": "run_pausing"})
+	assert handle.status == "pausing"
+	await handle.bus.emit({"type": "run_paused"})
+	assert handle.status == "paused"
+	await handle.bus.emit({"type": "run_resume_requested"})
+	assert handle.status == "resuming"
+	await handle.bus.emit({"type": "run_resume_requested"})
+	await handle.bus.emit({"type": "run_resuming"})
+	assert handle.status == "resuming"
+	await handle.bus.emit({"type": "run_resumed"})
+	assert handle.status == "running"
+
+	events = await rt.list_run_events(run_id, after_id=0, limit=500)
+	violations = [e for e in events if str(e.get("type") or "") == "state_transition_violation"]
+	assert not violations
