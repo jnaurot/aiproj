@@ -79,6 +79,31 @@ def validate_pause_snapshot_schema(snapshot: Dict[str, Any]) -> Tuple[bool, List
 				lease_nodes = control_plane.get("activeLeaseNodeIds")
 				if lease_nodes is not None and not _is_list(lease_nodes):
 					errors.append("state_control_plane_active_lease_nodes_invalid")
+		runtime_item_metrics = state.get("runtimeItemMetrics")
+		if runtime_item_metrics is not None:
+			if not _is_dict(runtime_item_metrics):
+				errors.append("state_runtime_item_metrics_invalid")
+			else:
+				node_counters = runtime_item_metrics.get("nodeCounters")
+				if node_counters is not None and not _is_dict(node_counters):
+					errors.append("state_runtime_item_metrics_node_counters_invalid")
+		runtime_node_metrics = state.get("nodeRuntimeMetrics")
+		if runtime_node_metrics is not None and not _is_dict(runtime_node_metrics):
+			errors.append("state_runtime_node_metrics_invalid")
+		runtime_totals = state.get("runtimeTotals")
+		if runtime_totals is not None:
+			if not _is_dict(runtime_totals):
+				errors.append("state_runtime_totals_invalid")
+			else:
+				for key in ("cached", "succeeded", "failed", "softFailed", "peakConcurrency"):
+					value = runtime_totals.get(key)
+					if value is None:
+						continue
+					try:
+						if int(value) < 0:
+							errors.append(f"state_runtime_totals_negative:{key}")
+					except Exception:
+						errors.append(f"state_runtime_totals_invalid_value:{key}")
 	basis = snapshot.get("frontierValidationBasis")
 	if not _is_dict(basis):
 		errors.append("missing_frontier_validation_basis")

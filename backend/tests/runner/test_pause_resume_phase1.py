@@ -590,6 +590,148 @@ async def test_pause_snapshot_includes_control_plane_state(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_pause_snapshot_includes_runtime_item_metrics(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	first_started = asyncio.Event()
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		if node_id == "n1":
+			first_started.set()
+			await asyncio.sleep(0.05)
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": node_id}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "n1", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "n2", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e12", "source": "n1", "target": "n2", "targetHandle": "in", "data": {"mode": "work"}}],
+	}
+	events: list[dict[str, Any]] = []
+	bus = RunEventBus("run-pause-runtime-metrics", on_emit=lambda evt: events.append(dict(evt)))
+	pause_event = asyncio.Event()
+	task = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-pause-runtime-metrics",
+			graph=graph,
+			run_from=None,
+			bus=bus,
+			artifact_store=MemoryArtifactStore(),
+			cache=ExecutionCache(),
+			graph_id="graph-pause-runtime-metrics",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(first_started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.wait_for(task, timeout=5.0)
+	paused_evt = next((evt for evt in events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot") if isinstance(paused_evt.get("snapshot"), dict) else {}
+	state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+	runtime_item_metrics = state.get("runtimeItemMetrics") if isinstance(state.get("runtimeItemMetrics"), dict) else {}
+	node_counters = runtime_item_metrics.get("nodeCounters") if isinstance(runtime_item_metrics.get("nodeCounters"), dict) else {}
+	n1 = node_counters.get("n1") if isinstance(node_counters.get("n1"), dict) else {}
+	assert int(n1.get("accepted") or 0) >= 1
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_runtime_item_counters_across_pause_boundary(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	first_started = asyncio.Event()
+	call_counts: dict[str, int] = {"n1": 0, "n2": 0}
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		call_counts[node_id] = int(call_counts.get(node_id, 0)) + 1
+		if node_id == "n1":
+			first_started.set()
+			await asyncio.sleep(0.05)
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": node_id}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "n1", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "n2", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e12", "source": "n1", "target": "n2", "targetHandle": "in", "data": {"mode": "work"}}],
+	}
+	artifact_store = MemoryArtifactStore()
+	cache = ExecutionCache()
+	pause_events: list[dict[str, Any]] = []
+	pause_bus = RunEventBus("run-resume-runtime-counters", on_emit=lambda evt: pause_events.append(dict(evt)))
+	pause_event = asyncio.Event()
+	first_run = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-resume-runtime-counters",
+			graph=graph,
+			run_from=None,
+			bus=pause_bus,
+			artifact_store=artifact_store,
+			cache=cache,
+			graph_id="graph-resume-runtime-counters",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(first_started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.wait_for(first_run, timeout=5.0)
+	paused_evt = next((evt for evt in pause_events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot")
+	assert isinstance(snapshot, dict)
+
+	resume_events: list[dict[str, Any]] = []
+	resume_bus = RunEventBus("run-resume-runtime-counters", on_emit=lambda evt: resume_events.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-resume-runtime-counters",
+		graph=graph,
+		run_from=None,
+		bus=resume_bus,
+		artifact_store=artifact_store,
+		cache=cache,
+		graph_id="graph-resume-runtime-counters",
+		resume_snapshot=snapshot,
+	)
+	last_queue = next(
+		(
+			evt
+			for evt in reversed(resume_events)
+			if str(evt.get("type") or "") == "queue_metrics" and isinstance(evt.get("runtimeItemMetrics"), dict)
+		),
+		None,
+	)
+	assert isinstance(last_queue, dict)
+	node_counters = (
+		(last_queue.get("runtimeItemMetrics") or {}).get("nodeCounters")
+		if isinstance(last_queue.get("runtimeItemMetrics"), dict)
+		else {}
+	)
+	assert isinstance(node_counters, dict)
+	n1 = node_counters.get("n1") if isinstance(node_counters.get("n1"), dict) else {}
+	n2 = node_counters.get("n2") if isinstance(node_counters.get("n2"), dict) else {}
+	assert int(n1.get("accepted") or 0) == 1
+	assert int(n2.get("accepted") or 0) == 1
+
+
+@pytest.mark.asyncio
 async def test_resume_rehydrates_control_plane_state_from_snapshot(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")

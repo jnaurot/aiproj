@@ -8345,6 +8345,15 @@ async def run_graph(
                         "lastSeq": int(control_signal_seq),
                         "activeLeaseNodeIds": sorted(str(nid) for nid in active_llm_lease_nodes if str(nid).strip()),
                     },
+                    "runtimeItemMetrics": copy.deepcopy(runtime_item_metrics),
+                    "nodeRuntimeMetrics": copy.deepcopy(node_runtime_metrics),
+                    "runtimeTotals": {
+                        "cached": int(total_cached),
+                        "succeeded": int(total_succeeded),
+                        "failed": int(total_failed),
+                        "softFailed": int(total_soft_failed),
+                        "peakConcurrency": int(peak_concurrency),
+                    },
                 },
                 "completedNodeIds": started_node_ids,
                 "readyNodeIds": ready_node_ids,
@@ -8578,6 +8587,62 @@ async def run_graph(
                 for node_id in lease_nodes_raw
                 if str(node_id or "").strip() and str(node_id) in sub
             )
+
+            runtime_item_metrics_raw = (
+                state.get("runtimeItemMetrics")
+                if isinstance(state.get("runtimeItemMetrics"), dict)
+                else {}
+            )
+            if runtime_item_metrics_raw:
+                restored_metrics = copy.deepcopy(runtime_item_metrics_raw)
+                restored_node_counters_raw = (
+                    restored_metrics.get("nodeCounters")
+                    if isinstance(restored_metrics.get("nodeCounters"), dict)
+                    else {}
+                )
+                for nid in nodes.keys():
+                    restored_entry = (
+                        restored_node_counters_raw.get(nid)
+                        if isinstance(restored_node_counters_raw.get(nid), dict)
+                        else {}
+                    )
+                    node_accept_reject_counters[nid] = {
+                        "accepted": max(0, int(restored_entry.get("accepted") or 0)),
+                        "rejected": max(0, int(restored_entry.get("rejected") or 0)),
+                    }
+                restored_metrics["nodeCounters"] = node_accept_reject_counters
+                if not isinstance(restored_metrics.get("byPlane"), dict):
+                    restored_metrics["byPlane"] = {
+                        "work": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+                        "param": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+                        "control": {"itemsEnqueued": 0, "itemsDequeued": 0, "itemsAccepted": 0, "itemsRejected": 0},
+                    }
+                if not isinstance(restored_metrics.get("byHandle"), dict):
+                    restored_metrics["byHandle"] = {}
+                runtime_item_metrics = restored_metrics
+
+            runtime_node_metrics_raw = (
+                state.get("nodeRuntimeMetrics")
+                if isinstance(state.get("nodeRuntimeMetrics"), dict)
+                else {}
+            )
+            if runtime_node_metrics_raw:
+                node_runtime_metrics.clear()
+                for nid, raw_metric in runtime_node_metrics_raw.items():
+                    if str(nid) in sub and isinstance(raw_metric, dict):
+                        node_runtime_metrics[str(nid)] = dict(raw_metric)
+
+            runtime_totals_raw = (
+                state.get("runtimeTotals")
+                if isinstance(state.get("runtimeTotals"), dict)
+                else {}
+            )
+            if runtime_totals_raw:
+                total_cached = max(0, int(runtime_totals_raw.get("cached") or total_cached))
+                total_succeeded = max(0, int(runtime_totals_raw.get("succeeded") or total_succeeded))
+                total_failed = max(0, int(runtime_totals_raw.get("failed") or total_failed))
+                total_soft_failed = max(0, int(runtime_totals_raw.get("softFailed") or total_soft_failed))
+                peak_concurrency = max(0, int(runtime_totals_raw.get("peakConcurrency") or peak_concurrency))
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):

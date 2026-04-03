@@ -354,6 +354,39 @@ async def test_snapshot_load_rejects_malformed_control_plane_state(monkeypatch):
 	assert result["errorCode"] == "PAUSE_SNAPSHOT_SCHEMA_INVALID"
 
 
+@pytest.mark.asyncio
+async def test_snapshot_load_rejects_malformed_runtime_metrics_state(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-resume-invalid-runtime-metrics"
+	handle = rt.create_run(run_id)
+	handle.status = "paused"
+	handle.graph_id = "graph-invalid-runtime-metrics"
+	handle.graph = _make_graph()
+	handle.node_bindings = _make_bindings()
+	basis = _build_frontier_identity_basis(
+		graph=handle.graph,
+		graph_id="graph-invalid-runtime-metrics",
+		node_ids=["n2"],
+		node_bindings=handle.node_bindings,
+		execution_version="v1",
+	)
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-invalid-runtime-metrics",
+		graph=handle.graph,
+		basis=basis,
+	)
+	state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+	state["runtimeItemMetrics"] = {"nodeCounters": []}
+	state["runtimeTotals"] = {"cached": "x"}
+	snapshot["state"] = state
+	await rt.artifact_store.upsert_run_pause_snapshot(run_id, snapshot)
+	result = await rt.request_resume(run_id)
+	assert result["resumed"] is False
+	assert result["errorCode"] == "PAUSE_SNAPSHOT_SCHEMA_INVALID"
+
+
 def test_resume_contract_compare_fails_on_frontier_binding_change():
 	expected_contract = {
 		"contractVersion": 1,
