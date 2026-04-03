@@ -33,6 +33,7 @@ REQUIRED_BY_TYPE = {
     "edge_exec": {"runId", "at", "edgeId", "exec"},
     "log": {"runId", "at", "level", "message"},
     "control_signal": {"runId", "at", "signal", "event_version", "payload_type", "control_signal", "seq", "graphId"},
+    "control_plane_divergence": {"runId", "at", "mode", "reasonCode", "missingNodeIds"},
 }
 
 ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
@@ -48,6 +49,7 @@ ALLOWED_TYPES = set(REQUIRED_BY_TYPE) | {
     "run_telemetry",
     "node_not_resumable",
     "control_signal",
+    "control_plane_divergence",
 }
 
 ALLOWED_CACHE_REASONS = {

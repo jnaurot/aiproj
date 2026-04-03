@@ -10239,6 +10239,16 @@ async def run_graph(
             if control_plane_mode == "observe":
                 await _emit(
                     {
+                        "type": "control_plane_divergence",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "mode": "observe",
+                        "reasonCode": "terminality_incomplete",
+                        "missingNodeIds": list(missing_terminal_nodes),
+                    }
+                )
+                await _emit(
+                    {
                         "type": "log",
                         "runId": run_id,
                         "at": iso_now(),

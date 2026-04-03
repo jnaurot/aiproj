@@ -325,6 +325,12 @@ async def test_control_plane_observe_mode_emits_divergence_without_failing(monke
 		for evt in events
 	)
 	assert any(
+		evt.get("type") == "control_plane_divergence"
+		and str(evt.get("reasonCode") or "") == "terminality_incomplete"
+		and isinstance(evt.get("missingNodeIds"), list)
+		for evt in events
+	)
+	assert any(
 		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "succeeded"
 		for evt in events
 	)
