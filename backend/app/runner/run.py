@@ -2727,6 +2727,13 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
     return max(float(minimum), float(val))
 
 
+def _normalize_control_plane_mode(raw: Any) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"off", "observe", "enforce"}:
+        return value
+    return "enforce"
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -3354,6 +3361,7 @@ async def run_graph(
     max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
     max_llm = max_model
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
+    control_plane_mode = _normalize_control_plane_mode(get_env("CONTROL_PLANE_V1", "enforce"))
     adaptive_mode_source = (
         "run_override"
         if isinstance(adaptive_override, dict)
@@ -3419,6 +3427,9 @@ async def run_graph(
                 "hardCaps": dict(adaptive_hard_caps),
                 "minCaps": dict(adaptive_min_caps),
                 "policy": dict(adaptive_config),
+            },
+            "controlPlane": {
+                "mode": str(control_plane_mode),
             },
             "retryPolicy": {
                 "maxAttempts": int(node_retry_max_attempts),
@@ -10107,19 +10118,46 @@ async def run_graph(
             key=lambda n: order_index.get(n, 10**9),
         )
         if missing_terminal_nodes:
-            await _emit(
-                {
-                    "type": "log",
-                    "runId": run_id,
-                    "at": iso_now(),
-                    "level": "error",
-                    "message": (
-                        "[control-plane] terminality_incomplete "
-                        f"missing_nodes={','.join(missing_terminal_nodes)}"
-                    ),
-                }
-            )
-            run_failed = True
+            if control_plane_mode == "observe":
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "warning",
+                        "message": (
+                            "[control-plane] divergence_observed terminality_incomplete "
+                            f"missing_nodes={','.join(missing_terminal_nodes)}"
+                        ),
+                    }
+                )
+            elif control_plane_mode == "off":
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "info",
+                        "message": (
+                            "[control-plane] legacy_mode terminality_check_skipped "
+                            f"missing_nodes={','.join(missing_terminal_nodes)}"
+                        ),
+                    }
+                )
+            else:
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "error",
+                        "message": (
+                            "[control-plane] terminality_incomplete "
+                            f"missing_nodes={','.join(missing_terminal_nodes)}"
+                        ),
+                    }
+                )
+                run_failed = True
 
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 

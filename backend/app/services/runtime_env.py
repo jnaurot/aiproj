@@ -47,6 +47,12 @@ _SUPPORTED_ENV_SPECS: List[EnvVarSpec] = [
 	EnvVarSpec("RUNNER_MAX_MODEL", "Max concurrent model/llm nodes.", "2", category="scheduler"),
 	EnvVarSpec("RUNNER_MAX_LLM", "Legacy alias for RUNNER_MAX_MODEL.", "2", category="scheduler"),
 	EnvVarSpec("RUNNER_MAX_TOOL", "Max concurrent tool nodes.", "2", category="scheduler"),
+	EnvVarSpec(
+		"CONTROL_PLANE_V1",
+		"Control-plane cutover mode (off|observe|enforce).",
+		"enforce",
+		category="scheduler",
+	),
 	EnvVarSpec("RUNNER_ADAPTIVE_MODE", "Adaptive scheduler mode (off|observe|enforce).", "off", category="scheduler"),
 	EnvVarSpec("RUNNER_ADAPTIVE_EVAL_INTERVAL_MS", "Adaptive scheduler evaluation interval in ms.", "500", category="scheduler"),
 	EnvVarSpec("RUNNER_ADAPTIVE_COOLDOWN_MS", "Cooldown before applying another enforced adaptive cap change.", "1000", category="scheduler"),

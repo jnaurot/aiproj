@@ -281,3 +281,97 @@ async def test_cache_hit_once_node_does_not_fail_terminality_incomplete(monkeypa
 		and "terminality_incomplete" in str(evt.get("message") or "")
 		for evt in events_run2
 	)
+
+
+@pytest.mark.asyncio
+async def test_control_plane_observe_mode_emits_divergence_without_failing(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	def _never_terminalize(**kwargs):
+		return False
+
+	monkeypatch.setenv("CONTROL_PLANE_V1", "observe")
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setattr(run_mod, "can_node_terminalize", _never_terminalize)
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e1", "source": "a", "target": "b"}],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-control-plane-observe",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-control-plane-observe", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-control-plane-observe",
+	)
+	assert any(
+		evt.get("type") == "log"
+		and "divergence_observed terminality_incomplete" in str(evt.get("message") or "")
+		for evt in events
+	)
+	assert any(
+		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "succeeded"
+		for evt in events
+	)
+
+
+@pytest.mark.asyncio
+async def test_control_plane_enforce_mode_fails_closed_on_missing_terminality(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	def _never_terminalize(**kwargs):
+		return False
+
+	monkeypatch.setenv("CONTROL_PLANE_V1", "enforce")
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setattr(run_mod, "can_node_terminalize", _never_terminalize)
+	graph = {
+		"nodes": [
+			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-control-plane-enforce",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-control-plane-enforce", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-control-plane-enforce",
+	)
+	assert any(
+		evt.get("type") == "log"
+		and "terminality_incomplete" in str(evt.get("message") or "")
+		and "divergence_observed" not in str(evt.get("message") or "")
+		for evt in events
+	)
+	assert any(
+		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "failed"
+		for evt in events
+	)
