@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BaseNodeDataSchema } from "./base";
+import { NodeDebugParamsSchema } from "./debug";
 
 export const ComponentKindSchema = z.literal("graph_component");
 
@@ -99,7 +100,8 @@ export const ComponentParamsSchema = z
 		componentRef: ComponentRefSchema,
 		bindings: ComponentBindingsSchema.default({ inputs: {}, config: {}, outputs: {} }),
 		config: z.record(z.string(), z.unknown()).optional().default({}),
-		api: ComponentApiContractSchema.optional()
+		api: ComponentApiContractSchema.optional(),
+		debug: NodeDebugParamsSchema.optional()
 	})
 	.strip();
 

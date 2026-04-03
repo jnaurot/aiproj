@@ -275,6 +275,24 @@ function transformJsonFilterNode(): Node<PipelineNodeData> {
 	};
 }
 
+function componentNode(): Node<PipelineNodeData> {
+	return {
+		id: 'n_component',
+		type: 'component',
+		position: { x: 0, y: 0 },
+		data: {
+			kind: 'component',
+			componentKind: 'graph_component',
+			label: 'Component',
+			params: {
+				componentRef: { componentId: 'c1', revisionId: 'r1', apiVersion: 'v1' },
+				bindings: { inputs: {}, config: {}, outputs: {} },
+				config: {}
+			}
+		} as PipelineNodeData
+	};
+}
+
 describe('updateNodeParamsValidated builtin args replacement', () => {
 	it('replaces builtin args object on operation switch instead of deep-merging keys', () => {
 		const nodes = [
@@ -534,5 +552,53 @@ describe('updateNodeParamsValidated transform editor roundtrip parity', () => {
 		const params = ((result.nodes.find((n) => n.id === 'n_transform_json_filter')?.data as any)?.params ?? {}) as Record<string, any>;
 		expect(params.json_filter.route_reject).toBe(false);
 		expect(params.json_filter.include_reject_meta).toBe(false);
+	});
+});
+
+describe('updateNodeParamsValidated debug options across node kinds', () => {
+	it('persists debug options for source nodes', () => {
+		const nodes = [sourceApiNodeWithQuery({})];
+		const result = updateNodeParamsValidated(nodes, 'n_source_api', {
+			debug: { enabled: true, log_input_preview: true, log_raw_output: false }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_source_api')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.debug).toEqual({ enabled: true, log_input_preview: true, log_raw_output: false });
+	});
+
+	it('persists debug options for transform nodes', () => {
+		const nodes = [transformFilterNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_transform_filter', {
+			debug: { enabled: true, log_input_preview: false, log_raw_output: true }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_transform_filter')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.debug).toEqual({ enabled: true, log_input_preview: false, log_raw_output: true });
+	});
+
+	it('persists debug options for tool nodes', () => {
+		const nodes = [toolNodeWithArgs({ value: 'ok' })];
+		const result = updateNodeParamsValidated(nodes, 'n_tool', {
+			debug: { enabled: true, log_input_preview: true, log_raw_output: true }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_tool')?.data as any)?.params ?? {}) as Record<string, any>;
+		expect(params.debug).toEqual({ enabled: true, log_input_preview: true, log_raw_output: true });
+	});
+
+	it('persists debug options for component nodes', () => {
+		const nodes = [componentNode()];
+		const result = updateNodeParamsValidated(nodes, 'n_component', {
+			debug: { enabled: true, log_input_preview: false, log_raw_output: false }
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_component')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.debug).toEqual({ enabled: true, log_input_preview: false, log_raw_output: false });
 	});
 });

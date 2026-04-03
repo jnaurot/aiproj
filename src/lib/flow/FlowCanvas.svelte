@@ -233,12 +233,36 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			'control_link'
 				? 'edge-link-control'
 				: '';
+		const edgeId = String(e.id ?? '').trim();
+		const edgeExec = String((e.data as any)?.exec ?? 'idle').trim().toLowerCase();
+		const edgeMode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
+		const sourceNodeId = String((e as any)?.source ?? '').trim();
+		const targetNodeId = String((e as any)?.target ?? '').trim();
+		const sourceLifecycle = String(runMonitorNodeLifecycleById.get(sourceNodeId) ?? '').trim().toLowerCase();
+		const targetLifecycle = String(runMonitorNodeLifecycleById.get(targetNodeId) ?? '').trim().toLowerCase();
+		const monitorFlags = runMonitorEdgeFlagsById.get(edgeId) ?? {
+			waiting: false,
+			blocked: false,
+			full: false
+		};
+		let visualClass = 'edge-state-inactive';
+		if (edgeMode !== 'work') {
+			visualClass = 'edge-state-nonwork';
+		} else if (edgeExec === 'active') {
+			visualClass = 'edge-state-running';
+		} else if (monitorFlags.blocked || monitorFlags.full) {
+			visualClass = 'edge-state-blocked';
+		} else if (monitorFlags.waiting) {
+			visualClass = 'edge-state-waiting';
+		} else if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
+			visualClass = 'edge-state-settled';
+		}
 		const title = diag
 			? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
 			: undefined;
 		return {
 			...e,
-			class: `edge edge-${e.data?.exec ?? 'idle'} ${schemaClass} ${linkKindClass}`.trim(),
+			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
 			title
 		};
 	});
@@ -839,11 +863,28 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					runMonitorNodeStatusFilters.includes(String(row.lifecycle ?? '').trim())
 				);
 	$: runMonitorNodeRowsVisible = runMonitorNodeRowsStatusFiltered.slice(0, 40);
+	$: runMonitorNodeLifecycleById = new Map(
+		runMonitorNodeRows.map((row) => [String(row.nodeId ?? '').trim(), String(row.lifecycle ?? '').trim().toLowerCase()])
+	);
 	$: runMonitorEdgeRows = buildRunMonitorEdgeRows({
 		nodes: ($graphStore.nodes ?? []) as any,
 		edges: ($graphStore.edges ?? []) as any,
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any
 	});
+	$: runMonitorEdgeFlagsById = (() => {
+		const out = new Map<string, { waiting: boolean; blocked: boolean; full: boolean }>();
+		for (const row of runMonitorEdgeRows) {
+			const edgeId = String(row.edgeId ?? '').trim();
+			if (!edgeId) continue;
+			const prev = out.get(edgeId) ?? { waiting: false, blocked: false, full: false };
+			out.set(edgeId, {
+				waiting: prev.waiting || String(row.lifecycle ?? '').trim().toLowerCase() === 'waiting',
+				blocked: prev.blocked || Boolean(row.blocked),
+				full: prev.full || Boolean(row.full)
+			});
+		}
+		return out;
+	})();
 	$: runMonitorEdgeRowsVisible = filterRunMonitorEdgeRows(runMonitorEdgeRows, runMonitorEdgeStatusFilters).slice(
 		0,
 		40
@@ -6291,24 +6332,56 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	@import './styles/inspectorForm.css';
 
 	:global(.edge path) {
-		stroke: #2f3646;
+		stroke: var(--color-status-muted, #64748b);
 		stroke-width: 2;
 	}
 	:global(.edge.edge-link-control path) {
-		stroke: #43c9c2;
+		stroke: color-mix(in srgb, var(--color-status-info, #3b82f6) 60%, var(--color-status-muted, #64748b));
 		stroke-dasharray: 6 5;
 	}
+	:global(.edge.edge-state-running path),
 	:global(.edge.edge-active path) {
 		stroke-width: 3.5;
-		stroke: #4b8cff;
-		filter: drop-shadow(0 0 6px rgba(75, 140, 255, 0.6));
+		stroke: var(--color-status-info, #3b82f6);
+		filter: drop-shadow(0 0 6px color-mix(in srgb, var(--color-status-info, #3b82f6) 65%, transparent));
 		stroke-dasharray: 8 6;
 		animation: dashmove 0.8s linear infinite;
 	}
+	:global(.edge.edge-state-settled path),
 	:global(.edge.edge-done path) {
-		stroke: #7ee787;
+		stroke: var(--color-status-success, #22c55e);
 		stroke-width: 3;
-		filter: drop-shadow(0 0 4px rgba(126, 231, 135, 0.4));
+		stroke-dasharray: none;
+		animation: none;
+		filter: drop-shadow(0 0 4px color-mix(in srgb, var(--color-status-success, #22c55e) 45%, transparent));
+	}
+	:global(.edge.edge-state-waiting path) {
+		stroke: var(--color-status-warning, #f59e0b);
+		stroke-width: 2.5;
+		stroke-dasharray: 2 6;
+		animation: none;
+		filter: none;
+	}
+	:global(.edge.edge-state-blocked path) {
+		stroke: var(--color-status-danger, #ef4444);
+		stroke-width: 3;
+		stroke-dasharray: none;
+		animation: none;
+		filter: drop-shadow(0 0 4px color-mix(in srgb, var(--color-status-danger, #ef4444) 40%, transparent));
+	}
+	:global(.edge.edge-state-inactive path) {
+		stroke: var(--color-status-muted, #475569);
+		stroke-width: 2;
+		stroke-dasharray: none;
+		animation: none;
+		filter: none;
+	}
+	:global(.edge.edge-state-nonwork path) {
+		stroke: color-mix(in srgb, var(--color-status-muted, #64748b) 85%, var(--color-surface-card, #0f172a));
+		stroke-width: 1.75;
+		stroke-dasharray: none;
+		animation: none;
+		filter: none;
 	}
 	:global(.edge.edge-schema-error path) {
 		stroke: #ff6b6b;

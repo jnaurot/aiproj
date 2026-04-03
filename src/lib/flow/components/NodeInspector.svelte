@@ -63,6 +63,9 @@
 
 	// inspector draft params (single source of truth for editors)
 	$: params = $graphStore.inspector?.draftParams ?? {};
+	$: nodeDebugEnabled = Boolean((params as any)?.debug?.enabled ?? false);
+	$: nodeDebugLogInputPreview = Boolean((params as any)?.debug?.log_input_preview ?? false);
+	$: nodeDebugLogRawOutput = Boolean((params as any)?.debug?.log_raw_output ?? false);
 	$: nodeError = selectedNode ? ($graphStore.nodeOutputs?.[selectedNode.id]?.lastError ?? null) : null;
 	$: sourceObservability = selectedNode
 		? (($graphStore.nodeOutputs?.[selectedNode.id]?.sourceObservability ?? null) as Record<string, unknown> | null)
@@ -1794,6 +1797,72 @@
 					{onCommit}
 				/>
 			{/if}
+		{/if}
+		{#if !isLlm}
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">Debug</div>
+				<div class="assistActionRow">
+					<label class="guidedToggle">
+						<input
+							type="checkbox"
+							checked={nodeDebugEnabled}
+							on:change={(event) => {
+								const checked = (event.currentTarget as HTMLInputElement).checked;
+								const patch = {
+									debug: {
+										enabled: checked,
+										log_input_preview: checked ? nodeDebugLogInputPreview : false,
+										log_raw_output: checked ? nodeDebugLogRawOutput : false
+									}
+								};
+								onDraft(patch);
+								onCommit(patch);
+							}}
+						/>
+						<span>debug.enabled</span>
+					</label>
+					<label class="guidedToggle">
+						<input
+							type="checkbox"
+							disabled={!nodeDebugEnabled}
+							checked={nodeDebugLogInputPreview}
+							on:change={(event) => {
+								const checked = (event.currentTarget as HTMLInputElement).checked;
+								const patch = {
+									debug: {
+										enabled: nodeDebugEnabled,
+										log_input_preview: checked,
+										log_raw_output: nodeDebugLogRawOutput
+									}
+								};
+								onDraft(patch);
+								onCommit(patch);
+							}}
+						/>
+						<span>debug.log_input_preview</span>
+					</label>
+					<label class="guidedToggle">
+						<input
+							type="checkbox"
+							disabled={!nodeDebugEnabled}
+							checked={nodeDebugLogRawOutput}
+							on:change={(event) => {
+								const checked = (event.currentTarget as HTMLInputElement).checked;
+								const patch = {
+									debug: {
+										enabled: nodeDebugEnabled,
+										log_input_preview: nodeDebugLogInputPreview,
+										log_raw_output: checked
+									}
+								};
+								onDraft(patch);
+								onCommit(patch);
+							}}
+						/>
+						<span>debug.log_raw_output</span>
+					</label>
+				</div>
+			</div>
 		{/if}
 		<div class="guidedAssistCard">
 			<div class="guidedAssistHead">Processing Policy</div>

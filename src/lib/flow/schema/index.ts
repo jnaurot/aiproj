@@ -5,6 +5,7 @@ export * from "./transform";
 export * from "./llm";
 export * from "./tool";
 export * from "./component";
+export * from "./debug";
 
 // runtime defaults (single source of truth)
 export * from "./defaults";

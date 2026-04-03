@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BaseNodeDataSchema } from "./base";
+import { NodeDebugParamsSchema } from "./debug";
 
 export const SourceKindSchema = z.enum(["file", "database", "api", "object_store", "warehouse"]);
 export const SourceOutputModeSchema = z.enum(["table", "text", "json", "binary"]);
@@ -174,6 +175,7 @@ export const SourceFileParamsSchema = z
 		sheet_name: z.string().optional(),
 		encoding: z.string().default("utf-8"),
 		cache_enabled: z.boolean().default(true),
+		debug: NodeDebugParamsSchema.optional(),
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
@@ -216,6 +218,7 @@ export const SourceDatabaseParamsSchema = z
 			sample_bytes: 65536,
 			timeout_ms: 1500
 		}),
+		debug: NodeDebugParamsSchema.optional(),
 		output: SourceOutputSchema.default({ mode: "table" })
 	})
 	.superRefine((v, ctx) => {
@@ -301,6 +304,7 @@ export const SourceAPIParamsSchema = z
 		json_item_path: z.string().min(1).optional(),
 		json_item_strict: z.boolean().default(false),
 		cache_policy: SourceCachePolicySchema.default({ mode: "default" }),
+		debug: NodeDebugParamsSchema.optional(),
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
@@ -399,6 +403,7 @@ export const SourceObjectStoreParamsSchema = z
 			])
 			.default("txt"),
 		encoding: z.string().default("utf-8"),
+		debug: NodeDebugParamsSchema.optional(),
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",
@@ -436,6 +441,7 @@ export const SourceWarehouseParamsSchema = z
 		connection_ref: z.string().optional(),
 		query: z.string().min(1),
 		limit: z.number().int().positive().optional(),
+		debug: NodeDebugParamsSchema.optional(),
 		priming: SourcePrimingSchema.default({
 			enabled: false,
 			mode: "advisory",

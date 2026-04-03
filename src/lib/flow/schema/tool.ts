@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { BaseNodeDataSchema } from "./base";
 import { TOOL_BUILTIN_PROFILE_IDS } from "./toolBuiltinProfiles";
+import { NodeDebugParamsSchema } from "./debug";
 
 const BuiltinEnvironmentSchema = z.object({
   profileId: z.enum(TOOL_BUILTIN_PROFILE_IDS).optional().default("core"),
@@ -38,6 +39,7 @@ const ToolCommonSchema = z.object({
     mapping: z.record(z.string(), z.string()).optional()
   }).strip().optional(),
   output: z.object({ schema: z.unknown().optional() }).strip().optional(),
+  debug: NodeDebugParamsSchema.optional(),
   builtin: BuiltinEnvironmentSchema.optional()
 }).strip();
 

@@ -1,5 +1,6 @@
 //src/lib/flow/schema/transform.ts
 import { z } from "zod";
+import { NodeDebugParamsSchema } from "./debug";
 
 // ---- shared enums ----
 const TransformKindSchema = z.enum(["filter",
@@ -1033,7 +1034,8 @@ const TransformCommonSchema = z
   .object({
     enabled: z.boolean().default(true),
     notes: z.string().optional().default(""),
-    cache: TransformCacheSchema.optional().default({ enabled: false })
+    cache: TransformCacheSchema.optional().default({ enabled: false }),
+    debug: NodeDebugParamsSchema.optional()
   })
   .strip();
 
