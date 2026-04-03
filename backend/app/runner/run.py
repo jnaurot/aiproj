@@ -8308,6 +8308,11 @@ async def run_graph(
                         for nid, handle_map in (provided_nonwork_edges_by_handle or {}).items()
                     },
                     "queueRegistry": queue_registry.snapshot() if hasattr(queue_registry, "snapshot") else {},
+                    "controlPlane": {
+                        "edgeControlState": copy.deepcopy(edge_control_state_by_edge_id),
+                        "lastSeq": int(control_signal_seq),
+                        "activeLeaseNodeIds": sorted(str(nid) for nid in active_llm_lease_nodes if str(nid).strip()),
+                    },
                 },
                 "completedNodeIds": started_node_ids,
                 "readyNodeIds": ready_node_ids,
@@ -8491,6 +8496,56 @@ async def run_graph(
             queue_state = state.get("queueRegistry") if isinstance(state.get("queueRegistry"), dict) else {}
             if queue_state and hasattr(queue_registry, "restore"):
                 queue_registry.restore(queue_state)
+            control_plane_state = state.get("controlPlane") if isinstance(state.get("controlPlane"), dict) else {}
+            edge_control_raw = (
+                control_plane_state.get("edgeControlState")
+                if isinstance(control_plane_state.get("edgeControlState"), dict)
+                else {}
+            )
+            for edge_id, raw_state in edge_control_raw.items():
+                edge_key = str(edge_id or "").strip()
+                if not edge_key or edge_key not in edges:
+                    continue
+                state_obj = raw_state if isinstance(raw_state, dict) else {}
+                try:
+                    restored_depth = max(0, int(state_obj.get("depth") or 0))
+                except Exception:
+                    restored_depth = 0
+                try:
+                    restored_last_seq = max(0, int(state_obj.get("lastSeq") or 0))
+                except Exception:
+                    restored_last_seq = 0
+                edge_control_state_by_edge_id[edge_key] = {
+                    "edgeId": edge_key,
+                    "open": bool(state_obj.get("open")),
+                    "closed": bool(state_obj.get("closed")),
+                    "depth": restored_depth,
+                    "blocked": bool(state_obj.get("blocked")),
+                    "lastSeq": restored_last_seq,
+                    "updatedAt": str(state_obj.get("updatedAt") or ""),
+                }
+            seq_raw = control_plane_state.get("lastSeq")
+            try:
+                restored_control_seq = max(0, int(seq_raw or 0))
+            except Exception:
+                restored_control_seq = 0
+            if restored_control_seq > 0:
+                control_signal_seq = max(
+                    int(control_signal_seq),
+                    restored_control_seq,
+                    max((int((item or {}).get("lastSeq") or 0) for item in edge_control_state_by_edge_id.values()), default=0),
+                )
+            lease_nodes_raw = (
+                control_plane_state.get("activeLeaseNodeIds")
+                if isinstance(control_plane_state.get("activeLeaseNodeIds"), list)
+                else []
+            )
+            active_llm_lease_nodes.clear()
+            active_llm_lease_nodes.update(
+                str(node_id)
+                for node_id in lease_nodes_raw
+                if str(node_id or "").strip() and str(node_id) in sub
+            )
 
         for nid in sub:
             for incoming_edge_id in plan.incoming_edges.get(nid, []):

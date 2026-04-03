@@ -533,6 +533,155 @@ async def test_pause_snapshot_not_empty_when_runtime_binding_exists(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_pause_snapshot_includes_control_plane_state(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	started = asyncio.Event()
+	release = asyncio.Event()
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		started.set()
+		await release.wait()
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "n1", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "n2", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e12", "source": "n1", "target": "n2", "targetHandle": "in", "data": {"mode": "work"}}],
+	}
+	events: list[dict[str, Any]] = []
+	bus = RunEventBus("run-pause-control-plane-state", on_emit=lambda evt: events.append(dict(evt)))
+	pause_event = asyncio.Event()
+	task = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-pause-control-plane-state",
+			graph=graph,
+			run_from=None,
+			bus=bus,
+			artifact_store=MemoryArtifactStore(),
+			cache=ExecutionCache(),
+			graph_id="graph-pause-control-plane-state",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.sleep(0.05)
+	release.set()
+	await asyncio.wait_for(task, timeout=5.0)
+	paused_evt = next((evt for evt in events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot") if isinstance(paused_evt.get("snapshot"), dict) else {}
+	state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+	control_plane = state.get("controlPlane") if isinstance(state.get("controlPlane"), dict) else {}
+	assert isinstance(control_plane.get("edgeControlState"), dict)
+	assert "e12" in (control_plane.get("edgeControlState") or {})
+	assert int(control_plane.get("lastSeq") or 0) > 0
+	assert isinstance(control_plane.get("activeLeaseNodeIds"), list)
+
+
+@pytest.mark.asyncio
+async def test_resume_rehydrates_control_plane_state_from_snapshot(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	first_started = asyncio.Event()
+	call_counts: dict[str, int] = {"n1": 0, "n2": 0}
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		call_counts[node_id] = int(call_counts.get(node_id, 0)) + 1
+		if node_id == "n1":
+			first_started.set()
+			await asyncio.sleep(0.05)
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": node_id}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "n1", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "n2", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e12", "source": "n1", "target": "n2", "targetHandle": "in", "data": {"mode": "work"}}],
+	}
+
+	artifact_store = MemoryArtifactStore()
+	cache = ExecutionCache()
+	pause_events: list[dict[str, Any]] = []
+	pause_bus = RunEventBus("run-resume-control-plane-state", on_emit=lambda evt: pause_events.append(dict(evt)))
+	pause_event = asyncio.Event()
+	first_run = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-resume-control-plane-state",
+			graph=graph,
+			run_from=None,
+			bus=pause_bus,
+			artifact_store=artifact_store,
+			cache=cache,
+			graph_id="graph-resume-control-plane-state",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(first_started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.wait_for(first_run, timeout=5.0)
+	paused_evt = next((evt for evt in pause_events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot") if isinstance(paused_evt.get("snapshot"), dict) else {}
+	state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+	control_plane = state.get("controlPlane") if isinstance(state.get("controlPlane"), dict) else {}
+	control_plane["lastSeq"] = 777
+	control_plane["edgeControlState"] = {
+		"e12": {
+			"edgeId": "e12",
+			"open": False,
+			"closed": True,
+			"depth": 0,
+			"blocked": False,
+			"lastSeq": 777,
+			"updatedAt": "2026-04-03T00:00:00+00:00",
+		}
+	}
+	state["controlPlane"] = control_plane
+	snapshot["state"] = state
+
+	resume_events: list[dict[str, Any]] = []
+	resume_bus = RunEventBus("run-resume-control-plane-state", on_emit=lambda evt: resume_events.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-resume-control-plane-state",
+		graph=graph,
+		run_from=None,
+		bus=resume_bus,
+		artifact_store=artifact_store,
+		cache=cache,
+		graph_id="graph-resume-control-plane-state",
+		resume_snapshot=snapshot,
+	)
+	assert _event_index(resume_events, "run_resumed") >= 0
+	assert any(
+		str(evt.get("type") or "") == "scheduler_snapshot"
+		and int(evt.get("lastControlSeq") or 0) >= 777
+		and isinstance(evt.get("controlPlaneEdgeState"), dict)
+		and "e12" in (evt.get("controlPlaneEdgeState") or {})
+		for evt in resume_events
+	)
+
+
+@pytest.mark.asyncio
 async def test_pause_snapshot_order_is_after_binding_commit(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")

@@ -41,6 +41,44 @@ def validate_pause_snapshot_schema(snapshot: Dict[str, Any]) -> Tuple[bool, List
 		errors.append("invalid_lifecycle_state")
 	if not _is_dict(snapshot.get("state")):
 		errors.append("missing_state")
+	else:
+		state = snapshot.get("state") if _is_dict(snapshot.get("state")) else {}
+		control_plane = state.get("controlPlane")
+		if control_plane is not None:
+			if not _is_dict(control_plane):
+				errors.append("state_control_plane_invalid")
+			else:
+				edge_state = control_plane.get("edgeControlState")
+				if not _is_dict(edge_state):
+					errors.append("state_control_plane_missing_edge_state")
+				else:
+					for edge_id, raw_edge in edge_state.items():
+						if not _is_dict(raw_edge):
+							errors.append(f"state_control_plane_edge_invalid:{edge_id}")
+							continue
+						try:
+							depth = int((raw_edge or {}).get("depth") or 0)
+						except Exception:
+							depth = -1
+						if depth < 0:
+							errors.append(f"state_control_plane_edge_depth_invalid:{edge_id}")
+						try:
+							last_seq = int((raw_edge or {}).get("lastSeq") or 0)
+						except Exception:
+							last_seq = -1
+						if last_seq < 0:
+							errors.append(f"state_control_plane_edge_last_seq_invalid:{edge_id}")
+				last_seq_raw = control_plane.get("lastSeq")
+				if last_seq_raw is not None:
+					try:
+						last_seq = int(last_seq_raw)
+					except Exception:
+						last_seq = -1
+					if last_seq < 0:
+						errors.append("state_control_plane_last_seq_invalid")
+				lease_nodes = control_plane.get("activeLeaseNodeIds")
+				if lease_nodes is not None and not _is_list(lease_nodes):
+					errors.append("state_control_plane_active_lease_nodes_invalid")
 	basis = snapshot.get("frontierValidationBasis")
 	if not _is_dict(basis):
 		errors.append("missing_frontier_validation_basis")

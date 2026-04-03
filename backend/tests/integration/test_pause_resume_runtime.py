@@ -39,7 +39,24 @@ def _make_snapshot(*, run_id: str, graph_id: str, graph: Dict[str, Any], basis: 
 		"lifecycleState": "paused",
 		"executionVersion": execution_version,
 		"pausedAt": "2026-03-30T00:00:00Z",
-		"state": {"ready": ["n2"]},
+		"state": {
+			"ready": ["n2"],
+			"controlPlane": {
+				"edgeControlState": {
+					"e1": {
+						"edgeId": "e1",
+						"open": False,
+						"closed": True,
+						"depth": 0,
+						"blocked": False,
+						"lastSeq": 12,
+						"updatedAt": "2026-03-30T00:00:00Z",
+					}
+				},
+				"lastSeq": 12,
+				"activeLeaseNodeIds": [],
+			},
+		},
 		"completedNodeIds": ["n1"],
 		"readyNodeIds": ["n2"],
 		"blockedNodeIds": [],
@@ -300,6 +317,38 @@ async def test_snapshot_load_validates_schema(monkeypatch):
 		run_id,
 		{"schemaVersion": 999, "runId": run_id, "graphId": "graph-invalid-schema"},
 	)
+	result = await rt.request_resume(run_id)
+	assert result["resumed"] is False
+	assert result["errorCode"] == "PAUSE_SNAPSHOT_SCHEMA_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_load_rejects_malformed_control_plane_state(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-resume-invalid-control-plane"
+	handle = rt.create_run(run_id)
+	handle.status = "paused"
+	handle.graph_id = "graph-invalid-control-plane"
+	handle.graph = _make_graph()
+	handle.node_bindings = _make_bindings()
+	basis = _build_frontier_identity_basis(
+		graph=handle.graph,
+		graph_id="graph-invalid-control-plane",
+		node_ids=["n2"],
+		node_bindings=handle.node_bindings,
+		execution_version="v1",
+	)
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-invalid-control-plane",
+		graph=handle.graph,
+		basis=basis,
+	)
+	state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+	state["controlPlane"] = {"edgeControlState": [], "lastSeq": -1}
+	snapshot["state"] = state
+	await rt.artifact_store.upsert_run_pause_snapshot(run_id, snapshot)
 	result = await rt.request_resume(run_id)
 	assert result["resumed"] is False
 	assert result["errorCode"] == "PAUSE_SNAPSHOT_SCHEMA_INVALID"
