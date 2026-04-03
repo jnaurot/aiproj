@@ -381,3 +381,47 @@ async def test_control_plane_enforce_mode_fails_closed_on_missing_terminality(mo
 		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "failed"
 		for evt in events
 	)
+
+
+@pytest.mark.asyncio
+async def test_control_plane_off_mode_keeps_legacy_completion(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	def _never_terminalize(**kwargs):
+		return False
+
+	monkeypatch.setenv("CONTROL_PLANE_V1", "off")
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	monkeypatch.setattr(run_mod, "can_node_terminalize", _never_terminalize)
+	graph = {
+		"nodes": [{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}}],
+		"edges": [],
+	}
+	events: list[dict] = []
+	await run_mod.run_graph(
+		run_id="run-control-plane-off",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-control-plane-off", on_emit=lambda evt: events.append(dict(evt))),
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="g-control-plane-off",
+	)
+	assert any(
+		evt.get("type") == "log"
+		and "legacy_mode terminality_check_skipped" in str(evt.get("message") or "")
+		for evt in events
+	)
+	assert any(
+		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "succeeded"
+		for evt in events
+	)
