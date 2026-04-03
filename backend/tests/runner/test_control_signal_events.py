@@ -180,7 +180,14 @@ async def test_node_terminal_emits_after_edge_drain_and_close(monkeypatch) -> No
 	graph = {
 		"nodes": [
 			{"id": "a", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
-			{"id": "b", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{
+				"id": "b",
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"processingPolicy": {"consume_mode": "single_item"},
+				},
+			},
 		],
 		"edges": [{"id": "e1", "source": "a", "target": "b"}],
 	}
@@ -212,3 +219,65 @@ async def test_node_terminal_emits_after_edge_drain_and_close(monkeypatch) -> No
 	assert upstream_closed_index >= 0
 	assert node_terminal_index > input_drained_index
 	assert node_terminal_index > upstream_closed_index
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_once_node_does_not_fail_terminality_incomplete(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"rows": [{"id": 1}]}, "meta": {"ok": True}},
+		)
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"ok": True}, "meta": {"ok": True}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+	graph = {
+		"nodes": [
+			{"id": "src", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			{"id": "mid", "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+		],
+		"edges": [{"id": "e_mid", "source": "src", "target": "mid"}],
+	}
+	events_run2: list[dict] = []
+	cache = ExecutionCache()
+	artifact_store = MemoryArtifactStore()
+	await run_mod.run_graph(
+		run_id="run-once-cache-seed",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-once-cache-seed", on_emit=lambda evt: None),
+		artifact_store=artifact_store,
+		cache=cache,
+		graph_id="g-once-cache-shared",
+	)
+	await run_mod.run_graph(
+		run_id="run-once-cache-2",
+		graph=graph,
+		run_from=None,
+		bus=RunEventBus("run-once-cache-2", on_emit=lambda evt: events_run2.append(dict(evt))),
+		artifact_store=artifact_store,
+		cache=cache,
+		graph_id="g-once-cache-shared",
+	)
+	assert any(
+		evt.get("type") == "run_finished" and str(evt.get("status") or "") == "succeeded"
+		for evt in events_run2
+	)
+	assert not any(
+		evt.get("type") == "log"
+		and "terminality_incomplete" in str(evt.get("message") or "")
+		for evt in events_run2
+	)

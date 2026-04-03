@@ -8980,7 +8980,14 @@ async def run_graph(
             node_key = str(node_id or "").strip()
             if not node_key:
                 return
-            required_edge_ids = [str(info.get("edgeId") or "") for info in _incoming_work_edge_infos(node_key)]
+            policy = _effective_node_runtime_policy(node_key)
+            consume_mode = str(policy.get("consume_mode") or "once")
+            # Authoritative terminality model:
+            # - once nodes are node-boundary resumable and do not depend on streaming queue drain semantics.
+            # - streaming nodes (single_item/batch) require required work inputs closed + drained.
+            required_edge_ids: List[str] = []
+            if consume_mode != "once":
+                required_edge_ids = [str(info.get("edgeId") or "") for info in _incoming_work_edge_infos(node_key)]
             if can_node_terminalize(
                 required_work_edge_ids=required_edge_ids,
                 edge_control_state=edge_control_state_by_edge_id,
