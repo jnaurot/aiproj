@@ -5154,13 +5154,9 @@ async def run_graph(
                         output = NodeOutput(status="succeeded", data=None, metadata=None, execution_time_ms=0.0)
                     else:
                         # 1) collect upstream artifacts (inputHandle -> artifactId)
-                        input_refs = await resolve_input_refs(
-                            edges,
-                            node_id,
-                            get_current_artifact,
-                            lambda nid: nodes.get(nid),
-                            context.artifact_store,
-                        )  # [(inputHandle, artifactId), ...]
+                        # IMPORTANT: `input_refs` is already resolved in `_resolve_node_execution`
+                        # while work-item overrides are active. Re-resolving here can drift to
+                        # mutable latest bindings after scheduler rebuild/soft-fail recovery.
                         input_tables = {}  # inputHandle -> DataFrame
                         param_inputs: Dict[str, Any] = {}
                         input_columns: dict[str, list[str]] = {}
