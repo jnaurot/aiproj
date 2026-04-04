@@ -32,7 +32,7 @@
 **Tests**
 - Run this test standalone and with the stage-localization test.
 
-## Ticket 3: Validate no regressions in existing identity and queue behavior
+## Ticket 3: Validate no regressions in existing identity and queue behavior ✅
 **Implementation**
 - Run targeted suite:
   - `backend/tests/integration/test_model_table_rows_identity_integrity.py`
