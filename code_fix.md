@@ -19,7 +19,7 @@
     4) transform input resolution
 - Existing regression tests for model/table identity remain passing.
 
-## Ticket 2: Add targeted downstream-soft-fail regression coverage
+## Ticket 2: Add targeted downstream-soft-fail regression coverage ✅
 **Problem**
 - The field case appears when downstream fails once, scheduler rebuilds ready nodes, and upstream streaming continues.
 
