@@ -55,6 +55,7 @@
 			: null;
 	$: freezeIcon = freezeMode === 'sticky' ? '#' : '';
 	$: freezeClass = freezeMode === 'sticky' ? 'freeze-sticky' : freezeMode === 'per_run' ? 'freeze-per-run' : '';
+	$: debugEnabled = Boolean((data as any)?.params?.debug?.enabled ?? false);
 	$: processingPolicy = (data as any)?.processingPolicy ?? {};
 	$: consumeMode = normalizeConsumeMode(processingPolicy);
 	$: batchSize = Math.max(1, Number((processingPolicy as any)?.batch_size ?? 1) || 1);
@@ -137,7 +138,7 @@
 <div class={`node ${selected ? 'selected' : ''} st-${status}`}>
 	<div class="title">
 		<span class="label">{label}</span>
-		<span class={`badge ${freezeClass}`}>{kind}{freezeIcon ? ` ${freezeIcon}` : ''}</span>
+		<span class={`badge ${freezeClass} ${debugEnabled ? 'debugEnabled' : ''}`}>{kind}{freezeIcon ? ` ${freezeIcon}` : ''}</span>
 	</div>
 
 	<slot />
@@ -194,6 +195,7 @@
 		white-space: nowrap;
 		flex-shrink: 0;
 		margin-left: -2px;
+		position: relative;
 	}
 
 	.badge.freeze-per-run {
@@ -201,6 +203,17 @@
 		border-color: #f59e0b;
 		background: rgba(245, 158, 11, 0.22);
 		opacity: 1;
+	}
+
+	.badge.debugEnabled::after {
+		content: '🐞';
+		position: absolute;
+		right: 2px;
+		top: calc(100% + 2px);
+		font-size: 11px;
+		line-height: 1;
+		opacity: 0.95;
+		pointer-events: none;
 	}
 
 	.badge.freeze-sticky {

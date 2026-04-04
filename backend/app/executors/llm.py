@@ -623,33 +623,38 @@ async def exec_llm(
 
     input_encoding = llm_params.input_encoding or "text"
     runtime_work_item = raw_params.get("_work_item") if isinstance(raw_params.get("_work_item"), dict) else None
+    runtime_item_mode = (
+        str(runtime_work_item.get("itemMode") or "artifact").strip().lower()
+        if isinstance(runtime_work_item, dict)
+        else ""
+    )
+    runtime_item_artifact_id = (
+        str(runtime_work_item.get("artifactId") or "").strip()
+        if isinstance(runtime_work_item, dict)
+        else ""
+    )
     serialized_inputs: List[str] = []
     serialized_media: List[Dict[str, Any]] = []
-    runtime_item_text = (
-        _serialize_runtime_work_item_input(runtime_work_item, input_encoding)
-        if isinstance(runtime_work_item, dict)
-        else None
-    )
-    if runtime_item_text is not None:
-        text = runtime_item_text
-        serialized_inputs = [text] if text else []
-    elif not upstream_artifact_ids:
-        text = ""
-    elif len(upstream_artifact_ids) == 1:
-        aid = upstream_artifact_ids[0]
-        if model_kind in {"vision", "multimodal"}:
-            media = await _serialize_image_media(context, aid)
-            if media is not None:
-                serialized_media.append(media)
-        if model_kind in {"audio", "multimodal"}:
-            media = await _serialize_audio_media(context, aid)
-            if media is not None:
-                serialized_media.append(media)
-        text = await _serialize_artifact_input(context, aid, input_encoding)
-        serialized_inputs = [text] if text else []
-    else:
+
+    async def _materialize_from_artifact_ids(artifact_ids: List[str]) -> str:
+        if not artifact_ids:
+            return ""
+        if len(artifact_ids) == 1:
+            aid = artifact_ids[0]
+            if model_kind in {"vision", "multimodal"}:
+                media = await _serialize_image_media(context, aid)
+                if media is not None:
+                    serialized_media.append(media)
+            if model_kind in {"audio", "multimodal"}:
+                media = await _serialize_audio_media(context, aid)
+                if media is not None:
+                    serialized_media.append(media)
+            payload = await _serialize_artifact_input(context, aid, input_encoding)
+            if payload:
+                serialized_inputs.append(payload)
+            return payload
         text_parts: List[str] = []
-        for idx, aid in enumerate(upstream_artifact_ids, start=1):
+        for idx, aid in enumerate(artifact_ids, start=1):
             if model_kind in {"vision", "multimodal"}:
                 media = await _serialize_image_media(context, aid)
                 if media is not None:
@@ -661,7 +666,24 @@ async def exec_llm(
             payload = await _serialize_artifact_input(context, aid, input_encoding)
             serialized_inputs.append(payload)
             text_parts.append(f"### INPUT {idx} artifact={aid}\n{payload}")
-        text = "\n\n---\n\n".join(text_parts)
+        return "\n\n---\n\n".join(text_parts)
+
+    runtime_item_text = (
+        _serialize_runtime_work_item_input(runtime_work_item, input_encoding)
+        if isinstance(runtime_work_item, dict)
+        else None
+    )
+    if runtime_item_text is not None:
+        text = runtime_item_text
+        serialized_inputs = [text] if text else []
+    elif runtime_item_mode == "artifact" and runtime_item_artifact_id:
+        # For queued artifact-mode work items, the item artifactId is authoritative.
+        # Do not fall back to mutable upstream bindings for this execution.
+        text = await _materialize_from_artifact_ids([runtime_item_artifact_id])
+    elif not upstream_artifact_ids:
+        text = ""
+    else:
+        text = await _materialize_from_artifact_ids(upstream_artifact_ids)
     envelope_text_parts, envelope_media_parts = _canonicalize_input_envelope(getattr(llm_params, "input_envelope", None))
     if envelope_text_parts:
         envelope_text = "\n".join(envelope_text_parts)
@@ -670,7 +692,10 @@ async def exec_llm(
     if envelope_media_parts:
         serialized_media = [*serialized_media, *envelope_media_parts]
     prompt_only_allowed = bool(getattr(llm_params, "allow_prompt_only_model_execution", False))
-    has_runtime_work_item = isinstance(runtime_work_item, dict) and runtime_item_text is not None
+    has_runtime_work_item = isinstance(runtime_work_item, dict) and (
+        runtime_item_text is not None
+        or (runtime_item_mode == "artifact" and bool(runtime_item_artifact_id))
+    )
     has_any_upstream_input = bool(upstream_artifact_ids) or has_runtime_work_item
     if not has_any_upstream_input and not prompt_only_allowed:
         return NodeOutput(

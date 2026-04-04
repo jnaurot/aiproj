@@ -136,3 +136,110 @@ async def test_model_input_mapping_missing_key_fails_structured(monkeypatch):
 	payload = json.loads(str(out.error or "{}"))
 	assert payload.get("errorCode") == "MODEL_INPUT_MAPPING_MISSING"
 	assert isinstance(payload.get("missing"), list)
+
+
+@pytest.mark.asyncio
+async def test_model_work_item_artifact_mode_uses_queued_artifact_not_upstream_binding(monkeypatch):
+	captured: dict = {}
+
+	async def _fake_exec_ollama(
+		run_id,
+		node,
+		context,
+		input_metadata,
+		params,
+		input_text=None,
+		input_items=None,
+		input_media=None,
+		template_values=None,
+		upstream_artifact_ids=None,
+	):
+		captured["input_text"] = input_text
+		captured["input_items"] = list(input_items or [])
+		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
+
+	async def _fake_serialize_artifact_input(context, artifact_id, input_encoding):
+		return f"from:{artifact_id}:{input_encoding}"
+
+	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
+	monkeypatch.setattr(llm_exec, "_serialize_artifact_input", _fake_serialize_artifact_input)
+
+	params = {
+		"model": "glm-4.7-flash:latest",
+		"base_url": "http://127.0.0.1:11434",
+		"user_prompt": "Use {input}",
+		"output_mode": "text",
+		"input_mapping": {"input": "in"},
+		"_work_item": {
+			"itemMode": "artifact",
+			"itemIndex": 0,
+			"artifactId": "artifact_from_queue",
+			"itemPreview": None,
+		},
+	}
+	out = await llm_exec.exec_llm(
+		"run-model-artifact-work-item",
+		_base_node(params),
+		_context("run-model-artifact-work-item"),
+		upstream_artifact_ids=["artifact_from_mutable_binding"],
+	)
+	assert out.status == "succeeded"
+	assert captured.get("input_text") == "from:artifact_from_queue:text"
+	assert captured.get("input_items") == ["from:artifact_from_queue:text"]
+
+
+@pytest.mark.asyncio
+async def test_model_work_item_artifact_mode_multimodal_uses_queued_artifact_for_media(monkeypatch):
+	captured: dict = {}
+
+	async def _fake_exec_ollama(
+		run_id,
+		node,
+		context,
+		input_metadata,
+		params,
+		input_text=None,
+		input_items=None,
+		input_media=None,
+		template_values=None,
+		upstream_artifact_ids=None,
+	):
+		captured["input_text"] = input_text
+		captured["input_media"] = list(input_media or [])
+		return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data="ok")
+
+	async def _fake_serialize_artifact_input(context, artifact_id, input_encoding):
+		return f"text:{artifact_id}"
+
+	async def _fake_serialize_image_media(context, artifact_id):
+		return {"type": "image", "artifactId": artifact_id}
+
+	monkeypatch.setattr(llm_exec, "exec_llm_ollama", _fake_exec_ollama)
+	monkeypatch.setattr(llm_exec, "_serialize_artifact_input", _fake_serialize_artifact_input)
+	monkeypatch.setattr(llm_exec, "_serialize_image_media", _fake_serialize_image_media)
+
+	params = {
+		"model": "glm-4.7-flash:latest",
+		"base_url": "http://127.0.0.1:11434",
+		"user_prompt": "Use {input}",
+		"output_mode": "text",
+		"_work_item": {
+			"itemMode": "artifact",
+			"itemIndex": 0,
+			"artifactId": "artifact_from_queue",
+			"itemPreview": None,
+		},
+	}
+	node = _base_node(params)
+	node["data"]["modelKind"] = "vision"
+	out = await llm_exec.exec_llm(
+		"run-model-artifact-work-item-vision",
+		node,
+		_context("run-model-artifact-work-item-vision"),
+		upstream_artifact_ids=["artifact_from_mutable_binding"],
+	)
+	assert out.status == "succeeded"
+	assert captured.get("input_text") == "text:artifact_from_queue"
+	input_media = captured.get("input_media") or []
+	assert input_media
+	assert input_media[0].get("artifactId") == "artifact_from_queue"
