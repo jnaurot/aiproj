@@ -127,6 +127,8 @@ import {
 		type RunMonitorTransitionRow,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
+	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
+	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
 	const { screenToFlowPosition, setCenter, getViewport, setViewport } = useSvelteFlow();
 
@@ -346,6 +348,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let commandFilter = '';
 	let commandFilterInput: HTMLInputElement | null = null;
 	let runLogFilter = '';
+	let runLogFilterPredicate: (text: string) => boolean = () => true;
 	let canUndo = false;
 	let canRedo = false;
 	let envProfiles: EnvProfileStatus[] = [];
@@ -775,9 +778,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		isComponentEditContext &&
 		(Boolean($graphStore.inspector.dirty) ||
 			(componentEditEntrySnapshotKey != null && componentEditEntrySnapshotKey !== currentGraphSnapshotKey));
+	$: runLogFilterPredicate = buildRunLogFilterPredicate(runLogFilter);
 	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
-		const q = runLogFilter.trim().toLowerCase();
-		if (!q) return true;
 		const nodeName = String(nodeLabelById.get(String(entry.nodeId ?? '')) ?? '');
 		const edgeTag = runLogEdgeTag(entry);
 		const parts = [
@@ -788,7 +790,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			edgeTag,
 			Array.isArray(entry.componentPath) ? entry.componentPath.join(' > ') : ''
 		];
-		return parts.join(' ').toLowerCase().includes(q);
+		return runLogFilterPredicate(parts.join(' '));
 	});
 
 	function nodeToken(input: string): string {
@@ -5629,7 +5631,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 												</svg>
 												{#if runMonitorAdaptiveHoverPoint}
 													<div class="runMonitorSparklineTooltip mono">
-														{runMonitorAdaptiveHoverPoint.createdAt || '-'} | score={runMonitorAdaptiveHoverPoint.value.toFixed(1)}
+														{formatUserLocalTime(runMonitorAdaptiveHoverPoint.createdAt)} | score={runMonitorAdaptiveHoverPoint.value.toFixed(1)}
 													</div>
 													<button
 														type="button"
@@ -5658,7 +5660,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													on:click={() => selectAdaptiveDecisionDrilldown(row)}
 													title="Select adaptive decision details and filter logs by run"
 												>
-													<span class="mono">{row.at || '-'}</span>
+													<span class="mono">{formatUserLocalTime(row.at)}</span>
 													<span>{row.mode}{row.enforced ? ' (enforced)' : ''}</span>
 													<span>{row.modeSource || '-'}</span>
 													<span>
@@ -5722,7 +5724,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<div class="envProfileEmpty">Select an adaptive decision row to view full diagnostics.</div>
 										{:else}
 											<div class="envPanelSummary">
-												run={selectedAdaptiveDecision.runId} | at={selectedAdaptiveDecision.at} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''} | source={selectedAdaptiveDecision.modeSource || '-'}
+												run={selectedAdaptiveDecision.runId} | at={formatUserLocalTime(selectedAdaptiveDecision.at)} | mode={selectedAdaptiveDecision.mode}{selectedAdaptiveDecision.enforced ? ' (enforced)' : ''} | source={selectedAdaptiveDecision.modeSource || '-'}
 											</div>
 											<div class="envPanelSummary">
 												score=
@@ -5783,7 +5785,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											{/if}
 											{#if selectedAdaptiveDecisionPrevious}
 												<div class="envPanelSummary">
-													previous at={selectedAdaptiveDecisionPrevious.at} mode={selectedAdaptiveDecisionPrevious.mode}
+													previous at={formatUserLocalTime(selectedAdaptiveDecisionPrevious.at)} mode={selectedAdaptiveDecisionPrevious.mode}
 												</div>
 											{/if}
 											{#if selectedAdaptiveCapRows.length > 0}
@@ -6224,7 +6226,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 													</svg>
 													{#if runMonitorTrendHoverPoint}
 														<div class="runMonitorSparklineTooltip mono">
-															{runMonitorTrendHoverPoint.createdAt || '-'} | value={runMonitorTrendHoverPoint.value.toFixed(1)}
+															{formatUserLocalTime(runMonitorTrendHoverPoint.createdAt)} | value={runMonitorTrendHoverPoint.value.toFixed(1)}
 														</div>
 													{/if}
 													<div class="runMonitorSparklineFoot mono">
@@ -6254,7 +6256,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														<span>{point.nodeId}</span>
 														<span>{point.metric}</span>
 														<span>{Number(point.value ?? 0).toFixed(1)}</span>
-														<span>{point.createdAt}</span>
+														<span>{formatUserLocalTime(point.createdAt)}</span>
 													</button>
 												{/each}
 											{/if}
@@ -6280,7 +6282,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 														<span>{breach.nodeId}</span>
 														<span>{Number(breach.p95Ms ?? 0).toFixed(1)}</span>
 														<span>{Number(breach.thresholdMs ?? 0).toFixed(1)}</span>
-														<span>{breach.createdAt}</span>
+														<span>{formatUserLocalTime(breach.createdAt)}</span>
 													</button>
 												{/each}
 											{/if}

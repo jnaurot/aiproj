@@ -43,6 +43,7 @@
 		schemaEdgeDriftGuidance,
 		type ExpectedInputHandleSummary
 	} from '$lib/flow/components/nodeInspectorSchema';
+	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
@@ -2177,7 +2178,7 @@
 					{#each nodeHandleStates as row (`${row.handle}:${row.state}:${row.updatedAt}`)}
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">{row.handle}</div>
-							<div class="guidedAssistDesc">state {row.state} | at {row.updatedAt || '-'}</div>
+							<div class="guidedAssistDesc">state {row.state} | at {formatUserLocalTime(row.updatedAt)}</div>
 						</div>
 					{/each}
 				</div>
@@ -2191,7 +2192,7 @@
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">origin {row.originNodeId || '-'}</div>
 							<div class="guidedAssistDesc">
-								blocked {row.blockedNodeIds.join(', ') || '-'} | reason {row.reasonCode || '-'} | at {row.at || '-'}
+								blocked {row.blockedNodeIds.join(', ') || '-'} | reason {row.reasonCode || '-'} | at {formatUserLocalTime(row.at)}
 							</div>
 						</div>
 					{/each}
@@ -2206,7 +2207,7 @@
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">{row.handle}</div>
 							<div class="guidedAssistDesc">
-								status {row.status} | provided {row.providedEdges}/{row.connectedEdges} | at {row.updatedAt || '-'}
+								status {row.status} | provided {row.providedEdges}/{row.connectedEdges} | at {formatUserLocalTime(row.updatedAt)}
 							</div>
 						</div>
 					{/each}
@@ -2221,7 +2222,7 @@
 						<div class="guidedAssistItem">
 							<div class="guidedAssistLabel">{row.plane} {row.handle}</div>
 							<div class="guidedAssistDesc">
-								edge {row.edgeId} | code {row.code} | reason {row.reasonCode || '-'} | upstream {row.upstreamNodeId || '-'} | at {row.updatedAt || '-'}
+								edge {row.edgeId} | code {row.code} | reason {row.reasonCode || '-'} | upstream {row.upstreamNodeId || '-'} | at {formatUserLocalTime(row.updatedAt)}
 							</div>
 						</div>
 					{/each}
