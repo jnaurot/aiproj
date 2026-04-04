@@ -10401,12 +10401,18 @@ async def run_graph(
                                 "handle": target_handle,
                             }
                         )
+                    released_now = False
                     if not bool(edge_dependency_released.get(edge_id, False)):
                         edge_dependency_released[edge_id] = True
+                        released_now = True
                         indeg[nb] = max(0, indeg.get(nb, 0) - 1)
                         if indeg[nb] == 0:
                             deps_released[nb] = True
                             await _enqueue_ready_if_possible(nb)
+                    # Re-admit streaming consumers when new items arrive on an already-released edge.
+                    # Without this, nodes can remain blocked until late scheduler ready-rebuild.
+                    if work_items and not released_now and bool(deps_released.get(nb, False)):
+                        await _enqueue_ready_if_possible(nb)
                     await _emit_handle_satisfaction_if_changed(nb, target_handle)
                 await _enqueue_ready_if_possible(node_id)
                 ready.sort(key=lambda n: order_index.get(n, 10**9))

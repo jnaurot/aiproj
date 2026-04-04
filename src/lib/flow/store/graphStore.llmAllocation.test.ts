@@ -36,7 +36,21 @@ function allocated(state: GraphState): string[] {
 
 describe('graphStore llm allocation UI state', () => {
 	it('does not mutate stars from control llm signals (lease is source of truth)', () => {
-		const state = makeState('running');
+		const state = {
+			...makeState('running'),
+			queueRuntime: {
+				appliedControlSeq: 0,
+				llmLease: {
+					state: 'acquired',
+					nodeId: 'b',
+					holderNodeId: 'b',
+					activeNodeIds: ['b'],
+					waitQueueLength: 0,
+					waitingNodeIds: [],
+					updatedAt: '2026-03-29T00:00:00Z'
+				}
+			}
+		} as GraphState;
 		const evt: KnownRunEvent = {
 			type: 'control_signal',
 			runId: 'run-llm',

@@ -1677,6 +1677,71 @@ function applyLlmHolderToNodes(
 	return changed ? nextNodes : nodes;
 }
 
+function reconcileModelLeaseRunningInvariant(state: GraphState): GraphState {
+	const runState = String(state.runStatus ?? '').trim().toLowerCase();
+	const runActive = runState === 'running' || runState === 'pausing' || runState === 'resuming';
+	if (!runActive) return state;
+
+	const leaseActive = Array.isArray((state.queueRuntime?.llmLease as any)?.activeNodeIds)
+		? (((state.queueRuntime?.llmLease as any)?.activeNodeIds as unknown[]) ?? [])
+				.map((item) => String(item ?? '').trim())
+				.filter(Boolean)
+		: [];
+	const leaseActiveSet = new Set<string>(leaseActive);
+
+	const nextNodes = applyLlmHolderToNodes(state.nodes, leaseActiveSet);
+	let nodesChanged = nextNodes !== state.nodes;
+
+	let nextBindings = state.nodeBindings ?? {};
+	let bindingsChanged = false;
+
+	for (const node of nextNodes) {
+		const nodeId = String((node as any)?.id ?? '').trim();
+		if (!nodeId) continue;
+		const kind = String(((node as any)?.data?.kind ?? '')).trim().toLowerCase();
+		if (kind !== 'model' && kind !== 'llm') continue;
+		const hasLease = leaseActiveSet.has(nodeId);
+		const prevBinding = _normalizeBinding((nextBindings as any)?.[nodeId], nodeId);
+
+		if (hasLease && prevBinding.status !== 'running') {
+			nextBindings = {
+				...nextBindings,
+				[nodeId]: {
+					...prevBinding,
+					status: 'running',
+					currentRunId: prevBinding.currentRunId ?? state.activeRunId
+				}
+			};
+			bindingsChanged = true;
+			continue;
+		}
+
+		if (!hasLease && prevBinding.status === 'running') {
+			nextBindings = {
+				...nextBindings,
+				[nodeId]: {
+					...prevBinding,
+					status: 'busy',
+					currentRunId: prevBinding.currentRunId ?? state.activeRunId
+				}
+			};
+			bindingsChanged = true;
+		}
+	}
+
+	if (!nodesChanged && !bindingsChanged) return state;
+	return {
+		...state,
+		nodes: nextNodes,
+		nodeBindings: nextBindings
+	};
+}
+
+function applyRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
+	const reduced = reduceRunEventState(state, evt, runId);
+	return reconcileModelLeaseRunningInvariant(reduced);
+}
+
 function clearActiveWorkIncomingEdgesForNode(
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[],
 	nodeId: string
@@ -3057,12 +3122,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
-					appliedControlSeq: Math.max(
-						0,
-						Number((state.queueRuntime as any)?.appliedControlSeq ?? 0),
-						Number((evt as any)?.lastControlSeq ?? 0)
-					)
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
 				}
 			};
 			return logPush(
@@ -3134,12 +3194,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
-					appliedControlSeq: Math.max(
-						0,
-						Number((state.queueRuntime as any)?.appliedControlSeq ?? 0),
-						Number((evt as any)?.lastControlSeq ?? 0)
-					)
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
 				}
 			};
 			return logPush(
@@ -3540,7 +3595,7 @@ function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): 
 }
 
 export function __applyRunEventForTest(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
-	return reduceRunEventState(state, evt, runId);
+	return applyRunEventState(state, evt, runId);
 }
 
 export function __hydrateFromRunSnapshotForTest(
@@ -6328,7 +6383,7 @@ export const graphStore = (() => {
 								)
 							}
 						: { source: 'event', evt };
-				update((s) => reduceRunEventState(s, evt, rid), auditCtx);
+				update((s) => applyRunEventState(s, evt, rid), auditCtx);
 				if (evt.type === 'run_finished' || evt.type === 'run_paused') {
 					const current = get({ subscribe } as any) as GraphState;
 					persist(current);
@@ -9806,7 +9861,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 										}
 									: { source: 'event', evt };
 							update((s) => {
-								const nextState = reduceRunEventState(s, evt, runId);
+								const nextState = applyRunEventState(s, evt, runId);
 								debugLogOutOfScopeBindingMutation(s, nextState, evt.type);
 								debugLogStaleFlips(s, nextState, evt.type);
 								assertNoOutOfScopeStaleFlips(s, nextState, evt.type);
