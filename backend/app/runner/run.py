@@ -653,6 +653,8 @@ async def _build_non_work_injection_values(
 def _edge_mode(edge: Dict[str, Any]) -> str:
     data = edge.get("data") if isinstance(edge.get("data"), dict) else {}
     mode = str(data.get("mode") or "work").strip().lower() or "work"
+    if mode == "config":
+        return "param"
     if mode not in {"work", "param", "control"}:
         return "work"
     return mode

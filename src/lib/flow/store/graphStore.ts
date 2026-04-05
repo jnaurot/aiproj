@@ -3043,7 +3043,48 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 		case 'queue_metrics': {
 			const globalDepth = Number((evt as any)?.metrics?.globalDepth ?? 0);
 			const perEdgeMax = Number((evt as any)?.metrics?.perEdgeMax ?? 0);
-			const itemStats = (evt as any)?.runtimeItemMetrics ?? {};
+			const rawItemStats = (evt as any)?.runtimeItemMetrics ?? {};
+			const rawByPlane = (rawItemStats?.byPlane ?? {}) as Record<string, any>;
+			const normalizeMetricPlane = (raw: unknown): 'work' | 'param' | 'control' => {
+				const value = String(raw ?? '').trim().toLowerCase();
+				if (value === 'config') return 'param';
+				if (value === 'param' || value === 'control') return value;
+				return 'work';
+			};
+			const normalizedByPlane: Record<string, any> = {
+				work: { itemsEnqueued: 0, itemsDequeued: 0, itemsAccepted: 0, itemsRejected: 0 },
+				param: { itemsEnqueued: 0, itemsDequeued: 0, itemsAccepted: 0, itemsRejected: 0 },
+				control: { itemsEnqueued: 0, itemsDequeued: 0, itemsAccepted: 0, itemsRejected: 0 }
+			};
+			for (const [rawPlaneKey, rawBucket] of Object.entries(rawByPlane)) {
+				const planeNorm = normalizeMetricPlane(rawPlaneKey);
+				const bucket = rawBucket && typeof rawBucket === 'object' ? (rawBucket as Record<string, unknown>) : {};
+				normalizedByPlane[planeNorm] = {
+					itemsEnqueued:
+						Number(normalizedByPlane[planeNorm]?.itemsEnqueued ?? 0) + Number(bucket.itemsEnqueued ?? 0),
+					itemsDequeued:
+						Number(normalizedByPlane[planeNorm]?.itemsDequeued ?? 0) + Number(bucket.itemsDequeued ?? 0),
+					itemsAccepted:
+						Number(normalizedByPlane[planeNorm]?.itemsAccepted ?? 0) + Number(bucket.itemsAccepted ?? 0),
+					itemsRejected:
+						Number(normalizedByPlane[planeNorm]?.itemsRejected ?? 0) + Number(bucket.itemsRejected ?? 0)
+				};
+			}
+			const rawByHandle = (rawItemStats?.byHandle ?? {}) as Record<string, any>;
+			const normalizedByHandle: Record<string, any> = {};
+			for (const [handleKey, rawHandleMetrics] of Object.entries(rawByHandle)) {
+				const metrics =
+					rawHandleMetrics && typeof rawHandleMetrics === 'object'
+						? ({ ...(rawHandleMetrics as Record<string, unknown>) } as Record<string, unknown>)
+						: {};
+				metrics.plane = normalizeMetricPlane(metrics.plane);
+				normalizedByHandle[handleKey] = metrics;
+			}
+			const itemStats = {
+				...(rawItemStats && typeof rawItemStats === 'object' ? rawItemStats : {}),
+				byPlane: normalizedByPlane,
+				byHandle: normalizedByHandle
+			};
 			const enq = Number(itemStats?.itemsEnqueued ?? 0);
 			const deq = Number(itemStats?.itemsDequeued ?? 0);
 			const rej = Number(itemStats?.itemsRejected ?? 0);
