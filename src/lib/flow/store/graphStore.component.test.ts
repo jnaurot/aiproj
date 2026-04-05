@@ -32,6 +32,7 @@ describe('graphStore component integration', () => {
 		});
 		const blocked = await graphStore.applyInspectorDraft();
 		expect((blocked as any)?.ok).toBe(false);
+		expect(String((blocked as any)?.reason ?? '')).toBe('component_contract_readonly');
 		expect(String((blocked as any)?.error ?? '')).toContain('component authoring mode');
 
 		const after = get(graphStore);
@@ -119,9 +120,101 @@ describe('graphStore component integration', () => {
 			});
 			const blocked = await graphStore.applyInspectorDraft();
 			expect((blocked as any)?.ok).toBe(false);
+			expect(String((blocked as any)?.reason ?? '')).toBe('component_contract_readonly');
 			expect(String((blocked as any)?.error ?? '')).toContain('component authoring mode');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
+	it('allows component contract edits inside component authoring context', async () => {
+		graphStore.hardResetGraph();
+		const hostComponentNodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(hostComponentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_author/revisions/crev_author') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_author',
+						revisionId: 'crev_author',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						message: 'author',
+						revisionSchemaVersion: 1,
+						checksum: 'author',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'internal_component_node',
+										type: 'component',
+										position: { x: 20, y: 20 },
+										data: {
+											kind: 'component',
+											label: 'Internal Component',
+											params: {
+												componentRef: {
+													componentId: 'cmp_inner',
+													revisionId: 'crev_inner',
+													apiVersion: 'v1'
+												},
+												api: { inputs: [], outputs: [] },
+												exposureRegistry: [],
+												config: {}
+											},
+											status: 'idle'
+										}
+									}
+								],
+								edges: []
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_author',
+				'crev_author',
+				hostComponentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			graphStore.selectNode('internal_component_node');
+			graphStore.patchInspectorDraft({
+				api: {
+					inputs: [],
+					outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: true }]
+				},
+				exposureRegistry: [
+					{
+						handle_id: 'data_out::summary',
+						alias: 'summary',
+						internal_source_path: 'node:n_sum',
+						kind: 'data_output',
+						native_contract: { type: 'text', fields: [] },
+						exposed: true,
+						published: true,
+						debug_visible: false
+					}
+				]
+			});
+
+			const accepted = await graphStore.applyInspectorDraft();
+			expect((accepted as any)?.ok).toBe(true);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
 		}
 	});
 

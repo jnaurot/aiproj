@@ -7317,6 +7317,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit }, { enforceComponentContractBoundary: true });
 
+		if (!r.ok) {
+			if (String(r.error ?? '').toLowerCase().includes('component authoring mode')) {
+				return {
+					ok: false,
+					reason: 'component_contract_readonly' as const,
+					error: r.error
+				};
+			}
+			return r;
+		}
+
 		// only clear dirty if commit succeeded (fail-closed keeps draft)
 		if (r.ok) {
 			update((st) => {
