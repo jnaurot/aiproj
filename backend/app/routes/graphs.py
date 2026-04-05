@@ -44,8 +44,78 @@ class GraphImportRequest(BaseModel):
     message: Optional[str] = None
 
 
+class GraphMigrationReportRequest(BaseModel):
+    graph: Dict[str, Any]
+    includeCanonicalGraph: bool = False
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _dedupe_migration_notes(notes: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    out: list[Dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in notes:
+        if not isinstance(raw, dict):
+            continue
+        code = str(raw.get("code") or "").strip()
+        entity_type = str(raw.get("entityType") or "").strip()
+        entity_id = str(raw.get("entityId") or raw.get("nodeId") or raw.get("edgeId") or "").strip()
+        key = (code, entity_type, entity_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(raw)
+    return out
+
+
+def _normalize_plane_migration_entries(notes: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    out: list[Dict[str, Any]] = []
+    for raw in notes:
+        if not isinstance(raw, dict):
+            continue
+        note = dict(raw)
+        code = str(note.get("code") or "").strip().upper()
+        if code == "NODE_PORT_PLANE_CONFIG_MIGRATED":
+            note.setdefault("entityType", "node")
+            note.setdefault("entityId", str(note.get("nodeId") or ""))
+            note.setdefault("oldPlane", "config")
+            note.setdefault("newPlane", "param")
+            note.setdefault("severity", "warning")
+            note.setdefault("autoFixApplied", True)
+        elif code == "EDGE_MODE_CONFIG_MIGRATED":
+            note.setdefault("entityType", "edge")
+            note.setdefault("entityId", str(note.get("edgeId") or ""))
+            note.setdefault("oldPlane", "config")
+            note.setdefault("newPlane", "param")
+            note.setdefault("severity", "warning")
+            note.setdefault("autoFixApplied", True)
+        out.append(note)
+    return _dedupe_migration_notes(out)
+
+
+def _build_graph_migration_report(graph: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_graph, migration_notes = canonicalize_graph_payload(graph)
+    normalized_notes = _normalize_plane_migration_entries(migration_notes)
+    return {
+        "format": "canonical_graph_v1",
+        "migrated": bool(len(normalized_notes) > 0),
+        "warnings": [],
+        "notes": normalized_notes,
+        "summary": {
+            "total": len(normalized_notes),
+            "planeMigrations": len(
+                [
+                    note
+                    for note in normalized_notes
+                    if str(note.get("oldPlane") or "").strip().lower() == "config"
+                    and str(note.get("newPlane") or "").strip().lower() == "param"
+                ]
+            ),
+        },
+        "canonicalGraph": normalized_graph,
+    }
 
 
 def _build_graph_export_package(
@@ -351,7 +421,13 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
                 raise ValueError("package must include manifest and graph")
             if "nodes" not in graph or "edges" not in graph:
                 raise ValueError("package.graph must include nodes and edges")
-            normalized_graph, migration_notes = canonicalize_graph_payload(graph)
+            migration_report = _build_graph_migration_report(graph)
+            normalized_graph = migration_report.get("canonicalGraph") if isinstance(migration_report, dict) else {}
+            migration_notes = migration_report.get("notes") if isinstance(migration_report, dict) else []
+            if not isinstance(normalized_graph, dict):
+                normalized_graph = {}
+            if not isinstance(migration_notes, list):
+                migration_notes = []
             handle_errors = find_component_edge_handle_errors(normalized_graph)
             if handle_errors:
                 raise ValueError(
@@ -401,7 +477,13 @@ def _normalize_import_package(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if "nodes" not in graph_candidate or "edges" not in graph_candidate:
         raise ValueError("package.graph must include nodes and edges")
-    normalized_graph, migration_notes = canonicalize_graph_payload(graph_candidate)
+    migration_report = _build_graph_migration_report(graph_candidate)
+    normalized_graph = migration_report.get("canonicalGraph") if isinstance(migration_report, dict) else {}
+    migration_notes = migration_report.get("notes") if isinstance(migration_report, dict) else []
+    if not isinstance(normalized_graph, dict):
+        normalized_graph = {}
+    if not isinstance(migration_notes, list):
+        migration_notes = []
     handle_errors = find_component_edge_handle_errors(normalized_graph)
     if handle_errors:
         raise ValueError(
@@ -451,6 +533,21 @@ async def graph_feature_flags():
 @router.put("/feature-flags")
 async def set_graph_feature_flags(req: GraphFeatureFlagsUpdateRequest):
     raise HTTPException(status_code=410, detail="Feature-flag mutation is disabled after Phase 8 cutover")
+
+
+@router.post("/migration-report")
+async def graph_migration_report(req: GraphMigrationReportRequest):
+    report = _build_graph_migration_report(req.graph)
+    out = {
+        "format": report.get("format"),
+        "migrated": bool(report.get("migrated")),
+        "warnings": report.get("warnings") if isinstance(report.get("warnings"), list) else [],
+        "notes": report.get("notes") if isinstance(report.get("notes"), list) else [],
+        "summary": report.get("summary") if isinstance(report.get("summary"), dict) else {"total": 0, "planeMigrations": 0},
+    }
+    if bool(req.includeCanonicalGraph):
+        out["graph"] = report.get("canonicalGraph") if isinstance(report.get("canonicalGraph"), dict) else {"nodes": [], "edges": []}
+    return out
 
 
 @router.get("/{graph_id}/export")

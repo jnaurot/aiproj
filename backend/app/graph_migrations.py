@@ -330,6 +330,11 @@ def _canonicalize_node_port_declarations(node: Dict[str, Any], notes: List[Dict[
 			{
 				"code": "NODE_PORT_PLANE_CONFIG_MIGRATED",
 				"nodeId": str(node.get("id") or ""),
+				"entityType": "node",
+				"entityId": str(node.get("id") or ""),
+				"oldPlane": "config",
+				"newPlane": "param",
+				"autoFixApplied": True,
 				"message": (
 					"Migrated legacy config plane declarations to param: "
 					+ ", ".join(sorted(legacy_config_planes))
@@ -651,6 +656,11 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 				{
 					"code": "EDGE_MODE_CONFIG_MIGRATED",
 					"edgeId": str(next_edge.get("id") or ""),
+					"entityType": "edge",
+					"entityId": str(next_edge.get("id") or ""),
+					"oldPlane": "config",
+					"newPlane": "param",
+					"autoFixApplied": True,
 					"message": "Migrated legacy edge mode 'config' to 'param'.",
 					"severity": "warning",
 					"deprecation": {

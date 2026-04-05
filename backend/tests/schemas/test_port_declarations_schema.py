@@ -132,4 +132,22 @@ def test_graph_migration_migrates_legacy_config_plane_and_edge_mode() -> None:
 	note_codes = {str(note.get("code") or "") for note in notes}
 	assert "NODE_PORT_PLANE_CONFIG_MIGRATED" in note_codes
 	assert "EDGE_MODE_CONFIG_MIGRATED" in note_codes
+	node_note = next(
+		(note for note in notes if str(note.get("code") or "") == "NODE_PORT_PLANE_CONFIG_MIGRATED"),
+		{},
+	)
+	assert str(node_note.get("entityType") or "") == "node"
+	assert str(node_note.get("entityId") or "") == "n_src"
+	assert str(node_note.get("oldPlane") or "") == "config"
+	assert str(node_note.get("newPlane") or "") == "param"
+	assert bool(node_note.get("autoFixApplied")) is True
+	edge_note = next(
+		(note for note in notes if str(note.get("code") or "") == "EDGE_MODE_CONFIG_MIGRATED"),
+		{},
+	)
+	assert str(edge_note.get("entityType") or "") == "edge"
+	assert str(edge_note.get("entityId") or "") == "e_cfg"
+	assert str(edge_note.get("oldPlane") or "") == "config"
+	assert str(edge_note.get("newPlane") or "") == "param"
+	assert bool(edge_note.get("autoFixApplied")) is True
 
