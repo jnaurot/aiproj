@@ -31,6 +31,19 @@ export type ComponentApiContract = {
 	outputs: ComponentApiPort[];
 };
 
+export type ComponentExposureKind = 'data_input' | 'data_output' | 'param_input' | 'control_input';
+
+export type ComponentExposureHandle = {
+	handle_id: string;
+	alias: string;
+	internal_source_path: string;
+	kind: ComponentExposureKind;
+	native_contract: ComponentTypedSchema;
+	exposed: boolean;
+	published: boolean;
+	debug_visible: boolean;
+};
+
 export type ComponentRevisionDefinition = {
 	graph: {
 		nodes: unknown[];
@@ -38,6 +51,9 @@ export type ComponentRevisionDefinition = {
 	};
 	api: ComponentApiContract;
 	configSchema?: Record<string, unknown>;
+	exposureRegistry?: ComponentExposureHandle[];
+	published_profile?: ComponentExposureHandle[];
+	debug_profile?: ComponentExposureHandle[];
 };
 
 export type ComponentRevisionDetail = {
@@ -64,6 +80,7 @@ export type CreateComponentRevisionRequest = {
 		componentId: string;
 		fromRevisionId: string;
 		toRevisionId: string;
+		compatibilityMapping?: Record<string, string>;
 	}>;
 	graph: {
 		nodes: unknown[];
@@ -71,6 +88,7 @@ export type CreateComponentRevisionRequest = {
 	};
 	api: ComponentApiContract;
 	configSchema?: Record<string, unknown>;
+	exposureRegistry?: ComponentExposureHandle[];
 };
 
 export type CreateComponentRevisionResponse = {
@@ -98,6 +116,7 @@ export type ValidateComponentRevisionRequest = {
 		componentId: string;
 		fromRevisionId: string;
 		toRevisionId: string;
+		compatibilityMapping?: Record<string, string>;
 	}>;
 	graph: {
 		nodes: unknown[];
@@ -105,6 +124,7 @@ export type ValidateComponentRevisionRequest = {
 	};
 	api: ComponentApiContract;
 	configSchema?: Record<string, unknown>;
+	exposureRegistry?: ComponentExposureHandle[];
 	schemaVersion?: number;
 };
 
@@ -206,12 +226,22 @@ export async function createComponentRevision(
 			? req.dependencyRevisionOverrides.map((item) => ({
 					componentId: String(item.componentId ?? '').trim(),
 					fromRevisionId: String(item.fromRevisionId ?? '').trim(),
-					toRevisionId: String(item.toRevisionId ?? '').trim()
+					toRevisionId: String(item.toRevisionId ?? '').trim(),
+					compatibilityMapping:
+						item.compatibilityMapping && typeof item.compatibilityMapping === 'object'
+							? Object.fromEntries(
+									Object.entries(item.compatibilityMapping).map(([from, to]) => [
+										String(from).trim(),
+										String(to ?? '').trim()
+									])
+								)
+							: undefined
 				}))
 			: undefined,
 		graph: req.graph,
 		api: req.api,
-		configSchema: req.configSchema ?? {}
+		configSchema: req.configSchema ?? {},
+		exposureRegistry: Array.isArray(req.exposureRegistry) ? req.exposureRegistry : undefined
 	};
 	if (!body.componentId) {
 		throw new Error('componentId is required');
@@ -243,10 +273,20 @@ export async function validateComponentRevision(
 				? req.dependencyRevisionOverrides.map((item) => ({
 						componentId: String(item.componentId ?? '').trim(),
 						fromRevisionId: String(item.fromRevisionId ?? '').trim(),
-						toRevisionId: String(item.toRevisionId ?? '').trim()
+						toRevisionId: String(item.toRevisionId ?? '').trim(),
+						compatibilityMapping:
+							item.compatibilityMapping && typeof item.compatibilityMapping === 'object'
+								? Object.fromEntries(
+										Object.entries(item.compatibilityMapping).map(([from, to]) => [
+											String(from).trim(),
+											String(to ?? '').trim()
+										])
+									)
+								: undefined
 					}))
 				: undefined,
-			schemaVersion: Number(req.schemaVersion ?? 1)
+			schemaVersion: Number(req.schemaVersion ?? 1),
+			exposureRegistry: Array.isArray(req.exposureRegistry) ? req.exposureRegistry : undefined
 		})
 	});
 	if (!res.ok) {

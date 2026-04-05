@@ -68,6 +68,26 @@ export const ComponentApiContractSchema = z
 		})
 		.strip());
 
+export const ComponentExposureKindSchema = z.enum([
+	'data_input',
+	'data_output',
+	'param_input',
+	'control_input'
+]);
+
+export const ComponentExposureHandleSchema = z
+	.object({
+		handle_id: z.string().min(1),
+		alias: z.string().min(1),
+		internal_source_path: z.string().min(1),
+		kind: ComponentExposureKindSchema,
+		native_contract: ComponentTypedSchemaSchema,
+		exposed: z.boolean().default(true),
+		published: z.boolean().default(false),
+		debug_visible: z.boolean().default(false)
+	})
+	.strip();
+
 export const ComponentRefSchema = z
 	.object({
 		componentId: z.string().min(1),
@@ -101,6 +121,9 @@ export const ComponentParamsSchema = z
 		bindings: ComponentBindingsSchema.default({ inputs: {}, config: {}, outputs: {} }),
 		config: z.record(z.string(), z.unknown()).optional().default({}),
 		api: ComponentApiContractSchema.optional(),
+		exposureRegistry: z.array(ComponentExposureHandleSchema).optional(),
+		published_profile: z.array(ComponentExposureHandleSchema).optional(),
+		debug_profile: z.array(ComponentExposureHandleSchema).optional(),
 		debug: NodeDebugParamsSchema.optional()
 	})
 	.strip();
@@ -116,6 +139,8 @@ export type ComponentTypedField = z.infer<typeof ComponentTypedFieldSchema>;
 export type ComponentTypedSchema = z.infer<typeof ComponentTypedSchemaSchema>;
 export type ComponentApiPort = z.infer<typeof ComponentApiPortSchema>;
 export type ComponentApiContract = z.infer<typeof ComponentApiContractSchema>;
+export type ComponentExposureKind = z.infer<typeof ComponentExposureKindSchema>;
+export type ComponentExposureHandle = z.infer<typeof ComponentExposureHandleSchema>;
 export type ComponentRef = z.infer<typeof ComponentRefSchema>;
 export type ComponentBindings = z.infer<typeof ComponentBindingsSchema>;
 export type ComponentKind = z.infer<typeof ComponentKindSchema>;

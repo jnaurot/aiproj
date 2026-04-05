@@ -88,6 +88,93 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('blocks applying component revision when published handle contract is breaking without mapping', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+		const seed = graphStore.updateNodeConfig(
+			nodeId,
+			{
+				params: {
+					api: {
+						inputs: [],
+						outputs: [{ name: 'out_data', typedSchema: { type: 'text', fields: [] } }]
+					},
+					exposureRegistry: [
+						{
+							handle_id: 'data_out::out_data',
+							alias: 'out_data',
+							internal_source_path: 'out:out_data',
+							kind: 'data_output',
+							native_contract: { type: 'text', fields: [] },
+							exposed: true,
+							published: true,
+							debug_visible: false
+						}
+					]
+				}
+			} as any
+		);
+		expect(seed.ok).toBe(true);
+		graphStore.selectNode(nodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/components/cmp_break/revisions/crev_2')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_break',
+						revisionId: 'crev_2',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: { nodes: [], edges: [] },
+							api: {
+								inputs: [],
+								outputs: [{ name: 'out_data', typedSchema: { type: 'json', fields: [] } }]
+							},
+							exposureRegistry: [
+								{
+									handle_id: 'data_out::out_data',
+									alias: 'out_data',
+									internal_source_path: 'out:out_data',
+									kind: 'data_output',
+									native_contract: { type: 'json', fields: [] },
+									exposed: true,
+									published: true,
+									debug_visible: false
+								}
+							]
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components/cmp_break/revisions?')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_break',
+						revisions: [{ revisionId: 'crev_2' }]
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+		try {
+			const res = await graphStore.applyComponentRevisionToNode(nodeId, 'cmp_break', 'crev_2');
+			expect((res as any)?.ok).toBe(false);
+			expect((res as any)?.reason).toBe('breaking_component_contract');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
 	it('renaming a component updates existing component node references', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 40, y: 40 });

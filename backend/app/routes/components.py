@@ -11,6 +11,8 @@ from app.component_dependencies import build_component_dependency_manifest
 from app.component_contracts import (
     COMPONENT_SCHEMA_VERSION,
     canonicalize_component_definition,
+    component_contract_diff,
+    materialize_exposure_profiles,
     validate_component_definition,
 )
 from app.executors.builtin_profiles import missing_packages_for_packages, resolve_builtin_environment
@@ -24,6 +26,19 @@ def _stable_json(value: Dict[str, Any]) -> str:
 
 def _revision_contract_snapshot(revision: Any) -> Dict[str, Any]:
     definition = revision.definition if isinstance(getattr(revision, "definition", None), dict) else {}
+    exposure_registry = (
+        definition.get("exposureRegistry")
+        if isinstance(definition.get("exposureRegistry"), list)
+        else []
+    )
+    profiles = materialize_exposure_profiles(exposure_registry)
+    published_profile = (
+        profiles.get("published_profile")
+        if isinstance(profiles.get("published_profile"), list)
+        else []
+    )
+    if published_profile:
+        return {"published_profile": published_profile}
     contract = definition.get("contractSnapshot") if isinstance(definition.get("contractSnapshot"), dict) else {}
     if not contract:
         contract = definition.get("api") if isinstance(definition.get("api"), dict) else {}
@@ -94,7 +109,43 @@ def _apply_dependency_revision_overrides(
 
             current_contract = _revision_contract_snapshot(current_revision)
             target_contract = _revision_contract_snapshot(target_revision)
-            if _stable_json(current_contract) != _stable_json(target_contract):
+            compatibility_mapping = (
+                override.get("compatibilityMapping")
+                if isinstance(override.get("compatibilityMapping"), dict)
+                else {}
+            )
+            contract_diff = component_contract_diff(
+                current_contract.get("published_profile") if isinstance(current_contract, dict) else [],
+                target_contract.get("published_profile") if isinstance(target_contract, dict) else [],
+            )
+            if contract_diff.get("breaking"):
+                removed = set(contract_diff.get("removed") or [])
+                retyped_ids = {
+                    str(item.get("handle_id") or "")
+                    for item in (contract_diff.get("retyped") or [])
+                    if isinstance(item, dict)
+                }
+                mapped_removed = {
+                    str(k).strip()
+                    for k, _ in compatibility_mapping.items()
+                    if str(k).strip() and str(compatibility_mapping.get(k) or "").strip()
+                }
+                covered = removed.issubset(mapped_removed) and retyped_ids.issubset(mapped_removed)
+                if not covered:
+                    diagnostics.append(
+                        {
+                            "code": "COMPONENT_DEPENDENCY_OVERRIDE_INCOMPATIBLE",
+                            "path": f"graph.nodes[{idx}].data.params.componentRef.revisionId",
+                            "message": (
+                                f"Override has breaking published-handle changes without explicit mapping: "
+                                f"{component_id}@{ov_from_revision_id} -> {component_id}@{ov_to_revision_id}"
+                            ),
+                            "severity": "error",
+                            "details": contract_diff,
+                        }
+                    )
+                    continue
+            elif _stable_json(current_contract) != _stable_json(target_contract):
                 diagnostics.append(
                     {
                         "code": "COMPONENT_DEPENDENCY_OVERRIDE_INCOMPATIBLE",
@@ -301,6 +352,7 @@ class ComponentRevisionWriteRequest(BaseModel):
     graph: Dict[str, Any]
     api: Dict[str, Any]
     configSchema: Optional[Dict[str, Any]] = None
+    exposureRegistry: Optional[list[Dict[str, Any]]] = None
     dependencyRevisionOverrides: Optional[list[dict[str, str]]] = None
 
     @field_validator("graph")
@@ -337,11 +389,17 @@ class ComponentRevisionWriteRequest(BaseModel):
                 raise ValueError(
                     f"dependencyRevisionOverrides[{idx}] requires componentId, fromRevisionId, and toRevisionId"
                 )
+            compatibility_mapping = (
+                raw.get("compatibilityMapping")
+                if isinstance(raw.get("compatibilityMapping"), dict)
+                else None
+            )
             out.append(
                 {
                     "componentId": component_id,
                     "fromRevisionId": from_revision_id,
                     "toRevisionId": to_revision_id,
+                    "compatibilityMapping": compatibility_mapping or {},
                 }
             )
         return out
@@ -356,6 +414,7 @@ class ComponentValidateRequest(BaseModel):
     graph: Dict[str, Any]
     api: Dict[str, Any]
     configSchema: Optional[Dict[str, Any]] = None
+    exposureRegistry: Optional[list[Dict[str, Any]]] = None
     dependencyRevisionOverrides: Optional[list[dict[str, str]]] = None
     schemaVersion: int = COMPONENT_SCHEMA_VERSION
 
@@ -377,11 +436,17 @@ class ComponentValidateRequest(BaseModel):
                 raise ValueError(
                     f"dependencyRevisionOverrides[{idx}] requires componentId, fromRevisionId, and toRevisionId"
                 )
+            compatibility_mapping = (
+                raw.get("compatibilityMapping")
+                if isinstance(raw.get("compatibilityMapping"), dict)
+                else None
+            )
             out.append(
                 {
                     "componentId": component_id,
                     "fromRevisionId": from_revision_id,
                     "toRevisionId": to_revision_id,
+                    "compatibilityMapping": compatibility_mapping or {},
                 }
             )
         return out
@@ -394,6 +459,7 @@ async def validate_component_revision(req: ComponentValidateRequest, request: Re
         "graph": req.graph,
         "api": req.api,
         "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
+        "exposureRegistry": req.exposureRegistry if isinstance(req.exposureRegistry, list) else [],
     }
     normalized_definition, migration_notes, raw_diagnostics, normalized_diagnostics = _prepare_component_definition(
         raw_definition,
@@ -424,6 +490,7 @@ async def create_component_revision(req: ComponentRevisionWriteRequest, request:
         "graph": req.graph,
         "api": req.api,
         "configSchema": req.configSchema if isinstance(req.configSchema, dict) else {},
+        "exposureRegistry": req.exposureRegistry if isinstance(req.exposureRegistry, list) else [],
     }
     definition, migration_notes, raw_diagnostics, normalized_diagnostics = _prepare_component_definition(
         raw_definition,

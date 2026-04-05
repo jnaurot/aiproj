@@ -1237,7 +1237,33 @@ class ComponentApiPort(NodeParamSchema):
 
 class ComponentApiContract(NodeParamSchema):
     inputs: List[ComponentApiPort] = Field(default_factory=list)
+    workInputs: List[ComponentApiPort] = Field(default_factory=list)
+    paramInputs: List[ComponentApiPort] = Field(default_factory=list)
+    controlInputs: List[ComponentApiPort] = Field(default_factory=list)
     outputs: List[ComponentApiPort] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        next_data = dict(data)
+        work_inputs = (
+            next_data.get("workInputs")
+            if isinstance(next_data.get("workInputs"), list)
+            else next_data.get("inputs")
+            if isinstance(next_data.get("inputs"), list)
+            else []
+        )
+        next_data["inputs"] = work_inputs
+        next_data["workInputs"] = work_inputs
+        if not isinstance(next_data.get("paramInputs"), list):
+            next_data["paramInputs"] = []
+        if not isinstance(next_data.get("controlInputs"), list):
+            next_data["controlInputs"] = []
+        if not isinstance(next_data.get("outputs"), list):
+            next_data["outputs"] = []
+        return next_data
 
 
 class ComponentRefParams(NodeParamSchema):

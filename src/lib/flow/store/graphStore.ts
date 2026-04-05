@@ -53,6 +53,11 @@ import {
 	type ComponentApiContract
 } from '$lib/flow/client/components';
 import {
+	comparePublishedProfiles,
+	materializeExposureProfiles,
+	normalizeExposureRegistry
+} from '$lib/flow/components/exposureProfiles';
+import {
 	acceptNodeParams,
 	cancelAllRuns,
 	createEventBatcher,
@@ -4390,6 +4395,26 @@ function componentApiOutputPayloadType(
 	sourceHandle: string
 ): PayloadType | null {
 	if (node.data.kind !== 'component') return null;
+	const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
+	const publishedProfile = Array.isArray(params?.published_profile) ? (params.published_profile as any[]) : [];
+	if (publishedProfile.length > 0) {
+		const publishedOutputs = publishedProfile.filter(
+			(item) => String(item?.kind ?? '').trim().toLowerCase() === 'data_output'
+		);
+		const handle = String(sourceHandle ?? '').trim();
+		if (!handle || handle === 'out') {
+			if (publishedOutputs.length === 1) {
+				return normalizeComponentPayloadType((publishedOutputs[0] as any)?.native_contract?.type ?? null);
+			}
+			return null;
+		}
+		const decl = publishedOutputs.find(
+			(item) =>
+				String((item as any)?.alias ?? '').trim() === handle ||
+				String((item as any)?.handle_id ?? '').trim() === handle
+		);
+		return normalizeComponentPayloadType((decl as any)?.native_contract?.type ?? null);
+	}
 	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
 		? ((node.data as any).params.api.outputs as any[])
 		: [];
@@ -4432,9 +4457,20 @@ function sourcePayloadHint(
 		if (observedHint) return observedHint;
 	}
 	if (node.data.kind === 'component' && whichPort === 'out') {
-		const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
-			? ((node.data as any).params.api.outputs as any[])
-			: [];
+		const params = ((node.data as any)?.params ?? {}) as Record<string, any>;
+		const publishedProfile = Array.isArray(params?.published_profile) ? (params.published_profile as any[]) : [];
+		const publishedOutputs = publishedProfile.filter(
+			(item) => String(item?.kind ?? '').trim().toLowerCase() === 'data_output'
+		);
+		const outputs =
+			publishedOutputs.length > 0
+				? publishedOutputs.map((item) => ({
+						name: String((item as any)?.alias ?? (item as any)?.handle_id ?? '').trim(),
+						typedSchema: (item as any)?.native_contract ?? null
+					}))
+				: Array.isArray((node.data as any)?.params?.api?.outputs)
+					? ((node.data as any).params.api.outputs as any[])
+					: [];
 		const handle = String(handleId ?? '').trim();
 		const decl = handle && handle !== 'out'
 			? outputs.find((o) => String((o as any)?.name ?? '').trim() === handle)
@@ -9423,7 +9459,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							outputs: []
 						}) as ComponentApiContract
 					),
-					configSchema: structuredClone((source?.definition?.configSchema ?? {}) as Record<string, unknown>)
+					configSchema: structuredClone((source?.definition?.configSchema ?? {}) as Record<string, unknown>),
+					exposureRegistry: structuredClone(
+						(Array.isArray((source?.definition as any)?.exposureRegistry)
+							? ((source?.definition as any).exposureRegistry as unknown[])
+							: []) as any
+					)
 				});
 				const apply = await this.applyComponentRevisionToNode(
 					nodeId,
@@ -9527,6 +9568,47 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const detail = await getComponentRevision(cid, rid);
 				const api = (detail.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
+				const nextExposureRegistry = normalizeExposureRegistry(
+					(detail.definition as any)?.exposureRegistry,
+					api
+				);
+				const nextProfiles = materializeExposureProfiles(nextExposureRegistry);
+				const prevApi = (((node.data as any)?.params ?? {})?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
+				const prevExposureRegistry = normalizeExposureRegistry(
+					(((node.data as any)?.params ?? {}) as any)?.exposureRegistry,
+					prevApi
+				);
+				const prevProfiles = materializeExposureProfiles(prevExposureRegistry);
+				const compatibilityMapping = (
+					((detail.definition as any)?.compatibilityMapping &&
+					typeof (detail.definition as any)?.compatibilityMapping === 'object'
+						? ((detail.definition as any).compatibilityMapping as Record<string, string>)
+						: {}) as Record<string, string>
+				);
+				const publishedDiff = comparePublishedProfiles(
+					prevProfiles.published_profile,
+					nextProfiles.published_profile
+				);
+				if (publishedDiff.breaking) {
+					const mapped = new Set(
+						Object.keys(compatibilityMapping).filter(
+							(fromHandle) =>
+								String(fromHandle).trim() &&
+								String(compatibilityMapping[fromHandle] ?? '').trim()
+						)
+					);
+					const retypedHandles = new Set(publishedDiff.retyped.map((item) => item.handle_id));
+					const removedCovered = publishedDiff.removed.every((handleId) => mapped.has(handleId));
+					const retypedCovered = [...retypedHandles].every((handleId) => mapped.has(handleId));
+					if (!removedCovered || !retypedCovered) {
+						return {
+							ok: false,
+							reason: 'breaking_component_contract' as const,
+							error: `Published handle contract changed without compatibility mapping (removed=${publishedDiff.removed.length}, retyped=${publishedDiff.retyped.length})`,
+							details: publishedDiff
+						};
+					}
+				}
 				const internalGraph = (detail.definition?.graph ?? { nodes: [], edges: [] }) as {
 					nodes?: Array<{ id?: string }>;
 					edges?: Array<{ source?: string; target?: string }>;
@@ -9606,7 +9688,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						config: { ...(prevBindings.config ?? {}) },
 						outputs: nextOutputs
 					},
-					api
+					api,
+					exposureRegistry: nextExposureRegistry,
+					published_profile: nextProfiles.published_profile,
+					debug_profile: nextProfiles.debug_profile
 				};
 				const result = updateNodeConfigImpl(nodeId, {
 					params: paramsPatch
