@@ -15,4 +15,13 @@ describe('ComponentEditor', () => {
 		expect(text.includes('Param Payload (config)')).toBe(true);
 		expect(text.includes('Component config is a param-plane payload convention, not a separate plane.')).toBe(true);
 	});
+
+	it('supports consumer read-only contract mode', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes("export let editingContext: 'graph' | 'component' = 'graph';")).toBe(true);
+		expect(text.includes('componentContractReadOnly = editingContext !== \'component\'' )).toBe(true);
+		expect(text.includes('Contract is read-only in consumer mode.')).toBe(true);
+		expect(text.includes('disabled={componentContractReadOnly}')).toBe(true);
+	});
 });

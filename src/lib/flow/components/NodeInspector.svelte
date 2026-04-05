@@ -1656,7 +1656,12 @@
 			{onCommit}
 		/>
 		{:else if isComponent}
-		<ComponentEditor {selectedNode} {params} {onDraft} />
+		<ComponentEditor
+			{selectedNode}
+			{params}
+			{onDraft}
+			editingContext={$graphStore.editingContext}
+		/>
 		{:else if isTransform}
 			<div class={`schemaAssist schemaAssist-${schemaAssist.state}`}>
 				<div class="schemaAssistHead">

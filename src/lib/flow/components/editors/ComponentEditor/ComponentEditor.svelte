@@ -19,6 +19,7 @@
 
 export let selectedNode: any;
 export let params: Record<string, any> = {};
+export let editingContext: 'graph' | 'component' = 'graph';
 export let onDraft: (
 	patch: Record<string, any>,
 	opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
@@ -66,6 +67,7 @@ export let onDraft: (
 	$: latestRevisionId = String(revisions[0]?.revisionId ?? '').trim();
 	$: hasUpdate = Boolean(latestRevisionId && revisionId && latestRevisionId !== revisionId);
 	$: configObj = (params?.config ?? {}) as Record<string, unknown>;
+	$: componentContractReadOnly = editingContext !== 'component';
 	$: if (!configParseError) {
 		configDraft = JSON.stringify(configObj, null, 2);
 	}
@@ -332,6 +334,7 @@ export let onDraft: (
 	}
 
 	function onOutputBindingOutputRefChange(name: string, outputRef: string): void {
+		if (componentContractReadOnly) return;
 		const outName = String(name ?? '').trim();
 		if (!outName) return;
 		const nextRegistry = [...exposureRegistry];
@@ -390,6 +393,7 @@ export let onDraft: (
 		index: number,
 		patch: Partial<ComponentApiPort>
 	): void {
+		if (componentContractReadOnly) return;
 		const previousName = String(outputs[index]?.name ?? '').trim();
 		const next = outputs.map((out, i) =>
 			i === index
@@ -424,6 +428,7 @@ export let onDraft: (
 	}
 
 	function setOutputNameDraft(index: number, value: string): void {
+		if (componentContractReadOnly) return;
 		outputNameDraftByIndex = {
 			...outputNameDraftByIndex,
 			[index]: value
@@ -438,6 +443,7 @@ export let onDraft: (
 	}
 
 	function commitOutputNameDraft(index: number): void {
+		if (componentContractReadOnly) return;
 		if (!Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)) return;
 		const nextName = String(outputNameDraftByIndex[index] ?? '');
 		const currentName = String(outputs[index]?.name ?? '');
@@ -448,6 +454,7 @@ export let onDraft: (
 	}
 
 	function addApiOutput(): void {
+		if (componentContractReadOnly) return;
 		errorMessage = '';
 		outputNameDraftByIndex = {};
 		const nextName = outputs.length === 0 ? 'default' : `out_${outputs.length + 1}`;
@@ -479,6 +486,7 @@ export let onDraft: (
 	}
 
 	function resetOutputSchema(index: number): void {
+		if (componentContractReadOnly) return;
 		const output = outputs[index];
 		if (!output) return;
 		const outputType = normalizePayloadType(output?.typedSchema?.type);
@@ -491,6 +499,7 @@ export let onDraft: (
 	}
 
 	function removeApiOutput(index: number): void {
+		if (componentContractReadOnly) return;
 		outputNameDraftByIndex = {};
 		const removed = outputs[index];
 		const next = outputs.filter((_, i) => i !== index);
@@ -523,6 +532,7 @@ export let onDraft: (
 	}
 
 	function toggleOutputAdvanced(index: number): void {
+		if (componentContractReadOnly) return;
 		outputAdvancedOpen = {
 			...outputAdvancedOpen,
 			[index]: !isOutputAdvancedOpen(index)
@@ -534,6 +544,7 @@ export let onDraft: (
 	}
 
 	function setFieldsEditorMode(index: number, mode: 'structured' | 'json'): void {
+		if (componentContractReadOnly) return;
 		outputFieldsEditorMode = {
 			...outputFieldsEditorMode,
 			[index]: mode
@@ -595,6 +606,7 @@ export let onDraft: (
 		fieldIndex: number,
 		patch: Partial<ComponentTypedField>
 	): void {
+		if (componentContractReadOnly) return;
 		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.map((field, i) => (i === fieldIndex ? { ...field, ...patch } : field));
@@ -607,6 +619,7 @@ export let onDraft: (
 	}
 
 	function addOutputField(outputIndex: number): void {
+		if (componentContractReadOnly) return;
 		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
 		if (!shouldShowStructuredFieldsEditor(outputType)) return;
 		const fields = getOutputFields(outputIndex);
@@ -625,6 +638,7 @@ export let onDraft: (
 	}
 
 	function removeOutputField(outputIndex: number, fieldIndex: number): void {
+		if (componentContractReadOnly) return;
 		const outputType = normalizePayloadType(outputs[outputIndex]?.typedSchema?.type);
 		const fields = getOutputFields(outputIndex);
 		const nextFields = fields.filter((_, i) => i !== fieldIndex);
@@ -637,6 +651,7 @@ export let onDraft: (
 	}
 
 	function onApiOutputFieldsJsonChange(index: number, raw: string): void {
+		if (componentContractReadOnly) return;
 		try {
 			let parsed: any = [];
 			const trimmed = raw.trim();
@@ -955,7 +970,7 @@ export let onDraft: (
 					class="tabBtn small"
 					type="button"
 					on:click={addApiOutput}
-					disabled={loadingRevisionDetail}
+					disabled={loadingRevisionDetail || componentContractReadOnly}
 					title={loadingRevisionDetail ? 'Loading revision detail...' : undefined}
 				>
 					+ Add output
@@ -973,6 +988,7 @@ export let onDraft: (
 							<input
 								placeholder="output name"
 								value={getOutputNameDraft(index, String(port.name ?? ''))}
+								disabled={componentContractReadOnly}
 								on:input={(e) =>
 									setOutputNameDraft(index, (e.currentTarget as HTMLInputElement).value)}
 								on:blur={() => commitOutputNameDraft(index)}
@@ -993,12 +1009,19 @@ export let onDraft: (
 								{String(port.typedSchema?.type ?? 'json')}
 							</div>
 							<div class="outputActions">
-								<button class="tabBtn small danger" type="button" title="Remove output" on:click={() => removeApiOutput(index)}>-</button>
+								<button
+									class="tabBtn small danger"
+									type="button"
+									title="Remove output"
+									disabled={componentContractReadOnly}
+									on:click={() => removeApiOutput(index)}
+								>-</button>
 							</div>
 						</div>
 						<div class="outputEditorRow outputEditorRowSecondary">
 							<select
 								value={String(outputBindings?.[port.name]?.outputRef ?? '')}
+								disabled={componentContractReadOnly}
 								on:change={(e) => onOutputBindingOutputRefChange(port.name, (e.currentTarget as HTMLSelectElement).value)}
 							>
 								<option value="">internal output</option>
@@ -1015,13 +1038,14 @@ export let onDraft: (
 							<label class="requiredToggle">
 								<input
 									type="checkbox"
+									disabled={componentContractReadOnly}
 									checked={Boolean(port.required ?? true)}
 									on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
 								/>
 								req
 							</label>
 							<div class="outputActions">
-								<button class="tabBtn small" type="button" on:click|stopPropagation={() => toggleOutputAdvanced(index)}>
+								<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click|stopPropagation={() => toggleOutputAdvanced(index)}>
 									Adv {isOutputAdvancedOpen(index) ? '▴' : '▾'}
 								</button>
 							</div>
@@ -1040,18 +1064,19 @@ export let onDraft: (
 										<span class="k">typedSchema.fields</span>
 										<div class="schemaFieldActions">
 											{#if shouldShowStructuredFieldsEditor(port.typedSchema?.type)}
-												<button
-													class="tabBtn small"
-													type="button"
-													on:click={() => setFieldsEditorMode(index, getFieldsEditorMode(index) === 'structured' ? 'json' : 'structured')}
-												>
+													<button
+														class="tabBtn small"
+														type="button"
+														disabled={componentContractReadOnly}
+														on:click={() => setFieldsEditorMode(index, getFieldsEditorMode(index) === 'structured' ? 'json' : 'structured')}
+													>
 													{getFieldsEditorMode(index) === 'structured' ? 'JSON' : 'List'}
 												</button>
 												{#if getFieldsEditorMode(index) === 'structured'}
-													<button class="tabBtn small" type="button" on:click={() => addOutputField(index)}>+ field</button>
+														<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click={() => addOutputField(index)}>+ field</button>
+													{/if}
 												{/if}
-											{/if}
-											<button class="tabBtn small" type="button" on:click={() => resetOutputSchema(index)}>Reset</button>
+												<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click={() => resetOutputSchema(index)}>Reset</button>
 										</div>
 									</div>
 									{#if shouldShowStructuredFieldsEditor(port.typedSchema?.type)}
@@ -1064,10 +1089,12 @@ export let onDraft: (
 														<input
 															placeholder="field name"
 															value={String(field.name ?? '')}
+															disabled={componentContractReadOnly}
 															on:input={(e) => updateOutputField(index, fieldIndex, { name: (e.currentTarget as HTMLInputElement).value })}
 														/>
 														<select
 															value={String(field.type ?? 'unknown')}
+															disabled={componentContractReadOnly}
 															on:change={(e) =>
 																updateOutputField(index, fieldIndex, {
 																	type: normalizeTypedFieldType(
@@ -1082,21 +1109,23 @@ export let onDraft: (
 														<label class="requiredToggle">
 															<input
 																type="checkbox"
+																disabled={componentContractReadOnly}
 																checked={Boolean(field.nullable ?? false)}
 																on:change={(e) => updateOutputField(index, fieldIndex, { nullable: (e.currentTarget as HTMLInputElement).checked })}
 															/>
 															nullable
 														</label>
-														<button class="tabBtn small danger" type="button" title="Remove field" on:click={() => removeOutputField(index, fieldIndex)}>-</button>
+															<button class="tabBtn small danger" type="button" title="Remove field" disabled={componentContractReadOnly} on:click={() => removeOutputField(index, fieldIndex)}>-</button>
 													</div>
 												{/each}
 											{/if}
 										{:else}
-											<textarea
-												rows="3"
-												value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
-												on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
-											></textarea>
+												<textarea
+													rows="3"
+													disabled={componentContractReadOnly}
+													value={JSON.stringify(port.typedSchema?.fields ?? [], null, 2)}
+													on:change={(e) => onApiOutputFieldsJsonChange(index, (e.currentTarget as HTMLTextAreaElement).value)}
+												></textarea>
 											{#if outputFieldsJsonErrors[index]}
 												<div class="bindingErr">Invalid fields JSON: {outputFieldsJsonErrors[index]}</div>
 											{/if}
@@ -1129,8 +1158,15 @@ export let onDraft: (
 			{/if}
 		</div>
 	</div>
-	<div class="muted">Inputs are derived from selected revision API; outputs are editable for authoring.</div>
-</div>
+		{#if componentContractReadOnly}
+			<div class="muted">
+				Contract is read-only in consumer mode. Use <span class="mono">Actions -> Edit internals</span> or fork to
+				change exposed outputs.
+			</div>
+		{:else}
+			<div class="muted">Inputs are derived from selected revision API; outputs are editable for authoring.</div>
+		{/if}
+	</div>
 
 {#if loadingRevisionDetail}
 	<div class="section">
