@@ -3,13 +3,40 @@
 	import BaseNode from './BaseNode.svelte';
 	import { modelNodeMeta } from './modelNodeMeta';
 	import { graphStore } from '$lib/flow/store/graphStore';
+	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
+	import { reconcileLifecycleForActiveRun, reconcileModelLeaseLifecycle } from '$lib/flow/store/statusModel';
 
 	export let id: string;
 	export let selected: boolean = false;
 	export let data: LlmNodeData | ModelNodeData;
 
 	$: meta = modelNodeMeta(data);
-	$: llmAllocated = Boolean((data as any)?.meta?.llmAllocated);
+	$: binding = ($graphStore as any)?.nodeBindings?.[id];
+	$: statusProjection = statusProjectionFromBinding(binding as any);
+	$: runStatus = String(($graphStore as any)?.runStatus ?? 'idle');
+	$: schedulerRows = Array.isArray(($graphStore as any)?.queueRuntime?.schedulerSnapshot?.perNode)
+		? (($graphStore as any).queueRuntime.schedulerSnapshot.perNode as Array<Record<string, unknown>>)
+		: [];
+	$: schedulerRow = schedulerRows.find((row) => String(row?.nodeId ?? '') === String(id)) ?? {};
+	$: pendingInputCount = Math.max(0, Number((schedulerRow as any)?.pendingInputCount ?? 0));
+	$: inflightCount = Math.max(0, Number((schedulerRow as any)?.inflight ?? 0));
+	$: readyWork = Boolean((schedulerRow as any)?.readyWork ?? false);
+	$: blockedReasonCode = String((schedulerRow as any)?.lastBlockedReasonCode ?? '').trim();
+	$: lifecycle = reconcileModelLeaseLifecycle({
+		lifecycle: reconcileLifecycleForActiveRun({
+			lifecycle: statusProjection.lifecycle,
+			consumeMode: 'single_item',
+			runStatus,
+			inflight: inflightCount,
+			pendingInputCount,
+			readyWork,
+			blockedReasonCode
+		}),
+		nodeKind: String((data as any)?.kind ?? 'model'),
+		hasActiveLeaseStar: Boolean((data as any)?.meta?.llmAllocated),
+		runStatus
+	});
+	$: llmAllocated = lifecycle === 'running' && Boolean((data as any)?.meta?.llmAllocated);
 	$: workHandleStats = (() => {
 		const byHandle =
 			(($graphStore as any)?.queueRuntime?.runScoped?.runtimeItemMetrics?.byHandle ??

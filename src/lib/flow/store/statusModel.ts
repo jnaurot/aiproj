@@ -239,6 +239,26 @@ export function reconcileLifecycleForActiveRun(input: {
 	return lifecycle;
 }
 
+export function reconcileModelLeaseLifecycle(input: {
+	lifecycle: NodeLifecycleStatus;
+	nodeKind: string;
+	hasActiveLeaseStar: boolean;
+	runStatus: RunActivityStatus;
+}): NodeLifecycleStatus {
+	const lifecycle = input.lifecycle;
+	const kind = String(input.nodeKind ?? '').trim().toLowerCase();
+	const modelKind = kind === 'model' || kind === 'llm';
+	if (!modelKind) return lifecycle;
+
+	const runState = String(input.runStatus ?? 'idle').trim().toLowerCase();
+	const runActive = runState === 'running' || runState === 'pausing' || runState === 'resuming';
+	if (!runActive) return lifecycle;
+
+	if (Boolean(input.hasActiveLeaseStar)) return 'running';
+	if (lifecycle === 'running') return 'waiting';
+	return lifecycle;
+}
+
 export function projectEdgeStatus(input: EdgeStatusProjectionInput): EdgeStatusProjection {
 	const exec = normalizeEdgeExec(input.exec);
 	const mode = normalizeEdgeMode(input.mode);

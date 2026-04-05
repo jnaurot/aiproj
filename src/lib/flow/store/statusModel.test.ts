@@ -5,6 +5,7 @@ import {
 	projectEdgeStatus,
 	projectNodeStatus,
 	reconcileLifecycleForActiveRun,
+	reconcileModelLeaseLifecycle,
 	toDisplayNodeStatus
 } from './statusModel';
 
@@ -137,6 +138,30 @@ describe('reconcileLifecycleForActiveRun', () => {
 				inflight: 0,
 				pendingInputCount: 0,
 				readyWork: false
+			})
+		).toBe('waiting');
+	});
+});
+
+describe('reconcileModelLeaseLifecycle', () => {
+	it('forces model lifecycle to running when lease star is active during active run', () => {
+		expect(
+			reconcileModelLeaseLifecycle({
+				lifecycle: 'waiting',
+				nodeKind: 'model',
+				hasActiveLeaseStar: true,
+				runStatus: 'running'
+			})
+		).toBe('running');
+	});
+
+	it('demotes model running lifecycle when lease star is absent during active run', () => {
+		expect(
+			reconcileModelLeaseLifecycle({
+				lifecycle: 'running',
+				nodeKind: 'model',
+				hasActiveLeaseStar: false,
+				runStatus: 'running'
 			})
 		).toBe('waiting');
 	});

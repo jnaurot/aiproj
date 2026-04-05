@@ -3,7 +3,11 @@
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
 	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
-	import { reconcileLifecycleForActiveRun, toDisplayNodeStatus } from '$lib/flow/store/statusModel';
+	import {
+		reconcileLifecycleForActiveRun,
+		reconcileModelLeaseLifecycle,
+		toDisplayNodeStatus
+	} from '$lib/flow/store/statusModel';
 	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
 	import {
 		buildNodeExecutionBadge,
@@ -33,7 +37,7 @@
 	$: inflightCount = Math.max(0, Number((schedulerRow as any)?.inflight ?? 0));
 	$: readyWork = Boolean((schedulerRow as any)?.readyWork ?? false);
 	$: blockedReasonCode = String((schedulerRow as any)?.lastBlockedReasonCode ?? '').trim();
-	$: effectiveLifecycle = reconcileLifecycleForActiveRun({
+	$: activeRunLifecycle = reconcileLifecycleForActiveRun({
 		lifecycle: statusProjection.lifecycle,
 		consumeMode,
 		runStatus,
@@ -41,6 +45,12 @@
 		pendingInputCount,
 		readyWork,
 		blockedReasonCode
+	});
+	$: effectiveLifecycle = reconcileModelLeaseLifecycle({
+		lifecycle: activeRunLifecycle,
+		nodeKind: kind,
+		hasActiveLeaseStar: Boolean((data as any)?.meta?.llmAllocated),
+		runStatus
 	});
 	$: status = toDisplayNodeStatus(effectiveLifecycle, statusProjection.freshness);
 	$: lifecycleLabel = effectiveLifecycle;
