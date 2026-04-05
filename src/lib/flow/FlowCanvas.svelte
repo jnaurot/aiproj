@@ -89,6 +89,7 @@ import {
 	} from '$lib/flow/editorCommitPolicy';
 	import { graphSemanticSnapshotKey, isGraphSemanticDirty } from '$lib/flow/store/graphSemanticSnapshot';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
+	import { findDuplicateNodeNames } from '$lib/flow/store/nodeNameUniqueness';
 	import type { NodePreset } from '$lib/flow/store/nodePresetStore';
 	import type { ToolbarMenuItem } from './components/toolbarMenu';
 	import {
@@ -205,14 +206,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	function commitEditTitle() {
-		isEditingTitle = false;
-		updateSelectedTitle(titleDraft);
+		const ok = updateSelectedTitle(titleDraft);
+		if (ok) {
+			isEditingTitle = false;
+			return;
+		}
+		tick().then(() => {
+			const el = document.getElementById('node-title-input') as HTMLInputElement | null;
+			el?.focus();
+			el?.select();
+		});
 	}
 
 	function cancelEditTitle() {
 		isEditingTitle = false;
 		titleDraft = titleBeforeEdit;
-		updateSelectedTitle(titleBeforeEdit);
 	}
 	//end editing stuff
 	$: {
@@ -1564,10 +1572,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (!original) return null;
 		if (state.runStatus === 'running') return null;
 		const kind = original.data.kind as NodeKind;
-		const cloneId = graphStore.addNode(kind, {
-			x: Number(original.position?.x ?? 0) + NODE_DUPLICATE_OFFSET_X,
-			y: Number(original.position?.y ?? 0) + NODE_DUPLICATE_OFFSET_Y
-		});
+		const desiredLabel = String(original.data.label ?? '').trim();
+		const cloneId = graphStore.addNode(
+			kind,
+			{
+				x: Number(original.position?.x ?? 0) + NODE_DUPLICATE_OFFSET_X,
+				y: Number(original.position?.y ?? 0) + NODE_DUPLICATE_OFFSET_Y
+			},
+			desiredLabel ? { label: desiredLabel } : undefined
+		);
+		const clonedNode = get(graphStore).nodes.find((n) => n.id === cloneId);
+		const actualLabel = String((clonedNode as any)?.data?.label ?? '').trim();
+		if (desiredLabel && actualLabel && actualLabel.toLowerCase() !== desiredLabel.toLowerCase()) {
+			showToast(`Duplicate name "${desiredLabel}" adjusted to "${actualLabel}".`, 'info');
+		}
 		if (kind === 'source') {
 			graphStore.setSourceKind(cloneId, ((original.data as any)?.sourceKind ?? 'file') as SourceKind);
 		}
@@ -1592,8 +1610,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		if (expectedTypedSchema && typeof expectedTypedSchema === 'object') {
 			graphStore.setNodeExpectedSchema(cloneId, structuredClone(expectedTypedSchema));
 		}
-		const label = String(original.data.label ?? '').trim();
-		if (label) graphStore.updateNodeTitle(cloneId, label);
 		const meta = (original.data as any)?.meta;
 		if (meta && typeof meta === 'object') {
 			graphStore.setNodeMeta(cloneId, structuredClone(meta as Record<string, unknown>));
@@ -1685,12 +1701,32 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graphStore.deleteEdge(edge.id);
 	}
 
+	function promptForUniqueNodeName(kind: NodeKind): string | null {
+		const kindName = String(kind ?? 'node')
+			.replace(/_/g, ' ')
+			.trim();
+		let suggested = kindName ? `${kindName.charAt(0).toUpperCase()}${kindName.slice(1)}` : 'Node';
+		while (true) {
+			const raw = window.prompt('Node name', suggested);
+			if (raw == null) return null;
+			const checked = graphStore.validateNodeName(raw);
+			if ((checked as any)?.ok) {
+				return String((checked as any)?.cleanedName ?? raw).trim();
+			}
+			showToast(String((checked as any)?.error ?? 'Duplicate node name.'), 'warn');
+			const candidate = String(raw ?? '').trim();
+			if (candidate) suggested = candidate;
+		}
+	}
+
 	function addNode(kind: NodeKind): string {
+		const requestedName = promptForUniqueNodeName(kind);
+		if (!requestedName) return '';
 		const vp = getViewport();
 		const centerScreen = { x: window.innerWidth * 0.35, y: window.innerHeight * 0.55 };
 		const pos = screenToFlowPosition(centerScreen);
 
-		const id = graphStore.addNode(kind, { x: pos.x, y: pos.y });
+		const id = graphStore.addNode(kind, { x: pos.x, y: pos.y }, { label: requestedName });
 		graphStore.selectNode(id);
 		setCenter(pos.x, pos.y, { zoom: vp.zoom, duration: 250 });
 		return id;
@@ -1784,6 +1820,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const picked = await pickComponentAndRevision();
 		if (!picked) return;
 		const nodeId = addNode('component');
+		if (!nodeId) return;
 		const applied = await graphStore.applyComponentRevisionToNode(
 			nodeId,
 			picked.componentId,
@@ -1979,7 +2016,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const vp = getViewport();
 		const centerScreen = { x: window.innerWidth * 0.35, y: window.innerHeight * 0.55 };
 		const pos = screenToFlowPosition(centerScreen);
-		const nodeId = graphStore.addNode(preset.kind, { x: pos.x, y: pos.y });
+		const desiredLabel = String(preset.name ?? '').trim();
+		const nodeId = graphStore.addNode(
+			preset.kind,
+			{ x: pos.x, y: pos.y },
+			desiredLabel ? { label: desiredLabel } : undefined
+		);
+		const createdNode = get(graphStore).nodes.find((n) => n.id === nodeId);
+		const actualLabel = String((createdNode as any)?.data?.label ?? '').trim();
+		if (desiredLabel && actualLabel && actualLabel.toLowerCase() !== desiredLabel.toLowerCase()) {
+			showToast(`Preset node name "${desiredLabel}" adjusted to "${actualLabel}".`, 'info');
+		}
 		applyPresetToNode(nodeId, preset);
 		graphStore.selectNode(nodeId);
 		nodePresetStore.markUsed(presetId);
@@ -2039,12 +2086,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const centerScreen = { x: window.innerWidth * 0.3, y: window.innerHeight * 0.5 };
 		const anchor = screenToFlowPosition(centerScreen);
 		const nodeIdByTemplateId: Record<string, string> = {};
+		const renamedTemplateNodes: Array<{ from: string; to: string }> = [];
 		for (const definition of template.nodes) {
-			const nodeId = graphStore.addNode(definition.kind, {
-				x: anchor.x + Number(definition.position?.x ?? 0),
-				y: anchor.y + Number(definition.position?.y ?? 0)
-			});
+			const desiredLabel = String(definition.label ?? '').trim();
+			const nodeId = graphStore.addNode(
+				definition.kind,
+				{
+					x: anchor.x + Number(definition.position?.x ?? 0),
+					y: anchor.y + Number(definition.position?.y ?? 0)
+				},
+				desiredLabel ? { label: desiredLabel } : undefined
+			);
 			nodeIdByTemplateId[definition.id] = nodeId;
+			const createdNode = get(graphStore).nodes.find((n) => n.id === nodeId);
+			const actualLabel = String((createdNode as any)?.data?.label ?? '').trim();
+			if (desiredLabel && actualLabel && actualLabel.toLowerCase() !== desiredLabel.toLowerCase()) {
+				renamedTemplateNodes.push({ from: desiredLabel, to: actualLabel });
+			}
 			if (definition.kind === 'source' && definition.sourceKind) {
 				graphStore.setSourceKind(nodeId, definition.sourceKind);
 			} else if (definition.kind === 'transform' && definition.transformKind) {
@@ -2052,7 +2110,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			} else if (definition.kind === 'tool' && definition.toolProvider) {
 				graphStore.setToolProvider(nodeId, definition.toolProvider);
 			}
-			graphStore.updateNodeTitle(nodeId, definition.label);
 				graphStore.updateNodeConfig(nodeId, {
 					params: structuredClone(definition.params ?? {})
 				});
@@ -2074,6 +2131,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const focusId = nodeIdByTemplateId[template.nodes[template.nodes.length - 1]?.id ?? ''];
 		if (focusId) graphStore.selectNode(focusId);
 		setCenter(anchor.x + 320, anchor.y, { zoom: vp.zoom, duration: 260 });
+		if (renamedTemplateNodes.length > 0) {
+			const details = renamedTemplateNodes
+				.slice(0, 5)
+				.map((item) => `"${item.from}" -> "${item.to}"`)
+				.join(', ');
+			const suffix = renamedTemplateNodes.length > 5 ? ', ...' : '';
+			showToast(`Template name collisions adjusted: ${details}${suffix}`, 'info');
+		}
 		showToast(`Starter template added: ${template.name}`, 'info');
 	}
 
@@ -2291,9 +2356,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		});
 	}
 
-	function updateSelectedTitle(label: string) {
-		if (!$selectedNode) return;
-		graphStore.updateNodeTitle($selectedNode.id, label);
+	function updateSelectedTitle(label: string): boolean {
+		if (!$selectedNode) return false;
+		const result = graphStore.updateNodeTitle($selectedNode.id, label);
+		if (!(result as any)?.ok) {
+			showToast(String((result as any)?.error ?? 'Node name update failed.'), 'warn');
+			return false;
+		}
+		return true;
 	}
 
 	function jumpToNodeFromArtifact(nodeId: string) {
@@ -3166,6 +3236,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const note = window.prompt('Component revision message (optional)', '') ?? '';
 		const currentNodes = (state?.nodes ?? []) as Node<PipelineNodeData>[];
 		const currentEdges = (state?.edges ?? []) as Edge<PipelineEdgeData>[];
+		const duplicateNames = findDuplicateNodeNames(currentNodes);
+		if (duplicateNames.length > 0) {
+			const details = duplicateNames
+				.slice(0, 8)
+				.map((entry, index) => `${index + 1}. ${entry.displayName} (${entry.nodeIds.length} nodes)`)
+				.join('\n');
+			window.alert(
+				`Component publish blocked: duplicate internal node names found (trimmed + case-insensitive).\n\n${details}`
+			);
+			showToast('Save Component Revision blocked: duplicate node names.', 'error');
+			return false;
+		}
 		try {
 			const detail = await getComponentRevision(componentId, baseRevisionId);
 			const api = ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract);
@@ -4859,7 +4941,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									on:input={(e) => {
 										const next = (e.currentTarget as HTMLInputElement).value;
 										titleDraft = next;
-										updateSelectedTitle(next);
 									}}
 									on:blur={() => commitEditTitle()}
 									on:keydown={(e) => {

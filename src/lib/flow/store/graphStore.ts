@@ -32,6 +32,12 @@ import {
 } from '$lib/flow/schema/schemaContract';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { updateNodeParamsValidated } from './graph';
+import {
+	findDuplicateNodeNames,
+	findNodeIdByName,
+	normalizeNodeName,
+	resolveUniqueNodeName
+} from './nodeNameUniqueness';
 import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph, clearGraphDraft } from './persist';
 import {
 	getLatestGraphRevision,
@@ -4319,6 +4325,14 @@ function buildSavePreflightDiagnostics(
 			}
 		}
 	}
+	for (const duplicate of findDuplicateNodeNames(workingNodes)) {
+		diagnostics.push({
+			code: 'NODE_NAME_DUPLICATE',
+			path: `nodes.${duplicate.nodeIds.join(',')}.data.label`,
+			message: `Duplicate node name "${duplicate.displayName}" (case-insensitive, trimmed match).`,
+			severity: 'error'
+		});
+	}
 
 	return {
 		ok: !diagnostics.some((d) => d.severity === 'error'),
@@ -7657,7 +7671,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		// ----- node CRUD -----
-		addNode(kind: NodeKind, position: { x: number; y: number }) {
+		addNode(kind: NodeKind, position: { x: number; y: number }, opts?: { label?: string }) {
 			const id = `n_${crypto.randomUUID()}`;
 			const baseNode: Node<PipelineNodeData> = {
 				id,
@@ -7671,6 +7685,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 
 			update((s) => {
+				const requestedLabel =
+					typeof opts?.label === 'string' && String(opts.label).trim().length > 0
+						? String(opts.label).trim()
+						: String((node.data as any)?.label ?? '').trim();
+				const uniqueLabel = resolveUniqueNodeName(s.nodes as Node<PipelineNodeData>[], requestedLabel);
+				if (uniqueLabel) {
+					(node.data as any).label = uniqueLabel;
+				}
 				const nodeBindings = {
 					...s.nodeBindings,
 					[id]: _normalizeBinding(s.nodeBindings?.[id], id)
@@ -8307,14 +8329,53 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		updateNodeTitle(nodeId: string, label: string) {
+			const state = get({ subscribe } as any) as GraphState;
+			const cleaned = String(label ?? '').trim();
+			const normalized = normalizeNodeName(cleaned);
+			if (!normalized) {
+				return { ok: false as const, error: 'Node name cannot be empty.' };
+			}
+			const duplicateNodeId = findNodeIdByName(state.nodes as Node<PipelineNodeData>[], cleaned, {
+				excludeNodeId: nodeId
+			});
+			if (duplicateNodeId) {
+				return {
+					ok: false as const,
+					error: `Node name "${cleaned}" already exists in this graph.`,
+					reason: 'duplicate_name_in_scope' as const,
+					existingNodeId: duplicateNodeId
+				};
+			}
 			update((s) => {
 				const nodes = s.nodes.map((n) =>
-					n.id === nodeId ? { ...n, data: { ...n.data, label } } : n
+					n.id === nodeId ? { ...n, data: { ...n.data, label: cleaned } } : n
 				);
 				const next = { ...s, nodes };
 				persist(next);
 				return next;
 			});
+			return { ok: true as const };
+		},
+
+		validateNodeName(name: string, opts?: { excludeNodeId?: string | null }) {
+			const state = get({ subscribe } as any) as GraphState;
+			const cleaned = String(name ?? '').trim();
+			const normalized = normalizeNodeName(cleaned);
+			if (!normalized) {
+				return { ok: false as const, error: 'Node name cannot be empty.' };
+			}
+			const duplicateNodeId = findNodeIdByName(state.nodes as Node<PipelineNodeData>[], cleaned, {
+				excludeNodeId: String(opts?.excludeNodeId ?? '').trim() || null
+			});
+			if (duplicateNodeId) {
+				return {
+					ok: false as const,
+					error: `Node name "${cleaned}" already exists in this graph.`,
+					reason: 'duplicate_name_in_scope' as const,
+					existingNodeId: duplicateNodeId
+				};
+			}
+			return { ok: true as const, cleanedName: cleaned };
 		},
 
 		setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
