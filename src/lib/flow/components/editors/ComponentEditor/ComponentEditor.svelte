@@ -1143,7 +1143,8 @@ export let onDraft: (
 {/if}
 
 <div class="section">
-	<div class="sectionTitle">Config</div>
+	<div class="sectionTitle">Param Payload (config)</div>
+	<div class="muted">Component config is a param-plane payload convention, not a separate plane.</div>
 	<textarea
 		rows="4"
 		value={configDraft}
