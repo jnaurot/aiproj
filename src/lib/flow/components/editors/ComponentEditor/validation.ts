@@ -10,7 +10,7 @@ export const RESERVED_COMPONENT_OUTPUT_NAMES = new Set([
 
 export type ComponentOutputBinding = {
 	outputRef?: string;
-	artifact?: 'current' | 'last';
+	artifact?: 'current';
 };
 
 export type ComponentOutputValidation = {
@@ -120,14 +120,14 @@ export function validateComponentOutputs(
 			const boundOutputRef = String(binding?.outputRef ?? '').trim();
 			const bindingIssues: string[] = [];
 			if (!boundOutputRef) {
-				bindingIssues.push('bindings.outputs.<name>.outputRef is required.');
+				bindingIssues.push('API Contract output source is required.');
 			}
 			if (boundOutputRef && availableOutputRefs.size > 0 && !availableOutputRefs.has(boundOutputRef)) {
-				bindingIssues.push('bindings.outputs.<name>.outputRef must reference an exposed internal output.');
+				bindingIssues.push('API Contract output source must reference an exposed internal output.');
 			}
 			const artifactMode = String(binding?.artifact ?? 'current').trim();
-			if (artifactMode !== 'current' && artifactMode !== 'last') {
-				bindingIssues.push('bindings.outputs.<name>.artifact must be "current" or "last".');
+			if (artifactMode !== 'current') {
+				bindingIssues.push('API Contract output artifact mode must be "current".');
 			}
 			if (bindingIssues.length > 0) {
 				bindingErrors[name] = bindingIssues;
@@ -163,7 +163,7 @@ export function syncOutputBindings(
 			undefined;
 		next[outName] = {
 			outputRef,
-			artifact: existing?.artifact === 'last' ? 'last' : 'current'
+			artifact: 'current'
 		};
 	}
 	const prevKey = JSON.stringify(source);

@@ -889,7 +889,7 @@ describe('graphStore component integration', () => {
 		}
 	});
 
-	it('defaults output bindings to first internal node when no leaf exists', async () => {
+	it('defaults output source mapping to first internal node when no leaf exists', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(nodeId);
@@ -941,15 +941,21 @@ describe('graphStore component integration', () => {
 			expect((res as any)?.ok).toBe(true);
 			const state = get(graphStore);
 			const node = state.nodes.find((n) => n.id === nodeId);
-			const outBinding = (node?.data?.params as any)?.bindings?.outputs?.out_data;
-			expect(String(outBinding?.outputRef ?? '')).toBe('node:n1');
-			expect(String(outBinding?.artifact ?? '')).toBe('current');
+			const exposureRegistry = (((node?.data?.params as any)?.exposureRegistry ?? []) as any[]).filter(
+				(rec) => String(rec?.kind ?? '').trim().toLowerCase() === 'data_output'
+			);
+			const outExposure = exposureRegistry.find(
+				(rec) =>
+					String(rec?.alias ?? '').trim() === 'out_data' ||
+					String(rec?.handle_id ?? '').trim() === 'data_out::out_data'
+			);
+			expect(String(outExposure?.internal_source_path ?? '')).toBe('node:n1');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
 	});
 
-	it('applies multi-output component API and keeps bindings synchronized', async () => {
+	it('applies multi-output component API and keeps output source mapping synchronized', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(nodeId);
@@ -1010,15 +1016,15 @@ describe('graphStore component integration', () => {
 			const state = get(graphStore);
 			const node = state.nodes.find((n) => n.id === nodeId);
 			const outputs = ((node?.data?.params as any)?.api?.outputs ?? []) as Array<{ name: string }>;
-			const bindings = ((node?.data?.params as any)?.bindings?.outputs ?? {}) as Record<
-				string,
-				{ outputRef?: string; artifact?: 'current' | 'last' }
-			>;
+			const exposureRegistry = (((node?.data?.params as any)?.exposureRegistry ?? []) as any[]).filter(
+				(rec) => String(rec?.kind ?? '').trim().toLowerCase() === 'data_output'
+			);
+			const sourceByAlias = Object.fromEntries(
+				exposureRegistry.map((rec) => [String(rec?.alias ?? '').trim(), String(rec?.internal_source_path ?? '').trim()])
+			) as Record<string, string>;
 			expect(outputs.map((o) => o.name)).toEqual(['out_text', 'out_json']);
-			expect(String(bindings.out_text?.outputRef ?? '')).toBe('node:inner_text');
-			expect(String(bindings.out_json?.outputRef ?? '')).toBe('node:inner_text');
-			expect(String(bindings.out_text?.artifact ?? '')).toBe('current');
-			expect(String(bindings.out_json?.artifact ?? '')).toBe('current');
+			expect(String(sourceByAlias.out_text ?? '')).toBe('node:inner_text');
+			expect(String(sourceByAlias.out_json ?? '')).toBe('node:inner_text');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 		}
@@ -1107,7 +1113,7 @@ describe('graphStore component integration', () => {
 		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
 	});
 
-	it('prunes dangling component output bindings on Accept', async () => {
+	it('prunes dangling component output source mappings on Accept', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1119,15 +1125,11 @@ describe('graphStore component integration', () => {
 					{ name: 'source', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }
 				]
 			},
-			bindings: {
-				inputs: {},
-				config: {},
-				outputs: {
-					out_data: { outputRef: 'node:n_old', artifact: 'current' },
-					summary: { outputRef: 'node:n_sum', artifact: 'current' },
-					source: { outputRef: 'node:n_src', artifact: 'current' }
-				}
-			}
+			exposureRegistry: [
+				{ handle_id: 'data_out::out_data', alias: 'out_data', internal_source_path: 'node:n_old', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+				{ handle_id: 'data_out::summary', alias: 'summary', internal_source_path: 'node:n_sum', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+				{ handle_id: 'data_out::source', alias: 'source', internal_source_path: 'node:n_src', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false }
+			]
 		});
 
 		const result = await graphStore.applyInspectorDraft();
@@ -1135,12 +1137,13 @@ describe('graphStore component integration', () => {
 
 		const state = get(graphStore);
 		const node = state.nodes.find((n) => n.id === componentId);
-		const outputBindings = (((node?.data?.params as any)?.bindings ?? {}).outputs ?? {}) as Record<string, unknown>;
-		expect(Object.keys(outputBindings).sort()).toEqual(['source', 'summary']);
-		expect(outputBindings.out_data).toBeUndefined();
+		const exposureRegistry = (((node?.data?.params as any)?.exposureRegistry ?? []) as any[]).filter(
+			(rec) => String(rec?.kind ?? '').trim().toLowerCase() === 'data_output'
+		);
+		expect(exposureRegistry.map((rec) => String(rec?.alias ?? '').trim()).sort()).toEqual(['source', 'summary']);
 	});
 
-	it('blocks Accept when a declared component output is missing binding outputRef', async () => {
+	it('blocks Accept when a declared component output is missing API output source', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1156,22 +1159,27 @@ describe('graphStore component integration', () => {
 					}
 				]
 			},
-			bindings: {
-				inputs: {},
-				config: {},
-				outputs: {
-					summary: { outputRef: '', artifact: 'current' }
+			exposureRegistry: [
+				{
+					handle_id: 'data_out::summary',
+					alias: 'summary',
+					internal_source_path: '',
+					kind: 'data_output',
+					native_contract: { type: 'text', fields: [] },
+					exposed: true,
+					published: true,
+					debug_visible: false
 				}
-			}
+			]
 		});
 
 		const result = await graphStore.applyInspectorDraft();
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
-		expect(String((result as any)?.error ?? '')).toContain('requires a bound internal outputRef');
+		expect(String((result as any)?.error ?? '')).toContain('requires an API Contract output source');
 	});
 
-	it('blocks Accept when a non-required declared component output is missing binding outputRef', async () => {
+	it('blocks Accept when a non-required declared component output is missing API output source', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1187,18 +1195,23 @@ describe('graphStore component integration', () => {
 					}
 				]
 			},
-			bindings: {
-				inputs: {},
-				config: {},
-				outputs: {
-					summary: { outputRef: '', artifact: 'current' }
+			exposureRegistry: [
+				{
+					handle_id: 'data_out::summary',
+					alias: 'summary',
+					internal_source_path: '',
+					kind: 'data_output',
+					native_contract: { type: 'text', fields: [] },
+					exposed: true,
+					published: true,
+					debug_visible: false
 				}
-			}
+			]
 		});
 
 		const validation = graphStore.getInspectorDraftAcceptValidation();
 		expect(validation.ok).toBe(false);
-		expect(String(validation.errors?.[0] ?? '')).toContain('requires a bound internal outputRef');
+		expect(String(validation.errors?.[0] ?? '')).toContain('requires an API Contract output source');
 		const result = await graphStore.applyInspectorDraft();
 		expect((result as any)?.ok).toBe(false);
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
@@ -1220,13 +1233,18 @@ describe('graphStore component integration', () => {
 					}
 				]
 			},
-			bindings: {
-				inputs: {},
-				config: {},
-				outputs: {
-					summary: { outputRef: 'node:n_any', artifact: 'current' }
+			exposureRegistry: [
+				{
+					handle_id: 'data_out::summary',
+					alias: 'summary',
+					internal_source_path: 'node:n_any',
+					kind: 'data_output',
+					native_contract: { type: 'json', fields: [] },
+					exposed: true,
+					published: true,
+					debug_visible: false
 				}
-			}
+			]
 		});
 
 		const result = await graphStore.applyInspectorDraft();
@@ -1247,6 +1265,10 @@ describe('graphStore component integration', () => {
 						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
+				exposureRegistry: [
+					{ handle_id: 'data_out::out_text', alias: 'out_text', internal_source_path: 'node:n1', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+					{ handle_id: 'data_out::out_json', alias: 'out_json', internal_source_path: 'node:n2', kind: 'data_output', native_contract: { type: 'json', fields: [] }, exposed: true, published: true, debug_visible: false }
+				],
 				bindings: {
 					inputs: {},
 					config: {},
@@ -1308,6 +1330,10 @@ describe('graphStore component integration', () => {
 						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
+				exposureRegistry: [
+					{ handle_id: 'data_out::out_text', alias: 'out_text', internal_source_path: 'node:n1', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+					{ handle_id: 'data_out::out_json', alias: 'out_json', internal_source_path: 'node:n2', kind: 'data_output', native_contract: { type: 'json', fields: [] }, exposed: true, published: true, debug_visible: false }
+				],
 				bindings: {
 					inputs: {},
 					config: {},
@@ -1391,6 +1417,10 @@ describe('graphStore component integration', () => {
 						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
+				exposureRegistry: [
+					{ handle_id: 'data_out::out_text', alias: 'out_text', internal_source_path: 'node:n1', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+					{ handle_id: 'data_out::out_json', alias: 'out_json', internal_source_path: 'node:n2', kind: 'data_output', native_contract: { type: 'json', fields: [] }, exposed: true, published: true, debug_visible: false }
+				],
 				bindings: {
 					inputs: {},
 					config: {},
@@ -1437,6 +1467,10 @@ describe('graphStore component integration', () => {
 						{ name: 'out_json', payloadType: 'json', required: true, typedSchema: { type: 'json', fields: [] } }
 					]
 				},
+				exposureRegistry: [
+					{ handle_id: 'data_out::out_text', alias: 'out_text', internal_source_path: 'node:n1', kind: 'data_output', native_contract: { type: 'text', fields: [] }, exposed: true, published: true, debug_visible: false },
+					{ handle_id: 'data_out::out_json', alias: 'out_json', internal_source_path: 'node:n2', kind: 'data_output', native_contract: { type: 'json', fields: [] }, exposed: true, published: true, debug_visible: false }
+				],
 				bindings: {
 					inputs: {},
 					config: {},
@@ -1534,7 +1568,7 @@ describe('graphStore component integration', () => {
 			const result = await graphStore.saveGraph('save');
 			expect((result as any)?.ok).toBe(false);
 			expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
-			expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_BINDING_MISSING');
+			expect(String((result as any)?.error ?? '')).toContain('COMPONENT_OUTPUT_SOURCE_MISSING');
 			expect(postCalled).toBe(false);
 		} finally {
 			(globalThis as any).fetch = originalFetch;

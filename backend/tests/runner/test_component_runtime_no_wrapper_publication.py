@@ -71,7 +71,30 @@ async def test_component_runtime_publishes_native_handle_outputs_without_wrapper
 							"inputs": [],
 							"outputs": [{"name": "out_text", "required": True, "typedSchema": {"type": "text", "fields": []}}],
 						},
-						"bindings": {"outputs": {"out_text": {"artifact": "current", "outputRef": "tool:writer"}}},
+						"exposureRegistry": [
+							{
+								"handle_id": "data_out::out_text",
+								"alias": "out_text",
+								"internal_source_path": "tool:writer",
+								"kind": "data_output",
+								"native_contract": {"type": "text", "fields": []},
+								"exposed": True,
+								"published": True,
+								"debug_visible": False,
+							}
+						],
+						"published_profile": [
+							{
+								"handle_id": "data_out::out_text",
+								"alias": "out_text",
+								"internal_source_path": "tool:writer",
+								"kind": "data_output",
+								"native_contract": {"type": "text", "fields": []},
+								"exposed": True,
+								"published": True,
+								"debug_visible": False,
+							}
+						],
 					},
 				},
 			}

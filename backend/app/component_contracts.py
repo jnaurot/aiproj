@@ -408,6 +408,36 @@ def validate_component_definition(definition: Dict[str, Any]) -> List[ContractDi
             diagnostics.append(ContractDiagnostic("INVALID_GRAPH_NODES", "graph.nodes", "graph.nodes must be an array"))
         if not isinstance(graph.get("edges"), list):
             diagnostics.append(ContractDiagnostic("INVALID_GRAPH_EDGES", "graph.edges", "graph.edges must be an array"))
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        for idx, raw_node in enumerate(nodes):
+            if not isinstance(raw_node, dict):
+                continue
+            data = raw_node.get("data") if isinstance(raw_node.get("data"), dict) else {}
+            if str(data.get("kind") or "").strip().lower() != "component":
+                continue
+            params = data.get("params") if isinstance(data.get("params"), dict) else {}
+            bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
+            outputs = bindings.get("outputs") if isinstance(bindings.get("outputs"), dict) else {}
+            if outputs:
+                diagnostics.append(
+                    ContractDiagnostic(
+                        "COMPONENT_LEGACY_OUTPUT_BINDINGS_DEPRECATED",
+                        f"graph.nodes[{idx}].data.params.bindings.outputs",
+                        "Legacy component output bindings are deprecated; use API Contract exposure mappings only.",
+                    )
+                )
+            for out_name, binding in outputs.items():
+                if not isinstance(binding, dict):
+                    continue
+                mode = str(binding.get("artifact") or "current").strip().lower() or "current"
+                if mode != "current":
+                    diagnostics.append(
+                        ContractDiagnostic(
+                            "COMPONENT_OUTPUT_ARTIFACT_MODE_UNSUPPORTED",
+                            f"graph.nodes[{idx}].data.params.bindings.outputs.{str(out_name)}.artifact",
+                            "Only artifact mode 'current' is supported.",
+                        )
+                    )
 
     api = definition.get("api")
     if not isinstance(api, dict):

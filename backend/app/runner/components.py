@@ -70,6 +70,8 @@ def _build_output_ref_index(internal_nodes: List[Dict[str, Any]]) -> Dict[str, L
         label = str(data.get("label") or internal_id).strip() or internal_id
         base_ref = f"{kind}:{label}"
         index.setdefault(base_ref, []).append((internal_id, None))
+        index.setdefault(internal_id, []).append((internal_id, None))
+        index.setdefault(f"{internal_id}.out", []).append((internal_id, None))
         if kind != "component":
             continue
         params = data.get("params") if isinstance(data.get("params"), dict) else {}
@@ -83,7 +85,45 @@ def _build_output_ref_index(internal_nodes: List[Dict[str, Any]]) -> Dict[str, L
                 continue
             ref = f"{base_ref}|{out_name}"
             index.setdefault(ref, []).append((internal_id, out_name))
+            index.setdefault(f"{internal_id}.{out_name}", []).append((internal_id, out_name))
     return index
+
+
+def _component_output_source_map_from_api(
+    *,
+    component_api: Dict[str, Any],
+    exposure_registry: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    outputs = component_api.get("outputs") if isinstance(component_api.get("outputs"), list) else []
+    records = exposure_registry if isinstance(exposure_registry, list) else []
+    by_alias = {
+        str(rec.get("alias") or "").strip(): rec
+        for rec in records
+        if isinstance(rec, dict)
+        and str(rec.get("kind") or "").strip().lower() == "data_output"
+        and str(rec.get("alias") or "").strip()
+    }
+    by_handle = {
+        str(rec.get("handle_id") or "").strip(): rec
+        for rec in records
+        if isinstance(rec, dict)
+        and str(rec.get("kind") or "").strip().lower() == "data_output"
+        and str(rec.get("handle_id") or "").strip()
+    }
+    out: Dict[str, str] = {}
+    for out_port in outputs:
+        if not isinstance(out_port, dict):
+            continue
+        out_name = str(out_port.get("name") or "").strip()
+        if not out_name:
+            continue
+        rec = by_alias.get(out_name) or by_handle.get(f"data_out::{out_name}")
+        if not isinstance(rec, dict):
+            continue
+        source = str(rec.get("internal_source_path") or "").strip()
+        if source:
+            out[out_name] = source
+    return out
 
 
 def expand_graph_components(
@@ -346,11 +386,21 @@ def expand_graph_components(
             if isinstance(component_api, dict) and isinstance(component_api.get("outputs"), list)
             else []
         )
-        bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
-        output_bindings = (
-            bindings.get("outputs")
-            if isinstance(bindings, dict) and isinstance(bindings.get("outputs"), dict)
-            else {}
+        published_profile = (
+            params.get("published_profile")
+            if isinstance(params.get("published_profile"), list)
+            else []
+        )
+        exposure_registry = (
+            params.get("exposureRegistry")
+            if isinstance(params.get("exposureRegistry"), list)
+            else published_profile
+            if isinstance(published_profile, list)
+            else []
+        )
+        output_sources = _component_output_source_map_from_api(
+            component_api=component_api if isinstance(component_api, dict) else {},
+            exposure_registry=exposure_registry if isinstance(exposure_registry, list) else [],
         )
         output_ref_index = _build_output_ref_index(internal_nodes)
 
@@ -360,30 +410,16 @@ def expand_graph_components(
             out_name = str(out_port.get("name") or "").strip()
             if not out_name:
                 continue
-            binding = output_bindings.get(out_name) if isinstance(output_bindings, dict) else None
-            if not isinstance(binding, dict):
-                raise ComponentExpansionError(
-                    f"Missing output binding for '{out_name}' in {component_id}@{revision_id}",
-                    code="COMPONENT_OUTPUT_BINDING_MISSING",
-                    details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
-                )
-            output_ref = str(binding.get("outputRef") or "").strip()
-            bound_artifact = str(binding.get("artifact") or "current").strip().lower() or "current"
+            output_ref = str(output_sources.get(out_name) or "").strip()
             if not output_ref:
                 raise ComponentExpansionError(
-                    f"Output binding outputRef is required for '{out_name}' in {component_id}@{revision_id}",
-                    code="COMPONENT_OUTPUT_BINDING_INVALID",
-                    details={"componentId": component_id, "revisionId": revision_id, "output": out_name},
-                )
-            if bound_artifact not in {"current", "last"}:
-                raise ComponentExpansionError(
-                    f"Unsupported output binding artifact mode '{bound_artifact}' for '{out_name}'",
+                    f"Missing published API output source for '{out_name}' in {component_id}@{revision_id}",
                     code="COMPONENT_OUTPUT_BINDING_INVALID",
                     details={
                         "componentId": component_id,
                         "revisionId": revision_id,
                         "output": out_name,
-                        "artifact": bound_artifact,
+                        "expected": "published_profile.data_output.internal_source_path",
                     },
                 )
             candidates = output_ref_index.get(output_ref, [])

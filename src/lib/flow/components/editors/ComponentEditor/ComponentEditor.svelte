@@ -1,5 +1,4 @@
 <script lang="ts">
-	import KeyValueEditor from '$lib/flow/components/KeyValueEditor.svelte';
 	import ToolbarMenu from '$lib/flow/components/ToolbarMenu.svelte';
 	import type { ToolbarMenuItem } from '$lib/flow/components/toolbarMenu';
 	import { graphStore } from '$lib/flow/store/graphStore';
@@ -16,6 +15,7 @@
 		syncOutputBindings,
 		validateComponentOutputs
 	} from './validation';
+	import { materializeExposureProfiles, normalizeExposureRegistry } from '$lib/flow/components/exposureProfiles';
 
 export let selectedNode: any;
 export let params: Record<string, any> = {};
@@ -70,12 +70,19 @@ export let onDraft: (
 		configDraft = JSON.stringify(configObj, null, 2);
 	}
 
-	$: bindings = (params?.bindings ?? { inputs: {}, config: {} }) as {
-		inputs?: Record<string, string>;
-		config?: Record<string, string>;
-		outputs?: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
-	};
-	$: outputBindings = (bindings?.outputs ?? {}) as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
+	$: exposureRegistry = normalizeExposureRegistry(
+		params?.exposureRegistry,
+		{
+			inputs: [...inputs],
+			outputs: [...outputs]
+		} as any
+	);
+	$: outputBindings = Object.fromEntries(
+		exposureRegistry
+			.filter((rec) => String(rec?.kind ?? '') === 'data_output')
+			.map((rec) => [String(rec.alias ?? '').trim(), { outputRef: String(rec.internal_source_path ?? '').trim(), artifact: 'current' as const }])
+			.filter(([name]) => String(name ?? '').trim().length > 0)
+	) as Record<string, { outputRef?: string; artifact?: 'current' }>;
 	$: outputValidation = validateComponentOutputs(
 		outputs,
 		outputBindings,
@@ -99,16 +106,39 @@ export let onDraft: (
 			const nextSignature = JSON.stringify(synced.next);
 			if (nextSignature !== outputSyncSignature) {
 				outputSyncSignature = nextSignature;
-				onDraft({
-					bindings: {
-						inputs: { ...(bindings?.inputs ?? {}) },
-						config: { ...(bindings?.config ?? {}) },
-						outputs: synced.next
+				const nextRegistry = [...exposureRegistry];
+				for (const [outName, binding] of Object.entries(synced.next)) {
+					const idx = nextRegistry.findIndex(
+						(rec) =>
+							String(rec?.kind ?? '') === 'data_output' &&
+							(String(rec?.alias ?? '').trim() === outName ||
+								String(rec?.handle_id ?? '').trim() === `data_out::${outName}`)
+					);
+					const nextSource = String((binding as any)?.outputRef ?? '').trim();
+					if (idx >= 0) {
+						nextRegistry[idx] = {
+							...nextRegistry[idx],
+							handle_id: `data_out::${outName}`,
+							alias: outName,
+							internal_source_path: nextSource,
+							kind: 'data_output',
+							exposed: true,
+							published: true
+						};
+					} else {
+						nextRegistry.push({
+							handle_id: `data_out::${outName}`,
+							alias: outName,
+							internal_source_path: nextSource,
+							kind: 'data_output',
+							native_contract: { type: 'json', fields: [] },
+							exposed: true,
+							published: true,
+							debug_visible: false
+						});
 					}
-				}, {
-					intent: 'system_canonicalize',
-					notice: 'Component output bindings normalized automatically.'
-				});
+				}
+				publishExposureRegistry(nextRegistry);
 			}
 		}
 	}
@@ -126,7 +156,7 @@ export let onDraft: (
 			outputCanonicalSignature = nextSignature;
 			draftApiOutputs(canonicalOutputs, {
 				intent: 'system_canonicalize',
-				notice: 'Component output types normalized from internal bindings.'
+				notice: 'Component output types normalized from API Contract output sources.'
 			});
 		}
 	}
@@ -288,51 +318,59 @@ export let onDraft: (
 		});
 	}
 
-	function onBindingsInputsChange(nextInputs: Record<string, any>): void {
+	function publishExposureRegistry(nextRegistry: any[]): void {
+		const normalized = normalizeExposureRegistry(nextRegistry, {
+			inputs: [...inputs],
+			outputs: [...outputs]
+		} as any);
+		const profiles = materializeExposureProfiles(normalized as any);
 		onDraft({
-			bindings: {
-				inputs: nextInputs,
-				config: { ...(bindings?.config ?? {}) },
-				outputs: { ...(bindings?.outputs ?? {}) }
-			}
-		});
-	}
-
-	function onBindingsConfigChange(nextConfigBindings: Record<string, any>): void {
-		onDraft({
-			bindings: {
-				inputs: { ...(bindings?.inputs ?? {}) },
-				config: nextConfigBindings,
-				outputs: { ...(bindings?.outputs ?? {}) }
-			}
+			exposureRegistry: normalized,
+			published_profile: profiles.published_profile,
+			debug_profile: profiles.debug_profile
 		});
 	}
 
 	function onOutputBindingOutputRefChange(name: string, outputRef: string): void {
-		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
-		const current = nextOutputs[name] ?? { artifact: 'current' as const };
-		nextOutputs[name] = { ...current, outputRef: String(outputRef ?? '').trim() };
-		onDraft({
-			bindings: {
-				inputs: { ...(bindings?.inputs ?? {}) },
-				config: { ...(bindings?.config ?? {}) },
-				outputs: nextOutputs
-			}
-		});
-	}
-
-	function onOutputBindingArtifactChange(name: string, artifact: string): void {
-		const mode = artifact === 'last' ? 'last' : 'current';
-		const nextOutputs = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
-		const current = nextOutputs[name] ?? {};
-		nextOutputs[name] = { ...current, artifact: mode };
-		onDraft({
-			bindings: {
-				inputs: { ...(bindings?.inputs ?? {}) },
-				config: { ...(bindings?.config ?? {}) },
-				outputs: nextOutputs
-			}
-		});
+		const outName = String(name ?? '').trim();
+		if (!outName) return;
+		const nextRegistry = [...exposureRegistry];
+		const nextSource = String(outputRef ?? '').trim();
+		const idx = nextRegistry.findIndex(
+			(rec) =>
+				String(rec?.kind ?? '') === 'data_output' &&
+				(String(rec?.alias ?? '').trim() === outName ||
+					String(rec?.handle_id ?? '').trim() === `data_out::${outName}`)
+		);
+		if (idx >= 0) {
+			nextRegistry[idx] = {
+				...nextRegistry[idx],
+				kind: 'data_output',
+				handle_id: String(nextRegistry[idx]?.handle_id ?? `data_out::${outName}`),
+				alias: outName,
+				internal_source_path: nextSource,
+				exposed: true,
+				published: true,
+				debug_visible: false,
+				native_contract: nextRegistry[idx]?.native_contract ?? {
+					type: String(outputs.find((o) => String(o?.name ?? '').trim() === outName)?.typedSchema?.type ?? 'json'),
+					fields: []
+				}
+			};
+		} else {
+			const sourceType = String(outputs.find((o) => String(o?.name ?? '').trim() === outName)?.typedSchema?.type ?? 'json');
+			nextRegistry.push({
+				handle_id: `data_out::${outName}`,
+				alias: outName,
+				internal_source_path: nextSource,
+				kind: 'data_output',
+				native_contract: { type: sourceType, fields: [] },
+				exposed: true,
+				published: true,
+				debug_visible: false
+			});
+		}
+		publishExposureRegistry(nextRegistry);
 	}
 
 	function draftApiOutputs(
@@ -361,21 +399,20 @@ export let onDraft: (
 		draftApiOutputs(next as ComponentApiPort[]);
 		const nextName = String(next[index]?.name ?? '').trim();
 		if (previousName && nextName && previousName !== nextName) {
-			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<
-				string,
-				{ outputRef?: string; artifact?: 'current' | 'last' }
-			>;
-			const moved = nextBindings[previousName];
-			if (moved) {
-				delete nextBindings[previousName];
-				nextBindings[nextName] = moved;
-				onDraft({
-					bindings: {
-						inputs: { ...(bindings?.inputs ?? {}) },
-						config: { ...(bindings?.config ?? {}) },
-						outputs: nextBindings
-					}
-				});
+			const nextRegistry = [...exposureRegistry];
+			const idx = nextRegistry.findIndex(
+				(rec) =>
+					String(rec?.kind ?? '') === 'data_output' &&
+					(String(rec?.alias ?? '').trim() === previousName ||
+						String(rec?.handle_id ?? '').trim() === `data_out::${previousName}`)
+			);
+			if (idx >= 0) {
+				nextRegistry[idx] = {
+					...nextRegistry[idx],
+					handle_id: `data_out::${nextName}`,
+					alias: nextName
+				};
+				publishExposureRegistry(nextRegistry);
 			}
 		}
 	}
@@ -427,27 +464,18 @@ export let onDraft: (
 			}
 		];
 		draftApiOutputs(next as ComponentApiPort[]);
-		onDraft({
-			bindings: {
-				inputs: { ...(bindings?.inputs ?? {}) },
-				config: { ...(bindings?.config ?? {}) },
-					outputs: {
-						...(bindings?.outputs ?? {}),
-						[nextName]: {
-							outputRef: fallbackOutputRef,
-							artifact: 'current'
-						}
-					}
-				}
+		const nextRegistry = [...exposureRegistry];
+		nextRegistry.push({
+			handle_id: `data_out::${nextName}`,
+			alias: nextName,
+			internal_source_path: fallbackOutputRef ?? '',
+			kind: 'data_output',
+			native_contract: { type: String(initialOutputType), fields: [] },
+			exposed: true,
+			published: true,
+			debug_visible: false
 		});
-	}
-
-	function isOutputBindingCurrent(name: string): boolean {
-		return String(outputBindings?.[name]?.artifact ?? 'current') !== 'last';
-	}
-
-	function toggleOutputBindingArtifact(name: string): void {
-		onOutputBindingArtifactChange(name, isOutputBindingCurrent(name) ? 'last' : 'current');
+		publishExposureRegistry(nextRegistry);
 	}
 
 	function resetOutputSchema(index: number): void {
@@ -468,15 +496,16 @@ export let onDraft: (
 		const next = outputs.filter((_, i) => i !== index);
 		draftApiOutputs(next as ComponentApiPort[]);
 		if (removed?.name) {
-			const nextBindings = { ...(bindings?.outputs ?? {}) } as Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
-			delete nextBindings[String(removed.name)];
-			onDraft({
-				bindings: {
-					inputs: { ...(bindings?.inputs ?? {}) },
-					config: { ...(bindings?.config ?? {}) },
-					outputs: nextBindings
-				}
-			});
+			const removedName = String(removed.name ?? '').trim();
+			const nextRegistry = exposureRegistry.filter(
+				(rec) =>
+					!(
+						String(rec?.kind ?? '') === 'data_output' &&
+						(String(rec?.alias ?? '').trim() === removedName ||
+							String(rec?.handle_id ?? '').trim() === `data_out::${removedName}`)
+					)
+			);
+			publishExposureRegistry(nextRegistry);
 		}
 		const nextErrors = { ...outputFieldsJsonErrors };
 		delete nextErrors[index];
@@ -982,14 +1011,7 @@ export let onDraft: (
 									<option value={opt.ref}>{opt.label}</option>
 								{/each}
 							</select>
-							<button
-								class={`tabBtn small toggleMode ${isOutputBindingCurrent(port.name) ? 'active' : ''}`}
-								type="button"
-								title="Toggle current/last artifact"
-								on:click={() => toggleOutputBindingArtifact(port.name)}
-							>
-								{isOutputBindingCurrent(port.name) ? 'current' : 'last'}
-							</button>
+							<div class="readonlyField outputTypeReadonly">current</div>
 							<label class="requiredToggle">
 								<input
 									type="checkbox"
@@ -1093,7 +1115,7 @@ export let onDraft: (
 							{/if}
 						{/if}
 						{#if !String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
-							<div class="bindingErr">bindings.outputs.{port.name}.outputRef is required</div>
+							<div class="bindingErr">API Contract output source is required for {port.name}</div>
 						{/if}
 						{#if outputValidation.bindingErrors[port.name]?.length}
 							<div class="bindingErr">
@@ -1110,27 +1132,15 @@ export let onDraft: (
 	<div class="muted">Inputs are derived from selected revision API; outputs are editable for authoring.</div>
 </div>
 
-<div class="section">
-	<div class="sectionTitle">Bindings</div>
-	<KeyValueEditor
-		label="inputs"
-		value={(bindings?.inputs ?? {}) as Record<string, any>}
-		onChange={onBindingsInputsChange}
-		stacked={true}
-	/>
-	<KeyValueEditor
-		label="config"
-		value={(bindings?.config ?? {}) as Record<string, any>}
-		onChange={onBindingsConfigChange}
-		stacked={true}
-	/>
-	<div class="muted">Output bindings and mode are configured in API Contract &gt; Outputs.</div>
-	{#if loadingRevisionDetail}
+{#if loadingRevisionDetail}
+	<div class="section">
 		<div class="muted">Loading internal nodes...</div>
-	{:else if !loadingRevisionDetail && internalNodeOptions.length === 0}
+	</div>
+{:else if !loadingRevisionDetail && internalNodeOptions.length === 0}
+	<div class="section">
 		<div class="muted">No internal nodes found for selected revision.</div>
-	{/if}
-</div>
+	</div>
+{/if}
 
 <div class="section">
 	<div class="sectionTitle">Config</div>
@@ -1270,16 +1280,6 @@ export let onDraft: (
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-	}
-
-	.toggleMode {
-		min-width: 74px;
-		text-transform: lowercase;
-	}
-
-	.toggleMode.active {
-		border-color: rgba(59, 130, 246, 0.55);
-		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.outputCard {

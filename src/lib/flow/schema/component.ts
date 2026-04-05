@@ -106,7 +106,7 @@ export const ComponentBindingsSchema = z
 				z
 					.object({
 						outputRef: z.string().min(1).optional(),
-						artifact: z.enum(["current", "last"]).optional().default("current")
+						artifact: z.literal("current").optional().default("current")
 					})
 					.strip()
 			)

@@ -708,8 +708,8 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 
 function sanitizeComponentDraftParams(params: Record<string, any>): Record<string, any> {
 	const api = params?.api;
-	const bindings = params?.bindings;
-	if (!api || typeof api !== 'object' || !bindings || typeof bindings !== 'object') {
+	const exposureRegistry = Array.isArray(params?.exposureRegistry) ? (params.exposureRegistry as any[]) : null;
+	if (!api || typeof api !== 'object' || !Array.isArray(exposureRegistry)) {
 		return params;
 	}
 	const outputs = Array.isArray((api as any).outputs) ? ((api as any).outputs as any[]) : [];
@@ -718,33 +718,28 @@ function sanitizeComponentDraftParams(params: Record<string, any>): Record<strin
 			.map((out) => String((out as any)?.name ?? '').trim())
 			.filter((name) => name.length > 0)
 	);
-	const currentOutputs =
-		bindings && typeof (bindings as any).outputs === 'object' && (bindings as any).outputs
-			? ((bindings as any).outputs as Record<string, any>)
-			: {};
-	const nextOutputs: Record<string, any> = {};
-	for (const name of validOutputNames) {
-		if (Object.prototype.hasOwnProperty.call(currentOutputs, name)) {
-			nextOutputs[name] = currentOutputs[name];
+	const nextExposureRegistry = exposureRegistry.filter((rec) => {
+		if (!rec || typeof rec !== 'object') return false;
+		if (String((rec as any).kind ?? '').trim().toLowerCase() !== 'data_output') return true;
+		const alias = String((rec as any).alias ?? '').trim();
+		const handleId = String((rec as any).handle_id ?? '').trim();
+		if (alias && validOutputNames.has(alias)) return true;
+		if (handleId.startsWith('data_out::')) {
+			const outName = handleId.slice('data_out::'.length).trim();
+			return outName.length > 0 && validOutputNames.has(outName);
 		}
-	}
+		return false;
+	});
 	return {
 		...params,
-		bindings: {
-			...(bindings as Record<string, any>),
-			outputs: nextOutputs
-		}
+		exposureRegistry: nextExposureRegistry
 	};
 }
 
 function validateComponentDraftForAccept(params: Record<string, any>): { ok: true } | { ok: false; errors: string[] } {
 	const api = params?.api;
-	const bindings = params?.bindings;
 	const outputs = Array.isArray(api?.outputs) ? (api.outputs as any[]) : [];
-	const outputBindings =
-		bindings && typeof bindings.outputs === 'object' && bindings.outputs
-			? (bindings.outputs as Record<string, any>)
-			: {};
+	const exposureRegistry = Array.isArray(params?.exposureRegistry) ? (params.exposureRegistry as any[]) : [];
 	const errors: string[] = [];
 	const seenOutputNames = new Set<string>();
 	for (const output of outputs) {
@@ -759,16 +754,19 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 			continue;
 		}
 		seenOutputNames.add(outputNameKey);
-		const binding = outputBindings[outputName];
-		const boundOutputRef = String(binding?.outputRef ?? '').trim();
-		if (!boundOutputRef) {
-			errors.push(`Component output "${outputName}" requires a bound internal outputRef before Accept.`);
-		}
-		const artifactMode = String(binding?.artifact ?? 'current').trim();
-		if (artifactMode !== 'current' && artifactMode !== 'last') {
-			errors.push(
-				`Component output "${outputName}" must set artifact mode to "current" or "last" before Accept.`
-			);
+		const exposure = exposureRegistry.find(
+			(rec) =>
+				rec &&
+				typeof rec === 'object' &&
+				String((rec as any).kind ?? '').trim().toLowerCase() === 'data_output' &&
+				(
+					String((rec as any).alias ?? '').trim() === outputName ||
+					String((rec as any).handle_id ?? '').trim() === `data_out::${outputName}`
+				)
+		);
+		const internalSourcePath = String((exposure as any)?.internal_source_path ?? '').trim();
+		if (!internalSourcePath) {
+			errors.push(`Component output "${outputName}" requires an API Contract output source before Accept.`);
 		}
 		const typedSchemaType = normalizeComponentPayloadType(output?.typedSchema?.type);
 		if (typedSchemaType == null) {
@@ -3786,14 +3784,19 @@ function normalizeComponentNodeForMigration(
 		outputByName.set(name, outputType);
 	}
 
-	const bindings = (params.bindings ?? {}) as Record<string, any>;
-	const outputBindingsRaw =
-		bindings.outputs && typeof bindings.outputs === 'object'
-			? ({ ...(bindings.outputs as Record<string, any>) } as Record<string, any>)
-			: {};
-	for (const key of Object.keys(outputBindingsRaw)) {
-		if (!outputSet.has(String(key))) delete outputBindingsRaw[key];
-	}
+	const exposureRegistryRaw = Array.isArray(params.exposureRegistry) ? (params.exposureRegistry as any[]) : [];
+	const exposureRegistry = exposureRegistryRaw.filter((rec) => {
+		if (!rec || typeof rec !== 'object') return false;
+		if (String((rec as any).kind ?? '').trim().toLowerCase() !== 'data_output') return true;
+		const alias = String((rec as any).alias ?? '').trim();
+		const handleId = String((rec as any).handle_id ?? '').trim();
+		if (alias && outputSet.has(alias)) return true;
+		if (handleId.startsWith('data_out::')) {
+			const outName = handleId.slice('data_out::'.length).trim();
+			return outName.length > 0 && outputSet.has(outName);
+		}
+		return false;
+	});
 
 		const nextNode: Node<PipelineNodeData> = {
 			...node,
@@ -3805,15 +3808,19 @@ function normalizeComponentNodeForMigration(
 					...(api as Record<string, any>),
 					outputs: normalizedOutputs
 				},
-				bindings: {
-					...(bindings as Record<string, any>),
-					outputs: outputBindingsRaw
-				}
+				exposureRegistry
 			}
 		}
 	};
 	const bindingNames = outputNames.filter((name) =>
-		Object.prototype.hasOwnProperty.call(outputBindingsRaw, name)
+		exposureRegistry.some(
+			(rec: any) =>
+				String(rec?.kind ?? '').trim().toLowerCase() === 'data_output' &&
+				(
+					String(rec?.alias ?? '').trim() === name ||
+					String(rec?.handle_id ?? '').trim() === `data_out::${name}`
+				)
+		)
 	);
 	return { node: nextNode, outputNames, outputByName, bindingNames };
 }
@@ -4287,10 +4294,9 @@ function buildSavePreflightDiagnostics(
 		const apiOutputs = Array.isArray(componentParams?.api?.outputs)
 			? (componentParams.api.outputs as any[])
 			: [];
-		const outputBindings =
-			componentParams?.bindings && typeof componentParams.bindings.outputs === 'object' && componentParams.bindings.outputs
-				? (componentParams.bindings.outputs as Record<string, any>)
-				: {};
+		const exposureRegistry = Array.isArray(componentParams?.exposureRegistry)
+			? (componentParams.exposureRegistry as any[])
+			: [];
 		for (let i = 0; i < apiOutputs.length; i += 1) {
 			const out = apiOutputs[i] ?? {};
 			const outputName = String(out?.name ?? '').trim();
@@ -4304,13 +4310,22 @@ function buildSavePreflightDiagnostics(
 				});
 				continue;
 			}
-			const binding = outputBindings[outputName] ?? {};
-			const boundOutputRef = String(binding?.outputRef ?? '').trim();
-			if (!boundOutputRef) {
+			const exposure = exposureRegistry.find(
+				(rec) =>
+					rec &&
+					typeof rec === 'object' &&
+					String((rec as any).kind ?? '').trim().toLowerCase() === 'data_output' &&
+					(
+						String((rec as any).alias ?? '').trim() === outputName ||
+						String((rec as any).handle_id ?? '').trim() === `data_out::${outputName}`
+					)
+			);
+			const internalSourcePath = String((exposure as any)?.internal_source_path ?? '').trim();
+			if (!internalSourcePath) {
 				diagnostics.push({
-					code: 'COMPONENT_OUTPUT_BINDING_MISSING',
-					path: `nodes.${String(node.id)}.params.bindings.outputs.${outputName}.outputRef`,
-					message: `Component output "${outputName}" requires a bound internal outputRef.`,
+					code: 'COMPONENT_OUTPUT_SOURCE_MISSING',
+					path: `nodes.${String(node.id)}.params.exposureRegistry`,
+					message: `Component output "${outputName}" requires API Contract internal_source_path.`,
 					severity: 'error'
 				});
 			}
@@ -9629,11 +9644,11 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			try {
 				const detail = await getComponentRevision(cid, rid);
 				const api = (detail.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
-				const nextExposureRegistry = normalizeExposureRegistry(
+				const baseExposureRegistry = normalizeExposureRegistry(
 					(detail.definition as any)?.exposureRegistry,
 					api
 				);
-				const nextProfiles = materializeExposureProfiles(nextExposureRegistry);
+				const nextProfiles = materializeExposureProfiles(baseExposureRegistry);
 				const prevApi = (((node.data as any)?.params ?? {})?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract;
 				const prevExposureRegistry = normalizeExposureRegistry(
 					(((node.data as any)?.params ?? {}) as any)?.exposureRegistry,
@@ -9713,46 +9728,62 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					return baseRef;
 				};
 
-				const prevBindings = ((node.data.params as any)?.bindings ?? {}) as {
-					inputs?: Record<string, string>;
-					config?: Record<string, string>;
-					outputs?: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }>;
-				};
-				const prevOutputs = (prevBindings.outputs ?? {}) as Record<
-					string,
-					{ outputRef?: string; artifact?: 'current' | 'last' }
-				>;
-				const nextOutputs: Record<string, { outputRef?: string; artifact?: 'current' | 'last' }> = {};
+				const nextExposureRegistry = [...nextProfiles.published_profile];
 				const apiOutputs = Array.isArray(api.outputs) ? api.outputs : [];
 				for (const out of apiOutputs) {
 					const outName = String((out as any)?.name ?? '').trim();
 					if (!outName) continue;
-					const existing = prevOutputs[outName] ?? {};
-					const existingOutputRef = String(existing?.outputRef ?? '').trim();
-					nextOutputs[outName] = {
-						outputRef:
-							existingOutputRef ||
-							outputRefForNodeId(leafNodeId) ||
-							outputRefForNodeId(firstNodeId) ||
-							undefined,
-						artifact: existing?.artifact === 'last' ? 'last' : 'current'
-					};
+					const idx = nextExposureRegistry.findIndex(
+						(rec: any) =>
+							String(rec?.kind ?? '').trim().toLowerCase() === 'data_output' &&
+							(
+								String(rec?.alias ?? '').trim() === outName ||
+								String(rec?.handle_id ?? '').trim() === `data_out::${outName}`
+							)
+					);
+					const sourceRef =
+						outputRefForNodeId(leafNodeId) ||
+						outputRefForNodeId(firstNodeId) ||
+						`out:${outName}`;
+					if (idx >= 0) {
+						const existingSource = String((nextExposureRegistry[idx] as any)?.internal_source_path ?? '').trim();
+						const shouldReplaceLegacySource =
+							!existingSource ||
+							existingSource === `out:${outName}` ||
+							existingSource === outName;
+						nextExposureRegistry[idx] = {
+							...nextExposureRegistry[idx],
+							handle_id: `data_out::${outName}`,
+							alias: outName,
+							internal_source_path: shouldReplaceLegacySource ? sourceRef : existingSource,
+							kind: 'data_output',
+							published: true,
+							exposed: true
+						};
+					} else {
+						nextExposureRegistry.push({
+							handle_id: `data_out::${outName}`,
+							alias: outName,
+							internal_source_path: sourceRef,
+							kind: 'data_output',
+							native_contract: (out as any)?.typedSchema ?? { type: 'json', fields: [] },
+							published: true,
+							exposed: true,
+							debug_visible: false
+						} as any);
+					}
 				}
+				const nextProfilesNormalized = materializeExposureProfiles(nextExposureRegistry as any);
 				const paramsPatch = {
 					componentRef: {
 						componentId: cid,
 						revisionId: rid,
 						apiVersion: String((node.data.params as any)?.componentRef?.apiVersion ?? 'v1')
 					},
-					bindings: {
-						inputs: { ...(prevBindings.inputs ?? {}) },
-						config: { ...(prevBindings.config ?? {}) },
-						outputs: nextOutputs
-					},
 					api,
 					exposureRegistry: nextExposureRegistry,
-					published_profile: nextProfiles.published_profile,
-					debug_profile: nextProfiles.debug_profile
+					published_profile: nextProfilesNormalized.published_profile,
+					debug_profile: nextProfilesNormalized.debug_profile
 				};
 				const result = updateNodeConfigImpl(nodeId, {
 					params: paramsPatch

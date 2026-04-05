@@ -101,32 +101,6 @@ def edge_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 def upstream_node_ids(edges: Dict[str, Dict[str, Any]], node_id: str) -> list[str]:
     return [e["source"] for e in edges.values() if e.get("target") == node_id]
 
-def _resolve_component_output_artifact_from_bindings(
-    *,
-    src_node: Dict[str, Any],
-    component_instance_node_id: str,
-    output_name: str,
-    get_current_artifact,
-) -> Dict[str, Any]:
-    params = (src_node.get("data") or {}).get("params")
-    if not isinstance(params, dict):
-        return {"artifactId": None, "hasBinding": False, "runtimeNodeId": None}
-    bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
-    outputs = bindings.get("outputs") if isinstance(bindings.get("outputs"), dict) else {}
-    binding = outputs.get(output_name) if isinstance(outputs, dict) else None
-    if not isinstance(binding, dict):
-        return {"artifactId": None, "hasBinding": False, "runtimeNodeId": None}
-    bound_node_id = str(binding.get("nodeId") or "").strip()
-    if not bound_node_id:
-        return {"artifactId": None, "hasBinding": True, "runtimeNodeId": None}
-    runtime_node_id = (
-        bound_node_id if bound_node_id.startswith("cmp:") else f"cmp:{component_instance_node_id}:{bound_node_id}"
-    )
-    aid = get_current_artifact(runtime_node_id)
-    resolved = str(aid or "").strip() or None
-    return {"artifactId": resolved, "hasBinding": True, "runtimeNodeId": runtime_node_id}
-
-
 def _resolve_component_output_artifact_from_output_edges(
     *,
     edges: Dict[str, Dict[str, Any]],
@@ -307,7 +281,7 @@ async def resolve_input_refs(
                 aid = str(bridge["artifactId"])
             elif bridge.get("runtimeNodeId"):
                 raise ContractMismatchError(
-                    f"Component output '{source_handle}' could not be resolved from bindings",
+                    f"Component output '{source_handle}' could not be resolved from published output edges",
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
                     details=_contract_details(
                         expected={"sourceHandle": source_handle, "resolvedArtifact": True},
@@ -320,36 +294,13 @@ async def resolve_input_refs(
                         },
                     ),
                 )
-
-            direct = _resolve_component_output_artifact_from_bindings(
-                src_node=src_node,
-                component_instance_node_id=str(src),
-                output_name=source_handle,
-                get_current_artifact=get_current_artifact,
-            )
             if bridge.get("edgeCount"):
                 # Expanded component output edges are the source of truth for runtime IDs.
                 # If the bridge exists and produced no artifact, we already raised above.
                 pass
-            elif direct.get("artifactId"):
-                aid = str(direct["artifactId"])
-            elif bool(direct.get("hasBinding")):
-                raise ContractMismatchError(
-                    f"Component output '{source_handle}' could not be resolved from bindings",
-                    code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
-                    details=_contract_details(
-                        expected={"sourceHandle": source_handle, "resolvedArtifact": True},
-                        actual={
-                            "edgeId": str(e.get("id") or ""),
-                            "componentArtifactId": str(aid),
-                            "boundRuntimeNodeId": str(direct.get("runtimeNodeId") or ""),
-                            "resolvedArtifact": False,
-                        },
-                    ),
-                )
             else:
                 raise ContractMismatchError(
-                    f"Component output '{source_handle}' requires explicit bound artifact",
+                    f"Component output '{source_handle}' is not connected to a published internal source",
                     code="COMPONENT_OUTPUT_HANDLE_UNRESOLVED",
                     details=_contract_details(
                         expected={"sourceHandle": source_handle, "resolvedArtifact": True},
@@ -7076,12 +7027,6 @@ async def run_graph(
                         if isinstance(component_api.get("outputs"), list)
                         else []
                     )
-                    bindings = params.get("bindings") if isinstance(params.get("bindings"), dict) else {}
-                    output_bindings = (
-                        bindings.get("outputs")
-                        if isinstance(bindings.get("outputs"), dict)
-                        else {}
-                    )
                     refs_by_handle: Dict[str, list[str]] = {}
                     for input_handle, aid in input_refs:
                         handle = str(input_handle or "").strip()
@@ -7098,30 +7043,10 @@ async def run_graph(
                         out_name = str(out_decl.get("name") or "").strip()
                         if not out_name:
                             continue
-                        binding = output_bindings.get(out_name) if isinstance(output_bindings, dict) else None
-                        if not isinstance(binding, dict):
-                            raise ContractMismatchError(
-                                f"Component output binding missing for '{out_name}'",
-                                code="COMPONENT_OUTPUT_BINDING_MISSING",
-                                details=_contract_details(
-                                    expected={"output": out_name, "binding": "required"},
-                                    actual={"binding": None},
-                                ),
-                            )
-                        mode = str(binding.get("artifact") or "current").strip().lower() or "current"
-                        if mode not in {"current", "last"}:
-                            raise ContractMismatchError(
-                                f"Component output binding for '{out_name}' has unsupported artifact mode '{mode}'",
-                                code="COMPONENT_OUTPUT_BINDING_INVALID",
-                                details=_contract_details(
-                                    expected={"output": out_name, "artifactMode": ["current", "last"]},
-                                    actual={"artifactMode": mode},
-                                ),
-                            )
                         candidates = refs_by_handle.get(out_name, [])
                         if not candidates:
                             raise ContractMismatchError(
-                                f"Component output '{out_name}' not resolved. Ensure bindings.outputs.{out_name}.outputRef exists and produced an artifact.",
+                                f"Component output '{out_name}' not resolved. Ensure published API contract maps data_output '{out_name}' to an internal source path.",
                                 code="COMPONENT_OUTPUT_NOT_RESOLVED",
                                 details=_contract_details(
                                     expected={"output": out_name, "resolvedArtifact": True},
@@ -7130,48 +7055,6 @@ async def run_graph(
                             )
                         current_artifact_id = str(candidates[0] or "").strip()
                         bound_artifact_id = current_artifact_id
-                        if mode == "last":
-                            output_edge_resolution = _resolve_component_output_artifact_from_output_edges(
-                                edges=edges,
-                                component_instance_node_id=str(node_id),
-                                output_name=out_name,
-                                get_current_artifact=get_current_artifact,
-                            )
-                            bound_runtime_node_id = str(output_edge_resolution.get("runtimeNodeId") or "").strip()
-                            if not bound_runtime_node_id:
-                                raise ContractMismatchError(
-                                    f"Component output binding for '{out_name}' requires a resolvable outputRef when artifact='last'",
-                                    code="COMPONENT_OUTPUT_BINDING_INVALID",
-                                    details=_contract_details(
-                                        expected={"output": out_name, "outputRef": "resolvable when artifact='last'"},
-                                        actual={"runtimeNodeId": ""},
-                                    ),
-                                )
-                            latest_lookup = getattr(context.artifact_store, "get_latest_node_artifact", None)
-                            if not callable(latest_lookup):
-                                raise ContractMismatchError(
-                                    "Component output binding artifact='last' requires artifact store support",
-                                    code="COMPONENT_OUTPUT_BINDING_UNSUPPORTED",
-                                    details=_contract_details(
-                                        expected={"artifactStoreCapability": "get_latest_node_artifact"},
-                                        actual={"artifactStoreCapability": "missing"},
-                                    ),
-                                )
-                            last_artifact_id = await latest_lookup(
-                                graph_id=graph_id,
-                                node_id=bound_runtime_node_id,
-                                exclude_artifact_id=current_artifact_id or None,
-                            )
-                            bound_artifact_id = str(last_artifact_id or "").strip()
-                            if not bound_artifact_id:
-                                raise ContractMismatchError(
-                                    f"Component output '{out_name}' requested artifact='last' but no previous artifact exists for the bound outputRef",
-                                    code="COMPONENT_OUTPUT_LAST_NOT_FOUND",
-                                    details=_contract_details(
-                                        expected={"output": out_name, "artifact": "last"},
-                                        actual={"runtimeNodeId": bound_runtime_node_id, "artifactFound": False},
-                                    ),
-                                )
                         if not bound_artifact_id:
                             raise ContractMismatchError(
                                 f"Component output '{out_name}' resolved to empty artifact id",
