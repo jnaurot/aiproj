@@ -4315,6 +4315,10 @@ async def run_graph(
                 cache_bypass_reason = "NODE_POLICY_FORCE_OFF"
             elif global_cache_mode == "default_on" and node_prefer_off:
                 cache_bypass_reason = "NODE_POLICY_PREFER_OFF"
+            elif kind == "component":
+                # Component boundary nodes route already-materialized native artifacts
+                # from internal outputs; avoid caching wrapper-style boundary artifacts.
+                cache_bypass_reason = "COMPONENT_NATIVE_BOUNDARY"
             elif processing_policy.get("consume_mode") in {"single_item", "batch"}:
                 cache_bypass_reason = "STREAMING_WORK_ITEM"
             use_cache_for_node = cache_bypass_reason is None
@@ -4825,24 +4829,29 @@ async def run_graph(
                     reason=str(cache_bypass_reason or "CACHE_ENTRY_MISSING"),
                 )
                 if cache_only:
-                    msg = (
-                        "Selected-only run requires cache for ancestor nodes, "
-                        f"but node '{node_id}' cannot use cache in this run."
-                    )
-                    await _emit_node_started_once()
-                    await _emit({
-                        "type": "node_finished",
-                        "runId": run_id,
-                        "at": iso_now(),
-                        "nodeId": node_id,
-                        "status": "failed",
-                        "execution_time_ms": max(
-                            0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
-                        ),
-                        "error": msg,
-                        "cached": False,
-                    })
-                    return {"ok": False, "cached": False}
+                    if kind == "component":
+                        # Component boundary nodes are lightweight native routing and do
+                        # not rely on cache artifacts. Allow execution in cache-only runs.
+                        pass
+                    else:
+                        msg = (
+                            "Selected-only run requires cache for ancestor nodes, "
+                            f"but node '{node_id}' cannot use cache in this run."
+                        )
+                        await _emit_node_started_once()
+                        await _emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": "failed",
+                            "execution_time_ms": max(
+                                0.0, (asyncio.get_running_loop().time() - node_started_t) * 1000.0
+                            ),
+                            "error": msg,
+                            "cached": False,
+                        })
+                        return {"ok": False, "cached": False}
 
             # ---- Resolve phase result ----
             if cache_resolution == "CACHE_HIT" and cached_artifact_id:
@@ -7082,6 +7091,7 @@ async def run_graph(
 
                     wrapper_outputs: Dict[str, Any] = {}
                     wrapper_upstream_ids: list[str] = []
+                    component_output_events: List[Dict[str, Any]] = []
                     for out_decl in declared_outputs:
                         if not isinstance(out_decl, dict):
                             continue
@@ -7225,6 +7235,15 @@ async def run_graph(
                                 ),
                             )
                         wrapper_upstream_ids.append(bound_artifact_id)
+                        component_output_events.append(
+                            {
+                                "handle": out_name,
+                                "artifactId": bound_artifact_id,
+                                "mimeType": str(getattr(bound_artifact, "mime_type", "") or "").strip()
+                                or "application/octet-stream",
+                                "payloadType": actual_payload_type,
+                            }
+                        )
                         wrapper_outputs[out_name] = {
                             "artifactId": bound_artifact_id,
                             "mimeType": str(getattr(bound_artifact, "mime_type", "") or "").strip() or "application/octet-stream",
@@ -7250,6 +7269,16 @@ async def run_graph(
                                 ),
                             )
 
+                    # Preserve default 'out' compatibility for single-output component edges.
+                    if len(component_output_events) == 1:
+                        only = component_output_events[0]
+                        context.bindings.bind(
+                            node_id=node_id,
+                            handle="out",
+                            artifact_id=str(only.get("artifactId") or ""),
+                            status="computed",
+                        )
+
                     output = NodeOutput(
                         status="succeeded",
                         data={
@@ -7267,6 +7296,7 @@ async def run_graph(
                                 "inputRefs": [{"inputHandle": h, "artifactId": a} for h, a in input_refs],
                                 "upstreamArtifactIds": sorted(set(wrapper_upstream_ids)),
                             },
+                            "nativeOutputs": component_output_events,
                         },
                         metadata=None,
                         execution_time_ms=0.0,
@@ -7321,6 +7351,83 @@ async def run_graph(
                     })
                 else:
                     # ---- Artifact write + binding ----
+                    if kind == "component":
+                        component_data = (
+                            output.data
+                            if isinstance(getattr(output, "data", None), dict)
+                            else {}
+                        )
+                        component_events = (
+                            component_data.get("nativeOutputs")
+                            if isinstance(component_data.get("nativeOutputs"), list)
+                            else []
+                        )
+                        component_upstream_ids = (
+                            [str(a) for a in (component_data.get("meta") or {}).get("upstreamArtifactIds", []) if str(a or "").strip()]
+                            if isinstance((component_data.get("meta") or {}).get("upstreamArtifactIds"), list)
+                            else list(upstream_ids)
+                        )
+                        for event in component_events:
+                            if not isinstance(event, dict):
+                                continue
+                            handle = str(event.get("handle") or "").strip()
+                            artifact_id = str(event.get("artifactId") or "").strip()
+                            if not handle or not artifact_id:
+                                continue
+                            try:
+                                resolved_artifact = await context.artifact_store.get(artifact_id)
+                            except Exception:
+                                resolved_artifact = None
+                            await _record_consumers(
+                                context=context,
+                                input_artifact_ids=component_upstream_ids,
+                                consumer_run_id=run_id,
+                                consumer_node_id=node_id,
+                                consumer_exec_key=f"{exec_key}::{handle}",
+                                output_artifact_id=artifact_id,
+                            )
+                            await _emit(
+                                {
+                                    "type": "node_output",
+                                    "runId": run_id,
+                                    "nodeId": node_id,
+                                    "at": iso_now(),
+                                    "artifactId": artifact_id,
+                                    "mimeType": str(event.get("mimeType") or "application/octet-stream"),
+                                    "payloadType": str(event.get("payloadType") or "unknown"),
+                                    "handle": handle,
+                                    "sourceObservability": (
+                                        _source_observability_from_artifact(resolved_artifact)
+                                        if resolved_artifact is not None
+                                        else None
+                                    ),
+                                    "primingArtifact": (
+                                        _source_priming_artifact_from_artifact(resolved_artifact)
+                                        if resolved_artifact is not None
+                                        else None
+                                    ),
+                                }
+                            )
+                            await _emit_output_artifact_log(
+                                run_id=run_id,
+                                node_id=node_id,
+                                artifact_id=artifact_id,
+                                handle=handle,
+                            )
+                        await _emit({
+                            "type": "node_finished",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "nodeId": node_id,
+                            "status": output.status,
+                            "execution_time_ms": max(0.0, float(getattr(output, "execution_time_ms", 0.0) or 0.0)),
+                        })
+                        return {
+                            "ok": True,
+                            "cached": False,
+                            "decision": decision_value,
+                            "reasonCode": decision_reason_code,
+                        }
                     mime_type = "application/octet-stream"
                     payload_bytes: bytes
                     data_value = getattr(output, "data", None)
