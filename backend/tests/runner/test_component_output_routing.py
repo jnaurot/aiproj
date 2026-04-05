@@ -79,7 +79,6 @@ async def test_component_named_outputs_route_to_distinct_internal_artifacts():
     artifacts = {
         "cmp:component_1:n_llm_summary": "artifact_summary",
         "cmp:component_1:n_source_text": "artifact_source",
-        "component_1": "artifact_component_wrapper",
     }
 
     refs_a = await resolve_input_refs(
@@ -125,7 +124,6 @@ async def test_component_output_routing_is_deterministic_across_reruns_and_keys(
 
     artifacts_run_1 = {
         "cmp:component_1:n_source_text": "artifact_source_v1",
-        "component_1": "artifact_component_wrapper_v1",
     }
     refs_1 = await resolve_input_refs(
         edges=edges,
@@ -174,7 +172,6 @@ async def test_component_output_routing_is_deterministic_across_reruns_and_keys(
     # Semantic change in bound internal artifact must change downstream key.
     artifacts_run_2 = {
         "cmp:component_1:n_source_text": "artifact_source_v2",
-        "component_1": "artifact_component_wrapper_v2",
     }
     refs_3 = await resolve_input_refs(
         edges=edges,

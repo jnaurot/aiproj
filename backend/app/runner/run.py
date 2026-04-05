@@ -261,12 +261,10 @@ async def resolve_input_refs(
         src = e.get("source")
         if not src:
             continue
-        source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
-        aid = _get_artifact_for_source(src, source_handle)
-        if not aid:
-            continue
         src_node = get_node_by_id(src) or {}
         src_kind = str(((src_node.get("data") or {}).get("kind") or "")).strip().lower()
+        source_handle = str(e.get("sourceHandle") or "out").strip() or "out"
+        aid = _get_artifact_for_source(src, source_handle)
         if src_kind == "component":
             params = (src_node.get("data") or {}).get("params")
             api = params.get("api") if isinstance(params, dict) else None
@@ -362,6 +360,9 @@ async def resolve_input_refs(
                         },
                     ),
                 )
+        else:
+            if not aid:
+                continue
         input_handle = e.get("targetHandle") or "in"
         refs.append((input_handle, aid))
     # stable order
@@ -7170,6 +7171,16 @@ async def run_graph(
                                     actual={"artifactId": ""},
                                 ),
                             )
+                        # Component boundary handles are authoritative data-plane outputs.
+                        # Bind each output handle directly to its native upstream artifact
+                        # so downstream queue expansion can resolve by sourceHandle without
+                        # relying on component wrapper artifacts.
+                        context.bindings.bind(
+                            node_id=node_id,
+                            handle=out_name,
+                            artifact_id=bound_artifact_id,
+                            status="computed",
+                        )
                         bound_artifact = await context.artifact_store.get(bound_artifact_id)
                         actual_payload_type = str(_infer_artifact_payload_type(bound_artifact) or "json").strip().lower() or "json"
                         wrapper_typed = await _component_wrapper_output_typed_schema(
