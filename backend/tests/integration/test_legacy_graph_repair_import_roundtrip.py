@@ -24,6 +24,11 @@ def test_import_roundtrip_repairs_malformed_handle_schemas_and_edge_snapshot() -
 					"kind": "model",
 					"label": "Model",
 					"params": {"model": "stub"},
+					"portDeclarations": {
+						"in": {
+							"config_in": {"plane": "config", "required": False, "cardinality": "many"}
+						}
+					},
 					"schema": {
 						"expectedInputSchemas": {
 							"": {"typedSchema": {"type": "json"}},
@@ -40,6 +45,7 @@ def test_import_roundtrip_repairs_malformed_handle_schemas_and_edge_snapshot() -
 				"source": "n_src",
 				"target": "n_dst",
 				"data": {
+					"mode": "config",
 					"contract": {
 						"payload": {"source": {"type": "json"}, "target": {"type": "text"}},
 						"snapshot": {"decision": "??"},
@@ -55,6 +61,10 @@ def test_import_roundtrip_repairs_malformed_handle_schemas_and_edge_snapshot() -
 			json={"graphId": graph_id, "message": "legacy repair seed", "graph": graph},
 		)
 		assert created.status_code == 200, created.text
+		created_notes = created.json().get("migrationNotes") or []
+		created_codes = {str(note.get("code") or "") for note in created_notes if isinstance(note, dict)}
+		assert "NODE_PORT_PLANE_CONFIG_MIGRATED" in created_codes
+		assert "EDGE_MODE_CONFIG_MIGRATED" in created_codes
 
 		latest = client.get(f"/graphs/{graph_id}/latest")
 		assert latest.status_code == 200, latest.text
@@ -66,7 +76,12 @@ def test_import_roundtrip_repairs_malformed_handle_schemas_and_edge_snapshot() -
 		expected = ((((dst.get("data") or {}).get("schema") or {}).get("expectedInputSchemas") or {}))
 		assert "" not in expected
 		assert ((expected.get("param_filters") or {}).get("typedSchema") or {}).get("type") == "text"
+		config_in_plane = (
+			((((dst.get("data") or {}).get("portDeclarations") or {}).get("in") or {}).get("config_in") or {})
+		).get("plane")
+		assert config_in_plane == "param"
 		edge = ((roundtrip.get("edges") or [])[0] or {})
 		snapshot = ((((edge.get("data") or {}).get("contract") or {}).get("snapshot") or {}))
 		assert str(snapshot.get("sourceSchemaFingerprint") or "")
 		assert str(snapshot.get("targetSchemaFingerprint") or "")
+		assert str(((edge.get("data") or {}).get("mode") or "")) == "param"

@@ -49,6 +49,8 @@ def _infer_edge_mode_from_handles(edge: Dict[str, Any]) -> str:
 		return "control"
 	if source_handle.startswith("param") or target_handle.startswith("param"):
 		return "param"
+	if source_handle.startswith("config") or target_handle.startswith("config"):
+		return "param"
 	return "work"
 
 
@@ -311,6 +313,35 @@ def _canonicalize_node_port_declarations(node: Dict[str, Any], notes: List[Dict[
 	raw_port_contracts = data.get("portContracts") if isinstance(data.get("portContracts"), dict) else None
 	normalized = normalize_node_port_declarations(kind, raw_decls)
 	changed = normalized != raw_decls
+	legacy_config_planes: List[str] = []
+	if isinstance(raw_decls, dict):
+		for direction in ("in", "out"):
+			by_dir = raw_decls.get(direction)
+			if not isinstance(by_dir, dict):
+				continue
+			for handle, decl in by_dir.items():
+				if not isinstance(decl, dict):
+					continue
+				plane_raw = str(decl.get("plane") or decl.get("affinity") or "").strip().lower()
+				if plane_raw == "config":
+					legacy_config_planes.append(f"{direction}.{str(handle)}")
+	if legacy_config_planes:
+		notes.append(
+			{
+				"code": "NODE_PORT_PLANE_CONFIG_MIGRATED",
+				"nodeId": str(node.get("id") or ""),
+				"message": (
+					"Migrated legacy config plane declarations to param: "
+					+ ", ".join(sorted(legacy_config_planes))
+				),
+				"severity": "warning",
+				"deprecation": {
+					"field": "data.portDeclarations.*.(plane|affinity=config)",
+					"replacement": "data.portDeclarations.*.plane=param",
+					"removeAfter": "2026-06-30",
+				},
+			}
+		)
 	data["portDeclarations"] = normalized
 	if raw_decls is None and isinstance(raw_port_contracts, dict) and raw_port_contracts:
 		notes.append(
@@ -615,6 +646,21 @@ def canonicalize_graph_payload(raw: Dict[str, Any]) -> Tuple[Dict[str, Any], Lis
 		inferred_mode = _infer_edge_mode_from_handles(next_edge)
 		if raw_link_kind == "control_link":
 			inferred_mode = "control"
+		if raw_mode == "config":
+			notes.append(
+				{
+					"code": "EDGE_MODE_CONFIG_MIGRATED",
+					"edgeId": str(next_edge.get("id") or ""),
+					"message": "Migrated legacy edge mode 'config' to 'param'.",
+					"severity": "warning",
+					"deprecation": {
+						"field": "edge.data.mode=config",
+						"replacement": "edge.data.mode=param",
+						"removeAfter": "2026-06-30",
+					},
+				}
+			)
+			raw_mode = "param"
 		normalized_mode = raw_mode or inferred_mode
 		if normalized_mode not in {"work", "param", "control"}:
 			normalized_mode = inferred_mode

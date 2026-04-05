@@ -87,3 +87,49 @@ def test_graph_migration_preserves_explicit_empty_port_declarations() -> None:
 	assert port_decls.get("in") == {}
 	assert port_decls.get("out") == {}
 
+
+def test_normalize_port_declarations_migrates_legacy_config_plane_to_param() -> None:
+	decls = normalize_node_port_declarations(
+		"transform",
+		{
+			"in": {
+				"config_in": {"plane": "config", "required": False, "cardinality": "many"},
+			},
+			"out": {},
+		},
+	)
+	assert decls["in"]["config_in"]["plane"] == "param"
+	assert decls["in"]["config_in"]["affinity"] == "param"
+
+
+def test_graph_migration_migrates_legacy_config_plane_and_edge_mode() -> None:
+	graph, notes = canonicalize_graph_payload(
+		{
+			"nodes": [
+				{
+					"id": "n_src",
+					"data": {
+						"kind": "transform",
+						"params": {},
+						"portDeclarations": {
+							"in": {"config_in": {"plane": "config", "required": False, "cardinality": "many"}},
+							"out": {"out": {"plane": "work", "cardinality": "many"}},
+						},
+					},
+				},
+				{"id": "n_dst", "data": {"kind": "transform", "params": {}}},
+			],
+			"edges": [
+				{"id": "e_cfg", "source": "n_src", "target": "n_dst", "data": {"mode": "config"}},
+			],
+		}
+	)
+	node = graph["nodes"][0]
+	data = node.get("data") or {}
+	assert (((data.get("portDeclarations") or {}).get("in") or {}).get("config_in") or {}).get("plane") == "param"
+	edge_mode = (((graph.get("edges") or [])[0] or {}).get("data") or {}).get("mode")
+	assert edge_mode == "param"
+	note_codes = {str(note.get("code") or "") for note in notes}
+	assert "NODE_PORT_PLANE_CONFIG_MIGRATED" in note_codes
+	assert "EDGE_MODE_CONFIG_MIGRATED" in note_codes
+

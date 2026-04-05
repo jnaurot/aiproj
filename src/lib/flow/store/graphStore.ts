@@ -427,6 +427,7 @@ function canonicalizeNodeSchemas(nodes: Node<PipelineNodeData>[]): Node<Pipeline
 	};
 	const normalizePlane = (raw: unknown): 'work' | 'param' | 'control' => {
 		const plane = String(raw ?? 'work').trim().toLowerCase();
+		if (plane === 'config') return 'param';
 		if (plane === 'param' || plane === 'control') return plane;
 		return 'work';
 	};
@@ -2944,7 +2945,12 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const reasonCode = String((evt as any)?.reasonCode ?? '').trim() || 'NO_READY_WORK';
 			const handle = String((evt as any)?.handle ?? '').trim();
 			const planeRaw = String((evt as any)?.plane ?? '').trim().toLowerCase();
-			const plane = planeRaw === 'param' || planeRaw === 'control' || planeRaw === 'work' ? planeRaw : undefined;
+			const plane =
+				planeRaw === 'param' || planeRaw === 'control' || planeRaw === 'work'
+					? planeRaw
+					: planeRaw === 'config'
+						? 'param'
+						: undefined;
 			const missingEdgeIds = Array.isArray((evt as any)?.missingEdgeIds)
 				? ((evt as any).missingEdgeIds as unknown[]).map((item) => String(item ?? '').trim()).filter(Boolean)
 				: [];

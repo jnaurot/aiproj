@@ -82,4 +82,40 @@ describe('graphStore port declarations', () => {
 		expect(dst?.data?.portDeclarations?.in?.in?.cardinality).toBe('one');
 		expect(dst?.data?.portContracts?.in?.in?.affinity).toBe('work');
 	});
+
+	it('normalizes legacy config plane declarations to param on load', () => {
+		graphStore.hardResetGraph();
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'n1',
+						type: 'transform',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'transform',
+							label: 'T',
+							params: { op: 'derive', derive: { mode: 'rules', rules: [] } },
+							status: 'idle',
+							portDeclarations: {
+								in: {
+									config_in: { plane: 'config', required: false, cardinality: 'many', behavior: 'once' }
+								},
+								out: {
+									out: { plane: 'work', required: false, cardinality: 'many' }
+								}
+							}
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_port_declarations_config_plane'
+		);
+		expect(loaded.ok).toBe(true);
+		const state = get(graphStore as any);
+		const node = state.nodes.find((n: any) => n.id === 'n1');
+		expect(node?.data?.portDeclarations?.in?.config_in?.plane).toBe('param');
+		expect(node?.data?.portContracts?.in?.config_in?.affinity).toBe('param');
+	});
 });

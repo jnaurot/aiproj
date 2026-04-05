@@ -121,6 +121,8 @@ PortCardinality = Literal["one", "many"]
 
 def _normalize_plane(raw: Any, default: PortPlane = "work") -> PortPlane:
     value = str(raw or "").strip().lower()
+    if value == "config":
+        return "param"
     if value in {"work", "param", "control"}:
         return value  # type: ignore[return-value]
     return default

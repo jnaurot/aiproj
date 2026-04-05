@@ -89,6 +89,7 @@ function readHandleAffinity(node: MinimalNode | undefined, handle: string): 'wor
 	const affinity = String((exact ?? fallback ?? {}).plane ?? (exact ?? fallback ?? {}).affinity ?? '')
 		.trim()
 		.toLowerCase();
+	if (affinity === 'config') return 'param';
 	if (affinity === 'work' || affinity === 'param' || affinity === 'control') {
 		return affinity;
 	}
@@ -157,7 +158,7 @@ export function groupSchemaEdgesByMode(edges: NodeSchemaContractEdge[]): SchemaM
 	];
 	for (const edge of edges ?? []) {
 		const modeRaw = String(edge?.mode ?? 'work').trim().toLowerCase();
-		const mode = modeRaw === 'param' || modeRaw === 'control' ? modeRaw : 'work';
+		const mode = modeRaw === 'param' || modeRaw === 'control' || modeRaw === 'config' ? (modeRaw === 'config' ? 'param' : modeRaw) : 'work';
 		const group = groups.find((candidate) => candidate.mode === mode);
 		if (group) group.edges.push(edge);
 	}

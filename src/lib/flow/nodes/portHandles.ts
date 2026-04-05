@@ -21,6 +21,7 @@ function toPlane(value: unknown): HandlePlane | null {
 	const v = String(value ?? '')
 		.trim()
 		.toLowerCase();
+	if (v === 'config') return 'param';
 	if (v === 'work' || v === 'param' || v === 'control') return v;
 	return null;
 }
@@ -30,6 +31,7 @@ export function inferPlaneFromHandleId(id: string): HandlePlane {
 		.trim()
 		.toLowerCase();
 	if (raw.startsWith('param')) return 'param';
+	if (raw.startsWith('config')) return 'param';
 	if (raw.startsWith('control') || raw.startsWith('ctl')) return 'control';
 	return 'work';
 }

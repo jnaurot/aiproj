@@ -564,6 +564,8 @@ def canonicalize_component_definition(
 
 def normalize_edge_mode(raw: Any) -> str:
     mode = str(raw or "work").strip().lower() or "work"
+    if mode == "config":
+        return "param"
     return mode if mode in ALLOWED_EDGE_MODES else "work"
 
 
