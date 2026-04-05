@@ -4,6 +4,127 @@ import { get } from 'svelte/store';
 import { graphStore, deriveNodeIoForData } from './graphStore';
 
 describe('graphStore component integration', () => {
+	it('blocks component contract mutation through inspector accept in graph context', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+
+		const before = get(graphStore);
+		const beforeApi = ((before.nodes.find((n) => n.id === nodeId)?.data as any)?.params?.api ?? null);
+
+		graphStore.patchInspectorDraft({
+			api: {
+				inputs: [],
+				outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] } }]
+			},
+			exposureRegistry: [
+				{
+					handle_id: 'data_out::summary',
+					alias: 'summary',
+					internal_source_path: 'node:n_sum',
+					kind: 'data_output',
+					native_contract: { type: 'text', fields: [] },
+					exposed: true,
+					published: true,
+					debug_visible: false
+				}
+			]
+		});
+		const blocked = await graphStore.applyInspectorDraft();
+		expect((blocked as any)?.ok).toBe(false);
+		expect(String((blocked as any)?.error ?? '')).toContain('component authoring mode');
+
+		const after = get(graphStore);
+		const afterApi = ((after.nodes.find((n) => n.id === nodeId)?.data as any)?.params?.api ?? null);
+		expect(JSON.stringify(afterApi)).toBe(JSON.stringify(beforeApi));
+	});
+
+	it('allows non-contract component param mutation through inspector accept in graph context', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+
+		graphStore.patchInspectorDraft({ config: { topic: 'diet' } });
+		const res = await graphStore.applyInspectorDraft();
+		expect((res as any)?.ok).toBe(true);
+
+		const state = get(graphStore);
+		expect((((state.nodes.find((n) => n.id === nodeId)?.data as any)?.params?.config ?? {}) as any).topic).toBe('diet');
+	});
+
+	it('allows internal component revision apply path to update contract, then blocks direct mutation', async () => {
+		graphStore.hardResetGraph();
+		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(nodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/components/cmp_guard/revisions/crev_guard')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_guard',
+						revisionId: 'crev_guard',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'abc',
+						definition: {
+							graph: { nodes: [], edges: [] },
+							api: {
+								inputs: [],
+								outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components/cmp_guard/revisions?')) {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_guard',
+						revisions: [{ revisionId: 'crev_guard' }]
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+		try {
+			const applied = await graphStore.applyComponentRevisionToNode(nodeId, 'cmp_guard', 'crev_guard');
+			expect((applied as any)?.ok).toBe(true);
+
+			graphStore.patchInspectorDraft({
+				api: {
+					inputs: [],
+					outputs: [{ name: 'summary2', typedSchema: { type: 'text', fields: [] } }]
+				},
+				exposureRegistry: [
+					{
+						handle_id: 'data_out::summary2',
+						alias: 'summary2',
+						internal_source_path: 'node:n_sum2',
+						kind: 'data_output',
+						native_contract: { type: 'text', fields: [] },
+						exposed: true,
+						published: true,
+						debug_visible: false
+					}
+				]
+			});
+			const blocked = await graphStore.applyInspectorDraft();
+			expect((blocked as any)?.ok).toBe(false);
+			expect(String((blocked as any)?.error ?? '')).toContain('component authoring mode');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
 	it('applies component revision to node and derives immutable contracts from API schema', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
@@ -1113,7 +1234,7 @@ describe('graphStore component integration', () => {
 		expect((edge as any)?.data?.contract?.payload?.source?.type).toBe('string');
 	});
 
-	it('prunes dangling component output source mappings on Accept', async () => {
+	it('blocks component contract pruning edits from inspector in graph context', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1133,14 +1254,8 @@ describe('graphStore component integration', () => {
 		});
 
 		const result = await graphStore.applyInspectorDraft();
-		expect((result as any)?.ok).toBe(true);
-
-		const state = get(graphStore);
-		const node = state.nodes.find((n) => n.id === componentId);
-		const exposureRegistry = (((node?.data?.params as any)?.exposureRegistry ?? []) as any[]).filter(
-			(rec) => String(rec?.kind ?? '').trim().toLowerCase() === 'data_output'
-		);
-		expect(exposureRegistry.map((rec) => String(rec?.alias ?? '').trim()).sort()).toEqual(['source', 'summary']);
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.error ?? '')).toContain('component authoring mode');
 	});
 
 	it('blocks Accept when a declared component output is missing API output source', async () => {
@@ -1217,7 +1332,7 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
 	});
 
-	it('allows Accept when typedSchema.type is present even if payloadType metadata differs', async () => {
+	it('blocks contract typedSchema edits from inspector in graph context', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1248,7 +1363,8 @@ describe('graphStore component integration', () => {
 		});
 
 		const result = await graphStore.applyInspectorDraft();
-		expect((result as any)?.ok).toBe(true);
+		expect((result as any)?.ok).toBe(false);
+		expect(String((result as any)?.error ?? '')).toContain('component authoring mode');
 	});
 
 	it('recomputes component edge contract payload source from sourceHandle on load', () => {

@@ -6635,9 +6635,53 @@ export const graphStore = (() => {
 
 	function updateNodeConfigImpl(
 		nodeId: string,
-		config: { params?: unknown; schema?: Record<string, unknown> }
+		config: { params?: unknown; schema?: Record<string, unknown> },
+		opts?: { allowComponentContractMutation?: boolean; enforceComponentContractBoundary?: boolean }
 	) {
 		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
+		const allowComponentContractMutation = Boolean(opts?.allowComponentContractMutation ?? false);
+		const enforceComponentContractBoundary = Boolean(opts?.enforceComponentContractBoundary ?? false);
+		const componentContractMutationError =
+			'Component API contract can only be edited in component authoring mode.';
+
+		const hasContractMutationInPatch = (currentParamsRaw: unknown, patchRaw: unknown): boolean => {
+			const currentParams =
+				currentParamsRaw && typeof currentParamsRaw === 'object'
+					? (currentParamsRaw as Record<string, unknown>)
+					: {};
+			const patchParams =
+				patchRaw && typeof patchRaw === 'object' ? (patchRaw as Record<string, unknown>) : null;
+			if (!patchParams) return false;
+			const keyChanged = (key: string): boolean =>
+				Object.prototype.hasOwnProperty.call(patchParams, key) &&
+				stableJson(patchParams[key]) !== stableJson(currentParams[key]);
+			if (keyChanged('api')) return true;
+			if (keyChanged('exposureRegistry')) return true;
+			if (keyChanged('published_profile')) return true;
+			if (keyChanged('debug_profile')) return true;
+			if (Object.prototype.hasOwnProperty.call(patchParams, 'bindings')) {
+				const patchBindings =
+					patchParams.bindings && typeof patchParams.bindings === 'object'
+						? (patchParams.bindings as Record<string, unknown>)
+						: null;
+				if (patchBindings && Object.prototype.hasOwnProperty.call(patchBindings, 'outputs')) {
+					const currentBindings =
+						currentParams.bindings && typeof currentParams.bindings === 'object'
+							? (currentParams.bindings as Record<string, unknown>)
+							: {};
+					const currentOutputs =
+						currentBindings.outputs && typeof currentBindings.outputs === 'object'
+							? (currentBindings.outputs as Record<string, unknown>)
+							: null;
+					const patchOutputs =
+						patchBindings.outputs && typeof patchBindings.outputs === 'object'
+							? (patchBindings.outputs as Record<string, unknown>)
+							: null;
+					if (stableJson(patchOutputs) !== stableJson(currentOutputs)) return true;
+				}
+			}
+			return false;
+		};
 
 		update((s) => {
 			let nodes = s.nodes;
@@ -6651,6 +6695,24 @@ export const graphStore = (() => {
 			if (!node) {
 				out = { ok: false, error: 'Node not found' };
 				return logPush(s, 'warn', out.error!, nodeId);
+			}
+			if (
+				config.params !== undefined &&
+				node.data.kind === 'component' &&
+				enforceComponentContractBoundary &&
+				s.editingContext === 'graph' &&
+				!allowComponentContractMutation &&
+				hasContractMutationInPatch((node.data as any)?.params, config.params)
+			) {
+				out = { ok: false, error: componentContractMutationError };
+				const inspector =
+					String(s.inspector?.nodeId ?? '') === nodeId
+						? {
+								...s.inspector,
+								systemNotice: componentContractMutationError
+							}
+						: s.inspector;
+				return logPush({ ...s, inspector }, 'warn', componentContractMutationError, nodeId);
 			}
 			const beforeExecParams = effectiveExecParamsForNode(node as Node<PipelineNodeData>);
 			const wasPinnedBeforeParams = nodeFreezeMode(node as any) !== null;
@@ -6988,7 +7050,7 @@ export const graphStore = (() => {
 		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
 
 		// 2) commit patch (validated/stripped)
-		const result = updateNodeConfigImpl(nodeId, { params: commitPatch });
+		const result = updateNodeConfigImpl(nodeId, { params: commitPatch }, { enforceComponentContractBoundary: true });
 		if (!result.ok) return result;
 
 		const afterState = get({ subscribe } as any) as GraphState;
@@ -7253,7 +7315,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			}
 		}
 
-		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit });
+		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit }, { enforceComponentContractBoundary: true });
 
 		// only clear dirty if commit succeeded (fail-closed keeps draft)
 		if (r.ok) {
@@ -9834,7 +9896,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				};
 				const result = updateNodeConfigImpl(nodeId, {
 					params: paramsPatch
-				});
+				}, { allowComponentContractMutation: true });
 				if (!result.ok) return { ok: false, reason: 'update_failed' as const, error: result.error };
 				const revisions = await listComponentRevisions(cid, 20, 0);
 				const latestRevisionId = String(revisions?.[0]?.revisionId ?? '').trim() || null;
