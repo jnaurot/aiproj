@@ -262,11 +262,19 @@ async def explain_node_doc(req: NodeDocExplainRequest):
 	ready = bool(runtime.get("ready_work") or False)
 
 	subtype_phrase = f" ({node_subtype})" if node_subtype else ""
+	prompt_excerpt = ""
+	if node_kind in {"model", "llm"}:
+		user_prompt = str(settings.get("user_prompt") or "").strip()
+		if user_prompt:
+			compact = " ".join(user_prompt.split())
+			prompt_excerpt = compact[:140] + ("..." if len(compact) > 140 else "")
 	summary = (
 		f"{node_label} is a {node_kind}{subtype_phrase} node. "
 		f"It reads {len(data_inputs)} data input handle(s), writes {len(data_outputs)} data output handle(s), "
 		f"uses {len(param_inputs)} param handle(s), and consumes {len(control_inputs)} control handle(s)."
 	)
+	if prompt_excerpt:
+		summary = f"{summary} User prompt intent: {prompt_excerpt}"
 	context_notes = [
 		f"pending_input_count={pending}",
 		f"inflight={inflight}",

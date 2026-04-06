@@ -111,6 +111,7 @@ function buildSettingsSummary(data: PipelineNodeData): Record<string, string> {
 		addSetting(settings, 'provider', (data as any)?.llmKind ?? (params as any)?.provider);
 		addSetting(settings, 'model', (params as any)?.model);
 		addSetting(settings, 'output_mode', (params as any)?.output?.mode ?? (params as any)?.output_mode);
+		addSetting(settings, 'user_prompt', (params as any)?.user_prompt);
 	}
 	if (kind === 'tool') {
 		addSetting(settings, 'provider', (params as any)?.provider ?? (data as any)?.toolKind);
@@ -163,4 +164,3 @@ export function buildNodeDocLlmContextSignature(context: NodeDocLlmContext | nul
 		context.runtime
 	]);
 }
-

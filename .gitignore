@@ -47,7 +47,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
-*.md
 
 # Environment variables & secrets (CRITICAL!)
 .env
