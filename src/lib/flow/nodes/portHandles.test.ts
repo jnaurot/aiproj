@@ -111,5 +111,8 @@ describe('portHandles', () => {
 			'Input: Context (param_context) [param]'
 		);
 		expect(portHintText('out', { id: 'out', plane: 'work' })).toBe('Output: out [work]');
+		expect(portHintText('out', { id: 'summary', label: 'Summarize', plane: 'work', payloadType: 'text' })).toBe(
+			'Output: Summarize (summary) [text] [work]'
+		);
 	});
 });

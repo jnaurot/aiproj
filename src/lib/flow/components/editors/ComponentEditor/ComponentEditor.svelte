@@ -20,6 +20,7 @@
 export let selectedNode: any;
 export let params: Record<string, any> = {};
 export let editingContext: 'graph' | 'component' = 'graph';
+export let showComponentMetaSection = true;
 export let onDraft: (
 	patch: Record<string, any>,
 	opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
@@ -59,9 +60,7 @@ export let onDraft: (
 	const STRUCTURED_OUTPUT_TYPES = new Set<PayloadType>(['table', 'json']);
 	type TypedFieldType = ComponentTypedField['type'];
 	let outputFieldsJsonErrors: Record<number, string> = {};
-	let outputAdvancedOpen: Record<number, boolean> = {};
 	let outputFieldsEditorMode: Record<number, 'structured' | 'json'> = {};
-	let outputNameDraftByIndex: Record<number, string> = {};
 	let outputSyncSignature = '';
 	let outputCanonicalSignature = '';
 	$: latestRevisionId = String(revisions[0]?.revisionId ?? '').trim();
@@ -333,46 +332,76 @@ export let onDraft: (
 		});
 	}
 
-	function onOutputBindingOutputRefChange(name: string, outputRef: string): void {
-		if (componentContractReadOnly) return;
-		const outName = String(name ?? '').trim();
-		if (!outName) return;
-		const nextRegistry = [...exposureRegistry];
-		const nextSource = String(outputRef ?? '').trim();
-		const idx = nextRegistry.findIndex(
-			(rec) =>
-				String(rec?.kind ?? '') === 'data_output' &&
-				(String(rec?.alias ?? '').trim() === outName ||
-					String(rec?.handle_id ?? '').trim() === `data_out::${outName}`)
+	function outputNameFromRef(outputRef: string): string {
+		const raw = String(outputRef ?? '').trim();
+		if (!raw) return '';
+		const colon = raw.indexOf(':');
+		if (colon < 0) return raw;
+		return raw.slice(colon + 1).trim();
+	}
+
+	function outputOptionLabel(outputRef: string): string {
+		return outputNameFromRef(outputRef) || String(outputRef ?? '').trim();
+	}
+
+	function currentOutputRefForPort(port: ComponentApiPort): string {
+		return String(outputBindings?.[String(port?.name ?? '').trim()]?.outputRef ?? '').trim();
+	}
+
+	function availableOutputRefsForIndex(index: number): string[] {
+		const currentRef = currentOutputRefForPort(outputs[index] as ComponentApiPort);
+		const usedRefs = new Set(
+			outputs
+				.map((port, i) => (i === index ? '' : currentOutputRefForPort(port as ComponentApiPort)))
+				.map((ref) => String(ref ?? '').trim())
+				.filter((ref) => ref.length > 0)
 		);
-		if (idx >= 0) {
-			nextRegistry[idx] = {
-				...nextRegistry[idx],
-				kind: 'data_output',
-				handle_id: String(nextRegistry[idx]?.handle_id ?? `data_out::${outName}`),
-				alias: outName,
-				internal_source_path: nextSource,
-				exposed: true,
-				published: true,
-				debug_visible: false,
-				native_contract: nextRegistry[idx]?.native_contract ?? {
-					type: String(outputs.find((o) => String(o?.name ?? '').trim() === outName)?.typedSchema?.type ?? 'json'),
-					fields: []
-				}
-			};
-		} else {
-			const sourceType = String(outputs.find((o) => String(o?.name ?? '').trim() === outName)?.typedSchema?.type ?? 'json');
-			nextRegistry.push({
-				handle_id: `data_out::${outName}`,
-				alias: outName,
-				internal_source_path: nextSource,
-				kind: 'data_output',
-				native_contract: { type: sourceType, fields: [] },
-				exposed: true,
-				published: true,
-				debug_visible: false
-			});
-		}
+		const refs = internalNodeOptions
+			.map((opt) => String(opt.ref ?? '').trim())
+			.filter((ref) => ref.length > 0 && (!usedRefs.has(ref) || ref === currentRef));
+		if (currentRef && !refs.includes(currentRef)) refs.unshift(currentRef);
+		return refs;
+	}
+
+	function setOutputFromRef(index: number, outputRef: string): void {
+		if (componentContractReadOnly) return;
+		const selectedRef = String(outputRef ?? '').trim();
+		if (!selectedRef) return;
+		const previousName = String(outputs[index]?.name ?? '').trim();
+		const nextName = outputNameFromRef(selectedRef);
+		const nextType = normalizePayloadType(internalNodeMetaByRef[selectedRef]?.outPayloadType ?? 'json');
+		const nextOutputs = outputs.map((out, i) =>
+			i === index
+				? canonicalizeOutputPort({
+						...(out as ComponentApiPort),
+						name: nextName,
+						typedSchema: {
+							type: nextType as TypedFieldType,
+							fields: (out as any)?.typedSchema?.fields ?? []
+						}
+					})
+				: canonicalizeOutputPort(out as ComponentApiPort)
+		);
+		draftApiOutputs(nextOutputs as ComponentApiPort[]);
+
+		const nextRegistry = exposureRegistry.filter((rec) => {
+			if (String(rec?.kind ?? '').trim().toLowerCase() !== 'data_output') return true;
+			const alias = String(rec?.alias ?? '').trim();
+			const handle = String(rec?.handle_id ?? '').trim();
+			if (previousName && (alias === previousName || handle === `data_out::${previousName}`)) return false;
+			if (nextName && (alias === nextName || handle === `data_out::${nextName}`)) return false;
+			return true;
+		});
+		nextRegistry.push({
+			handle_id: `data_out::${nextName}`,
+			alias: nextName,
+			internal_source_path: selectedRef,
+			kind: 'data_output',
+			native_contract: { type: String(nextType), fields: [] },
+			exposed: true,
+			published: true,
+			debug_visible: false
+		});
 		publishExposureRegistry(nextRegistry);
 	}
 
@@ -421,44 +450,20 @@ export let onDraft: (
 		}
 	}
 
-	function getOutputNameDraft(index: number, currentName: string): string {
-		return Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)
-			? String(outputNameDraftByIndex[index] ?? '')
-			: currentName;
-	}
-
-	function setOutputNameDraft(index: number, value: string): void {
-		if (componentContractReadOnly) return;
-		outputNameDraftByIndex = {
-			...outputNameDraftByIndex,
-			[index]: value
-		};
-	}
-
-	function cancelOutputNameDraft(index: number): void {
-		if (!Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)) return;
-		const next = { ...outputNameDraftByIndex };
-		delete next[index];
-		outputNameDraftByIndex = next;
-	}
-
-	function commitOutputNameDraft(index: number): void {
-		if (componentContractReadOnly) return;
-		if (!Object.prototype.hasOwnProperty.call(outputNameDraftByIndex, index)) return;
-		const nextName = String(outputNameDraftByIndex[index] ?? '');
-		const currentName = String(outputs[index]?.name ?? '');
-		if (nextName !== currentName) {
-			updateApiOutput(index, { name: nextName });
-		}
-		cancelOutputNameDraft(index);
-	}
-
 	function addApiOutput(): void {
 		if (componentContractReadOnly) return;
 		errorMessage = '';
-		outputNameDraftByIndex = {};
-		const nextName = outputs.length === 0 ? 'default' : `out_${outputs.length + 1}`;
-		const fallbackOutputRef = String(internalNodeOptions[0]?.ref ?? '').trim() || undefined;
+		const usedRefs = new Set(
+			outputs
+				.map((port) => currentOutputRefForPort(port as ComponentApiPort))
+				.map((ref) => String(ref ?? '').trim())
+				.filter((ref) => ref.length > 0)
+		);
+		const fallbackOutputRef =
+			internalNodeOptions
+				.map((opt) => String(opt.ref ?? '').trim())
+				.find((ref) => ref.length > 0 && !usedRefs.has(ref)) ?? '';
+		const nextName = outputNameFromRef(fallbackOutputRef) || (outputs.length === 0 ? 'default' : `out_${outputs.length + 1}`);
 		const initialOutputType = normalizePayloadType(
 			(fallbackOutputRef ? internalNodeMetaByRef[fallbackOutputRef]?.outPayloadType : undefined) ?? 'json'
 		);
@@ -475,7 +480,7 @@ export let onDraft: (
 		nextRegistry.push({
 			handle_id: `data_out::${nextName}`,
 			alias: nextName,
-			internal_source_path: fallbackOutputRef ?? '',
+			internal_source_path: fallbackOutputRef,
 			kind: 'data_output',
 			native_contract: { type: String(initialOutputType), fields: [] },
 			exposed: true,
@@ -500,7 +505,6 @@ export let onDraft: (
 
 	function removeApiOutput(index: number): void {
 		if (componentContractReadOnly) return;
-		outputNameDraftByIndex = {};
 		const removed = outputs[index];
 		const next = outputs.filter((_, i) => i !== index);
 		draftApiOutputs(next as ComponentApiPort[]);
@@ -519,24 +523,9 @@ export let onDraft: (
 		const nextErrors = { ...outputFieldsJsonErrors };
 		delete nextErrors[index];
 		outputFieldsJsonErrors = nextErrors;
-		const nextAdvancedOpen = { ...outputAdvancedOpen };
-		delete nextAdvancedOpen[index];
-		outputAdvancedOpen = nextAdvancedOpen;
 		const nextEditorMode = { ...outputFieldsEditorMode };
 		delete nextEditorMode[index];
 		outputFieldsEditorMode = nextEditorMode;
-	}
-
-	function isOutputAdvancedOpen(index: number): boolean {
-		return Boolean(outputAdvancedOpen[index]);
-	}
-
-	function toggleOutputAdvanced(index: number): void {
-		if (componentContractReadOnly) return;
-		outputAdvancedOpen = {
-			...outputAdvancedOpen,
-			[index]: !isOutputAdvancedOpen(index)
-		};
 	}
 
 	function getFieldsEditorMode(index: number): 'structured' | 'json' {
@@ -593,6 +582,10 @@ export let onDraft: (
 				fields: canonicalizeFieldsForPayloadType(normalizedOutputType, (typedSchema as any)?.fields)
 			}
 		};
+	}
+
+	function outputIsRequired(port: ComponentApiPort): boolean {
+		return (port as any)?.required === false ? false : true;
 	}
 
 	function getOutputFields(index: number): ComponentTypedField[] {
@@ -890,61 +883,63 @@ export let onDraft: (
 	}
 </script>
 
-<div class="section">
-	<div class="sectionTitle">Component</div>
+{#if showComponentMetaSection}
+	<div class="section">
+		<div class="sectionTitle">Component</div>
 
-	<div class="row rowNoLabel">
-		<div class="v">
-			<div class="idRow">
-				<div class="idValue" title={componentId || '-'}>{componentId || '-'}</div>
-				<ToolbarMenu
-					label="Actions"
-					items={componentActionItems}
-					disabled={!componentId || mutatingComponent}
-					menuAriaLabel="Component actions"
-					align="right"
-					compact={true}
-					onSelect={onComponentAction}
+		<div class="row rowNoLabel">
+			<div class="v">
+				<div class="idRow">
+					<div class="idValue" title={componentId || '-'}>{componentId || '-'}</div>
+					<ToolbarMenu
+						label="Actions"
+						items={componentActionItems}
+						disabled={!componentId || mutatingComponent}
+						menuAriaLabel="Component actions"
+						align="right"
+						compact={true}
+						onSelect={onComponentAction}
+					/>
+				</div>
+			</div>
+		</div>
+
+		<div class="row rowNoLabel">
+			<div class="v">
+				<div class="idRow">
+					<div class="idValue" title={revisionId || '-'}>{revisionId || '-'}</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="row">
+			<div class="k">apiVersion</div>
+			<div class="v">
+				<input
+					value={apiVersion}
+					on:input={(e) => draftComponentRef({ apiVersion: (e.currentTarget as HTMLInputElement).value })}
 				/>
 			</div>
 		</div>
-	</div>
 
-	<div class="row rowNoLabel">
-		<div class="v">
-			<div class="idRow">
-				<div class="idValue" title={revisionId || '-'}>{revisionId || '-'}</div>
-			</div>
+		<div class="metaRow">
+			<span class="pill">pinned {revisionId || '-'}</span>
+			{#if hasUpdate}
+				<span class="pill warn">newer {latestRevisionId}</span>
+				<button class="tabBtn" disabled={loadingRevisionApply} on:click={() => applyRevision(latestRevisionId)}>
+					Upgrade revision
+				</button>
+			{/if}
 		</div>
 	</div>
+{/if}
 
-	<div class="row">
-		<div class="k">apiVersion</div>
-		<div class="v">
-			<input
-				value={apiVersion}
-				on:input={(e) => draftComponentRef({ apiVersion: (e.currentTarget as HTMLInputElement).value })}
-			/>
-		</div>
-	</div>
-
-	<div class="metaRow">
-		<span class="pill">pinned {revisionId || '-'}</span>
-		{#if hasUpdate}
-			<span class="pill warn">newer {latestRevisionId}</span>
-			<button class="tabBtn" disabled={loadingRevisionApply} on:click={() => applyRevision(latestRevisionId)}>
-				Upgrade revision
-			</button>
-		{/if}
-	</div>
-
-	{#if loadingComponents || loadingRevisions || loadingRevisionApply}
-		<div class="muted">Loading...</div>
-	{/if}
-	{#if errorMessage}
-		<div class="err">{errorMessage}</div>
-	{/if}
-</div>
+{#if loadingComponents || loadingRevisions || loadingRevisionApply}
+	<div class="muted">Loading...</div>
+{/if}
+{#if errorMessage}
+	<div class="err">{errorMessage}</div>
+{/if}
 
 <div class="section">
 	<div class="sectionTitle">API Contract</div>
@@ -965,17 +960,19 @@ export let onDraft: (
 		</div>
 		<div class="contractGroup">
 			<div class="groupTitle">Outputs</div>
-			<div class="outputControls">
-				<button
-					class="tabBtn small"
-					type="button"
-					on:click={addApiOutput}
-					disabled={loadingRevisionDetail || componentContractReadOnly}
-					title={loadingRevisionDetail ? 'Loading revision detail...' : undefined}
-				>
-					+ Add output
-				</button>
-			</div>
+				{#if !componentContractReadOnly}
+					<div class="outputControls">
+						<button
+							class="tabBtn small"
+							type="button"
+							on:click={addApiOutput}
+							disabled={loadingRevisionDetail || componentContractReadOnly}
+							title={loadingRevisionDetail ? 'Loading revision detail...' : undefined}
+						>
+							+ Add output
+						</button>
+					</div>
+				{/if}
 			{#if outputValidation.hasErrors}
 				<div class="validationSummary">Resolve output/binding issues before Accept: {outputValidationSummary}</div>
 			{/if}
@@ -984,76 +981,59 @@ export let onDraft: (
 			{:else}
 				{#each outputs as port, index (`${index}:${port.name}`)}
 					<div class="outputCard">
-						<div class="outputEditorRow outputEditorRowPrimary">
-							<input
-								placeholder="output name"
-								value={getOutputNameDraft(index, String(port.name ?? ''))}
-								disabled={componentContractReadOnly}
-								on:input={(e) =>
-									setOutputNameDraft(index, (e.currentTarget as HTMLInputElement).value)}
-								on:blur={() => commitOutputNameDraft(index)}
-								on:keydown={(e) => {
-									const key = (e as KeyboardEvent).key;
-									if (key === 'Enter') {
-										e.preventDefault();
-										commitOutputNameDraft(index);
-										return;
-									}
-									if (key === 'Escape') {
-										e.preventDefault();
-										cancelOutputNameDraft(index);
-									}
-								}}
-							/>
-							<div class="readonlyField outputTypeReadonly" title="Derived from bound internal node">
-								{String(port.typedSchema?.type ?? 'json')}
-							</div>
-							<div class="outputActions">
-								<button
-									class="tabBtn small danger"
-									type="button"
-									title="Remove output"
-									disabled={componentContractReadOnly}
-									on:click={() => removeApiOutput(index)}
-								>-</button>
-							</div>
-						</div>
-						<div class="outputEditorRow outputEditorRowSecondary">
-							<select
-								value={String(outputBindings?.[port.name]?.outputRef ?? '')}
-								disabled={componentContractReadOnly}
-								on:change={(e) => onOutputBindingOutputRefChange(port.name, (e.currentTarget as HTMLSelectElement).value)}
-							>
-								<option value="">internal output</option>
-								{#if String(outputBindings?.[port.name]?.outputRef ?? '').trim() && !internalNodeOptions.some((n) => n.ref === String(outputBindings?.[port.name]?.outputRef ?? '').trim())}
-									<option value={String(outputBindings?.[port.name]?.outputRef ?? '').trim()}>
-										missing: {String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
-									</option>
+							<div class="outputEditorRow outputEditorRowPrimary">
+								{#if componentContractReadOnly}
+									<div class="readonlyField outputSourceReadonly">
+										{outputOptionLabel(currentOutputRefForPort(port as ComponentApiPort))}
+									</div>
+								{:else}
+									<select
+										class="outputSourceSelect"
+										value={currentOutputRefForPort(port as ComponentApiPort)}
+										disabled={componentContractReadOnly}
+										on:change={(e) => setOutputFromRef(index, (e.currentTarget as HTMLSelectElement).value)}
+									>
+										<option value="">select output</option>
+										{#each availableOutputRefsForIndex(index) as outputRef (`${index}:${outputRef}`)}
+											<option value={outputRef}>{outputOptionLabel(outputRef)}</option>
+										{/each}
+									</select>
 								{/if}
-								{#each internalNodeOptions as opt (opt.ref)}
-									<option value={opt.ref}>{opt.label}</option>
-								{/each}
-							</select>
-							<div class="readonlyField outputTypeReadonly">current</div>
-							<label class="requiredToggle">
-								<input
-									type="checkbox"
-									disabled={componentContractReadOnly}
-									checked={Boolean(port.required ?? true)}
-									on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
-								/>
-								req
-							</label>
-							<div class="outputActions">
-								<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click|stopPropagation={() => toggleOutputAdvanced(index)}>
-									Adv {isOutputAdvancedOpen(index) ? '▴' : '▾'}
-								</button>
+								{#if componentContractReadOnly}
+									<span class="requiredToggle requiredToggleReadonly" aria-label={`required ${outputIsRequired(port as ComponentApiPort) ? 'enabled' : 'disabled'}`}>
+										<span
+											class:requiredBox={true}
+											class:requiredBoxChecked={outputIsRequired(port as ComponentApiPort)}
+											class:requiredBoxUnchecked={!outputIsRequired(port as ComponentApiPort)}
+											aria-hidden="true"
+										></span>
+										<span>req</span>
+									</span>
+								{:else}
+									<label class="requiredToggle">
+										<input
+											type="checkbox"
+											checked={outputIsRequired(port as ComponentApiPort)}
+											on:change={(e) => updateApiOutput(index, { required: (e.currentTarget as HTMLInputElement).checked })}
+										/>
+										<span>req</span>
+									</label>
+								{/if}
+								{#if !componentContractReadOnly}
+									<div class="outputActions">
+										<button
+											class="tabBtn small danger"
+											type="button"
+											title="Remove output"
+											disabled={componentContractReadOnly}
+											on:click={() => removeApiOutput(index)}
+										>-</button>
+									</div>
+								{/if}
 							</div>
-						</div>
-						{#if !isOutputAdvancedOpen(index) && outputValidation.outputErrors[index]?.length}
+						{#if outputValidation.outputErrors[index]?.length}
 							<div class="schemaIssueBadge">Schema issue</div>
 						{/if}
-						{#if isOutputAdvancedOpen(index)}
 							<div class="outputSchemaRow">
 								<div class="schemaType">
 									<span class="k">typedSchema.type</span>
@@ -1076,7 +1056,9 @@ export let onDraft: (
 														<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click={() => addOutputField(index)}>+ field</button>
 													{/if}
 												{/if}
-												<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click={() => resetOutputSchema(index)}>Reset</button>
+													{#if !componentContractReadOnly}
+														<button class="tabBtn small" type="button" disabled={componentContractReadOnly} on:click={() => resetOutputSchema(index)}>Reset</button>
+													{/if}
 										</div>
 									</div>
 									{#if shouldShowStructuredFieldsEditor(port.typedSchema?.type)}
@@ -1141,9 +1123,7 @@ export let onDraft: (
 										<div>{issue}</div>
 									{/each}
 								</div>
-							{/if}
-						{/if}
-						{#if !String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
+							{/if}						{#if !String(outputBindings?.[port.name]?.outputRef ?? '').trim()}
 							<div class="bindingErr">API Contract output source is required for {port.name}</div>
 						{/if}
 						{#if outputValidation.bindingErrors[port.name]?.length}
@@ -1302,14 +1282,21 @@ export let onDraft: (
 
 	.outputEditorRow {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto;
+		grid-template-columns: minmax(180px, 360px) auto auto;
 		gap: 8px;
 		align-items: center;
 		margin-bottom: 0;
 	}
 
-	.outputEditorRowSecondary {
-		grid-template-columns: minmax(0, 1fr) 86px auto auto;
+	.outputSourceSelect {
+		max-width: 360px;
+	}
+
+	.outputSourceReadonly {
+		max-width: 360px;
+	}
+
+	.outputEditorRowPrimary {
 		margin-top: 8px;
 	}
 
@@ -1391,6 +1378,54 @@ export let onDraft: (
 		opacity: 0.9;
 	}
 
+	.requiredToggle input[type='checkbox'] {
+		accent-color: #60a5fa;
+		opacity: 1;
+	}
+
+	.requiredToggle input[type='checkbox']:disabled {
+		opacity: 1;
+		filter: none;
+	}
+
+	.requiredToggle input[type='checkbox']:disabled + span {
+		opacity: 1;
+		color: #dbeafe;
+	}
+
+	.requiredToggleReadonly {
+		user-select: none;
+	}
+
+	.requiredBox {
+		width: 13px;
+		height: 13px;
+		border-radius: 3px;
+		border: 1px solid #5f738f;
+		background: #0f1a2b;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.requiredBoxChecked {
+		border-color: #7dd3fc;
+		background: #1f3b57;
+	}
+
+	.requiredBoxChecked::after {
+		content: '';
+		width: 7px;
+		height: 7px;
+		border-radius: 1px;
+		background: #dbeafe;
+	}
+
+	.requiredBoxUnchecked {
+		border-color: #6b7280;
+		background: #0d1422;
+	}
+
 	/* Component-editor-local select skin for output/binding choosers */
 	.section :global(select) {
 		background: var(--color-control-bg);
@@ -1433,14 +1468,10 @@ export let onDraft: (
 
 	@media (max-width: 760px) {
 		.outputEditorRow {
-			grid-template-columns: minmax(0, 1fr) minmax(0, 110px) auto;
+			grid-template-columns: minmax(0, 1fr) auto auto;
 		}
 
-		.outputEditorRowSecondary {
-			grid-template-columns: minmax(0, 1fr) 86px;
-		}
-
-		.outputEditorRowPrimary > input {
+		.outputEditorRowPrimary > select:first-child {
 			grid-column: 1 / -1;
 		}
 
@@ -1452,10 +1483,6 @@ export let onDraft: (
 		.outputActions {
 			grid-column: 2 / -1;
 			justify-content: flex-end;
-		}
-
-		.outputEditorRowSecondary > select:first-child {
-			grid-column: 1 / -1;
 		}
 
 		.outputSchemaRow {
@@ -1500,3 +1527,7 @@ export let onDraft: (
 		font-size: 12px;
 	}
 </style>
+
+
+
+

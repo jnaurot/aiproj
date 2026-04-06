@@ -547,7 +547,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	const DRAFT_RECOVERY_PROMPT_SESSION_KEY = 'graph_draft_recovery_prompted_at';
 	let importFileInput: HTMLInputElement | null = null;
 	let componentEditEntrySnapshotKey: string | null = null;
+	let componentEditEntryContractSnapshotKey: string | null = null;
 	let componentEditEntrySessionKey: string | null = null;
+	let lastCenteredComponentSessionKey = '';
 	let currentComponentSessionKey = '';
 	let componentInternalsDirty = false;
 	type ComponentSaveApplyScope = 'none' | 'one' | 'all';
@@ -772,20 +774,36 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: currentComponentSessionKey = isComponentEditContext
 		? `${String($graphStore.componentEditSession?.componentId ?? '').trim()}@${String($graphStore.componentEditSession?.revisionId ?? '').trim()}`
 		: '';
+	$: currentComponentContractSnapshotKey = isComponentEditContext
+		? JSON.stringify($graphStore.componentEditSession?.contractDraftParams ?? {})
+		: '';
 	$: if (!isComponentEditContext) {
 		componentEditEntrySnapshotKey = null;
+		componentEditEntryContractSnapshotKey = null;
 		componentEditEntrySessionKey = null;
+		lastCenteredComponentSessionKey = '';
 	} else if (
 		componentEditEntrySnapshotKey == null ||
 		componentEditEntrySessionKey !== currentComponentSessionKey
 	) {
 		componentEditEntrySnapshotKey = currentGraphSnapshotKey;
+		componentEditEntryContractSnapshotKey = currentComponentContractSnapshotKey;
 		componentEditEntrySessionKey = currentComponentSessionKey;
+	}
+	$: if (
+		isComponentEditContext &&
+		currentComponentSessionKey.length > 0 &&
+		lastCenteredComponentSessionKey !== currentComponentSessionKey
+	) {
+		lastCenteredComponentSessionKey = currentComponentSessionKey;
+		void centerGraphAfterLoad(220);
 	}
 	$: componentInternalsDirty =
 		isComponentEditContext &&
 		(Boolean($graphStore.inspector.dirty) ||
-			(componentEditEntrySnapshotKey != null && componentEditEntrySnapshotKey !== currentGraphSnapshotKey));
+			(componentEditEntrySnapshotKey != null && componentEditEntrySnapshotKey !== currentGraphSnapshotKey) ||
+			(componentEditEntryContractSnapshotKey != null &&
+				componentEditEntryContractSnapshotKey !== currentComponentContractSnapshotKey));
 	$: runLogFilterPredicate = buildRunLogFilterPredicate(runLogFilter);
 	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
 		const nodeName = String(nodeLabelById.get(String(entry.nodeId ?? '')) ?? '');
@@ -2900,6 +2918,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	async function returnFromComponentEditMode() {
+		const sessionBeforeReturn = get(graphStore).componentEditSession;
+		const entryNodeId = String(sessionBeforeReturn?.entryNodeId ?? '').trim();
+		const editedComponentId = String(sessionBeforeReturn?.componentId ?? '').trim();
 		if (componentInternalsDirty) {
 			const raw = window.prompt(
 				'Unsaved component edits detected.\n\n1. Save component\n2. Discard changes\n3. Cancel\n\nEnter 1, 2, or 3:',
@@ -2915,6 +2936,29 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const res = graphStore.returnFromComponentEditSession();
 		if (!(res as any)?.ok) {
 			showToast(`Return failed: ${String((res as any)?.reason ?? 'unknown')}`, 'error');
+			return;
+		}
+		await tick();
+		const stateAfterReturn = get(graphStore);
+		const candidateByEntry =
+			entryNodeId.length > 0
+				? (stateAfterReturn.nodes ?? []).find((n) => String(n.id ?? '') === entryNodeId)
+				: null;
+		const candidateByComponent =
+			!candidateByEntry && editedComponentId.length > 0
+				? (stateAfterReturn.nodes ?? []).find((n) => {
+						if (String((n.data as any)?.kind ?? '') !== 'component') return false;
+						const ref = (((n.data as any)?.params ?? {}) as any)?.componentRef ?? {};
+						return String(ref?.componentId ?? '').trim() === editedComponentId;
+					})
+				: null;
+		const focusNode = candidateByEntry ?? candidateByComponent ?? null;
+		if (focusNode) {
+			graphStore.selectNode(String(focusNode.id));
+			const vp = getViewport();
+			const x = Number(focusNode.position?.x ?? 0) + 120;
+			const y = Number(focusNode.position?.y ?? 0) + 40;
+			setCenter(x, y, { zoom: Number(vp.zoom ?? 1), duration: 260 });
 		}
 	}
 
@@ -3250,8 +3294,21 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		}
 		try {
 			const detail = await getComponentRevision(componentId, baseRevisionId);
-			const api = ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract);
-			const configSchema = (detail?.definition?.configSchema ?? {}) as Record<string, unknown>;
+			const draftParams = ((session.contractDraftParams ?? {}) as Record<string, any>);
+			const draftApi = draftParams?.api;
+			const draftExposureRegistry = Array.isArray(draftParams?.exposureRegistry)
+				? structuredClone(draftParams.exposureRegistry)
+				: undefined;
+			const api = (
+				draftApi && typeof draftApi === 'object'
+					? structuredClone(draftApi)
+					: ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract)
+			) as ComponentApiContract;
+			const configSchema = (
+				draftParams?.configSchema && typeof draftParams.configSchema === 'object'
+					? structuredClone(draftParams.configSchema)
+					: (detail?.definition?.configSchema ?? {})
+			) as Record<string, unknown>;
 			const preflight = await validateComponentRevision({
 				componentId,
 				schemaVersion: Number(detail?.schemaVersion ?? 1) || 1,
@@ -3260,7 +3317,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					edges: structuredClone(currentEdges) as unknown[]
 				},
 				api,
-				configSchema
+				configSchema,
+				...(draftExposureRegistry ? { exposureRegistry: draftExposureRegistry } : {})
 			});
 			const summary = summarizeComponentPreflight(
 				Boolean(preflight?.ok),
@@ -3287,7 +3345,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					edges: structuredClone(currentEdges) as unknown[]
 				},
 				api,
-				configSchema
+				configSchema,
+				...(draftExposureRegistry ? { exposureRegistry: draftExposureRegistry } : {})
 			});
 			const nextRevisionId = String(created.revisionId ?? '').trim();
 			if (nextRevisionId) {
@@ -3325,6 +3384,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				showToast('Saved component revision but did not receive a revision id.', 'warn');
 			}
 			componentEditEntrySnapshotKey = currentGraphSnapshotKey;
+			componentEditEntryContractSnapshotKey = currentComponentContractSnapshotKey;
 			return true;
 		} catch (error) {
 			const failure = summarizeComponentPublishFailure(error, componentId, baseRevisionId);

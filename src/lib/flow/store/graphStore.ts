@@ -239,6 +239,7 @@ export type ComponentEditSession = {
 	componentId: string;
 	revisionId: string;
 	entryNodeId: string | null;
+	contractDraftParams: Record<string, any>;
 	snapshot: ComponentEditSessionSnapshot;
 	parentSession: ComponentEditSession | null;
 };
@@ -766,7 +767,8 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 				)
 		);
 		const internalSourcePath = String((exposure as any)?.internal_source_path ?? '').trim();
-		if (!internalSourcePath) {
+		const isRequired = Boolean((output as any)?.required ?? true);
+		if (isRequired && !internalSourcePath) {
 			errors.push(`Component output "${outputName}" requires an API Contract output source before Accept.`);
 		}
 		const typedSchemaType = normalizeComponentPayloadType(output?.typedSchema?.type);
@@ -1213,7 +1215,8 @@ export type GraphState = {
 	};
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
-};
+	componentContractDraftCache: Record<string, Record<string, any>>;
+	};
 
 export type InputResolution = {
 	inputHandle: string;
@@ -3680,7 +3683,8 @@ function buildHardResetState(freshGraphId: string): GraphState {
 		nodeBindings: {},
 		activeRunId: null,
 		editingContext: 'graph',
-		componentEditSession: null
+		componentEditSession: null,
+		componentContractDraftCache: {}
 	};
 }
 
@@ -4368,7 +4372,8 @@ function buildSavePreflightDiagnostics(
 					)
 			);
 			const internalSourcePath = String((exposure as any)?.internal_source_path ?? '').trim();
-			if (!internalSourcePath) {
+			const isRequired = Boolean((out as any)?.required ?? true);
+			if (isRequired && !internalSourcePath) {
 				diagnostics.push({
 					code: 'COMPONENT_OUTPUT_SOURCE_MISSING',
 					path: `nodes.${String(node.id)}.params.exposureRegistry`,
@@ -6350,7 +6355,8 @@ const initialState: GraphState = {
 	nodeBindings: ensureNormalizedBindingsForNodes(loadedNormalized.nodes, {}),
 	activeRunId: null,
 	editingContext: 'graph',
-	componentEditSession: null
+	componentEditSession: null,
+	componentContractDraftCache: {}
 };
 
 export const graphStore = (() => {
@@ -9394,7 +9400,53 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const parentSession = before.componentEditSession
 					? structuredClone(before.componentEditSession)
 					: null;
-				const detail = await getComponentRevision(cid, rid);
+					const detail = await getComponentRevision(cid, rid);
+					const draftCacheKey = `${cid}@${rid}`;
+					const cachedDraftRaw =
+						before.componentContractDraftCache &&
+						typeof before.componentContractDraftCache === 'object'
+							? (before.componentContractDraftCache[draftCacheKey] as Record<string, any> | undefined)
+							: undefined;
+					const detailApi = ((detail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract);
+					const entryId = String(entryNodeId ?? '').trim() || null;
+					const entryNode =
+						entryId && entryId.length > 0
+							? before.nodes.find(
+									(n) => String(n.id ?? '') === entryId && String((n.data as any)?.kind ?? '') === 'component'
+								)
+							: null;
+					const entryRef = (((entryNode?.data as any)?.params ?? {})?.componentRef ?? {}) as Record<string, any>;
+					const entryComponentId = String(entryRef?.componentId ?? '').trim();
+					const entryRevisionId = String(entryRef?.revisionId ?? '').trim();
+					const useEntryDraftParams = Boolean(entryNode && entryComponentId === cid && entryRevisionId === rid);
+					const entryParams = ((entryNode?.data as any)?.params ?? {}) as Record<string, any>;
+					const draftApi =
+						cachedDraftRaw && cachedDraftRaw?.api && typeof cachedDraftRaw.api === 'object'
+							? (cachedDraftRaw.api as ComponentApiContract)
+							: useEntryDraftParams && entryParams?.api && typeof entryParams.api === 'object'
+								? (entryParams.api as ComponentApiContract)
+								: detailApi;
+					const draftExposureRegistry = normalizeExposureRegistry(
+						cachedDraftRaw
+							? cachedDraftRaw?.exposureRegistry
+							: useEntryDraftParams
+								? entryParams?.exposureRegistry
+								: (detail?.definition as any)?.exposureRegistry,
+						draftApi
+					);
+					const draftProfiles = materializeExposureProfiles(draftExposureRegistry);
+					const contractDraftParams = sanitizeComponentDraftParams({
+						componentRef: {
+							componentId: cid,
+							revisionId: rid,
+							apiVersion: 'v1'
+						},
+						api: draftApi,
+						exposureRegistry: draftExposureRegistry,
+						published_profile: draftProfiles.published_profile,
+						debug_profile: draftProfiles.debug_profile,
+						config: {}
+					});
 				const graph = (detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] };
 				const applied = applyGraphDocument(
 					{
@@ -9406,18 +9458,23 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				if (!applied.ok) {
 					return { ok: false, reason: 'invalid_payload' as const, error: String(applied.reason ?? 'invalid_payload') };
 				}
-				update((s) => {
-					const next = {
-						...s,
+					update((s) => {
+						const next = {
+							...s,
 						editingContext: 'component' as const,
-						componentEditSession: {
-							componentId: cid,
-							revisionId: rid,
-							entryNodeId: String(entryNodeId ?? '').trim() || null,
-							snapshot,
-							parentSession
-						},
-						lastRunStatus: 'never_run' as const,
+							componentEditSession: {
+								componentId: cid,
+								revisionId: rid,
+								entryNodeId: entryId,
+								contractDraftParams,
+								snapshot,
+								parentSession
+							},
+							componentContractDraftCache: {
+								...(s.componentContractDraftCache ?? {}),
+								[draftCacheKey]: contractDraftParams
+							},
+							lastRunStatus: 'never_run' as const,
 						logs: [
 							...(Array.isArray(s.logs) ? s.logs : []),
 							{
@@ -9496,7 +9553,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					...s,
 					componentEditSession: {
 						...session,
-						revisionId: rid
+						revisionId: rid,
+						contractDraftParams: sanitizeComponentDraftParams({
+							...(session.contractDraftParams ?? {}),
+							componentRef: {
+								...(((session.contractDraftParams ?? {}) as Record<string, any>).componentRef ?? {}),
+								componentId: String(session.componentId ?? '').trim(),
+								revisionId: rid
+							}
+						})
 					},
 					logs: [
 						...(Array.isArray(s.logs) ? s.logs : []),
@@ -9513,6 +9578,50 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			});
 			if (!updated) return { ok: false as const, reason: 'no_component_edit_session' as const };
 			return { ok: true as const, revisionId: rid };
+		},
+
+		patchComponentEditContractDraft(
+			patch: Record<string, any>,
+			opts?: { intent?: InspectorDraftPatchIntent; notice?: string | null }
+		) {
+			const intent: InspectorDraftPatchIntent = opts?.intent ?? 'user_edit';
+			let updated = false;
+			update((s) => {
+				const session = s.componentEditSession;
+				if (!session) return s;
+				const nextDraftRaw = {
+					...(session.contractDraftParams ?? {}),
+					...(patch ?? {})
+				};
+				const nextDraft = sanitizeComponentDraftParams(nextDraftRaw);
+				const baseline = sanitizeComponentDraftParams(session.contractDraftParams ?? {});
+				const changed = stableJson(nextDraft) !== stableJson(baseline);
+				const cacheKey = `${String(session.componentId ?? '').trim()}@${String(session.revisionId ?? '').trim()}`;
+				const nextNotice =
+					intent === 'system_canonicalize' && changed
+						? String(opts?.notice ?? 'Component contract normalized automatically.')
+						: null;
+				updated = true;
+				return {
+					...s,
+					componentEditSession: {
+						...session,
+						contractDraftParams: nextDraft
+					},
+					componentContractDraftCache: cacheKey
+						? {
+								...(s.componentContractDraftCache ?? {}),
+								[cacheKey]: nextDraft
+							}
+						: (s.componentContractDraftCache ?? {}),
+					inspector: {
+						...s.inspector,
+						systemNotice: nextNotice
+					}
+				};
+			});
+			if (!updated) return { ok: false as const, reason: 'no_component_edit_session' as const };
+			return { ok: true as const };
 		},
 
 		applySavedComponentRevisionToReturnGraph(
@@ -9534,6 +9643,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const session = s.componentEditSession;
 				if (!session) return s;
 				const snapshot = session.snapshot;
+				const draftParams = ((session.contractDraftParams ?? {}) as Record<string, any>);
+				const draftApi = draftParams?.api && typeof draftParams.api === 'object'
+					? structuredClone(draftParams.api)
+					: null;
+				const draftExposureRegistry = Array.isArray(draftParams?.exposureRegistry)
+					? structuredClone(draftParams.exposureRegistry)
+					: null;
+				const draftPublishedProfile = Array.isArray(draftParams?.published_profile)
+					? structuredClone(draftParams.published_profile)
+					: null;
+				const draftDebugProfile = Array.isArray(draftParams?.debug_profile)
+					? structuredClone(draftParams.debug_profile)
+					: null;
 				const matchingNodeIds = (snapshot.nodes ?? [])
 					.filter((n) => {
 						if (n.data?.kind !== 'component') return false;
@@ -9565,6 +9687,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							...n.data,
 							params: {
 								...params,
+								...(draftApi ? { api: draftApi } : {}),
+								...(draftExposureRegistry ? { exposureRegistry: draftExposureRegistry } : {}),
+								...(draftPublishedProfile ? { published_profile: draftPublishedProfile } : {}),
+								...(draftDebugProfile ? { debug_profile: draftDebugProfile } : {}),
 								componentRef: {
 									...existingRef,
 									componentId: cid,
@@ -9580,6 +9706,19 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						}
 					};
 				});
+				const nextSnapshotInspector = (() => {
+					const currentInspector = snapshot.inspector ?? initialInspector;
+					const inspectorNodeId = String((currentInspector as any)?.nodeId ?? '').trim();
+					if (!inspectorNodeId) return currentInspector;
+					if (!targetIds.has(inspectorNodeId)) return currentInspector;
+					const refreshedNode = nextSnapshotNodes.find((n) => String((n as any)?.id ?? '') === inspectorNodeId);
+					if (!refreshedNode) return currentInspector;
+					return {
+						...currentInspector,
+						draftParams: structuredClone((((refreshedNode as any)?.data ?? {})?.params ?? {}) as Record<string, any>),
+						dirty: false
+					};
+				})();
 				const modeLabel = mode === 'all' ? 'all' : mode === 'none' ? 'none' : 'one';
 				const nextLogMessage = `[component-edit] Save apply scope=${modeLabel} updated=${updatedCount}/${matchedCount} ${cid}@${fromRid} -> ${cid}@${toRid}`;
 				const nextSnapshotLogs = [
@@ -9596,9 +9735,18 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					componentEditSession: {
 						...session,
 						revisionId: toRid,
+						contractDraftParams: sanitizeComponentDraftParams({
+							...(session.contractDraftParams ?? {}),
+							componentRef: {
+								...(((session.contractDraftParams ?? {}) as Record<string, any>).componentRef ?? {}),
+								componentId: cid,
+								revisionId: toRid
+							}
+						}),
 						snapshot: {
 							...snapshot,
 							nodes: nextSnapshotNodes,
+							inspector: nextSnapshotInspector,
 							logs: nextSnapshotLogs
 						}
 					},

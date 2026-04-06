@@ -24,4 +24,28 @@ describe('ComponentEditor', () => {
 		expect(text.includes('Contract is read-only in consumer mode.')).toBe(true);
 		expect(text.includes('disabled={componentContractReadOnly}')).toBe(true);
 	});
+
+	it('supports hiding the top component metadata/actions section for contract-only authoring view', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes('export let showComponentMetaSection = true;')).toBe(true);
+		expect(text.includes('{#if showComponentMetaSection}')).toBe(true);
+	});
+
+	it('uses internal output selection as canonical output naming and removes current-artifact display', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes('function setOutputFromRef(index: number, outputRef: string): void')).toBe(true);
+		expect(text.includes('availableOutputRefsForIndex(index)')).toBe(true);
+		expect(text.includes('outputOptionLabel(outputRef)')).toBe(true);
+		expect(text.includes('select output')).toBe(true);
+		expect(text.includes('readonlyField outputTypeReadonly">current')).toBe(false);
+	});
+
+	it('always shows schema settings inline and removes Adv toggle', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes('Adv')).toBe(false);
+		expect(text.includes('typedSchema.fields')).toBe(true);
+	});
 });

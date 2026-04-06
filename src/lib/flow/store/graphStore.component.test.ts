@@ -218,6 +218,201 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('stores contract draft params on component-edit session and allows patching without selected component node', async () => {
+		graphStore.hardResetGraph();
+		const hostComponentNodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(hostComponentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_author_draft/revisions/crev_author_draft') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_author_draft',
+						revisionId: 'crev_author_draft',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						message: 'author',
+						revisionSchemaVersion: 1,
+						checksum: 'author',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'internal_source_node',
+										type: 'source',
+										position: { x: 20, y: 20 },
+										data: {
+											kind: 'source',
+											label: 'Internal Source',
+											sourceKind: 'file',
+											params: {},
+											status: 'idle'
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: true }]
+							},
+							exposureRegistry: [
+								{
+									handle_id: 'data_out::summary',
+									alias: 'summary',
+									internal_source_path: 'model:Summarize',
+									kind: 'data_output',
+									native_contract: { type: 'text', fields: [] },
+									exposed: true,
+									published: true,
+									debug_visible: false
+								}
+							],
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_author_draft',
+				'crev_author_draft',
+				hostComponentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			graphStore.selectNode('internal_source_node');
+			const sessionBefore = get(graphStore).componentEditSession;
+			expect(sessionBefore).toBeTruthy();
+			expect((sessionBefore?.contractDraftParams?.api?.outputs ?? []).length).toBe(1);
+			expect(String(sessionBefore?.contractDraftParams?.componentRef?.componentId ?? '')).toBe('cmp_author_draft');
+			expect(String(sessionBefore?.contractDraftParams?.componentRef?.revisionId ?? '')).toBe('crev_author_draft');
+
+			const patched = graphStore.patchComponentEditContractDraft({
+				api: {
+					inputs: [],
+					outputs: [{ name: 'source', typedSchema: { type: 'text', fields: [] }, required: true }]
+				},
+				exposureRegistry: [
+					{
+						handle_id: 'data_out::source',
+						alias: 'source',
+						internal_source_path: 'source:Internal Source',
+						kind: 'data_output',
+						native_contract: { type: 'text', fields: [] },
+						exposed: true,
+						published: true,
+						debug_visible: false
+					}
+				]
+			});
+			expect((patched as any)?.ok).toBe(true);
+			const sessionAfter = get(graphStore).componentEditSession;
+			expect((sessionAfter?.contractDraftParams?.api?.outputs ?? []).length).toBe(1);
+			expect(String(sessionAfter?.contractDraftParams?.api?.outputs?.[0]?.name ?? '')).toBe('source');
+			expect(String(sessionAfter?.contractDraftParams?.exposureRegistry?.[0]?.alias ?? '')).toBe('source');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('persists component contract draft required flag across return/reopen of internals', async () => {
+		graphStore.hardResetGraph();
+		const hostComponentNodeId = graphStore.addNode('component', { x: 20, y: 20 });
+		graphStore.selectNode(hostComponentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_req/revisions/crev_req') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_req',
+						revisionId: 'crev_req',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						message: 'author',
+						revisionSchemaVersion: 1,
+						checksum: 'req',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'internal_source_node',
+										type: 'source',
+										position: { x: 20, y: 20 },
+										data: {
+											kind: 'source',
+											label: 'Internal Source',
+											sourceKind: 'file',
+											params: {},
+											status: 'idle'
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: true }]
+							},
+							exposureRegistry: [
+								{
+									handle_id: 'data_out::summary',
+									alias: 'summary',
+									internal_source_path: 'source:Internal Source',
+									kind: 'data_output',
+									native_contract: { type: 'text', fields: [] },
+									exposed: true,
+									published: true,
+									debug_visible: false
+								}
+							],
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_req', 'crev_req', hostComponentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+			const patched = graphStore.patchComponentEditContractDraft({
+				api: {
+					inputs: [],
+					outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: false }]
+				}
+			});
+			expect((patched as any)?.ok).toBe(true);
+			const sessionAfterPatch = get(graphStore).componentEditSession;
+			expect(Boolean(sessionAfterPatch?.contractDraftParams?.api?.outputs?.[0]?.required)).toBe(false);
+
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+
+			const reopened = await graphStore.openComponentRevisionForEditing('cmp_req', 'crev_req', hostComponentNodeId);
+			expect((reopened as any)?.ok).toBe(true);
+			const sessionAfterReopen = get(graphStore).componentEditSession;
+			expect(Boolean(sessionAfterReopen?.contractDraftParams?.api?.outputs?.[0]?.required)).toBe(false);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
 	it('applies component revision to node and derives immutable contracts from API schema', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
@@ -896,6 +1091,38 @@ describe('graphStore component integration', () => {
 		try {
 			const opened = await graphStore.openComponentRevisionForEditing('cmp_edit', 'crev_1', firstComponentNodeId);
 			expect((opened as any)?.ok).toBe(true);
+			const patchedDraft = graphStore.patchComponentEditContractDraft({
+				api: {
+					inputs: [],
+					outputs: [
+						{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: true },
+						{ name: 'text', typedSchema: { type: 'text', fields: [] }, required: true }
+					]
+				},
+				exposureRegistry: [
+					{
+						handle_id: 'data_out::summary',
+						alias: 'summary',
+						internal_source_path: 'model:Summarize',
+						kind: 'data_output',
+						native_contract: { type: 'text', fields: [] },
+						exposed: true,
+						published: true,
+						debug_visible: false
+					},
+					{
+						handle_id: 'data_out::text',
+						alias: 'text',
+						internal_source_path: 'source:Grab_Diet',
+						kind: 'data_output',
+						native_contract: { type: 'text', fields: [] },
+						exposed: true,
+						published: true,
+						debug_visible: false
+					}
+				]
+			});
+			expect((patchedDraft as any)?.ok).toBe(true);
 
 			const noneResult = graphStore.applySavedComponentRevisionToReturnGraph('cmp_edit', 'crev_1', 'crev_2', 'none');
 			expect((noneResult as any)?.ok).toBe(true);
@@ -911,6 +1138,18 @@ describe('graphStore component integration', () => {
 			const oneEntry = oneSnapshotNodes.find((n) => String(n.id) === firstComponentNodeId);
 			const oneSibling = oneSnapshotNodes.find((n) => String(n.id) === secondComponentNodeId);
 			expect(String(oneEntry?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_3');
+			expect(String((session?.snapshot?.inspector as any)?.nodeId ?? '')).toBe(firstComponentNodeId);
+			expect(
+				String(
+					(((session?.snapshot?.inspector as any)?.draftParams ?? {}) as any)?.componentRef?.revisionId ?? ''
+				)
+			).toBe('crev_3');
+			expect(Array.isArray(oneEntry?.data?.params?.api?.outputs)).toBe(true);
+			expect((oneEntry?.data?.params?.api?.outputs ?? []).map((o: any) => String(o?.name ?? ''))).toEqual([
+				'summary',
+				'text'
+			]);
+			expect(Array.isArray(oneEntry?.data?.params?.exposureRegistry)).toBe(true);
 			expect(String(oneSibling?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_1');
 
 			const allResult = graphStore.applySavedComponentRevisionToReturnGraph('cmp_edit', 'crev_1', 'crev_4', 'all');
@@ -921,6 +1160,10 @@ describe('graphStore component integration', () => {
 			const allSibling = allSnapshotNodes.find((n) => String(n.id) === secondComponentNodeId);
 			const untouched = allSnapshotNodes.find((n) => String(n.id) === thirdComponentNodeId);
 			expect(String(allSibling?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_4');
+			expect((allSibling?.data?.params?.api?.outputs ?? []).map((o: any) => String(o?.name ?? ''))).toEqual([
+				'summary',
+				'text'
+			]);
 			expect(String(untouched?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_9');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
@@ -1169,6 +1412,105 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('persists toggled output required flag when apply scope is this instance (one)', async () => {
+		graphStore.hardResetGraph();
+		const firstComponentNodeId = graphStore.addNode('component', { x: 40, y: 40 });
+		const secondComponentNodeId = graphStore.addNode('component', { x: 120, y: 120 });
+		graphStore.selectNode(firstComponentNodeId);
+
+		const seedApi = {
+			inputs: [],
+			outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: true }]
+		};
+		const seedExposure = [
+			{
+				handle_id: 'data_out::summary',
+				alias: 'summary',
+				internal_source_path: 'model:Summarize',
+				kind: 'data_output',
+				native_contract: { type: 'text', fields: [] },
+				exposed: true,
+				published: true,
+				debug_visible: false
+			}
+		];
+		const setRef = (nodeId: string, revisionId: string) =>
+			graphStore.updateNodeConfig(nodeId, {
+				params: {
+					componentRef: { componentId: 'cmp_req_scope', revisionId, apiVersion: 'v1' },
+					api: structuredClone(seedApi),
+					exposureRegistry: structuredClone(seedExposure),
+					bindings: { inputs: {}, outputs: {}, config: {} },
+					config: {}
+				}
+			});
+		expect(setRef(firstComponentNodeId, 'crev_1').ok).toBe(true);
+		expect(setRef(secondComponentNodeId, 'crev_1').ok).toBe(true);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_req_scope/revisions/crev_1') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_req_scope',
+						revisionId: 'crev_1',
+						parentRevisionId: null,
+						createdAt: '2026-04-05T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: { nodes: [], edges: [] },
+							api: structuredClone(seedApi),
+							exposureRegistry: structuredClone(seedExposure),
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_req_scope', 'crev_1', firstComponentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+			const patchedDraft = graphStore.patchComponentEditContractDraft({
+				api: {
+					inputs: [],
+					outputs: [{ name: 'summary', typedSchema: { type: 'text', fields: [] }, required: false }]
+				},
+				exposureRegistry: structuredClone(seedExposure)
+			});
+			expect((patchedDraft as any)?.ok).toBe(true);
+
+			const applyResult = graphStore.applySavedComponentRevisionToReturnGraph(
+				'cmp_req_scope',
+				'crev_1',
+				'crev_2',
+				'one'
+			);
+			expect((applyResult as any)?.ok).toBe(true);
+			expect(Number((applyResult as any)?.updatedCount ?? -1)).toBe(1);
+
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+
+			const after = get(graphStore);
+			const firstNode = (after.nodes ?? []).find((n: any) => String(n.id) === firstComponentNodeId) as any;
+			const secondNode = (after.nodes ?? []).find((n: any) => String(n.id) === secondComponentNodeId) as any;
+			expect(String(firstNode?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_2');
+			expect(Boolean(firstNode?.data?.params?.api?.outputs?.[0]?.required ?? true)).toBe(false);
+			expect(String(secondNode?.data?.params?.componentRef?.revisionId ?? '')).toBe('crev_1');
+			expect(Boolean(secondNode?.data?.params?.api?.outputs?.[0]?.required ?? false)).toBe(true);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
+	});
+
 	it('applies multi-output component API and keeps output source mapping synchronized', async () => {
 		graphStore.hardResetGraph();
 		const nodeId = graphStore.addNode('component', { x: 20, y: 20 });
@@ -1387,7 +1729,7 @@ describe('graphStore component integration', () => {
 		expect(String((result as any)?.error ?? '')).toContain('requires an API Contract output source');
 	});
 
-	it('blocks Accept when a non-required declared component output is missing API output source', async () => {
+	it('allows Accept when a non-required declared component output is missing API output source', async () => {
 		graphStore.hardResetGraph();
 		const componentId = graphStore.addNode('component', { x: 20, y: 20 });
 		graphStore.selectNode(componentId);
@@ -1418,11 +1760,10 @@ describe('graphStore component integration', () => {
 		});
 
 		const validation = graphStore.getInspectorDraftAcceptValidation();
-		expect(validation.ok).toBe(false);
-		expect(String(validation.errors?.[0] ?? '')).toContain('requires an API Contract output source');
+		expect(validation.ok).toBe(true);
 		const result = await graphStore.applyInspectorDraft();
 		expect((result as any)?.ok).toBe(false);
-		expect(String((result as any)?.reason ?? '')).toBe('component_accept_blocked');
+		expect(String((result as any)?.error ?? '')).toContain('component authoring mode');
 	});
 
 	it('blocks contract typedSchema edits from inspector in graph context', async () => {

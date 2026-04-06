@@ -7045,16 +7045,19 @@ async def run_graph(
                         out_name = str(out_decl.get("name") or "").strip()
                         if not out_name:
                             continue
+                        output_required = bool(out_decl.get("required", True))
                         candidates = refs_by_handle.get(out_name, [])
                         if not candidates:
-                            raise ContractMismatchError(
-                                f"Component output '{out_name}' not resolved. Ensure published API contract maps data_output '{out_name}' to an internal source path.",
-                                code="COMPONENT_OUTPUT_NOT_RESOLVED",
-                                details=_contract_details(
-                                    expected={"output": out_name, "resolvedArtifact": True},
-                                    actual={"resolvedArtifact": False},
-                                ),
-                            )
+                            if output_required:
+                                raise ContractMismatchError(
+                                    f"Component output '{out_name}' not resolved. Ensure published API contract maps data_output '{out_name}' to an internal source path.",
+                                    code="COMPONENT_OUTPUT_NOT_RESOLVED",
+                                    details=_contract_details(
+                                        expected={"output": out_name, "resolvedArtifact": True, "required": True},
+                                        actual={"resolvedArtifact": False},
+                                    ),
+                                )
+                            continue
                         current_artifact_id = str(candidates[0] or "").strip()
                         bound_artifact_id = current_artifact_id
                         if not bound_artifact_id:
@@ -7136,7 +7139,7 @@ async def run_graph(
                             "typedSchema": declared_typed,
                             "typedSchemaExpected": declared_typed,
                             "typedSchemaObserved": actual_typed,
-                            "required": bool(out_decl.get("required", True)),
+                            "required": output_required,
                         }
                     for out_decl in declared_outputs:
                         if not isinstance(out_decl, dict):

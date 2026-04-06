@@ -24,6 +24,7 @@
 	export let selected: boolean = false;
 	export let sourceHandles: NodeHandleDef[] | null = null;
 	export let targetHandles: NodeHandleDef[] | null = null;
+	export let showSourceHandleLabels: boolean = false;
 
 	// Status is derived from bindings; node.data.status is not authoritative.
 	$: binding = $graphStore.nodeBindings?.[id];
@@ -143,6 +144,15 @@
 		data-port-hint={portHintText('out', h)}
 		style={`top:${handleTop(i, effectiveSourceHandles.length)};`}
 	/>
+	{#if showSourceHandleLabels}
+		<div
+			class="sourceHandleLabel"
+			title={String(h?.label ?? h?.id ?? '')}
+			style={`top:${handleTop(i, effectiveSourceHandles.length)};`}
+		>
+			{String(h?.label ?? h?.id ?? '')}
+		</div>
+	{/if}
 {/each}
 
 <div class={`node ${selected ? 'selected' : ''} st-${status}`}>
@@ -289,6 +299,22 @@
 
 	:global(.portHandle.plane-control) {
 		background: #2fbf71;
+	}
+
+	.sourceHandleLabel {
+		position: absolute;
+		right: 14px;
+		transform: translateY(-50%);
+		font-size: 10px;
+		line-height: 1;
+		color: #b8c6df;
+		opacity: 0.95;
+		max-width: 120px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		pointer-events: none;
+		text-align: right;
 	}
 
 	/* status coloring */

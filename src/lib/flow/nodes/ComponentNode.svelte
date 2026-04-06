@@ -52,9 +52,14 @@
 						const effectiveName = name || (index === 0 ? 'default' : `out_${index + 1}`);
 						const outputRef = String(outputSourceByAlias?.[effectiveName] ?? '').trim();
 						const internalName = internalNodeNameFromOutputRef(outputRef);
-						return { id: effectiveName, label: internalName || effectiveName };
+						const payloadType = String((out as any)?.typedSchema?.type ?? '').trim().toLowerCase();
+						return {
+							id: effectiveName,
+							label: internalName || effectiveName,
+							payloadType: payloadType.length > 0 ? payloadType : undefined
+						};
 					})
-					.filter((v): v is { id: string; label: string } => Boolean(v))
+					.filter((v): v is { id: string; label: string; payloadType?: string } => Boolean(v))
 			: null;
 </script>
 

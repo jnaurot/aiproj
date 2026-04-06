@@ -121,3 +121,4 @@ async def test_component_runtime_publishes_native_handle_outputs_without_wrapper
 	assert component_outputs, "expected component node_output events"
 	assert all(str(e.get("handle") or "").strip() for e in component_outputs), "all component outputs must be handle-scoped"
 	assert all(str(e.get("handle") or "") == "out_text" for e in component_outputs)
+

@@ -53,6 +53,11 @@
 	// import type { TransformKind } from '$lib/flow/types/paramsMap';
 
 	$: selectedNode = $selectedNodeStore;
+	$: isComponentEditContext = $graphStore.editingContext === 'component';
+	$: componentSessionContractParams =
+		isComponentEditContext && $graphStore.componentEditSession
+			? (($graphStore.componentEditSession.contractDraftParams ?? {}) as Record<string, any>)
+			: null;
 
 	// kind discriminators
 	$: kind = selectedNode?.data?.kind as PipelineNodeData['kind'] | undefined;
@@ -1154,6 +1159,13 @@
 		graphStore.commitInspectorImmediate(patch);
 	}
 
+	function onComponentSessionContractDraft(
+		patch: Record<string, any>,
+		opts?: { intent?: 'user_edit' | 'system_canonicalize'; notice?: string | null }
+	) {
+		graphStore.patchComponentEditContractDraft(patch, opts);
+	}
+
 	function toJoinPatch(patch: Record<string, any>): Record<string, any> {
 		const next = patch && typeof patch === 'object' ? patch : {};
 		if ('join' in next || 'op' in next) {
@@ -1415,6 +1427,21 @@
 
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
+	{#if isComponentEditContext && componentSessionContractParams && !isComponent}
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Component Contract (Authoring)</div>
+			<div class="guidedAssistDesc">
+				Editing published contract for this component revision while inside internals.
+			</div>
+		</div>
+		<ComponentEditor
+			{selectedNode}
+			params={componentSessionContractParams}
+			onDraft={onComponentSessionContractDraft}
+			editingContext="component"
+			showComponentMetaSection={false}
+		/>
+	{/if}
 	{#if sourceObservability}
 		<div class="guidedAssistCard">
 			<div class="guidedAssistHead">Source Observability</div>

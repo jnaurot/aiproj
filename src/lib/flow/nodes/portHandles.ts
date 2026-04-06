@@ -6,14 +6,17 @@ export type NodeHandleDef = {
 	id: string;
 	label?: string;
 	plane?: HandlePlane;
+	payloadType?: string;
 };
 
 export function portHintText(direction: 'in' | 'out', handle: NodeHandleDef): string {
 	const plane = String(handle?.plane ?? inferPlaneFromHandleId(String(handle?.id ?? ''))).trim() || 'work';
 	const id = String(handle?.id ?? '').trim() || (direction === 'in' ? 'in' : 'out');
 	const label = String(handle?.label ?? '').trim();
+	const payloadType = String(handle?.payloadType ?? '').trim().toLowerCase();
 	const role = direction === 'in' ? 'Input' : 'Output';
-	const shown = label.length > 0 ? `${label} (${id})` : id;
+	const shownBase = label.length > 0 ? `${label} (${id})` : id;
+	const shown = payloadType.length > 0 ? `${shownBase} [${payloadType}]` : shownBase;
 	return `${role}: ${shown} [${plane}]`;
 }
 
@@ -93,7 +96,8 @@ function normalizeHandle(
 	const declaredPlane = toPlane((decl as any)?.plane) ?? toPlane((decl as any)?.affinity);
 	const plane = handle?.plane ?? declaredPlane ?? inferPlaneFromHandleId(id);
 	const label = String(handle?.label ?? (decl as any)?.label ?? titleFromHandle(id)).trim() || id;
-	return { id, label, plane };
+	const payloadType = String(handle?.payloadType ?? '').trim() || undefined;
+	return { id, label, plane, payloadType };
 }
 
 export function resolveNodeHandles(
@@ -105,7 +109,12 @@ export function resolveNodeHandles(
 	const fromProvided =
 		Array.isArray(provided) && provided.length > 0
 			? provided
-					.map((h) => ({ id: String(h?.id ?? '').trim(), label: h?.label, plane: h?.plane }))
+					.map((h) => ({
+						id: String(h?.id ?? '').trim(),
+						label: h?.label,
+						plane: h?.plane,
+						payloadType: h?.payloadType
+					}))
 					.filter((h) => h.id.length > 0)
 			: [];
 	const fromDeclared = declaredHandleIds(data, direction).map((id) => ({ id }));
