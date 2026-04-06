@@ -69,6 +69,10 @@ import {
 	type NodeDocResolved
 } from '$lib/flow/components/nodeDocsViewModel';
 import {
+	NodeDocExplanationModeSchema,
+	type NodeDocExplanationMode
+} from '$lib/flow/schema/nodeDocs';
+import {
 	acceptNodeParams,
 	cancelAllRuns,
 	createEventBatcher,
@@ -1032,6 +1036,7 @@ export function __normalizeBindingForTest(
 
 export type GraphState = {
 	graphId: string;
+	nodeDocExplanationMode: NodeDocExplanationMode;
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
 	selectedNodeId: string | null;
@@ -6325,6 +6330,28 @@ function topoFrom(
 }
 
 const loaded = loadGraphFromLocalStorage(emptyGraph);
+const NODE_DOC_EXPLANATION_MODE_STORAGE_KEY = 'flow.nodeDocExplanationMode.v1';
+
+function loadNodeDocExplanationMode(): NodeDocExplanationMode {
+	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return 'default';
+	try {
+		const raw = String(window.localStorage.getItem(NODE_DOC_EXPLANATION_MODE_STORAGE_KEY) ?? '').trim();
+		const parsed = NodeDocExplanationModeSchema.safeParse(raw);
+		return parsed.success ? parsed.data : 'default';
+	} catch {
+		return 'default';
+	}
+}
+
+function persistNodeDocExplanationMode(mode: NodeDocExplanationMode): void {
+	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return;
+	try {
+		window.localStorage.setItem(NODE_DOC_EXPLANATION_MODE_STORAGE_KEY, mode);
+	} catch {
+		// no-op
+	}
+}
+
 const loadedNodes = Array.isArray((loaded as any)?.nodes)
 	? ((loaded as any).nodes as Node<PipelineNodeData>[])
 	: [];
@@ -6344,6 +6371,7 @@ const loadedEdges = recomputeEdgeContractsBestEffort(
 
 const initialState: GraphState = {
 	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
+	nodeDocExplanationMode: loadNodeDocExplanationMode(),
 	nodes: loadedNormalized.nodes,
 	edges: loadedEdges,
 	selectedNodeId: null,
@@ -7570,6 +7598,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		getNodeDocResolved(nodeId: string): NodeDocResolved | null {
 			const s = get({ subscribe } as any) as GraphState;
 			return resolveNodeDocMemoized(s, nodeId);
+		},
+		getNodeDocExplanationMode(): NodeDocExplanationMode {
+			const s = get({ subscribe } as any) as GraphState;
+			return s.nodeDocExplanationMode ?? 'default';
+		},
+		setNodeDocExplanationMode(modeRaw: NodeDocExplanationMode): void {
+			const parsed = NodeDocExplanationModeSchema.safeParse(modeRaw);
+			const mode = parsed.success ? parsed.data : 'default';
+			update((s) => ({ ...s, nodeDocExplanationMode: mode }));
+			persistNodeDocExplanationMode(mode);
 		},
 		updateNodeConfig: updateNodeConfigImpl,
 		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
@@ -10711,5 +10749,10 @@ export function __buildNodeSchemaContractSnapshotForTest(
 
 export function getNodeDocResolvedFromState(state: GraphState, nodeId: string): NodeDocResolved | null {
 	return resolveNodeDocForState(state, nodeId);
+}
+
+export function getNodeDocExplanationModeFromState(state: GraphState): NodeDocExplanationMode {
+	const parsed = NodeDocExplanationModeSchema.safeParse((state as any)?.nodeDocExplanationMode);
+	return parsed.success ? parsed.data : 'default';
 }
 
