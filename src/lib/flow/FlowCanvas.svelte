@@ -18,6 +18,7 @@
 	import type { GraphState, InputResolution, SaveConsistencyMismatch } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import ToolbarMenu from './components/ToolbarMenu.svelte';
@@ -404,6 +405,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeSettingsSavingAll = false;
 	let nodeDocExplanationMode: NodeDocExplanationMode = 'default';
 	let nodeDocTrainingMode: NodeDocTrainingMode = 'off';
+	let planeExpansionEnabled = true;
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsLive: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsHistory: RunMonitorAdaptiveDecisionRow[] = [];
@@ -4358,6 +4360,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				nextDrafts[name] = row.value ?? '';
 			}
 			runtimeEnvDraftByName = nextDrafts;
+			planeExpansionEnabled = parseBoolRuntimeEnv(nextDrafts['NODE_DOC_PLANES_EXPANSION_ENABLED'] ?? '1', true);
 		} catch (error) {
 			runtimeEnvError = String((error as Error)?.message ?? error ?? 'Failed to load runtime env vars.');
 			runtimeEnvVars = [];
@@ -4734,24 +4737,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</label>
 									</div>
 								</div>
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-duplicate-enabled">Node duplication</label>
-									<select
-										id="node-duplicate-enabled"
-										class="runtimeEnvInput"
-										value={parseBoolRuntimeEnv(runtimeEnvDraftValue('NODE_DUPLICATE_ENABLED', '1'), true) ? 'on' : 'off'}
-										aria-label="Node duplication"
-										on:change={(event) => {
-											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '').trim().toLowerCase();
-											setRuntimeEnvDraftValue('NODE_DUPLICATE_ENABLED', raw === 'off' ? '0' : '1');
+								<div class="runtimeEnvMergedRow">
+									<label class="mono" for="node-duplicate-delay-ms">Node duplication</label>
+									<TogglePill
+										bind:value={nodeDuplicateEnabled}
+										on:click={() => {
+											setRuntimeEnvDraftValue('NODE_DUPLICATE_ENABLED', nodeDuplicateEnabled ? '0' : '1');
 										}}
-									>
-										<option value="on">On</option>
-										<option value="off">Off</option>
-									</select>
-								</div>
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-duplicate-delay-ms">Node duplication delay (ms)</label>
+									/>
 									<input
 										id="node-duplicate-delay-ms"
 										class="runtimeEnvInput"
@@ -4759,6 +4752,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										min="0"
 										max="10000"
 										step="10"
+										disabled={!nodeDuplicateEnabled}
 										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DUPLICATE_DELAY_MS', '500'), 500, 0, 10000))}
 										aria-label="Node duplication delay milliseconds"
 										on:input={(event) => {
@@ -4767,41 +4761,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										}}
 									/>
 								</div>
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-doc-tooltip-delay-ms">Node explanation delay (ms)</label>
-									<input
-										id="node-doc-tooltip-delay-ms"
-										class="runtimeEnvInput"
-										type="number"
-										min="0"
-										max="10000"
-										step="10"
-										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', '500'), 500, 0, 10000))}
-										aria-label="Node explanation delay milliseconds"
-										on:input={(event) => {
-											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
-											setRuntimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', raw || '0');
+								<div class="runtimeEnvMergedRow">
+									<label class="mono" for="node-doc-planes-expansion-delay-ms">Plane expansion</label>
+									<TogglePill
+										bind:value={planeExpansionEnabled}
+										on:click={() => {
+											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', planeExpansionEnabled ? '0' : '1');
 										}}
 									/>
-								</div>
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-doc-planes-expansion-enabled">Node plane expansion</label>
-									<select
-										id="node-doc-planes-expansion-enabled"
-										class="runtimeEnvInput"
-										value={parseBoolRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', '1'), true) ? 'on' : 'off'}
-										aria-label="Node plane expansion"
-										on:change={(event) => {
-											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '').trim().toLowerCase();
-											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', raw === 'off' ? '0' : '1');
-										}}
-									>
-										<option value="on">On</option>
-										<option value="off">Off</option>
-									</select>
-								</div>
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-doc-planes-expansion-delay-ms">Node plane expansion delay (ms)</label>
 									<input
 										id="node-doc-planes-expansion-delay-ms"
 										class="runtimeEnvInput"
@@ -4809,8 +4776,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										min="0"
 										max="15000"
 										step="10"
+										disabled={!planeExpansionEnabled}
 										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_DELAY_MS', '1200'), 1200, 0, 15000))}
-										aria-label="Node plane expansion delay milliseconds"
+										aria-label="Plane expansion delay milliseconds"
 										on:input={(event) => {
 											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
 											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_DELAY_MS', raw || '0');
@@ -4899,11 +4867,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										/>
 									</div>
 								{/if}
-								<div class="runtimeEnvModeRow">
-									<label class="mono" for="node-doc-explanation-mode">Node explanation mode</label>
+								<div class="runtimeEnvMergedRow">
+									<label class="mono" for="node-doc-explanation-mode">Node explanation</label>
 									<select
 										id="node-doc-explanation-mode"
 										class="runtimeEnvInput"
+										style="width: 120px;"
 										value={nodeDocExplanationMode}
 										aria-label="Node explanation mode"
 										on:change={(event) => {
@@ -4916,9 +4885,24 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										}}
 									>
 										<option value="default">Default</option>
-										<option value="llm">LLM explanation (read-only)</option>
+										<option value="llm">LLM</option>
 										<option value="none">None</option>
 									</select>
+									<input
+										id="node-doc-tooltip-delay-ms"
+										class="runtimeEnvInput"
+										type="number"
+										min="0"
+										max="10000"
+										step="10"
+										disabled={nodeDocExplanationMode === 'none'}
+										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', '500'), 500, 0, 10000))}
+										aria-label="Node explanation delay milliseconds"
+										on:input={(event) => {
+											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
+											setRuntimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', raw || '0');
+										}}
+									/>
 								</div>
 								<div class="runtimeEnvModeRow">
 									<label class="mono" for="node-doc-training-mode">Node explanation training</label>
@@ -8136,6 +8120,40 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		grid-template-columns: 180px 1fr;
 		align-items: center;
 		gap: 8px;
+	}
+
+	.runtimeEnvMergedRow {
+		display: grid;
+		grid-template-columns: 140px 130px 1fr;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.runtimeEnvTogglePill {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 4px 12px;
+		border-radius: 999px;
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-bg, #0b1323);
+		color: var(--color-control-text, #dbe7ff);
+		font-size: 11px;
+		font-weight: 500;
+		cursor: pointer;
+		min-width: 50px;
+	}
+
+	.runtimeEnvTogglePill.on {
+		background: #1a4d2e;
+		border-color: #2d7a48;
+		color: #6fcf97;
+	}
+
+	.runtimeEnvTogglePill.off {
+		background: #3d2a2a;
+		border-color: #5a3d3d;
+		color: #cf6f6f;
 	}
 
 	.runtimeEnvDisclosure {
