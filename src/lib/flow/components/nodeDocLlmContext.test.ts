@@ -33,7 +33,17 @@ describe('nodeDocLlmContext', () => {
 
 	it('extracts model context with provider and model details', () => {
 		graphStore.hardResetGraph();
+		const upstreamId = graphStore.addNode('source', { x: -240, y: 0 });
+		graphStore.updateNodeConfig(upstreamId, { label: 'Component' } as any);
 		const modelId = graphStore.addNode('model', { x: 0, y: 0 });
+		graphStore.addEdge({
+			id: 'e_model_ctx',
+			source: upstreamId,
+			sourceHandle: 'summarize',
+			target: modelId,
+			targetHandle: 'in',
+			data: { mode: 'work' }
+		} as any);
 		graphStore.updateNodeConfig(modelId, {
 			params: {
 				user_prompt: 'Given a job row and preferences, score match quality.',
@@ -46,6 +56,9 @@ describe('nodeDocLlmContext', () => {
 		expect(String(context?.settings.provider ?? '').length).toBeGreaterThan(0);
 		expect(String(context?.settings.user_prompt ?? '')).toContain('score match quality');
 		expect((context?.settings as any).debug_enabled).toBeUndefined();
+		expect(Array.isArray(context?.planes?.data_input_sources)).toBe(true);
+		expect((context?.planes?.data_input_sources ?? []).length).toBeGreaterThan(0);
+		expect((context?.planes?.data_input_sources ?? []).some((v: string) => v.includes('.summarize'))).toBe(true);
 	});
 
 	it('extracts transform context with operation details', () => {

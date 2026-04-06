@@ -59,7 +59,7 @@ describe('NodeDocTooltip', () => {
 					node_kind: 'model',
 					node_subtype: 'ollama',
 					settings: { model: 'glm-4.7-flash:latest' },
-					planes: { data_inputs: ['in'], data_outputs: ['out'], param_inputs: [], control_inputs: [] },
+					planes: { data_inputs: ['in'], data_outputs: ['out'], data_input_sources: [], param_inputs: [], control_inputs: [] },
 					runtime: { pending_input_count: 0, inflight: 0, ready_work: false, blocked_reason_code: '' }
 				},
 				llmSignature: 'sig-llm'
@@ -84,7 +84,7 @@ describe('NodeDocTooltip', () => {
 					node_kind: 'model',
 					node_subtype: 'ollama',
 					settings: { model: 'glm-4.7-flash:latest' },
-					planes: { data_inputs: ['in'], data_outputs: ['out'], param_inputs: [], control_inputs: [] },
+					planes: { data_inputs: ['in'], data_outputs: ['out'], data_input_sources: [], param_inputs: [], control_inputs: [] },
 					runtime: { pending_input_count: 0, inflight: 0, ready_work: false, blocked_reason_code: '' }
 				},
 				llmSignature: 'sig-train'

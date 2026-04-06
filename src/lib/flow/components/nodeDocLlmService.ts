@@ -18,6 +18,10 @@ export type NodeDocLlmServiceResult = {
 };
 
 export type NodeDocLlmServiceOptions = {
+	/**
+	 * Optional client-side timeout override in milliseconds.
+	 * When omitted, request lifetime is controlled by backend timeout policy.
+	 */
 	timeoutMs?: number;
 	retries?: number;
 	provider?: string;
@@ -51,15 +55,17 @@ function nowMs(): number {
 async function postOnce(
 	context: NodeDocLlmContext,
 	signatureKey: string,
-	options: Required<Pick<NodeDocLlmServiceOptions, 'timeoutMs' | 'provider' | 'model'>>
+	options: Pick<NodeDocLlmServiceOptions, 'timeoutMs' | 'provider' | 'model'>
 ): Promise<NodeDocGeneratedExplanation | null> {
-	const controller = new AbortController();
-	const timeoutHandle = setTimeout(() => controller.abort(), options.timeoutMs);
+	const timeoutMs = Number(options.timeoutMs);
+	const useClientTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
+	const controller = useClientTimeout ? new AbortController() : null;
+	const timeoutHandle = useClientTimeout ? setTimeout(() => controller?.abort(), timeoutMs) : null;
 	try {
 		const response = await fetch(backendUrl('/api/models/node-doc-explain'), {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			signal: controller.signal,
+			...(controller ? { signal: controller.signal } : {}),
 			body: JSON.stringify({
 				context,
 				signatureKey,
@@ -71,7 +77,7 @@ async function postOnce(
 		const payload = await response.json();
 		return sanitizeNodeDocGeneratedExplanation(payload);
 	} finally {
-		clearTimeout(timeoutHandle);
+		if (timeoutHandle) clearTimeout(timeoutHandle);
 	}
 }
 
@@ -81,7 +87,8 @@ export async function generateNodeDocLlmExplanation(
 	options: NodeDocLlmServiceOptions = {}
 ): Promise<NodeDocLlmServiceResult> {
 	const retries = Math.max(0, Number(options.retries ?? 1));
-	const timeoutMs = Math.max(400, Number(options.timeoutMs ?? 2500));
+	const timeoutMsRaw = Number(options.timeoutMs);
+	const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : undefined;
 	const provider = String(options.provider ?? 'ollama').trim() || 'ollama';
 	const model = String(options.model ?? 'glm-4.7-flash:latest').trim() || 'glm-4.7-flash:latest';
 	const startedAt = nowMs();

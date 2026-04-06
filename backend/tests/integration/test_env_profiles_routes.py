@@ -131,6 +131,8 @@ def test_env_vars_list_contains_supported_runtime_envs(monkeypatch, tmp_path):
 		rows = body.get("vars") or []
 		assert any((r or {}).get("name") == "RUNNER_MAX_CONCURRENCY" for r in rows)
 		assert any((r or {}).get("name") == "ARTIFACT_STORE" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_FEEDBACK_LLM_TIMEOUT_SECONDS" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_TIMEOUT_SECONDS" for r in rows)
 
 
 def test_env_vars_set_and_clear_override(monkeypatch, tmp_path):

@@ -94,6 +94,25 @@ _SUPPORTED_ENV_SPECS: List[EnvVarSpec] = [
 	EnvVarSpec("LLM_TABLE_MAX_COLS", "Max columns when materializing table artifact for prompts.", "50", category="llm"),
 	EnvVarSpec("LLM_PROMPT_MAX_CHARS", "Max prompt chars after materialization.", "20000", category="llm"),
 	EnvVarSpec("LLM_TABLE_SORT_ROWS", "Sort table rows before prompt materialization.", "1", category="llm"),
+	EnvVarSpec("OLLAMA_BASE_URL", "Default Ollama base URL for backend LLM calls.", "http://127.0.0.1:11434", category="llm"),
+	EnvVarSpec(
+		"NODE_DOC_FEEDBACK_LLM_BASE_URL",
+		"Override Ollama base URL used by node-doc feedback suggester.",
+		"",
+		category="llm",
+	),
+	EnvVarSpec(
+		"NODE_DOC_FEEDBACK_LLM_TIMEOUT_SECONDS",
+		"Timeout in seconds for node-doc feedback LLM suggester requests.",
+		"4",
+		category="llm",
+	),
+	EnvVarSpec(
+		"NODE_DOC_EXPLAIN_LLM_TIMEOUT_SECONDS",
+		"Timeout in seconds for node-doc explain LLM requests.",
+		"4",
+		category="llm",
+	),
 	EnvVarSpec("CACHE_KEY_DEBUG", "Enable cache key debug diagnostics.", "0", category="runtime"),
 	EnvVarSpec("MODEL_CONN_*", "Model connection profile env refs, e.g. MODEL_CONN_DEV.", "", sensitive=True, category="model"),
 ]

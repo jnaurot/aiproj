@@ -11,6 +11,7 @@ const context: NodeDocLlmContext = {
 	planes: {
 		data_inputs: [],
 		data_outputs: ['out'],
+		data_input_sources: [],
 		param_inputs: [],
 		control_inputs: []
 	},

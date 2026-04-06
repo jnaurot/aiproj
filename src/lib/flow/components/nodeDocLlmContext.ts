@@ -12,6 +12,7 @@ export type NodeDocLlmContext = {
 	planes: {
 		data_inputs: string[];
 		data_outputs: string[];
+		data_input_sources: string[];
 		param_inputs: string[];
 		control_inputs: string[];
 	};
@@ -66,8 +67,12 @@ function edgeMode(edge: Edge<PipelineEdgeData>): 'work' | 'param' | 'control' {
 function collectPlaneHandles(state: GraphState, nodeId: string): NodeDocLlmContext['planes'] {
 	const data_inputs: string[] = [];
 	const data_outputs: string[] = [];
+	const data_input_sources: string[] = [];
 	const param_inputs: string[] = [];
 	const control_inputs: string[] = [];
+	const nodeById = new Map(
+		(state.nodes ?? []).map((node) => [normalized((node as any)?.id), (node as any)?.data ?? {}])
+	);
 	for (const edge of state.edges ?? []) {
 		const source = normalized((edge as any)?.source);
 		const target = normalized((edge as any)?.target);
@@ -77,6 +82,15 @@ function collectPlaneHandles(state: GraphState, nodeId: string): NodeDocLlmConte
 			if (mode === 'work') data_inputs.push(handle);
 			if (mode === 'param') param_inputs.push(handle);
 			if (mode === 'control') control_inputs.push(handle);
+			if (mode === 'work') {
+				const sourceHandle = normalized((edge as any)?.sourceHandle) || 'out';
+				const sourceData = nodeById.get(source) ?? {};
+				const sourceLabel = normalized((sourceData as any)?.label) || source || 'upstream';
+				const sourceKind = normalized((sourceData as any)?.kind).toLowerCase() || 'node';
+				data_input_sources.push(
+					`${handle}<=${sourceLabel}.${sourceHandle} [${sourceKind}]`
+				);
+			}
 		}
 		if (source === nodeId) {
 			const handle = normalized((edge as any)?.sourceHandle) || 'out';
@@ -86,6 +100,7 @@ function collectPlaneHandles(state: GraphState, nodeId: string): NodeDocLlmConte
 	return {
 		data_inputs: Array.from(new Set(data_inputs)).sort(),
 		data_outputs: Array.from(new Set(data_outputs)).sort(),
+		data_input_sources: Array.from(new Set(data_input_sources)).sort(),
 		param_inputs: Array.from(new Set(param_inputs)).sort(),
 		control_inputs: Array.from(new Set(control_inputs)).sort()
 	};
