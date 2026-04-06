@@ -26,6 +26,9 @@ export type NodeDocLlmServiceOptions = {
 	retries?: number;
 	provider?: string;
 	model?: string;
+	temperature?: number;
+	topP?: number;
+	maxTokens?: number;
 	onTelemetry?: (telemetry: NodeDocLlmTelemetry) => void;
 };
 
@@ -55,7 +58,10 @@ function nowMs(): number {
 async function postOnce(
 	context: NodeDocLlmContext,
 	signatureKey: string,
-	options: Pick<NodeDocLlmServiceOptions, 'timeoutMs' | 'provider' | 'model'>
+	options: Pick<
+		NodeDocLlmServiceOptions,
+		'timeoutMs' | 'provider' | 'model' | 'temperature' | 'topP' | 'maxTokens'
+	>
 ): Promise<NodeDocGeneratedExplanation | null> {
 	const timeoutMs = Number(options.timeoutMs);
 	const useClientTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
@@ -70,7 +76,15 @@ async function postOnce(
 				context,
 				signatureKey,
 				provider: options.provider,
-				model: options.model
+				model: options.model,
+				temperature: Number.isFinite(Number(options.temperature))
+					? Number(options.temperature)
+					: undefined,
+				topP: Number.isFinite(Number(options.topP)) ? Number(options.topP) : undefined,
+				maxTokens:
+					Number.isFinite(Number(options.maxTokens)) && Number(options.maxTokens) > 0
+						? Math.round(Number(options.maxTokens))
+						: undefined
 			})
 		});
 		if (!response.ok) return null;
@@ -91,11 +105,21 @@ export async function generateNodeDocLlmExplanation(
 	const timeoutMs = Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : undefined;
 	const provider = String(options.provider ?? 'ollama').trim() || 'ollama';
 	const model = String(options.model ?? 'glm-4.7-flash:latest').trim() || 'glm-4.7-flash:latest';
+	const temperature = Number(options.temperature);
+	const topP = Number(options.topP);
+	const maxTokens = Number(options.maxTokens);
 	const startedAt = nowMs();
 	let lastReason: NodeDocLlmTelemetry['fallbackReason'] = 'unknown';
 	for (let attempt = 0; attempt <= retries; attempt += 1) {
 		try {
-			const explanation = await postOnce(context, signatureKey, { timeoutMs, provider, model });
+			const explanation = await postOnce(context, signatureKey, {
+				timeoutMs,
+				provider,
+				model,
+				temperature: Number.isFinite(temperature) ? temperature : undefined,
+				topP: Number.isFinite(topP) ? topP : undefined,
+				maxTokens: Number.isFinite(maxTokens) ? maxTokens : undefined
+			});
 			if (explanation) {
 				const telemetry: NodeDocLlmTelemetry = {
 					status: 'success',

@@ -84,6 +84,9 @@ class NodeDocExplainRequest(BaseModel):
 	signatureKey: str
 	provider: Optional[str] = None
 	model: Optional[str] = None
+	temperature: Optional[float] = None
+	topP: Optional[float] = None
+	maxTokens: Optional[int] = None
 
 
 class NodeDocExplainResponse(BaseModel):
@@ -246,6 +249,30 @@ def _node_doc_explain_model() -> str:
 	return str(get_env("NODE_DOC_EXPLAIN_LLM_MODEL", "glm-4.7-flash:latest") or "").strip() or "glm-4.7-flash:latest"
 
 
+def _node_doc_explain_temperature() -> float:
+	raw = str(get_env("NODE_DOC_EXPLAIN_LLM_TEMPERATURE", "0.2") or "").strip()
+	try:
+		return max(0.0, min(2.0, float(raw)))
+	except Exception:
+		return 0.2
+
+
+def _node_doc_explain_top_p() -> float:
+	raw = str(get_env("NODE_DOC_EXPLAIN_LLM_TOP_P", "1.0") or "").strip()
+	try:
+		return max(0.0, min(1.0, float(raw)))
+	except Exception:
+		return 1.0
+
+
+def _node_doc_explain_max_tokens() -> int:
+	raw = str(get_env("NODE_DOC_EXPLAIN_LLM_MAX_TOKENS", "512") or "").strip()
+	try:
+		return max(1, min(4096, int(raw)))
+	except Exception:
+		return 512
+
+
 def _load_quick_fields_reference() -> str:
 	candidates = [
 		Path("docs/node_kind_quick_fields.md"),
@@ -338,6 +365,9 @@ async def _generate_node_doc_explanation_with_llm(
 	signature_key: str,
 	provider: str,
 	model: str,
+	temperature: float | None = None,
+	top_p: float | None = None,
+	max_tokens: int | None = None,
 ) -> tuple[str | None, list[str], list[str], Dict[str, str], list[str]]:
 	if not _node_doc_explain_llm_enabled():
 		return None, [], [], {"provider": provider, "model": model}, ["llm_explain_disabled"]
@@ -372,6 +402,15 @@ async def _generate_node_doc_explanation_with_llm(
 			"required": ["summary"],
 		},
 	}
+	options: Dict[str, Any] = {}
+	if temperature is not None:
+		options["temperature"] = float(temperature)
+	if top_p is not None:
+		options["top_p"] = float(top_p)
+	if max_tokens is not None:
+		options["num_predict"] = int(max_tokens)
+	if options:
+		body["options"] = options
 	try:
 		async with httpx.AsyncClient(timeout=timeout_seconds) as client:
 			res = await client.post(f"{base_url}/api/chat", json=body)
@@ -791,11 +830,17 @@ async def explain_node_doc(req: NodeDocExplainRequest):
 	signature_key = str(req.signatureKey or "").strip() or "missing-signature"
 	provider = str(req.provider or "").strip() or "ollama"
 	model = str(req.model or "").strip() or _node_doc_explain_model()
+	temperature = float(req.temperature) if isinstance(req.temperature, (int, float)) else _node_doc_explain_temperature()
+	top_p = float(req.topP) if isinstance(req.topP, (int, float)) else _node_doc_explain_top_p()
+	max_tokens = int(req.maxTokens) if isinstance(req.maxTokens, int) else _node_doc_explain_max_tokens()
 	llm_summary, llm_settings, llm_notes, llm_provider_meta, llm_diag_notes = await _generate_node_doc_explanation_with_llm(
 		context=context,
 		signature_key=signature_key,
 		provider=provider,
 		model=model,
+		temperature=temperature,
+		top_p=top_p,
+		max_tokens=max_tokens,
 	)
 	summary = llm_summary or deterministic_summary
 	settings_explained = llm_settings or deterministic_settings

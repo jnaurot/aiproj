@@ -10,13 +10,20 @@
 	import { submitNodeDocLlmFeedback } from './nodeDocLlmService';
 
 	export let doc: NodeDocResolved | null = null;
-	export let open: boolean = false;
-	export let expanded: boolean = false;
-	export let mode: NodeDocExplanationMode = 'default';
-	export let trainingMode: NodeDocTrainingMode = 'off';
-	export let nodeId: string = '';
+export let open: boolean = false;
+export let expanded: boolean = false;
+export let planesExpansionEnabled: boolean = true;
+export let mode: NodeDocExplanationMode = 'default';
+export let trainingMode: NodeDocTrainingMode = 'off';
+export let llmModel: string = 'glm-4.7-flash:latest';
+export let llmTemperature: number = 0.2;
+export let llmTopP: number = 1.0;
+export let llmMaxTokens: number = 512;
+export let nodeId: string = '';
 	export let llmContext: NodeDocLlmContext | null = null;
 	export let llmSignature: string = '';
+	export let onPersistGenerated: ((explanation: NodeDocGeneratedExplanation) => void) | null = null;
+	export let onClearPersistedGenerated: (() => void) | null = null;
 
 	let llmLoading = false;
 	let llmFailure = false;
@@ -27,6 +34,7 @@
 	let feedbackStatus = '';
 	let feedbackCorrection = '';
 	let feedbackShowCorrection = false;
+	let persistedInvalidationKey = '';
 
 	$: shouldUseLlm = mode === 'llm';
 	$: trainingEnabled = trainingMode === 'on';
@@ -51,23 +59,47 @@
 				llmFailure = false;
 			}
 		} else if (key !== llmInFlightKey) {
-			llmInFlightKey = key;
-			llmLoading = true;
-			llmFailure = false;
-			void getOrGenerateNodeDocLlmExplanation('llm', nodeId, llmContext, llmSignature)
-				.then((result) => {
-					if (llmInFlightKey !== key) return;
-					llmDoc = result.explanation;
-					llmFailure = !Boolean(result.explanation);
-				})
-				.catch(() => {
-					if (llmInFlightKey !== key) return;
-					llmDoc = null;
-					llmFailure = true;
-				})
-				.finally(() => {
-					if (llmInFlightKey === key) llmLoading = false;
-				});
+			const persisted = doc?.generated ?? null;
+			if (persisted && String(persisted.signature_key ?? '') === String(llmSignature ?? '')) {
+				llmDoc = persisted;
+				llmLoading = false;
+				llmFailure = false;
+				llmInFlightKey = key;
+			} else {
+				if (persisted && String(persisted.signature_key ?? '').trim()) {
+					const invalidationKey = `${String(nodeId ?? '')}::${String(llmSignature ?? '')}`;
+					if (invalidationKey !== persistedInvalidationKey) {
+						persistedInvalidationKey = invalidationKey;
+						onClearPersistedGenerated?.();
+					}
+				}
+				llmInFlightKey = key;
+				llmLoading = true;
+				llmFailure = false;
+					void getOrGenerateNodeDocLlmExplanation('llm', nodeId, llmContext, llmSignature, {
+						provider: 'ollama',
+						model: llmModel,
+						temperature: llmTemperature,
+						topP: llmTopP,
+						maxTokens: llmMaxTokens
+					})
+					.then((result) => {
+						if (llmInFlightKey !== key) return;
+						llmDoc = result.explanation;
+						llmFailure = !Boolean(result.explanation);
+						if (result.explanation && String(result.explanation.signature_key ?? '') === String(llmSignature ?? '')) {
+							onPersistGenerated?.(result.explanation);
+						}
+					})
+					.catch(() => {
+						if (llmInFlightKey !== key) return;
+						llmDoc = null;
+						llmFailure = true;
+					})
+					.finally(() => {
+						if (llmInFlightKey === key) llmLoading = false;
+					});
+			}
 		}
 	}
 
@@ -111,6 +143,7 @@
 					// Force next tooltip explanation to regenerate after corrective feedback.
 					clearNodeDocLlmCacheEntry('llm', nodeId, llmSignature);
 				}
+				onClearPersistedGenerated?.();
 				llmDoc = null;
 				llmFailure = false;
 				llmInFlightKey = '';
@@ -187,7 +220,7 @@
 				<div class="meta">{feedbackStatus}</div>
 			{/if}
 		{/if}
-		{#if expanded}
+		{#if expanded && planesExpansionEnabled}
 			<div class="section">
 				<div class="sectionTitle">Data Plane</div>
 				<div class="sectionBody">{dataSummary}</div>

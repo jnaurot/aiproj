@@ -1,5 +1,12 @@
 import type { Edge } from '@xyflow/svelte';
-import type { NodeDocOverride, NodeDocPlaneSection, NodeDocPortRef, NodeDocV1 } from '$lib/flow/schema/nodeDocs';
+import {
+	sanitizeNodeDocGeneratedExplanation,
+	type NodeDocGeneratedExplanation,
+	type NodeDocOverride,
+	type NodeDocPlaneSection,
+	type NodeDocPortRef,
+	type NodeDocV1
+} from '$lib/flow/schema/nodeDocs';
 import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
 import type { GraphState } from '$lib/flow/store/graphStore';
 import { resolveNodeHandles, type NodeHandleDef } from '$lib/flow/nodes/portHandles';
@@ -10,6 +17,7 @@ export type NodeDocResolved = NodeDocV1 & {
 	source: 'base' | 'runtime_only';
 	disabled: boolean;
 	overrideApplied: boolean;
+	generated: NodeDocGeneratedExplanation | null;
 	runtime: {
 		blockedReasonCode?: string;
 		pendingInputCount: number;
@@ -233,6 +241,7 @@ export function resolveNodeDocForState(state: GraphState, nodeIdRaw: string): No
 		controlNotes: controlRuntime.notes
 	});
 	const override = ((data as any)?.meta?.nodeDoc ?? {}) as NodeDocOverride;
+	const generated = sanitizeNodeDocGeneratedExplanation((override as any)?.generated ?? null);
 	const disabled = Boolean(override?.disabled ?? false);
 	const summary = String(override?.summary ?? '').trim() || merged.summary;
 	const overrideNotes = Array.isArray(override?.notes)
@@ -244,6 +253,7 @@ export function resolveNodeDocForState(state: GraphState, nodeIdRaw: string): No
 		source: base ? 'base' : 'runtime_only',
 		disabled,
 		overrideApplied: Boolean(String(override?.summary ?? '').trim().length > 0 || overrideNotes.length > 0),
+		generated,
 		runtime: {
 			blockedReasonCode: controlRuntime.blockedReasonCode,
 			pendingInputCount: controlRuntime.pendingInputCount,
@@ -300,7 +310,9 @@ export function buildNodeDocDependencySignature(state: GraphState, nodeIdRaw: st
 	const overrideSig = JSON.stringify({
 		summary: String((override as any)?.summary ?? ''),
 		notes: Array.isArray((override as any)?.notes) ? (override as any)?.notes : [],
-		disabled: Boolean((override as any)?.disabled ?? false)
+		disabled: Boolean((override as any)?.disabled ?? false),
+		generated_signature_key: String((override as any)?.generated?.signature_key ?? ''),
+		generated_summary: String((override as any)?.generated?.summary ?? '')
 	});
 	return `${connectedEdges}::pending=${pending}::inflight=${inflight}::ready=${String(readyWork)}::blocked=${blockedReasonCode}::override=${overrideSig}`;
 }

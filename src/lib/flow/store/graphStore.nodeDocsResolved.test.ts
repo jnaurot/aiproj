@@ -110,6 +110,28 @@ describe('graphStore node docs resolved selector', () => {
 		expect(resolved?.disabled).toBe(true);
 	});
 
+	it('persists and clears generated AI explanation on node meta', () => {
+		graphStore.hardResetGraph();
+		const modelId = graphStore.addNode('model', { x: 0, y: 0 });
+		const save = graphStore.setNodeDocGeneratedExplanation(modelId, {
+			summary: 'AI generated summary',
+			settings_explained: ['model=glm-4.7-flash:latest'],
+			context_notes: ['pending_input_count=0'],
+			generated_at: '2026-04-06T00:00:00.000Z',
+			signature_key: 'sig_persist_ai_1'
+		});
+		expect(save.ok).toBe(true);
+		const afterSave = get(graphStore as any);
+		const resolvedAfterSave = getNodeDocResolvedFromState(afterSave as any, modelId);
+		expect(resolvedAfterSave?.generated?.signature_key).toBe('sig_persist_ai_1');
+		expect(resolvedAfterSave?.generated?.summary).toBe('AI generated summary');
+		const clear = graphStore.clearNodeDocGeneratedExplanation(modelId);
+		expect(clear.ok).toBe(true);
+		const afterClear = get(graphStore as any);
+		const resolvedAfterClear = getNodeDocResolvedFromState(afterClear as any, modelId);
+		expect(resolvedAfterClear?.generated ?? null).toBeNull();
+	});
+
 	it('does not mutate graph state while resolving docs', () => {
 		graphStore.hardResetGraph();
 		const modelId = graphStore.addNode('model', { x: 0, y: 0 });

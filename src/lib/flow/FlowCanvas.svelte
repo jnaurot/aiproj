@@ -372,6 +372,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeEnvFilter = '';
 	let runtimeEnvRevealSensitive = false;
 	let runtimeEnvDirtyNames: string[] = [];
+	let runtimeEnvAiRelatedExpanded = false;
 	let previousEditingContext: 'graph' | 'component' = 'graph';
 	let logAutoScrollEnabled = true;
 	let lastObservedLogCount = 0;
@@ -632,6 +633,107 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: runtimeEnvDirtyNames = runtimeEnvVars
 		.filter((row) => String(runtimeEnvDraftByName[row.name] ?? '') !== String(row.value ?? ''))
 		.map((row) => row.name);
+	function parseBoolRuntimeEnv(raw: unknown, fallback: boolean): boolean {
+		const value = String(raw ?? '').trim().toLowerCase();
+		if (!value) return fallback;
+		if (value === '1' || value === 'true' || value === 'yes' || value === 'on') return true;
+		if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false;
+		return fallback;
+	}
+	function parseIntRuntimeEnv(raw: unknown, fallback: number, min: number, max: number): number {
+		const n = Number(String(raw ?? '').trim());
+		if (!Number.isFinite(n)) return fallback;
+		return Math.max(min, Math.min(max, Math.round(n)));
+	}
+	function parseFloatRuntimeEnv(raw: unknown, fallback: number, min: number, max: number): number {
+		const n = Number(String(raw ?? '').trim());
+		if (!Number.isFinite(n)) return fallback;
+		return Math.max(min, Math.min(max, n));
+	}
+	function runtimeEnvDraftValue(name: string, fallback = ''): string {
+		const key = String(name ?? '').trim();
+		if (!key) return fallback;
+		if (Object.prototype.hasOwnProperty.call(runtimeEnvDraftByName, key)) {
+			return String(runtimeEnvDraftByName[key] ?? '');
+		}
+		const row = runtimeEnvVars.find((item) => String(item?.name ?? '').trim() === key);
+		return String(row?.value ?? fallback);
+	}
+	function setRuntimeEnvDraftValue(name: string, value: string): void {
+		const key = String(name ?? '').trim();
+		if (!key) return;
+		runtimeEnvDraftByName = { ...runtimeEnvDraftByName, [key]: String(value ?? '') };
+	}
+	$: {
+		nodeDuplicateEnabled = parseBoolRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DUPLICATE_ENABLED')?.value,
+			true
+		);
+		const raw = String(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DUPLICATE_DELAY_MS')?.value ??
+				String(NODE_LONG_PRESS_MS_DEFAULT)
+		).trim();
+		const parsed = Number(raw);
+		if (Number.isFinite(parsed)) {
+			nodeDuplicateDelayMs = Math.max(0, Math.min(10000, Math.round(parsed)));
+		} else {
+			nodeDuplicateDelayMs = NODE_LONG_PRESS_MS_DEFAULT;
+		}
+	}
+	$: {
+		const tooltipEnabled = parseBoolRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_TOOLTIP_ENABLED')?.value,
+			true
+		);
+		const tooltipOpenDelayMs = parseIntRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_TOOLTIP_OPEN_DELAY_MS')?.value,
+			500,
+			0,
+			10000
+		);
+		const planesExpansionEnabled = parseBoolRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_PLANES_EXPANSION_ENABLED')?.value,
+			true
+		);
+		const planesExpansionDelayMs = parseIntRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_PLANES_EXPANSION_DELAY_MS')?.value,
+			1200,
+			0,
+			15000
+		);
+		const explainModel = String(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_EXPLAIN_LLM_MODEL')?.value ??
+				'glm-4.7-flash:latest'
+		).trim();
+		const explainTemperature = parseFloatRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_EXPLAIN_LLM_TEMPERATURE')?.value,
+			0.2,
+			0,
+			2
+		);
+		const explainTopP = parseFloatRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_EXPLAIN_LLM_TOP_P')?.value,
+			1.0,
+			0,
+			1
+		);
+		const explainMaxTokens = parseIntRuntimeEnv(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'NODE_DOC_EXPLAIN_LLM_MAX_TOKENS')?.value,
+			512,
+			1,
+			4096
+		);
+		graphStore.setNodeDocRuntimeConfig({
+			tooltipEnabled,
+			tooltipOpenDelayMs,
+			planesExpansionEnabled,
+			planesExpansionDelayMs,
+			explainModel: explainModel || 'glm-4.7-flash:latest',
+			explainTemperature,
+			explainTopP,
+			explainMaxTokens
+		});
+	}
 	$: {
 		const envModeRaw = String(
 			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'RUNNER_ADAPTIVE_MODE')?.value ??
@@ -660,14 +762,17 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	$: selectedId = $selectedNode?.id;
 	$: nodeDocExplanationMode =
-		String(($graphStore as any)?.nodeDocExplanationMode ?? 'default').trim().toLowerCase() === 'llm'
-			? 'llm'
-			: 'default';
+		(() => {
+			const raw = String(($graphStore as any)?.nodeDocExplanationMode ?? 'default').trim().toLowerCase();
+			if (raw === 'llm') return 'llm';
+			if (raw === 'none') return 'none';
+			return 'default';
+		})();
 	$: nodeDocTrainingMode =
 		String(($graphStore as any)?.nodeDocTrainingMode ?? 'off').trim().toLowerCase() === 'on'
 			? 'on'
 			: 'off';
-	$: if (nodeDocExplanationMode === 'default' && nodeDocTrainingMode !== 'off') {
+	$: if (nodeDocExplanationMode !== 'llm' && nodeDocTrainingMode !== 'off') {
 		graphStore.setNodeDocTrainingMode('off');
 	}
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
@@ -1578,10 +1683,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let lastClickAt = 0;
 	let lastClickNodeId: string | null = null;
 	const DBL_MS = 350;
-	const NODE_LONG_PRESS_MS = 500;
+	const NODE_LONG_PRESS_MS_DEFAULT = 500;
 	const NODE_LONG_PRESS_MOVE_PX = 8;
 	const NODE_DUPLICATE_OFFSET_X = 40;
 	const NODE_DUPLICATE_OFFSET_Y = 30;
+	let nodeDuplicateEnabled = true;
+	let nodeDuplicateDelayMs = NODE_LONG_PRESS_MS_DEFAULT;
 	let historyDragTransactionOpen = false;
 	let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 	let longPressNodeId: string | null = null;
@@ -1660,6 +1767,20 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			graphStore.beginHistoryTransaction();
 			historyDragTransactionOpen = true;
 		}
+		if (!nodeDuplicateEnabled) {
+			clearLongPressState();
+			return;
+		}
+		if (nodeDuplicateDelayMs <= 0) {
+			const duplicated = duplicateNodeExact(nodeId);
+			if (duplicated) {
+				suppressClickNodeId = nodeId;
+				suppressClickUntil = performance.now() + 260;
+				showToast('Node duplicated', 'info');
+			}
+			clearLongPressState();
+			return;
+		}
 		clearLongPressState();
 		longPressNodeId = nodeId;
 		longPressPointerId = event.pointerId;
@@ -1675,7 +1796,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				suppressClickUntil = performance.now() + 260;
 				showToast('Node duplicated', 'info');
 			}
-		}, NODE_LONG_PRESS_MS);
+		}, nodeDuplicateDelayMs);
 	}
 
 	function onFlowPointerMove(event: PointerEvent): void {
@@ -4614,6 +4735,171 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									</div>
 								</div>
 								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-duplicate-enabled">Node duplication</label>
+									<select
+										id="node-duplicate-enabled"
+										class="runtimeEnvInput"
+										value={parseBoolRuntimeEnv(runtimeEnvDraftValue('NODE_DUPLICATE_ENABLED', '1'), true) ? 'on' : 'off'}
+										aria-label="Node duplication"
+										on:change={(event) => {
+											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '').trim().toLowerCase();
+											setRuntimeEnvDraftValue('NODE_DUPLICATE_ENABLED', raw === 'off' ? '0' : '1');
+										}}
+									>
+										<option value="on">On</option>
+										<option value="off">Off</option>
+									</select>
+								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-duplicate-delay-ms">Node duplication delay (ms)</label>
+									<input
+										id="node-duplicate-delay-ms"
+										class="runtimeEnvInput"
+										type="number"
+										min="0"
+										max="10000"
+										step="10"
+										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DUPLICATE_DELAY_MS', '500'), 500, 0, 10000))}
+										aria-label="Node duplication delay milliseconds"
+										on:input={(event) => {
+											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
+											setRuntimeEnvDraftValue('NODE_DUPLICATE_DELAY_MS', raw || '0');
+										}}
+									/>
+								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-doc-tooltip-delay-ms">Node explanation delay (ms)</label>
+									<input
+										id="node-doc-tooltip-delay-ms"
+										class="runtimeEnvInput"
+										type="number"
+										min="0"
+										max="10000"
+										step="10"
+										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', '500'), 500, 0, 10000))}
+										aria-label="Node explanation delay milliseconds"
+										on:input={(event) => {
+											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
+											setRuntimeEnvDraftValue('NODE_DOC_TOOLTIP_OPEN_DELAY_MS', raw || '0');
+										}}
+									/>
+								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-doc-planes-expansion-enabled">Node plane expansion</label>
+									<select
+										id="node-doc-planes-expansion-enabled"
+										class="runtimeEnvInput"
+										value={parseBoolRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', '1'), true) ? 'on' : 'off'}
+										aria-label="Node plane expansion"
+										on:change={(event) => {
+											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '').trim().toLowerCase();
+											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', raw === 'off' ? '0' : '1');
+										}}
+									>
+										<option value="on">On</option>
+										<option value="off">Off</option>
+									</select>
+								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-doc-planes-expansion-delay-ms">Node plane expansion delay (ms)</label>
+									<input
+										id="node-doc-planes-expansion-delay-ms"
+										class="runtimeEnvInput"
+										type="number"
+										min="0"
+										max="15000"
+										step="10"
+										value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_DELAY_MS', '1200'), 1200, 0, 15000))}
+										aria-label="Node plane expansion delay milliseconds"
+										on:input={(event) => {
+											const raw = String((event.currentTarget as HTMLInputElement).value ?? '').trim();
+											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_DELAY_MS', raw || '0');
+										}}
+									/>
+								</div>
+								<button
+									type="button"
+									class="runtimeEnvDisclosure"
+									aria-expanded={runtimeEnvAiRelatedExpanded}
+									on:click={() => {
+										runtimeEnvAiRelatedExpanded = !runtimeEnvAiRelatedExpanded;
+									}}
+								>
+									<span class="runtimeEnvDisclosureTitle mono">AI related</span>
+									<span class="runtimeEnvDisclosureChevron" aria-hidden="true">{runtimeEnvAiRelatedExpanded ? '▾' : '▸'}</span>
+								</button>
+								{#if runtimeEnvAiRelatedExpanded}
+									<div class="runtimeEnvModeRow">
+										<label class="mono" for="node-doc-explain-llm-model">AI description model</label>
+										<input
+											id="node-doc-explain-llm-model"
+											class="runtimeEnvInput"
+											type="text"
+											value={runtimeEnvDraftValue('NODE_DOC_EXPLAIN_LLM_MODEL', 'glm-4.7-flash:latest')}
+											aria-label="AI description model"
+											on:input={(event) =>
+												setRuntimeEnvDraftValue(
+													'NODE_DOC_EXPLAIN_LLM_MODEL',
+													String((event.currentTarget as HTMLInputElement).value ?? '')
+												)}
+										/>
+									</div>
+									<div class="runtimeEnvModeRow">
+										<label class="mono" for="node-doc-explain-llm-temperature">AI temperature</label>
+										<input
+											id="node-doc-explain-llm-temperature"
+											class="runtimeEnvInput"
+											type="number"
+											min="0"
+											max="2"
+											step="0.1"
+											value={String(parseFloatRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_EXPLAIN_LLM_TEMPERATURE', '0.2'), 0.2, 0, 2))}
+											aria-label="AI description temperature"
+											on:input={(event) =>
+												setRuntimeEnvDraftValue(
+													'NODE_DOC_EXPLAIN_LLM_TEMPERATURE',
+													String((event.currentTarget as HTMLInputElement).value ?? '')
+												)}
+										/>
+									</div>
+									<div class="runtimeEnvModeRow">
+										<label class="mono" for="node-doc-explain-llm-top-p">AI top_p</label>
+										<input
+											id="node-doc-explain-llm-top-p"
+											class="runtimeEnvInput"
+											type="number"
+											min="0"
+											max="1"
+											step="0.05"
+											value={String(parseFloatRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_EXPLAIN_LLM_TOP_P', '1.0'), 1.0, 0, 1))}
+											aria-label="AI description top p"
+											on:input={(event) =>
+												setRuntimeEnvDraftValue(
+													'NODE_DOC_EXPLAIN_LLM_TOP_P',
+													String((event.currentTarget as HTMLInputElement).value ?? '')
+												)}
+										/>
+									</div>
+									<div class="runtimeEnvModeRow">
+										<label class="mono" for="node-doc-explain-llm-max-tokens">AI max tokens</label>
+										<input
+											id="node-doc-explain-llm-max-tokens"
+											class="runtimeEnvInput"
+											type="number"
+											min="1"
+											max="4096"
+											step="1"
+											value={String(parseIntRuntimeEnv(runtimeEnvDraftValue('NODE_DOC_EXPLAIN_LLM_MAX_TOKENS', '512'), 512, 1, 4096))}
+											aria-label="AI description max tokens"
+											on:input={(event) =>
+												setRuntimeEnvDraftValue(
+													'NODE_DOC_EXPLAIN_LLM_MAX_TOKENS',
+													String((event.currentTarget as HTMLInputElement).value ?? '')
+												)}
+										/>
+									</div>
+								{/if}
+								<div class="runtimeEnvModeRow">
 									<label class="mono" for="node-doc-explanation-mode">Node explanation mode</label>
 									<select
 										id="node-doc-explanation-mode"
@@ -4624,12 +4910,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '')
 												.trim()
 												.toLowerCase();
-											const next: NodeDocExplanationMode = raw === 'llm' ? 'llm' : 'default';
+											const next: NodeDocExplanationMode =
+												raw === 'llm' ? 'llm' : raw === 'none' ? 'none' : 'default';
 											graphStore.setNodeDocExplanationMode(next);
 										}}
 									>
 										<option value="default">Default</option>
 										<option value="llm">LLM explanation (read-only)</option>
+										<option value="none">None</option>
 									</select>
 								</div>
 								<div class="runtimeEnvModeRow">
@@ -7848,6 +8136,28 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		grid-template-columns: 180px 1fr;
 		align-items: center;
 		gap: 8px;
+	}
+
+	.runtimeEnvDisclosure {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-option-bg, #0c1220);
+		color: var(--color-control-text, #dbe7ff);
+		font-size: 12px;
+	}
+
+	.runtimeEnvDisclosureTitle {
+		font-size: 12px;
+	}
+
+	.runtimeEnvDisclosureChevron {
+		font-size: 12px;
+		opacity: 0.9;
 	}
 
 	.runtimeEnvToggle {

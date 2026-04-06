@@ -23,6 +23,13 @@ describe('graphStore node doc explanation mode', () => {
 		expect(getNodeDocExplanationModeFromState(state as any)).toBe('llm');
 	});
 
+	it('supports none mode globally', () => {
+		graphStore.setNodeDocExplanationMode('none');
+		expect(graphStore.getNodeDocExplanationMode()).toBe('none');
+		const state = get(graphStore as any);
+		expect(getNodeDocExplanationModeFromState(state as any)).toBe('none');
+	});
+
 	it('rejects unknown mode and falls back to default', () => {
 		graphStore.setNodeDocExplanationMode('hybrid' as any);
 		expect(graphStore.getNodeDocExplanationMode()).toBe('default');

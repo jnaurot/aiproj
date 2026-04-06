@@ -27,7 +27,24 @@ export const NodeMetaSchema = z.object({
     .object({
       summary: z.string().optional(),
       notes: z.array(z.string().min(1)).optional(),
-      disabled: z.boolean().optional()
+      disabled: z.boolean().optional(),
+      generated: z
+        .object({
+          summary: z.string().min(1),
+          settings_explained: z.array(z.string().min(1)).default([]),
+          context_notes: z.array(z.string().min(1)).default([]),
+          generated_at: z.string().min(1),
+          signature_key: z.string().min(1),
+          provider_meta: z
+            .object({
+              provider: z.string().min(1).optional(),
+              model: z.string().min(1).optional()
+            })
+            .strip()
+            .optional()
+        })
+        .strip()
+        .optional()
     })
     .strip()
     .optional(),

@@ -13,7 +13,7 @@ const DISALLOWED_GENERATED_EXPLANATION_FIELDS = new Set([
 ]);
 
 export const NodeDocPlaneKindSchema = z.enum(['data', 'control', 'param']);
-export const NodeDocExplanationModeSchema = z.enum(['default', 'llm']);
+export const NodeDocExplanationModeSchema = z.enum(['default', 'llm', 'none']);
 export const NodeDocTrainingModeSchema = z.enum(['off', 'on']);
 
 export const NodeDocPortRefSchema = z
@@ -44,11 +44,30 @@ export const NodeDocExampleSchema = z
 	})
 	.strip();
 
+export const NodeDocGeneratedProviderMetaSchema = z
+	.object({
+		provider: z.string().min(1).optional(),
+		model: z.string().min(1).optional()
+	})
+	.strip();
+
+export const NodeDocGeneratedExplanationSchema = z
+	.object({
+		summary: z.string().min(1),
+		settings_explained: z.array(z.string().min(1)).default([]),
+		context_notes: z.array(z.string().min(1)).default([]),
+		generated_at: z.string().min(1),
+		signature_key: z.string().min(1),
+		provider_meta: NodeDocGeneratedProviderMetaSchema.optional()
+	})
+	.strip();
+
 export const NodeDocOverrideSchema = z
 	.object({
 		summary: z.string().optional(),
 		notes: z.array(z.string().min(1)).optional(),
-		disabled: z.boolean().optional()
+		disabled: z.boolean().optional(),
+		generated: NodeDocGeneratedExplanationSchema.optional()
 	})
 	.strip();
 
@@ -68,24 +87,6 @@ export const NodeDocV1Schema = z
 			.strip(),
 		examples: z.array(NodeDocExampleSchema).optional().default([]),
 		see_also: z.array(z.string().min(1)).optional().default([])
-	})
-	.strip();
-
-export const NodeDocGeneratedProviderMetaSchema = z
-	.object({
-		provider: z.string().min(1).optional(),
-		model: z.string().min(1).optional()
-	})
-	.strip();
-
-export const NodeDocGeneratedExplanationSchema = z
-	.object({
-		summary: z.string().min(1),
-		settings_explained: z.array(z.string().min(1)).default([]),
-		context_notes: z.array(z.string().min(1)).default([]),
-		generated_at: z.string().min(1),
-		signature_key: z.string().min(1),
-		provider_meta: NodeDocGeneratedProviderMetaSchema.optional()
 	})
 	.strip();
 

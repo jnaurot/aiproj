@@ -50,6 +50,17 @@ export type NodeMeta = {
     summary?: string;
     notes?: string[];
     disabled?: boolean;
+    generated?: {
+      summary: string;
+      settings_explained: string[];
+      context_notes: string[];
+      generated_at: string;
+      signature_key: string;
+      provider_meta?: {
+        provider?: string;
+        model?: string;
+      };
+    };
   };
   freeze?: {
     enabled?: boolean;

@@ -6,7 +6,11 @@ import {
 	graphStore,
 	deriveNodeIoForData,
 	getNodeDocExplanationModeFromState,
+	getNodeDocPlanesExpansionDelayMsFromState,
+	getNodeDocPlanesExpansionEnabledFromState,
 	getNodeDocTrainingModeFromState,
+	getNodeDocTooltipEnabledFromState,
+	getNodeDocTooltipOpenDelayMsFromState,
 	getNodeDocResolvedFromState
 } from '$lib/flow/store/graphStore';
 import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
@@ -85,23 +89,38 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 	$: nodeDoc = getNodeDocResolvedFromState($graphStore as any, id);
 	$: nodeDocExplanationMode = getNodeDocExplanationModeFromState($graphStore as any);
 	$: nodeDocTrainingMode = getNodeDocTrainingModeFromState($graphStore as any);
+	$: nodeDocTooltipEnabled = getNodeDocTooltipEnabledFromState($graphStore as any);
+	$: nodeDocTooltipOpenDelayMs = getNodeDocTooltipOpenDelayMsFromState($graphStore as any);
+	$: nodeDocPlanesExpansionEnabled = getNodeDocPlanesExpansionEnabledFromState($graphStore as any);
+	$: nodeDocPlanesExpansionDelayMs = getNodeDocPlanesExpansionDelayMsFromState($graphStore as any);
+	$: nodeDocExplainModel = String(($graphStore as any)?.nodeDocExplainModel ?? 'glm-4.7-flash:latest').trim() || 'glm-4.7-flash:latest';
+	$: nodeDocExplainTemperature = Number(($graphStore as any)?.nodeDocExplainTemperature ?? 0.2);
+	$: nodeDocExplainTopP = Number(($graphStore as any)?.nodeDocExplainTopP ?? 1.0);
+	$: nodeDocExplainMaxTokens = Number(($graphStore as any)?.nodeDocExplainMaxTokens ?? 512);
 	$: nodeDocLlmContext = buildNodeDocLlmContext($graphStore as any, id);
 	$: nodeDocLlmSignature = buildNodeDocLlmContextSignature(nodeDocLlmContext);
 	let tooltipOpen = false;
 	let tooltipExpanded = false;
 	let tooltipState: NodeDocTooltipState = createNodeDocTooltipState({
+		openDelayMs: nodeDocTooltipOpenDelayMs,
+		expandDelayMs: nodeDocPlanesExpansionDelayMs,
 		onChange: (next) => {
 			tooltipOpen = next.open;
 			tooltipExpanded = next.expanded;
 		}
 	});
 	let tooltipOwnerNodeId = String(id ?? '');
+	let tooltipDelaySignature = `${String(nodeDocTooltipOpenDelayMs)}::${String(nodeDocPlanesExpansionDelayMs)}`;
 	$: {
 		const nodeKey = String(id ?? '');
-		if (nodeKey !== tooltipOwnerNodeId) {
+		const nextDelaySignature = `${String(nodeDocTooltipOpenDelayMs)}::${String(nodeDocPlanesExpansionDelayMs)}`;
+		if (nodeKey !== tooltipOwnerNodeId || nextDelaySignature !== tooltipDelaySignature) {
 			tooltipState.destroy();
 			tooltipOwnerNodeId = nodeKey;
+			tooltipDelaySignature = nextDelaySignature;
 			tooltipState = createNodeDocTooltipState({
+				openDelayMs: nodeDocTooltipOpenDelayMs,
+				expandDelayMs: nodeDocPlanesExpansionDelayMs,
 				onChange: (next) => {
 					tooltipOpen = next.open;
 					tooltipExpanded = next.expanded;
@@ -164,7 +183,7 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 	}
 
 	function onNodeEnter(): void {
-		if (nodeDoc?.disabled) return;
+		if (nodeDoc?.disabled || !nodeDocTooltipEnabled || nodeDocExplanationMode === 'none') return;
 		tooltipState.enter();
 	}
 
@@ -173,7 +192,20 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 	}
 
 	function onNodeKeydown(evt: KeyboardEvent): void {
+		if (!nodeDocTooltipEnabled || nodeDocExplanationMode === 'none') return;
 		tooltipState.keydown(String(evt?.key ?? ''));
+	}
+
+	$: if (nodeDocExplanationMode === 'none' && (tooltipOpen || tooltipExpanded)) {
+		tooltipState.leave();
+	}
+
+	function persistNodeDocGenerated(explanation: unknown): void {
+		graphStore.setNodeDocGeneratedExplanation(String(id ?? ''), explanation as any);
+	}
+
+	function clearPersistedNodeDocGenerated(): void {
+		graphStore.clearNodeDocGeneratedExplanation(String(id ?? ''));
 	}
 </script>
 
@@ -235,15 +267,22 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 			<slot name="footer-right" />
 		</div>
 	</div>
-	<NodeDocTooltip
-		doc={nodeDoc}
-		open={tooltipOpen}
-		expanded={tooltipExpanded}
-		mode={nodeDocExplanationMode}
-		trainingMode={nodeDocTrainingMode}
-		nodeId={id}
-		llmContext={nodeDocLlmContext}
-		llmSignature={nodeDocLlmSignature}
+		<NodeDocTooltip
+			doc={nodeDoc}
+			open={tooltipOpen}
+			expanded={tooltipExpanded}
+			planesExpansionEnabled={nodeDocPlanesExpansionEnabled}
+			mode={nodeDocExplanationMode}
+			trainingMode={nodeDocTrainingMode}
+			llmModel={nodeDocExplainModel}
+			llmTemperature={nodeDocExplainTemperature}
+			llmTopP={nodeDocExplainTopP}
+			llmMaxTokens={nodeDocExplainMaxTokens}
+			nodeId={id}
+			llmContext={nodeDocLlmContext}
+			llmSignature={nodeDocLlmSignature}
+		onPersistGenerated={persistNodeDocGenerated}
+		onClearPersistedGenerated={clearPersistedNodeDocGenerated}
 	/>
 </div>
 

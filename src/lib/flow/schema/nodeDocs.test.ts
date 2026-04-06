@@ -45,9 +45,17 @@ describe('node docs schema', () => {
 		const parsed = NodeDocOverrideSchema.parse({
 			summary: 'Custom summary',
 			notes: ['Use this for review only.'],
-			disabled: false
+			disabled: false,
+			generated: {
+				summary: 'AI summary',
+				settings_explained: ['temperature=0'],
+				context_notes: ['pending_input_count=0'],
+				generated_at: '2026-04-06T00:00:00.000Z',
+				signature_key: 'node_sig_1'
+			}
 		});
 		expect(parsed.disabled).toBe(false);
+		expect(parsed.generated?.signature_key).toBe('node_sig_1');
 	});
 
 	it('accepts valid generated explanation payload', () => {
@@ -65,6 +73,7 @@ describe('node docs schema', () => {
 	it('rejects unknown explanation mode values', () => {
 		expect(NodeDocExplanationModeSchema.safeParse('default').success).toBe(true);
 		expect(NodeDocExplanationModeSchema.safeParse('llm').success).toBe(true);
+		expect(NodeDocExplanationModeSchema.safeParse('none').success).toBe(true);
 		expect(NodeDocExplanationModeSchema.safeParse('hybrid').success).toBe(false);
 	});
 

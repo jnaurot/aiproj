@@ -133,6 +133,16 @@ def test_env_vars_list_contains_supported_runtime_envs(monkeypatch, tmp_path):
 		assert any((r or {}).get("name") == "ARTIFACT_STORE" for r in rows)
 		assert any((r or {}).get("name") == "NODE_DOC_FEEDBACK_LLM_TIMEOUT_SECONDS" for r in rows)
 		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_TIMEOUT_SECONDS" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DUPLICATE_ENABLED" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DUPLICATE_DELAY_MS" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_TOOLTIP_ENABLED" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_TOOLTIP_OPEN_DELAY_MS" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_PLANES_EXPANSION_ENABLED" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_PLANES_EXPANSION_DELAY_MS" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_MODEL" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_TEMPERATURE" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_TOP_P" for r in rows)
+		assert any((r or {}).get("name") == "NODE_DOC_EXPLAIN_LLM_MAX_TOKENS" for r in rows)
 
 
 def test_env_vars_set_and_clear_override(monkeypatch, tmp_path):

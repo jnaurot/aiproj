@@ -70,8 +70,10 @@ import {
 } from '$lib/flow/components/nodeDocsViewModel';
 import {
 	NodeDocExplanationModeSchema,
+	sanitizeNodeDocGeneratedExplanation,
 	NodeDocTrainingModeSchema,
 	type NodeDocExplanationMode,
+	type NodeDocGeneratedExplanation,
 	type NodeDocTrainingMode
 } from '$lib/flow/schema/nodeDocs';
 import {
@@ -1040,6 +1042,14 @@ export type GraphState = {
 	graphId: string;
 	nodeDocExplanationMode: NodeDocExplanationMode;
 	nodeDocTrainingMode: NodeDocTrainingMode;
+	nodeDocTooltipEnabled: boolean;
+	nodeDocTooltipOpenDelayMs: number;
+	nodeDocPlanesExpansionEnabled: boolean;
+	nodeDocPlanesExpansionDelayMs: number;
+	nodeDocExplainModel: string;
+	nodeDocExplainTemperature: number;
+	nodeDocExplainTopP: number;
+	nodeDocExplainMaxTokens: number;
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
 	selectedNodeId: string | null;
@@ -6397,6 +6407,14 @@ const initialState: GraphState = {
 	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
 	nodeDocExplanationMode: loadNodeDocExplanationMode(),
 	nodeDocTrainingMode: loadNodeDocTrainingMode(),
+	nodeDocTooltipEnabled: true,
+	nodeDocTooltipOpenDelayMs: 500,
+	nodeDocPlanesExpansionEnabled: true,
+	nodeDocPlanesExpansionDelayMs: 1200,
+	nodeDocExplainModel: 'glm-4.7-flash:latest',
+	nodeDocExplainTemperature: 0.2,
+	nodeDocExplainTopP: 1.0,
+	nodeDocExplainMaxTokens: 512,
 	nodes: loadedNormalized.nodes,
 	edges: loadedEdges,
 	selectedNodeId: null,
@@ -7644,6 +7662,142 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const mode = parsed.success ? parsed.data : 'off';
 			update((s) => ({ ...s, nodeDocTrainingMode: mode }));
 			persistNodeDocTrainingMode(mode);
+		},
+		setNodeDocRuntimeConfig(config: Partial<{
+			tooltipEnabled: boolean;
+			tooltipOpenDelayMs: number;
+			planesExpansionEnabled: boolean;
+			planesExpansionDelayMs: number;
+			explainModel: string;
+			explainTemperature: number;
+			explainTopP: number;
+			explainMaxTokens: number;
+		}>): void {
+			update((s) => {
+				const tooltipEnabled = typeof config?.tooltipEnabled === 'boolean' ? config.tooltipEnabled : s.nodeDocTooltipEnabled;
+				const tooltipOpenDelayMsRaw = Number(config?.tooltipOpenDelayMs);
+				const tooltipOpenDelayMs = Number.isFinite(tooltipOpenDelayMsRaw)
+					? Math.max(0, Math.min(10000, Math.round(tooltipOpenDelayMsRaw)))
+					: s.nodeDocTooltipOpenDelayMs;
+				const planesExpansionEnabled =
+					typeof config?.planesExpansionEnabled === 'boolean'
+						? config.planesExpansionEnabled
+						: s.nodeDocPlanesExpansionEnabled;
+				const planesExpansionDelayMsRaw = Number(config?.planesExpansionDelayMs);
+				const planesExpansionDelayMs = Number.isFinite(planesExpansionDelayMsRaw)
+					? Math.max(0, Math.min(15000, Math.round(planesExpansionDelayMsRaw)))
+					: s.nodeDocPlanesExpansionDelayMs;
+				const explainModel = String(config?.explainModel ?? s.nodeDocExplainModel).trim() || s.nodeDocExplainModel;
+				const explainTemperatureRaw = Number(config?.explainTemperature);
+				const explainTemperature = Number.isFinite(explainTemperatureRaw)
+					? Math.max(0, Math.min(2, explainTemperatureRaw))
+					: s.nodeDocExplainTemperature;
+				const explainTopPRaw = Number(config?.explainTopP);
+				const explainTopP = Number.isFinite(explainTopPRaw)
+					? Math.max(0, Math.min(1, explainTopPRaw))
+					: s.nodeDocExplainTopP;
+				const explainMaxTokensRaw = Number(config?.explainMaxTokens);
+				const explainMaxTokens = Number.isFinite(explainMaxTokensRaw)
+					? Math.max(1, Math.min(4096, Math.round(explainMaxTokensRaw)))
+					: s.nodeDocExplainMaxTokens;
+				if (
+					tooltipEnabled === s.nodeDocTooltipEnabled &&
+					tooltipOpenDelayMs === s.nodeDocTooltipOpenDelayMs &&
+					planesExpansionEnabled === s.nodeDocPlanesExpansionEnabled &&
+					planesExpansionDelayMs === s.nodeDocPlanesExpansionDelayMs &&
+					explainModel === s.nodeDocExplainModel &&
+					explainTemperature === s.nodeDocExplainTemperature &&
+					explainTopP === s.nodeDocExplainTopP &&
+					explainMaxTokens === s.nodeDocExplainMaxTokens
+				) {
+					return s;
+				}
+				return {
+					...s,
+					nodeDocTooltipEnabled: tooltipEnabled,
+					nodeDocTooltipOpenDelayMs: tooltipOpenDelayMs,
+					nodeDocPlanesExpansionEnabled: planesExpansionEnabled,
+					nodeDocPlanesExpansionDelayMs: planesExpansionDelayMs,
+					nodeDocExplainModel: explainModel,
+					nodeDocExplainTemperature: explainTemperature,
+					nodeDocExplainTopP: explainTopP,
+					nodeDocExplainMaxTokens: explainMaxTokens
+				};
+			});
+		},
+		setNodeDocGeneratedExplanation(nodeIdRaw: string, generatedRaw: unknown): { ok: boolean; reason?: string } {
+			const nodeId = String(nodeIdRaw ?? '').trim();
+			if (!nodeId) return { ok: false, reason: 'missing_node_id' };
+			const generated = sanitizeNodeDocGeneratedExplanation(generatedRaw);
+			if (!generated) return { ok: false, reason: 'invalid_generated_explanation' };
+			let changed = false;
+			update((s) => {
+				const nodes = (s.nodes as any[]).map((node) => {
+					if (String(node?.id ?? '') !== nodeId) return node;
+					const meta = ((node?.data as any)?.meta ?? {}) as Record<string, unknown>;
+					const nodeDoc = ((meta as any)?.nodeDoc ?? {}) as Record<string, unknown>;
+					const current = sanitizeNodeDocGeneratedExplanation((nodeDoc as any)?.generated);
+					if (
+						current &&
+						current.signature_key === generated.signature_key &&
+						current.summary === generated.summary
+					) {
+						return node;
+					}
+					changed = true;
+					return {
+						...node,
+						data: {
+							...(node.data ?? {}),
+							meta: {
+								...meta,
+								updatedAt: new Date().toISOString(),
+								nodeDoc: {
+									...nodeDoc,
+									generated: generated as NodeDocGeneratedExplanation
+								}
+							}
+						}
+					};
+				});
+				if (!changed) return s;
+				const next = { ...s, nodes };
+				persist(next);
+				return next;
+			});
+			return changed ? { ok: true } : { ok: false, reason: 'no_change' };
+		},
+		clearNodeDocGeneratedExplanation(nodeIdRaw: string): { ok: boolean; reason?: string } {
+			const nodeId = String(nodeIdRaw ?? '').trim();
+			if (!nodeId) return { ok: false, reason: 'missing_node_id' };
+			let changed = false;
+			update((s) => {
+				const nodes = (s.nodes as any[]).map((node) => {
+					if (String(node?.id ?? '') !== nodeId) return node;
+					const meta = ((node?.data as any)?.meta ?? {}) as Record<string, unknown>;
+					const nodeDoc = ((meta as any)?.nodeDoc ?? {}) as Record<string, unknown>;
+					if (!((nodeDoc as any)?.generated && typeof (nodeDoc as any)?.generated === 'object')) return node;
+					changed = true;
+					const nextNodeDoc = { ...nodeDoc } as Record<string, unknown>;
+					delete (nextNodeDoc as any).generated;
+					return {
+						...node,
+						data: {
+							...(node.data ?? {}),
+							meta: {
+								...meta,
+								updatedAt: new Date().toISOString(),
+								nodeDoc: nextNodeDoc
+							}
+						}
+					};
+				});
+				if (!changed) return s;
+				const next = { ...s, nodes };
+				persist(next);
+				return next;
+			});
+			return changed ? { ok: true } : { ok: false, reason: 'no_change' };
 		},
 		updateNodeConfig: updateNodeConfigImpl,
 		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
@@ -10795,5 +10949,25 @@ export function getNodeDocExplanationModeFromState(state: GraphState): NodeDocEx
 export function getNodeDocTrainingModeFromState(state: GraphState): NodeDocTrainingMode {
 	const parsed = NodeDocTrainingModeSchema.safeParse((state as any)?.nodeDocTrainingMode);
 	return parsed.success ? parsed.data : 'off';
+}
+
+export function getNodeDocTooltipEnabledFromState(state: GraphState): boolean {
+	return Boolean((state as any)?.nodeDocTooltipEnabled ?? true);
+}
+
+export function getNodeDocTooltipOpenDelayMsFromState(state: GraphState): number {
+	const raw = Number((state as any)?.nodeDocTooltipOpenDelayMs ?? 500);
+	if (!Number.isFinite(raw)) return 500;
+	return Math.max(0, Math.min(10000, Math.round(raw)));
+}
+
+export function getNodeDocPlanesExpansionEnabledFromState(state: GraphState): boolean {
+	return Boolean((state as any)?.nodeDocPlanesExpansionEnabled ?? true);
+}
+
+export function getNodeDocPlanesExpansionDelayMsFromState(state: GraphState): number {
+	const raw = Number((state as any)?.nodeDocPlanesExpansionDelayMs ?? 1200);
+	if (!Number.isFinite(raw)) return 1200;
+	return Math.max(0, Math.min(15000, Math.round(raw)));
 }
 
