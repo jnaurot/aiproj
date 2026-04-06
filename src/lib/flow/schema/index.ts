@@ -6,6 +6,7 @@ export * from "./llm";
 export * from "./tool";
 export * from "./component";
 export * from "./debug";
+export * from "./nodeDocs";
 
 // runtime defaults (single source of truth)
 export * from "./defaults";

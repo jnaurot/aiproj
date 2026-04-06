@@ -7,3 +7,4 @@ export * from "./component";
 export * from "./pipeline";
 export * from "./graph";
 export * from "./run";
+export * from "./nodeDocs";
