@@ -22,6 +22,15 @@ export function clearNodeDocLlmCache(): void {
 	cache.clear();
 }
 
+export function clearNodeDocLlmCacheEntry(
+	mode: NodeDocExplanationMode,
+	nodeId: string,
+	signature: string
+): void {
+	const key = cacheKey(mode, nodeId, signature);
+	cache.delete(key);
+}
+
 export function getNodeDocLlmCacheEntry(
 	mode: NodeDocExplanationMode,
 	nodeId: string,
@@ -56,4 +65,3 @@ export async function getOrGenerateNodeDocLlmExplanation(
 	}
 	return generated;
 }
-

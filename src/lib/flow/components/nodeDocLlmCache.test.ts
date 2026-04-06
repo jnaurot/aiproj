@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	clearNodeDocLlmCache,
+	clearNodeDocLlmCacheEntry,
 	getNodeDocLlmCacheEntry,
 	getOrGenerateNodeDocLlmExplanation
 } from './nodeDocLlmCache';
@@ -57,5 +58,24 @@ describe('nodeDocLlmCache', () => {
 		expect(spy).toHaveBeenCalledTimes(2);
 		expect(getNodeDocLlmCacheEntry('llm', 'n_1', 'sig-a')).not.toBeNull();
 		expect(getNodeDocLlmCacheEntry('llm', 'n_1', 'sig-b')).not.toBeNull();
+	});
+
+	it('clears a single cache entry and re-generates on next request', async () => {
+		const spy = vi.spyOn(service, 'generateNodeDocLlmExplanation').mockResolvedValue({
+			explanation: {
+				summary: 'AI explanation',
+				settings_explained: [],
+				context_notes: [],
+				generated_at: '2026-04-05T23:10:00.000Z',
+				signature_key: 'sig-clear-one'
+			},
+			telemetry: { status: 'success', latencyMs: 9 }
+		});
+		await getOrGenerateNodeDocLlmExplanation('llm', 'n_1', context, 'sig-clear-one');
+		expect(getNodeDocLlmCacheEntry('llm', 'n_1', 'sig-clear-one')).not.toBeNull();
+		clearNodeDocLlmCacheEntry('llm', 'n_1', 'sig-clear-one');
+		expect(getNodeDocLlmCacheEntry('llm', 'n_1', 'sig-clear-one')).toBeNull();
+		await getOrGenerateNodeDocLlmExplanation('llm', 'n_1', context, 'sig-clear-one');
+		expect(spy).toHaveBeenCalledTimes(2);
 	});
 });

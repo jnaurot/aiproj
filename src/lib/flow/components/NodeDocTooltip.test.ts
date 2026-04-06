@@ -42,7 +42,7 @@ describe('NodeDocTooltip', () => {
 		const rendered = render(NodeDocTooltip as any, {
 			props: { doc, open: true, expanded: true, mode: 'default' }
 		});
-		expect(rendered.body).toContain('Default explanation');
+		expect(rendered.body).toContain('Default');
 	});
 
 	it('renders llm explanation source label and loading state in llm mode', () => {
@@ -65,7 +65,7 @@ describe('NodeDocTooltip', () => {
 				llmSignature: 'sig-llm'
 			}
 		});
-		expect(rendered.body).toContain('AI-generated explanation');
+		expect(rendered.body).toContain('AI');
 		expect(rendered.body).toContain('generating...');
 	});
 

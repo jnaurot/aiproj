@@ -6,7 +6,7 @@
 		NodeDocTrainingMode
 	} from '$lib/flow/schema/nodeDocs';
 	import type { NodeDocLlmContext } from './nodeDocLlmContext';
-	import { getOrGenerateNodeDocLlmExplanation } from './nodeDocLlmCache';
+	import { clearNodeDocLlmCacheEntry, getOrGenerateNodeDocLlmExplanation } from './nodeDocLlmCache';
 	import { submitNodeDocLlmFeedback } from './nodeDocLlmService';
 
 	export let doc: NodeDocResolved | null = null;
@@ -30,7 +30,7 @@
 
 	$: shouldUseLlm = mode === 'llm';
 	$: trainingEnabled = trainingMode === 'on';
-	$: explanationSourceLabel = shouldUseLlm ? 'AI-generated explanation' : 'Default explanation';
+	$: explanationSourceLabel = shouldUseLlm ? 'AI' : 'Default';
 	$: safeSummary = (() => {
 		if (shouldUseLlm && llmDoc?.summary) return String(llmDoc.summary);
 		return String(doc?.summary ?? 'No documentation is available for this node yet.');
@@ -107,6 +107,13 @@
 			} else {
 				const fieldsText = result.suggested_fields.length > 0 ? result.suggested_fields.join(', ') : 'none';
 				feedbackStatus = `Saved bad feedback. Suggested fields: ${fieldsText}.`;
+				if (llmSignature && nodeId) {
+					// Force next tooltip explanation to regenerate after corrective feedback.
+					clearNodeDocLlmCacheEntry('llm', nodeId, llmSignature);
+				}
+				llmDoc = null;
+				llmFailure = false;
+				llmInFlightKey = '';
 			}
 		} catch {
 			feedbackStatus = 'Feedback submit failed.';

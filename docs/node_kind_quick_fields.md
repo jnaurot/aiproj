@@ -4,6 +4,7 @@
 
 ### File
 - Always examine: `data.sourceKind`, `data.params.file.name|file_name|snapshot.name`, `data.params.format|file_format`
+- suggested_fields: `source_kind`, `file_format`, `node_label`, `node_kind`, `node_subtype`, `data_outputs`, `delimiter`, `encoding`
 - Examine if meaningful: `data.params.delimiter`, `data.params.hasHeader`, `data.params.encoding`
 - Usually ignore: layout metadata, run-only cache state, runtime artifact ids
 - Description pattern: "Loads `<format>` file `<name>` for downstream use"
@@ -67,7 +68,7 @@
 ## Model
 ### Ollama (Translation)
 - Always examine: `node_label`, `settings.user_prompt`, `planes.data_inputs`, `planes.data_input_sources`
-- suggested_fields: `user_prompt`, `data_input_sources`, `data_inputs`
+- suggested_fields: `node_label`, `user_prompt`, `data_input_sources`
 - Examine if meaningful: `settings.system_prompt`, `settings.model`, `settings.output_mode`
 - Usually ignore: `runtime.pending_input_count`, `runtime.inflight`, `runtime.ready_work`
 - Description pattern: "`<node_label>` reads `<input_name>` from `<upstream_node_kind>` and `<task from user_prompt>`"

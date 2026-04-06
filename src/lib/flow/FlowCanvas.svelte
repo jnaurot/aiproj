@@ -667,6 +667,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		String(($graphStore as any)?.nodeDocTrainingMode ?? 'off').trim().toLowerCase() === 'on'
 			? 'on'
 			: 'off';
+	$: if (nodeDocExplanationMode === 'default' && nodeDocTrainingMode !== 'off') {
+		graphStore.setNodeDocTrainingMode('off');
+	}
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
 		subtypeError = null;
 		subtypeErrorNodeId = null;
@@ -4625,7 +4628,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											graphStore.setNodeDocExplanationMode(next);
 										}}
 									>
-										<option value="default">Default explanation</option>
+										<option value="default">Default</option>
 										<option value="llm">LLM explanation (read-only)</option>
 									</select>
 								</div>
@@ -4636,6 +4639,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										class="runtimeEnvInput"
 										value={nodeDocTrainingMode}
 										aria-label="Node explanation training mode"
+										disabled={nodeDocExplanationMode !== 'llm'}
 										on:change={(event) => {
 											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '')
 												.trim()
