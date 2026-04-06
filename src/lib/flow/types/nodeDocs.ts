@@ -1,4 +1,5 @@
 export type NodeDocPlaneKind = 'data' | 'control' | 'param';
+export type NodeDocExplanationMode = 'default' | 'llm';
 
 export type NodeDocPortRef = {
 	handle: string;
@@ -43,3 +44,16 @@ export type NodeDocOverride = {
 	disabled?: boolean;
 };
 
+export type NodeDocGeneratedProviderMeta = {
+	provider?: string;
+	model?: string;
+};
+
+export type NodeDocGeneratedExplanation = {
+	summary: string;
+	settings_explained: string[];
+	context_notes: string[];
+	generated_at: string;
+	signature_key: string;
+	provider_meta?: NodeDocGeneratedProviderMeta;
+};
