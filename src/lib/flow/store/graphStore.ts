@@ -64,6 +64,11 @@ import {
 	normalizeExposureRegistry
 } from '$lib/flow/components/exposureProfiles';
 import {
+	createMemoizedNodeDocResolver,
+	resolveNodeDocForState,
+	type NodeDocResolved
+} from '$lib/flow/components/nodeDocsViewModel';
+import {
 	acceptNodeParams,
 	cancelAllRuns,
 	createEventBatcher,
@@ -6361,6 +6366,7 @@ const initialState: GraphState = {
 
 export const graphStore = (() => {
 	const { subscribe, set, update: rawUpdate } = writable<GraphState>(initialState);
+	const resolveNodeDocMemoized = createMemoizedNodeDocResolver();
 	const HISTORY_LIMIT_DEFAULT = 100;
 	let historyLimit = HISTORY_LIMIT_DEFAULT;
 	let historyPast: PipelineGraphDTO[] = [];
@@ -7560,6 +7566,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		resolveNodeInputs(nodeId: string): InputResolution[] {
 			const s = get({ subscribe } as any) as GraphState;
 			return resolveNodeInputsFromState(s, nodeId);
+		},
+		getNodeDocResolved(nodeId: string): NodeDocResolved | null {
+			const s = get({ subscribe } as any) as GraphState;
+			return resolveNodeDocMemoized(s, nodeId);
 		},
 		updateNodeConfig: updateNodeConfigImpl,
 		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
@@ -10697,5 +10707,9 @@ export function __buildNodeSchemaContractSnapshotForTest(
 	nodeId: string
 ): NodeSchemaContractSnapshot {
 	return buildNodeSchemaContractSnapshotInternal(state, nodeId);
+}
+
+export function getNodeDocResolvedFromState(state: GraphState, nodeId: string): NodeDocResolved | null {
+	return resolveNodeDocForState(state, nodeId);
 }
 

@@ -46,6 +46,11 @@ export type NodeMeta = {
   updatedAt?: string;     // ISO
   description?: string;
   tags?: string[];
+  nodeDoc?: {
+    summary?: string;
+    notes?: string[];
+    disabled?: boolean;
+  };
   freeze?: {
     enabled?: boolean;
     mode?: "per_run" | "sticky";

@@ -23,6 +23,14 @@ export const NodeMetaSchema = z.object({
   updatedAt: z.string().optional(),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  nodeDoc: z
+    .object({
+      summary: z.string().optional(),
+      notes: z.array(z.string().min(1)).optional(),
+      disabled: z.boolean().optional()
+    })
+    .strip()
+    .optional(),
   freeze: z
     .object({
       enabled: z.boolean().optional(),
