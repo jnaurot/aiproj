@@ -37,4 +37,35 @@ describe('NodeDocTooltip', () => {
 		expect(rendered.body).toContain('Control Plane');
 		expect(rendered.body).toContain('Param Plane');
 	});
+
+	it('renders default explanation source label in default mode', () => {
+		const rendered = render(NodeDocTooltip as any, {
+			props: { doc, open: true, expanded: true, mode: 'default' }
+		});
+		expect(rendered.body).toContain('Default explanation');
+	});
+
+	it('renders llm explanation source label and loading state in llm mode', () => {
+		const rendered = render(NodeDocTooltip as any, {
+			props: {
+				doc,
+				open: true,
+				expanded: true,
+				mode: 'llm',
+				nodeId: 'n_1',
+				llmContext: {
+					node_id: 'n_1',
+					node_label: 'Model_ScoreJob',
+					node_kind: 'model',
+					node_subtype: 'ollama',
+					settings: { model: 'glm-4.7-flash:latest' },
+					planes: { data_inputs: ['in'], data_outputs: ['out'], param_inputs: [], control_inputs: [] },
+					runtime: { pending_input_count: 0, inflight: 0, ready_work: false, blocked_reason_code: '' }
+				},
+				llmSignature: 'sig-llm'
+			}
+		});
+		expect(rendered.body).toContain('AI-generated explanation');
+		expect(rendered.body).toContain('generating...');
+	});
 });

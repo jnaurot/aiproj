@@ -81,12 +81,13 @@ import {
 	summarizeComponentPreflight,
 	summarizeComponentPublishFailure
 } from '$lib/flow/components/componentPublishPreflight';
-	import {
-		getLlmEditorCommitMode,
-		getSourceEditorCommitMode,
-		getToolEditorCommitMode,
-		getTransformEditorCommitMode
-	} from '$lib/flow/editorCommitPolicy';
+import {
+	getLlmEditorCommitMode,
+	getSourceEditorCommitMode,
+	getToolEditorCommitMode,
+	getTransformEditorCommitMode
+} from '$lib/flow/editorCommitPolicy';
+import type { NodeDocExplanationMode } from '$lib/flow/schema/nodeDocs';
 	import { graphSemanticSnapshotKey, isGraphSemanticDirty } from '$lib/flow/store/graphSemanticSnapshot';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import { findDuplicateNodeNames } from '$lib/flow/store/nodeNameUniqueness';
@@ -400,6 +401,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeSettingsButtonEl: HTMLButtonElement | null = null;
 	let runtimeSettingsCloseWarningOpen = false;
 	let runtimeSettingsSavingAll = false;
+	let nodeDocExplanationMode: NodeDocExplanationMode = 'default';
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsLive: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsHistory: RunMonitorAdaptiveDecisionRow[] = [];
@@ -656,6 +658,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 
 	$: selectedId = $selectedNode?.id;
+	$: nodeDocExplanationMode =
+		String(($graphStore as any)?.nodeDocExplanationMode ?? 'default').trim().toLowerCase() === 'llm'
+			? 'llm'
+			: 'default';
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
 		subtypeError = null;
 		subtypeErrorNodeId = null;
@@ -4599,6 +4605,25 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 										</label>
 									</div>
 								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-doc-explanation-mode">Node explanation mode</label>
+									<select
+										id="node-doc-explanation-mode"
+										class="runtimeEnvInput"
+										value={nodeDocExplanationMode}
+										aria-label="Node explanation mode"
+										on:change={(event) => {
+											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '')
+												.trim()
+												.toLowerCase();
+											const next: NodeDocExplanationMode = raw === 'llm' ? 'llm' : 'default';
+											graphStore.setNodeDocExplanationMode(next);
+										}}
+									>
+										<option value="default">Default explanation</option>
+										<option value="llm">LLM explanation (read-only)</option>
+									</select>
+								</div>
 								<input class="logFilterInput" placeholder="Filter env vars..." bind:value={runtimeEnvFilter} aria-label="Filter runtime env vars" />
 								{#if runtimeEnvError}
 									<div class="envProfileError">{runtimeEnvError}</div>
@@ -7786,6 +7811,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	.runtimeEnvActions {
 		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.runtimeEnvModeRow {
+		display: grid;
+		grid-template-columns: 180px 1fr;
 		align-items: center;
 		gap: 8px;
 	}

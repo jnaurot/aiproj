@@ -40,6 +40,17 @@ describe('graphStore node docs resolved selector', () => {
 		);
 	});
 
+	it('includes instance-level deterministic context notes', () => {
+		graphStore.hardResetGraph();
+		const sourceId = graphStore.addNode('source', { x: 0, y: 0 });
+		graphStore.setSourceKind(sourceId as any, 'api');
+		graphStore.updateNodeConfig(sourceId, { params: { url: 'https://example.com/jobs', method: 'GET' } });
+		const state = get(graphStore as any);
+		const resolved = getNodeDocResolvedFromState(state as any, sourceId);
+		const paramNotes = resolved?.planes?.param?.notes ?? [];
+		expect(paramNotes.some((note) => note.includes('source_kind=api'))).toBe(true);
+	});
+
 	it('reflects blocked reason from scheduler snapshot in control section', () => {
 		graphStore.hardResetGraph();
 		const modelId = graphStore.addNode('model', { x: 0, y: 0 });

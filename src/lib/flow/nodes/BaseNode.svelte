@@ -2,13 +2,15 @@
 	import { onDestroy } from 'svelte';
 	import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import {
-		graphStore,
-		deriveNodeIoForData,
-		getNodeDocResolvedFromState
-	} from '$lib/flow/store/graphStore';
-	import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
-	import { createNodeDocTooltipState, type NodeDocTooltipState } from '$lib/flow/components/nodeDocTooltipState';
+import {
+	graphStore,
+	deriveNodeIoForData,
+	getNodeDocExplanationModeFromState,
+	getNodeDocResolvedFromState
+} from '$lib/flow/store/graphStore';
+import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
+import { createNodeDocTooltipState, type NodeDocTooltipState } from '$lib/flow/components/nodeDocTooltipState';
+import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/flow/components/nodeDocLlmContext';
 	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import {
 		reconcileLifecycleForActiveRun,
@@ -80,6 +82,9 @@
 	$: runtimeCounts = resolveNodeRuntimeCounts(($graphStore as any)?.queueRuntime, id);
 	$: executionBadge = buildNodeExecutionBadge(consumeMode, runtimeCounts, batchSize);
 	$: nodeDoc = getNodeDocResolvedFromState($graphStore as any, id);
+	$: nodeDocExplanationMode = getNodeDocExplanationModeFromState($graphStore as any);
+	$: nodeDocLlmContext = buildNodeDocLlmContext($graphStore as any, id);
+	$: nodeDocLlmSignature = buildNodeDocLlmContextSignature(nodeDocLlmContext);
 	let tooltipOpen = false;
 	let tooltipExpanded = false;
 	let tooltipState: NodeDocTooltipState = createNodeDocTooltipState({
@@ -228,7 +233,15 @@
 			<slot name="footer-right" />
 		</div>
 	</div>
-	<NodeDocTooltip doc={nodeDoc} open={tooltipOpen} expanded={tooltipExpanded} />
+	<NodeDocTooltip
+		doc={nodeDoc}
+		open={tooltipOpen}
+		expanded={tooltipExpanded}
+		mode={nodeDocExplanationMode}
+		nodeId={id}
+		llmContext={nodeDocLlmContext}
+		llmSignature={nodeDocLlmSignature}
+	/>
 </div>
 
 <style>

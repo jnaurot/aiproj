@@ -4,6 +4,7 @@ import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
 import type { GraphState } from '$lib/flow/store/graphStore';
 import { resolveNodeHandles, type NodeHandleDef } from '$lib/flow/nodes/portHandles';
 import { resolveNodeDocBase } from './nodeDocsResolver';
+import { buildNodeDocLlmContext } from './nodeDocLlmContext';
 
 export type NodeDocResolved = NodeDocV1 & {
 	source: 'base' | 'runtime_only';
@@ -252,6 +253,20 @@ export function resolveNodeDocForState(state: GraphState, nodeIdRaw: string): No
 	};
 	if (overrideNotes.length > 0) {
 		next.planes.control.notes = dedupeNotes([...(next.planes.control.notes ?? []), ...overrideNotes]);
+	}
+	const context = buildNodeDocLlmContext(state, nodeId);
+	if (context) {
+		const contextNotes = Object.entries(context.settings)
+			.slice(0, 5)
+			.map(([key, value]) => `${key}=${value}`);
+		if (contextNotes.length > 0) {
+			next.planes.param.notes = dedupeNotes([...(next.planes.param.notes ?? []), ...contextNotes]);
+		}
+		const dataSnippet = [
+			`inputs=${context.planes.data_inputs.join(',') || '(none)'}`,
+			`outputs=${context.planes.data_outputs.join(',') || '(none)'}`
+		];
+		next.planes.data.notes = dedupeNotes([...(next.planes.data.notes ?? []), ...dataSnippet]);
 	}
 	return next;
 }

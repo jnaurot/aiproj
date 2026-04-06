@@ -138,6 +138,12 @@ describe('node docs resolver', () => {
 		}
 	});
 
+	it('resolves subtype-specific docs from the real registry', () => {
+		expect(resolveNodeDocBase('source', 'file', NODE_DOCS_REGISTRY)?.title).toContain('File');
+		expect(resolveNodeDocBase('source', 'api', NODE_DOCS_REGISTRY)?.title).toContain('API');
+		expect(resolveNodeDocBase('model', 'ollama', NODE_DOCS_REGISTRY)?.title).toContain('Ollama');
+	});
+
 	it('returns null safely for malformed registry entries', () => {
 		const malformedRegistry = structuredClone(testRegistry);
 		(malformedRegistry as any).model['*'] = { invalid: true };

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -72,6 +73,22 @@ class ModelPromoteRequest(BaseModel):
 		if s not in {"candidate", "baseline", "prod"}:
 			raise ValueError("toStage must be one of: candidate, baseline, prod")
 		return s
+
+
+class NodeDocExplainRequest(BaseModel):
+	context: Dict[str, Any]
+	signatureKey: str
+	provider: Optional[str] = None
+	model: Optional[str] = None
+
+
+class NodeDocExplainResponse(BaseModel):
+	summary: str
+	settings_explained: list[str]
+	context_notes: list[str]
+	generated_at: str
+	signature_key: str
+	provider_meta: Dict[str, str]
 
 
 @router.post("/versions/register")
@@ -218,3 +235,56 @@ async def promote_model_version(
 	except ValueError as ex:
 		raise HTTPException(status_code=400, detail=str(ex))
 	return {"schemaVersion": 1, "modelId": model_id, "versionId": version_id, **result}
+
+
+@router.post("/node-doc-explain")
+async def explain_node_doc(req: NodeDocExplainRequest):
+	context = req.context if isinstance(req.context, dict) else {}
+	node_label = str(context.get("node_label") or context.get("nodeLabel") or "Node").strip() or "Node"
+	node_kind = str(context.get("node_kind") or context.get("nodeKind") or "node").strip().lower() or "node"
+	node_subtype = str(context.get("node_subtype") or context.get("nodeSubtype") or "").strip().lower()
+	settings = context.get("settings") if isinstance(context.get("settings"), dict) else {}
+	runtime = context.get("runtime") if isinstance(context.get("runtime"), dict) else {}
+	planes = context.get("planes") if isinstance(context.get("planes"), dict) else {}
+
+	settings_explained = [
+		f"{str(k).strip()}={str(v).strip()}"
+		for k, v in settings.items()
+		if str(k).strip() and str(v).strip()
+	][:8]
+	data_inputs = planes.get("data_inputs") if isinstance(planes.get("data_inputs"), list) else []
+	data_outputs = planes.get("data_outputs") if isinstance(planes.get("data_outputs"), list) else []
+	param_inputs = planes.get("param_inputs") if isinstance(planes.get("param_inputs"), list) else []
+	control_inputs = planes.get("control_inputs") if isinstance(planes.get("control_inputs"), list) else []
+	blocked = str(runtime.get("blocked_reason_code") or "").strip()
+	pending = int(runtime.get("pending_input_count") or 0)
+	inflight = int(runtime.get("inflight") or 0)
+	ready = bool(runtime.get("ready_work") or False)
+
+	subtype_phrase = f" ({node_subtype})" if node_subtype else ""
+	summary = (
+		f"{node_label} is a {node_kind}{subtype_phrase} node. "
+		f"It reads {len(data_inputs)} data input handle(s), writes {len(data_outputs)} data output handle(s), "
+		f"uses {len(param_inputs)} param handle(s), and consumes {len(control_inputs)} control handle(s)."
+	)
+	context_notes = [
+		f"pending_input_count={pending}",
+		f"inflight={inflight}",
+		f"ready_work={str(ready).lower()}"
+	]
+	if blocked:
+		context_notes.append(f"blocked_reason={blocked}")
+	if not settings_explained:
+		context_notes.append("no_explicit_settings_detected")
+
+	provider = str(req.provider or "").strip() or "local"
+	model = str(req.model or "").strip() or "deterministic-node-docs-v1"
+	response = NodeDocExplainResponse(
+		summary=summary,
+		settings_explained=settings_explained,
+		context_notes=context_notes,
+		generated_at=datetime.now(timezone.utc).isoformat(),
+		signature_key=str(req.signatureKey or "").strip() or "missing-signature",
+		provider_meta={"provider": provider, "model": model},
+	)
+	return response.model_dump()
