@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
-import { graphStore, getNodeDocExplanationModeFromState } from './graphStore';
+import {
+	graphStore,
+	getNodeDocExplanationModeFromState,
+	getNodeDocTrainingModeFromState
+} from './graphStore';
 
 describe('graphStore node doc explanation mode', () => {
 	beforeEach(() => {
@@ -43,5 +47,16 @@ describe('graphStore node doc explanation mode', () => {
 		expect(after.activeRunId).toBe(before.activeRunId);
 		expect(after.edges.length).toBe(before.edges.length);
 		expect(after.nodes.length).toBe(before.nodes.length);
+	});
+
+	it('supports training mode toggle without mutating runtime state', () => {
+		graphStore.hardResetGraph();
+		const before = get(graphStore as any);
+		graphStore.setNodeDocTrainingMode('on');
+		expect(graphStore.getNodeDocTrainingMode()).toBe('on');
+		const after = get(graphStore as any);
+		expect(getNodeDocTrainingModeFromState(after as any)).toBe('on');
+		expect(after.runStatus).toBe(before.runStatus);
+		expect(after.activeRunId).toBe(before.activeRunId);
 	});
 });

@@ -14,6 +14,7 @@ const DISALLOWED_GENERATED_EXPLANATION_FIELDS = new Set([
 
 export const NodeDocPlaneKindSchema = z.enum(['data', 'control', 'param']);
 export const NodeDocExplanationModeSchema = z.enum(['default', 'llm']);
+export const NodeDocTrainingModeSchema = z.enum(['off', 'on']);
 
 export const NodeDocPortRefSchema = z
 	.object({
@@ -116,4 +117,5 @@ export function sanitizeNodeDocGeneratedExplanation(input: unknown): NodeDocGene
 export type NodeDocV1 = z.infer<typeof NodeDocV1Schema>;
 export type NodeDocOverride = z.infer<typeof NodeDocOverrideSchema>;
 export type NodeDocExplanationMode = z.infer<typeof NodeDocExplanationModeSchema>;
+export type NodeDocTrainingMode = z.infer<typeof NodeDocTrainingModeSchema>;
 export type NodeDocGeneratedExplanation = z.infer<typeof NodeDocGeneratedExplanationSchema>;

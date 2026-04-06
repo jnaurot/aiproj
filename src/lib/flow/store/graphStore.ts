@@ -70,7 +70,9 @@ import {
 } from '$lib/flow/components/nodeDocsViewModel';
 import {
 	NodeDocExplanationModeSchema,
-	type NodeDocExplanationMode
+	NodeDocTrainingModeSchema,
+	type NodeDocExplanationMode,
+	type NodeDocTrainingMode
 } from '$lib/flow/schema/nodeDocs';
 import {
 	acceptNodeParams,
@@ -1037,6 +1039,7 @@ export function __normalizeBindingForTest(
 export type GraphState = {
 	graphId: string;
 	nodeDocExplanationMode: NodeDocExplanationMode;
+	nodeDocTrainingMode: NodeDocTrainingMode;
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
 	selectedNodeId: string | null;
@@ -6331,6 +6334,7 @@ function topoFrom(
 
 const loaded = loadGraphFromLocalStorage(emptyGraph);
 const NODE_DOC_EXPLANATION_MODE_STORAGE_KEY = 'flow.nodeDocExplanationMode.v1';
+const NODE_DOC_TRAINING_MODE_STORAGE_KEY = 'flow.nodeDocTrainingMode.v1';
 
 function loadNodeDocExplanationMode(): NodeDocExplanationMode {
 	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return 'default';
@@ -6347,6 +6351,26 @@ function persistNodeDocExplanationMode(mode: NodeDocExplanationMode): void {
 	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return;
 	try {
 		window.localStorage.setItem(NODE_DOC_EXPLANATION_MODE_STORAGE_KEY, mode);
+	} catch {
+		// no-op
+	}
+}
+
+function loadNodeDocTrainingMode(): NodeDocTrainingMode {
+	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return 'off';
+	try {
+		const raw = String(window.localStorage.getItem(NODE_DOC_TRAINING_MODE_STORAGE_KEY) ?? '').trim();
+		const parsed = NodeDocTrainingModeSchema.safeParse(raw);
+		return parsed.success ? parsed.data : 'off';
+	} catch {
+		return 'off';
+	}
+}
+
+function persistNodeDocTrainingMode(mode: NodeDocTrainingMode): void {
+	if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return;
+	try {
+		window.localStorage.setItem(NODE_DOC_TRAINING_MODE_STORAGE_KEY, mode);
 	} catch {
 		// no-op
 	}
@@ -6372,6 +6396,7 @@ const loadedEdges = recomputeEdgeContractsBestEffort(
 const initialState: GraphState = {
 	graphId: String((loaded as any)?.meta?.graphId ?? mintGraphId()),
 	nodeDocExplanationMode: loadNodeDocExplanationMode(),
+	nodeDocTrainingMode: loadNodeDocTrainingMode(),
 	nodes: loadedNormalized.nodes,
 	edges: loadedEdges,
 	selectedNodeId: null,
@@ -7608,6 +7633,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const mode = parsed.success ? parsed.data : 'default';
 			update((s) => ({ ...s, nodeDocExplanationMode: mode }));
 			persistNodeDocExplanationMode(mode);
+		},
+		getNodeDocTrainingMode(): NodeDocTrainingMode {
+			const s = get({ subscribe } as any) as GraphState;
+			const parsed = NodeDocTrainingModeSchema.safeParse((s as any)?.nodeDocTrainingMode);
+			return parsed.success ? parsed.data : 'off';
+		},
+		setNodeDocTrainingMode(modeRaw: NodeDocTrainingMode): void {
+			const parsed = NodeDocTrainingModeSchema.safeParse(modeRaw);
+			const mode = parsed.success ? parsed.data : 'off';
+			update((s) => ({ ...s, nodeDocTrainingMode: mode }));
+			persistNodeDocTrainingMode(mode);
 		},
 		updateNodeConfig: updateNodeConfigImpl,
 		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
@@ -10754,5 +10790,10 @@ export function getNodeDocResolvedFromState(state: GraphState, nodeId: string): 
 export function getNodeDocExplanationModeFromState(state: GraphState): NodeDocExplanationMode {
 	const parsed = NodeDocExplanationModeSchema.safeParse((state as any)?.nodeDocExplanationMode);
 	return parsed.success ? parsed.data : 'default';
+}
+
+export function getNodeDocTrainingModeFromState(state: GraphState): NodeDocTrainingMode {
+	const parsed = NodeDocTrainingModeSchema.safeParse((state as any)?.nodeDocTrainingMode);
+	return parsed.success ? parsed.data : 'off';
 }
 

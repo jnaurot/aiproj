@@ -6,6 +6,7 @@ import {
 	graphStore,
 	deriveNodeIoForData,
 	getNodeDocExplanationModeFromState,
+	getNodeDocTrainingModeFromState,
 	getNodeDocResolvedFromState
 } from '$lib/flow/store/graphStore';
 import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
@@ -83,6 +84,7 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 	$: executionBadge = buildNodeExecutionBadge(consumeMode, runtimeCounts, batchSize);
 	$: nodeDoc = getNodeDocResolvedFromState($graphStore as any, id);
 	$: nodeDocExplanationMode = getNodeDocExplanationModeFromState($graphStore as any);
+	$: nodeDocTrainingMode = getNodeDocTrainingModeFromState($graphStore as any);
 	$: nodeDocLlmContext = buildNodeDocLlmContext($graphStore as any, id);
 	$: nodeDocLlmSignature = buildNodeDocLlmContextSignature(nodeDocLlmContext);
 	let tooltipOpen = false;
@@ -238,6 +240,7 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 		open={tooltipOpen}
 		expanded={tooltipExpanded}
 		mode={nodeDocExplanationMode}
+		trainingMode={nodeDocTrainingMode}
 		nodeId={id}
 		llmContext={nodeDocLlmContext}
 		llmSignature={nodeDocLlmSignature}

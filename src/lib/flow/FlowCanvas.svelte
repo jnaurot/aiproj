@@ -87,7 +87,7 @@ import {
 	getToolEditorCommitMode,
 	getTransformEditorCommitMode
 } from '$lib/flow/editorCommitPolicy';
-import type { NodeDocExplanationMode } from '$lib/flow/schema/nodeDocs';
+import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/schema/nodeDocs';
 	import { graphSemanticSnapshotKey, isGraphSemanticDirty } from '$lib/flow/store/graphSemanticSnapshot';
 	import { nodePresetStore } from '$lib/flow/store/nodePresetStore';
 	import { findDuplicateNodeNames } from '$lib/flow/store/nodeNameUniqueness';
@@ -402,6 +402,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runtimeSettingsCloseWarningOpen = false;
 	let runtimeSettingsSavingAll = false;
 	let nodeDocExplanationMode: NodeDocExplanationMode = 'default';
+	let nodeDocTrainingMode: NodeDocTrainingMode = 'off';
 	let runMonitorAdaptiveDecisionRows: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsLive: RunMonitorAdaptiveDecisionRow[] = [];
 	let runMonitorAdaptiveDecisionRowsHistory: RunMonitorAdaptiveDecisionRow[] = [];
@@ -662,6 +663,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		String(($graphStore as any)?.nodeDocExplanationMode ?? 'default').trim().toLowerCase() === 'llm'
 			? 'llm'
 			: 'default';
+	$: nodeDocTrainingMode =
+		String(($graphStore as any)?.nodeDocTrainingMode ?? 'off').trim().toLowerCase() === 'on'
+			? 'on'
+			: 'off';
 	$: if (subtypeError && subtypeErrorNodeId && selectedId && subtypeErrorNodeId !== selectedId) {
 		subtypeError = null;
 		subtypeErrorNodeId = null;
@@ -4622,6 +4627,25 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 									>
 										<option value="default">Default explanation</option>
 										<option value="llm">LLM explanation (read-only)</option>
+									</select>
+								</div>
+								<div class="runtimeEnvModeRow">
+									<label class="mono" for="node-doc-training-mode">Node explanation training</label>
+									<select
+										id="node-doc-training-mode"
+										class="runtimeEnvInput"
+										value={nodeDocTrainingMode}
+										aria-label="Node explanation training mode"
+										on:change={(event) => {
+											const raw = String((event.currentTarget as HTMLSelectElement).value ?? '')
+												.trim()
+												.toLowerCase();
+											const next: NodeDocTrainingMode = raw === 'on' ? 'on' : 'off';
+											graphStore.setNodeDocTrainingMode(next);
+										}}
+									>
+										<option value="off">Off</option>
+										<option value="on">On (feedback capture)</option>
 									</select>
 								</div>
 								<input class="logFilterInput" placeholder="Filter env vars..." bind:value={runtimeEnvFilter} aria-label="Filter runtime env vars" />

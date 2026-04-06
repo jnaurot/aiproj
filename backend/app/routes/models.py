@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+from pathlib import Path
+import re
 from typing import Any, Dict, Optional
+import httpx
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
-from ..services.runtime_env import get_bool_env
+from ..services.runtime_env import get_bool_env, get_env
 
 router = APIRouter()
 
@@ -89,6 +93,261 @@ class NodeDocExplainResponse(BaseModel):
 	generated_at: str
 	signature_key: str
 	provider_meta: Dict[str, str]
+
+
+class NodeDocFeedbackRequest(BaseModel):
+	context: Dict[str, Any]
+	signatureKey: str
+	generatedSummary: str
+	verdict: str
+	correctedSummary: Optional[str] = None
+
+	@field_validator("verdict")
+	@classmethod
+	def validate_verdict(cls, v):
+		s = str(v or "").strip().lower()
+		if s not in {"good", "bad"}:
+			raise ValueError("verdict must be one of: good, bad")
+		return s
+
+
+class NodeDocFeedbackResponse(BaseModel):
+	ok: bool
+	stored: bool
+	entry_id: str
+	kind: str
+	subtype: str
+	suggestion_file: str
+	suggested_fields: list[str]
+	notes: list[str]
+
+
+_TOKEN_RE = re.compile(r"[a-z0-9_]+")
+
+
+def _tokenize_text(value: str) -> set[str]:
+	return {match.group(0) for match in _TOKEN_RE.finditer(str(value or "").strip().lower())}
+
+
+def _suggest_fields_from_feedback(
+	settings: Dict[str, Any],
+	generated_summary: str,
+	corrected_summary: str,
+	limit: int = 8,
+) -> list[str]:
+	if not isinstance(settings, dict) or not settings:
+		return []
+	corrected_tokens = _tokenize_text(corrected_summary)
+	generated_tokens = _tokenize_text(generated_summary)
+	delta_tokens = corrected_tokens - generated_tokens
+	scores: list[tuple[int, str]] = []
+	for key, raw_value in settings.items():
+		k = str(key or "").strip()
+		if not k:
+			continue
+		value = str(raw_value or "").strip().lower()
+		tokens = _tokenize_text(f"{k} {value}")
+		if not tokens:
+			continue
+		score = len(tokens.intersection(delta_tokens))
+		if score <= 0:
+			continue
+		scores.append((score, k))
+	scores.sort(key=lambda item: (-item[0], item[1]))
+	return [name for _, name in scores[: max(1, int(limit))]]
+
+
+def _node_doc_feedback_llm_enabled() -> bool:
+	return get_bool_env("NODE_DOC_FEEDBACK_LLM_ENABLED", True)
+
+
+def _node_doc_feedback_timeout_seconds() -> float:
+	raw = str(get_env("NODE_DOC_FEEDBACK_LLM_TIMEOUT_SECONDS", "4") or "").strip()
+	try:
+		return max(0.5, min(30.0, float(raw)))
+	except Exception:
+		return 4.0
+
+
+def _node_doc_feedback_max_fields() -> int:
+	raw = str(get_env("NODE_DOC_FEEDBACK_MAX_FIELDS", "8") or "").strip()
+	try:
+		return max(1, min(20, int(raw)))
+	except Exception:
+		return 8
+
+
+def _node_doc_feedback_base_url() -> str:
+	base = str(get_env("NODE_DOC_FEEDBACK_LLM_BASE_URL", "") or "").strip()
+	if not base:
+		base = str(get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434") or "").strip()
+	return base.rstrip("/")
+
+
+def _node_doc_feedback_model() -> str:
+	return str(get_env("NODE_DOC_FEEDBACK_LLM_MODEL", "glm-4.7-flash:latest") or "").strip() or "glm-4.7-flash:latest"
+
+
+def _load_quick_fields_reference() -> str:
+	candidates = [
+		Path("docs/node_kind_quick_fields.md"),
+		Path("../docs/node_kind_quick_fields.md"),
+	]
+	for path in candidates:
+		try:
+			if path.exists():
+				return str(path.read_text(encoding="utf-8"))
+		except Exception:
+			continue
+	return ""
+
+
+def _extract_json_object_from_text(text: str) -> Dict[str, Any]:
+	raw = str(text or "").strip()
+	if not raw:
+		return {}
+	try:
+		parsed = json.loads(raw)
+		if isinstance(parsed, dict):
+			return parsed
+	except Exception:
+		pass
+	start = raw.find("{")
+	end = raw.rfind("}")
+	if start >= 0 and end > start:
+		snippet = raw[start : end + 1]
+		try:
+			parsed = json.loads(snippet)
+			if isinstance(parsed, dict):
+				return parsed
+		except Exception:
+			return {}
+	return {}
+
+
+async def _suggest_fields_with_llm(
+	*,
+	kind: str,
+	subtype: str,
+	settings: Dict[str, Any],
+	generated_summary: str,
+	corrected_summary: str,
+) -> tuple[list[str], list[str]]:
+	if not _node_doc_feedback_llm_enabled():
+		return [], ["llm_suggester_disabled"]
+	settings_keys = [str(k).strip() for k in settings.keys() if str(k).strip()]
+	if not settings_keys:
+		return [], ["llm_suggester_no_settings"]
+	base_url = _node_doc_feedback_base_url()
+	model = _node_doc_feedback_model()
+	timeout_seconds = _node_doc_feedback_timeout_seconds()
+	max_fields = _node_doc_feedback_max_fields()
+	reference = _load_quick_fields_reference()
+	system_prompt = (
+		"You are selecting the most relevant setting keys for node-doc policy updates. "
+		"Return strict JSON with: {\"suggested_fields\": [string], \"reason\": string}. "
+		"Only choose keys from provided settings_keys."
+	)
+	user_payload = {
+		"kind": kind,
+		"subtype": subtype,
+		"settings_keys": settings_keys,
+		"settings_values": {k: str(v)[:200] for k, v in settings.items()},
+		"generated_summary": generated_summary[:800],
+		"corrected_summary": corrected_summary[:800],
+		"quick_fields_reference_excerpt": reference[:4000],
+		"max_fields": max_fields,
+	}
+	body = {
+		"model": model,
+		"stream": False,
+		"messages": [
+			{"role": "system", "content": system_prompt},
+			{"role": "user", "content": json.dumps(user_payload, ensure_ascii=True)},
+		],
+		"format": {
+			"type": "object",
+			"properties": {
+				"suggested_fields": {"type": "array", "items": {"type": "string"}},
+				"reason": {"type": "string"},
+			},
+			"required": ["suggested_fields"],
+		},
+	}
+	try:
+		async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+			res = await client.post(f"{base_url}/api/chat", json=body)
+			if int(res.status_code) < 200 or int(res.status_code) >= 300:
+				return [], [f"llm_suggester_http_{int(res.status_code)}"]
+			payload = res.json() if hasattr(res, "json") else {}
+			message = payload.get("message") if isinstance(payload, dict) else {}
+			content = ""
+			if isinstance(message, dict):
+				content = str(message.get("content") or "")
+			obj = _extract_json_object_from_text(content)
+			suggested = obj.get("suggested_fields") if isinstance(obj, dict) else []
+			clean = []
+			seen = set()
+			for field in suggested if isinstance(suggested, list) else []:
+				name = str(field or "").strip()
+				if not name or name in seen:
+					continue
+				if name not in settings_keys:
+					continue
+				seen.add(name)
+				clean.append(name)
+				if len(clean) >= max_fields:
+					break
+			if not clean:
+				return [], ["llm_suggester_no_candidates"]
+			return clean, [f"llm_suggester_model={model}", f"llm_suggester_base={base_url}"]
+	except Exception as ex:
+		return [], [f"llm_suggester_error={type(ex).__name__}"]
+
+
+def _node_doc_feedback_file_path() -> Path:
+	path_raw = str(
+		get_env("NODE_DOC_FEEDBACK_SUGGESTIONS_PATH", "docs/node_kind_quick_fields.suggestions.md") or ""
+	).strip()
+	if not path_raw:
+		path_raw = "docs/node_kind_quick_fields.suggestions.md"
+	return Path(path_raw)
+
+
+def _append_feedback_suggestion(
+	path: Path,
+	entry: Dict[str, Any],
+	suggested_fields: list[str],
+) -> None:
+	path.parent.mkdir(parents=True, exist_ok=True)
+	created_at = str(entry.get("created_at") or "")
+	kind = str(entry.get("kind") or "")
+	subtype = str(entry.get("subtype") or "")
+	verdict = str(entry.get("verdict") or "")
+	signature_key = str(entry.get("signature_key") or "")
+	node_label = str(entry.get("node_label") or "")
+	generated = str(entry.get("generated_summary") or "").strip()
+	corrected = str(entry.get("corrected_summary") or "").strip()
+	fields_text = ", ".join(suggested_fields) if suggested_fields else "(none)"
+	record_json = json.dumps(entry, ensure_ascii=True, separators=(",", ":"))
+	lines = [
+		"",
+		f"## [{created_at}] {kind}:{subtype or '*'}",
+		f"- node: `{node_label}`",
+		f"- verdict: `{verdict}`",
+		f"- signature: `{signature_key}`",
+		f"- suggested_fields: {fields_text}",
+		"- generated_summary:",
+		f"  - {generated}",
+		"- corrected_summary:",
+		f"  - {corrected if corrected else '(not provided)'}",
+		"- raw:",
+		f"```json\n{record_json}\n```",
+	]
+	if not path.exists():
+		path.write_text("# Node Doc LLM Feedback Suggestions\n", encoding="utf-8")
+	with path.open("a", encoding="utf-8") as handle:
+		handle.write("\n".join(lines))
 
 
 @router.post("/versions/register")
@@ -294,5 +553,72 @@ async def explain_node_doc(req: NodeDocExplainRequest):
 		generated_at=datetime.now(timezone.utc).isoformat(),
 		signature_key=str(req.signatureKey or "").strip() or "missing-signature",
 		provider_meta={"provider": provider, "model": model},
+	)
+	return response.model_dump()
+
+
+@router.post("/node-doc-feedback")
+async def node_doc_feedback(req: NodeDocFeedbackRequest):
+	context = req.context if isinstance(req.context, dict) else {}
+	kind = str(context.get("node_kind") or context.get("nodeKind") or "node").strip().lower() or "node"
+	subtype = str(context.get("node_subtype") or context.get("nodeSubtype") or "").strip().lower()
+	node_label = str(context.get("node_label") or context.get("nodeLabel") or "Node").strip() or "Node"
+	settings = context.get("settings") if isinstance(context.get("settings"), dict) else {}
+	signature_key = str(req.signatureKey or "").strip() or "missing-signature"
+	verdict = str(req.verdict or "").strip().lower()
+	generated_summary = str(req.generatedSummary or "").strip()
+	corrected_summary = str(req.correctedSummary or "").strip()
+	entry_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+	entry = {
+		"entry_id": entry_id,
+		"created_at": datetime.now(timezone.utc).isoformat(),
+		"kind": kind,
+		"subtype": subtype,
+		"node_label": node_label,
+		"signature_key": signature_key,
+		"verdict": verdict,
+		"generated_summary": generated_summary,
+		"corrected_summary": corrected_summary,
+		"settings": settings,
+	}
+	suggested_fields: list[str] = []
+	notes = []
+	if verdict == "good":
+		notes.append("good_feedback_recorded")
+	if verdict == "bad" and not corrected_summary:
+		notes.append("missing_corrected_summary")
+	if verdict == "bad" and corrected_summary:
+		llm_fields, llm_notes = await _suggest_fields_with_llm(
+			kind=kind,
+			subtype=subtype,
+			settings=settings,
+			generated_summary=generated_summary,
+			corrected_summary=corrected_summary,
+		)
+		notes.extend(llm_notes)
+		suggested_fields = llm_fields
+		if not suggested_fields:
+			suggested_fields = _suggest_fields_from_feedback(
+				settings,
+				generated_summary,
+				corrected_summary,
+				limit=_node_doc_feedback_max_fields(),
+			)
+			if suggested_fields:
+				notes.append("fallback_heuristic_used")
+	if verdict == "bad" and corrected_summary and not suggested_fields:
+		notes.append("no_field_candidates")
+
+	suggestion_file = _node_doc_feedback_file_path()
+	_append_feedback_suggestion(suggestion_file, entry, suggested_fields)
+	response = NodeDocFeedbackResponse(
+		ok=True,
+		stored=True,
+		entry_id=entry_id,
+		kind=kind,
+		subtype=subtype,
+		suggestion_file=str(suggestion_file.as_posix()),
+		suggested_fields=suggested_fields,
+		notes=notes,
 	)
 	return response.model_dump()

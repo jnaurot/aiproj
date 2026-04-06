@@ -1,13 +1,19 @@
 <script lang="ts">
 	import type { NodeDocResolved } from './nodeDocsViewModel';
-	import type { NodeDocExplanationMode, NodeDocGeneratedExplanation } from '$lib/flow/schema/nodeDocs';
+	import type {
+		NodeDocExplanationMode,
+		NodeDocGeneratedExplanation,
+		NodeDocTrainingMode
+	} from '$lib/flow/schema/nodeDocs';
 	import type { NodeDocLlmContext } from './nodeDocLlmContext';
 	import { getOrGenerateNodeDocLlmExplanation } from './nodeDocLlmCache';
+	import { submitNodeDocLlmFeedback } from './nodeDocLlmService';
 
 	export let doc: NodeDocResolved | null = null;
 	export let open: boolean = false;
 	export let expanded: boolean = false;
 	export let mode: NodeDocExplanationMode = 'default';
+	export let trainingMode: NodeDocTrainingMode = 'off';
 	export let nodeId: string = '';
 	export let llmContext: NodeDocLlmContext | null = null;
 	export let llmSignature: string = '';
@@ -16,8 +22,14 @@
 	let llmFailure = false;
 	let llmDoc: NodeDocGeneratedExplanation | null = null;
 	let llmInFlightKey = '';
+	let feedbackBusy = false;
+	let feedbackVerdict: '' | 'good' | 'bad' = '';
+	let feedbackStatus = '';
+	let feedbackCorrection = '';
+	let feedbackShowCorrection = false;
 
 	$: shouldUseLlm = mode === 'llm';
+	$: trainingEnabled = trainingMode === 'on';
 	$: explanationSourceLabel = shouldUseLlm ? 'AI-generated explanation' : 'Default explanation';
 	$: safeSummary = (() => {
 		if (shouldUseLlm && llmDoc?.summary) return String(llmDoc.summary);
@@ -58,6 +70,50 @@
 				});
 		}
 	}
+
+	$: if (!open) {
+		feedbackShowCorrection = false;
+		feedbackCorrection = '';
+		feedbackStatus = '';
+		feedbackVerdict = '';
+	}
+
+	async function submitFeedback(verdict: 'good' | 'bad'): Promise<void> {
+		if (!trainingEnabled || !shouldUseLlm || !llmContext || !llmSignature) return;
+		if (feedbackBusy) return;
+		if (verdict === 'bad' && !String(feedbackCorrection ?? '').trim()) {
+			feedbackStatus = 'Please enter a better explanation before submitting.';
+			return;
+		}
+		feedbackBusy = true;
+		feedbackStatus = '';
+		try {
+			const generatedSummary = String(llmDoc?.summary ?? safeSummary ?? '').trim();
+			const result = await submitNodeDocLlmFeedback({
+				context: llmContext,
+				signatureKey: llmSignature,
+				generatedSummary,
+				verdict,
+				correctedSummary: feedbackCorrection
+			});
+			if (!result?.ok) {
+				feedbackStatus = 'Feedback submit failed.';
+				return;
+			}
+			feedbackVerdict = verdict;
+			if (verdict === 'good') {
+				feedbackStatus = 'Saved as good feedback.';
+				feedbackShowCorrection = false;
+			} else {
+				const fieldsText = result.suggested_fields.length > 0 ? result.suggested_fields.join(', ') : 'none';
+				feedbackStatus = `Saved bad feedback. Suggested fields: ${fieldsText}.`;
+			}
+		} catch {
+			feedbackStatus = 'Feedback submit failed.';
+		} finally {
+			feedbackBusy = false;
+		}
+	}
 </script>
 
 {#if open}
@@ -77,6 +133,52 @@
 		{/if}
 		{#if failureLabel}
 			<div class="meta warn">{failureLabel}</div>
+		{/if}
+		{#if shouldUseLlm && trainingEnabled}
+			<div class="feedbackRow">
+				<button
+					type="button"
+					class={`feedbackBtn ${feedbackVerdict === 'good' ? 'active' : ''}`}
+					on:click={() => void submitFeedback('good')}
+					disabled={feedbackBusy}
+				>
+					Good
+				</button>
+				<button
+					type="button"
+					class={`feedbackBtn ${feedbackVerdict === 'bad' ? 'active' : ''}`}
+					on:click={() => {
+						feedbackShowCorrection = true;
+						feedbackVerdict = 'bad';
+					}}
+					disabled={feedbackBusy}
+				>
+					Bad
+				</button>
+			</div>
+			{#if feedbackShowCorrection}
+				<div class="feedbackEdit">
+					<textarea
+						class="feedbackTextarea"
+						rows="3"
+						bind:value={feedbackCorrection}
+						placeholder="What should this explanation say instead?"
+					></textarea>
+					<div class="feedbackActions">
+						<button
+							type="button"
+							class="feedbackBtn"
+							on:click={() => void submitFeedback('bad')}
+							disabled={feedbackBusy}
+						>
+							{feedbackBusy ? 'Submitting...' : 'Submit correction'}
+						</button>
+					</div>
+				</div>
+			{/if}
+			{#if feedbackStatus}
+				<div class="meta">{feedbackStatus}</div>
+			{/if}
 		{/if}
 		{#if expanded}
 			<div class="section">
@@ -109,7 +211,7 @@
 		box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
 		color: #dce6ff;
 		z-index: 60;
-		pointer-events: none;
+		pointer-events: auto;
 	}
 
 	.header {
@@ -177,5 +279,54 @@
 		font-size: 11px;
 		line-height: 1.35;
 		color: #c9d8f4;
+	}
+
+	.feedbackRow {
+		display: flex;
+		gap: 6px;
+		margin-top: 8px;
+	}
+
+	.feedbackBtn {
+		font-size: 10px;
+		padding: 2px 8px;
+		border-radius: 999px;
+		border: 1px solid #3a4f7b;
+		background: #101a2c;
+		color: #dbe7ff;
+		cursor: pointer;
+	}
+
+	.feedbackBtn.active {
+		border-color: #6aa0ff;
+		background: #163057;
+	}
+
+	.feedbackBtn:disabled {
+		opacity: 0.55;
+		cursor: default;
+	}
+
+	.feedbackEdit {
+		margin-top: 6px;
+		display: grid;
+		gap: 6px;
+	}
+
+	.feedbackTextarea {
+		width: 100%;
+		box-sizing: border-box;
+		font-size: 11px;
+		border-radius: 8px;
+		border: 1px solid #3b4f78;
+		background: #0c1629;
+		color: #dce6ff;
+		padding: 6px;
+		resize: vertical;
+	}
+
+	.feedbackActions {
+		display: flex;
+		justify-content: flex-end;
 	}
 </style>

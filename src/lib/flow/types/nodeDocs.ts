@@ -1,5 +1,6 @@
 export type NodeDocPlaneKind = 'data' | 'control' | 'param';
 export type NodeDocExplanationMode = 'default' | 'llm';
+export type NodeDocTrainingMode = 'off' | 'on';
 
 export type NodeDocPortRef = {
 	handle: string;

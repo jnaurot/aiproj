@@ -68,4 +68,29 @@ describe('NodeDocTooltip', () => {
 		expect(rendered.body).toContain('AI-generated explanation');
 		expect(rendered.body).toContain('generating...');
 	});
+
+	it('renders training feedback controls when training mode is on', () => {
+		const rendered = render(NodeDocTooltip as any, {
+			props: {
+				doc,
+				open: true,
+				expanded: true,
+				mode: 'llm',
+				trainingMode: 'on',
+				nodeId: 'n_1',
+				llmContext: {
+					node_id: 'n_1',
+					node_label: 'Model_ScoreJob',
+					node_kind: 'model',
+					node_subtype: 'ollama',
+					settings: { model: 'glm-4.7-flash:latest' },
+					planes: { data_inputs: ['in'], data_outputs: ['out'], param_inputs: [], control_inputs: [] },
+					runtime: { pending_input_count: 0, inflight: 0, ready_work: false, blocked_reason_code: '' }
+				},
+				llmSignature: 'sig-train'
+			}
+		});
+		expect(rendered.body).toContain('Good');
+		expect(rendered.body).toContain('Bad');
+	});
 });

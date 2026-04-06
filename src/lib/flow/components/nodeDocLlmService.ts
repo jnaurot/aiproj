@@ -25,6 +25,25 @@ export type NodeDocLlmServiceOptions = {
 	onTelemetry?: (telemetry: NodeDocLlmTelemetry) => void;
 };
 
+export type NodeDocLlmFeedbackRequest = {
+	context: NodeDocLlmContext;
+	signatureKey: string;
+	generatedSummary: string;
+	verdict: 'good' | 'bad';
+	correctedSummary?: string;
+};
+
+export type NodeDocLlmFeedbackResult = {
+	ok: boolean;
+	stored: boolean;
+	entry_id: string;
+	kind: string;
+	subtype: string;
+	suggestion_file: string;
+	suggested_fields: string[];
+	notes: string[];
+};
+
 function nowMs(): number {
 	return Date.now();
 }
@@ -93,3 +112,50 @@ export async function generateNodeDocLlmExplanation(
 	return { explanation: null, telemetry };
 }
 
+function sanitizeFeedbackResult(input: unknown): NodeDocLlmFeedbackResult | null {
+	if (!input || typeof input !== 'object') return null;
+	const rec = input as Record<string, unknown>;
+	const suggestedFields = Array.isArray(rec.suggested_fields)
+		? rec.suggested_fields.map((value) => String(value ?? '').trim()).filter(Boolean)
+		: [];
+	const notes = Array.isArray(rec.notes)
+		? rec.notes.map((value) => String(value ?? '').trim()).filter(Boolean)
+		: [];
+	const ok = Boolean(rec.ok);
+	const stored = Boolean(rec.stored);
+	const entryId = String(rec.entry_id ?? '').trim();
+	const kind = String(rec.kind ?? '').trim();
+	const subtype = String(rec.subtype ?? '').trim();
+	const suggestionFile = String(rec.suggestion_file ?? '').trim();
+	if (!entryId || !kind || !suggestionFile) return null;
+	return {
+		ok,
+		stored,
+		entry_id: entryId,
+		kind,
+		subtype,
+		suggestion_file: suggestionFile,
+		suggested_fields: suggestedFields,
+		notes
+	};
+}
+
+export async function submitNodeDocLlmFeedback(
+	request: NodeDocLlmFeedbackRequest
+): Promise<NodeDocLlmFeedbackResult | null> {
+	const body = {
+		context: request.context,
+		signatureKey: String(request.signatureKey ?? '').trim(),
+		generatedSummary: String(request.generatedSummary ?? '').trim(),
+		verdict: request.verdict === 'bad' ? 'bad' : 'good',
+		correctedSummary: String(request.correctedSummary ?? '').trim()
+	};
+	const response = await fetch(backendUrl('/api/models/node-doc-feedback'), {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify(body)
+	});
+	if (!response.ok) return null;
+	const payload = await response.json();
+	return sanitizeFeedbackResult(payload);
+}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { generateNodeDocLlmExplanation } from './nodeDocLlmService';
+import { generateNodeDocLlmExplanation, submitNodeDocLlmFeedback } from './nodeDocLlmService';
 import type { NodeDocLlmContext } from './nodeDocLlmContext';
 
 const context: NodeDocLlmContext = {
@@ -71,5 +71,49 @@ describe('nodeDocLlmService', () => {
 		expect(result.explanation).toBeNull();
 		expect(result.telemetry.fallbackReason).toBe('network');
 	});
-});
 
+	it('submits feedback and returns sanitized response', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => ({
+				ok: true,
+				json: async () => ({
+					ok: true,
+					stored: true,
+					entry_id: 'entry-1',
+					kind: 'model',
+					subtype: 'ollama',
+					suggestion_file: 'docs/node_kind_quick_fields.suggestions.md',
+					suggested_fields: ['user_prompt'],
+					notes: ['good_feedback_recorded']
+				})
+			}))
+		);
+		const result = await submitNodeDocLlmFeedback({
+			context,
+			signatureKey: 'sig-f1',
+			generatedSummary: 'summary',
+			verdict: 'good'
+		});
+		expect(result?.ok).toBe(true);
+		expect(result?.suggested_fields).toContain('user_prompt');
+	});
+
+	it('returns null feedback result for malformed payload', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async () => ({
+				ok: true,
+				json: async () => ({ ok: true })
+			}))
+		);
+		const result = await submitNodeDocLlmFeedback({
+			context,
+			signatureKey: 'sig-f2',
+			generatedSummary: 'summary',
+			verdict: 'bad',
+			correctedSummary: 'better summary'
+		});
+		expect(result).toBeNull();
+	});
+});
