@@ -1,6 +1,7 @@
 import type { Edge } from '@xyflow/svelte';
 import type { GraphState } from '$lib/flow/store/graphStore';
 import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
+import { pickQuickFields } from './nodeDocQuickFieldMap';
 
 export type NodeDocLlmContext = {
 	node_id: string;
@@ -33,7 +34,15 @@ function truncate(value: string, limit = 240): string {
 }
 
 function addSetting(target: Record<string, string>, key: string, value: unknown): void {
-	const next = truncate(normalized(value));
+	const serialized =
+		value == null
+			? ''
+			: typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+				? String(value)
+				: Array.isArray(value) || typeof value === 'object'
+					? JSON.stringify(value)
+					: String(value);
+	const next = truncate(normalized(serialized));
 	if (!next) return;
 	target[key] = next;
 }
@@ -85,6 +94,7 @@ function collectPlaneHandles(state: GraphState, nodeId: string): NodeDocLlmConte
 function buildSettingsSummary(data: PipelineNodeData): Record<string, string> {
 	const settings: Record<string, string> = {};
 	const kind = normalized((data as any)?.kind).toLowerCase();
+	const subtype = getNodeSubtype(data);
 	const params = ((data as any)?.params ?? {}) as Record<string, unknown>;
 	if (kind === 'source') {
 		const sourceKind = normalized((data as any)?.sourceKind).toLowerCase();
@@ -95,33 +105,58 @@ function buildSettingsSummary(data: PipelineNodeData): Record<string, string> {
 				'file_name',
 				(params as any)?.file?.name ?? (params as any)?.file_name ?? (params as any)?.snapshot?.name
 			);
+			addSetting(settings, 'file_format', (params as any)?.format ?? (params as any)?.file_format);
+			addSetting(settings, 'delimiter', (params as any)?.delimiter);
+			addSetting(settings, 'has_header', (params as any)?.hasHeader);
+			addSetting(settings, 'encoding', (params as any)?.encoding);
 		} else if (sourceKind === 'api') {
 			addSetting(settings, 'api_url', (params as any)?.url ?? (params as any)?.api?.url);
 			addSetting(settings, 'api_method', (params as any)?.method ?? (params as any)?.api?.method ?? 'GET');
+			addSetting(settings, 'api_auth_mode', (params as any)?.auth?.mode ?? (params as any)?.authMode);
 		} else if (sourceKind === 'database') {
 			addSetting(settings, 'database_table', (params as any)?.table ?? (params as any)?.db?.table);
 			addSetting(settings, 'database_query', (params as any)?.query ?? (params as any)?.db?.query);
+			addSetting(settings, 'connection_ref', (params as any)?.connectionRef ?? (params as any)?.connection_ref);
+		} else if (sourceKind === 'object_store') {
+			addSetting(settings, 'object_bucket', (params as any)?.bucket ?? (params as any)?.container);
+			addSetting(settings, 'object_prefix', (params as any)?.prefix ?? (params as any)?.keyPrefix);
+		} else if (sourceKind === 'warehouse') {
+			addSetting(settings, 'warehouse_source', (params as any)?.table ?? (params as any)?.query);
 		}
 	}
 	if (kind === 'transform') {
 		addSetting(settings, 'transform_kind', (data as any)?.transformKind);
 		addSetting(settings, 'operation', (params as any)?.op ?? (params as any)?.operation);
+		addSetting(settings, 'selected_fields', (params as any)?.columns ?? (params as any)?.fields);
+		addSetting(settings, 'group_by', (params as any)?.groupBy);
+		addSetting(settings, 'metrics', (params as any)?.metrics);
 	}
 	if (kind === 'model' || kind === 'llm') {
 		addSetting(settings, 'provider', (data as any)?.llmKind ?? (params as any)?.provider);
 		addSetting(settings, 'model', (params as any)?.model);
 		addSetting(settings, 'output_mode', (params as any)?.output?.mode ?? (params as any)?.output_mode);
+		addSetting(settings, 'output_strict', (params as any)?.output?.strict);
 		addSetting(settings, 'user_prompt', (params as any)?.user_prompt);
+		addSetting(settings, 'temperature', (params as any)?.temperature);
+		addSetting(settings, 'max_tokens', (params as any)?.max_tokens);
 	}
 	if (kind === 'tool') {
 		addSetting(settings, 'provider', (params as any)?.provider ?? (data as any)?.toolKind);
 		addSetting(settings, 'tool_id', (params as any)?.toolId ?? (params as any)?.name);
+		addSetting(settings, 'tool_args', (params as any)?.args);
 	}
 	if (kind === 'component') {
 		addSetting(settings, 'component_id', (params as any)?.componentRef?.componentId);
 		addSetting(settings, 'revision_id', (params as any)?.componentRef?.revisionId);
+		addSetting(
+			settings,
+			'required_outputs',
+			Array.isArray((params as any)?.api?.outputs)
+				? ((params as any).api.outputs ?? []).filter((entry: any) => Boolean(entry?.required)).map((entry: any) => String(entry?.name ?? '')).filter(Boolean)
+				: []
+		);
 	}
-	return settings;
+	return pickQuickFields(kind, subtype, settings);
 }
 
 function runtimeSummary(state: GraphState, nodeId: string): NodeDocLlmContext['runtime'] {

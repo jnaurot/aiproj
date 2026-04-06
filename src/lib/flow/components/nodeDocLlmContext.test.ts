@@ -35,13 +35,17 @@ describe('nodeDocLlmContext', () => {
 		graphStore.hardResetGraph();
 		const modelId = graphStore.addNode('model', { x: 0, y: 0 });
 		graphStore.updateNodeConfig(modelId, {
-			params: { user_prompt: 'Given a job row and preferences, score match quality.' }
+			params: {
+				user_prompt: 'Given a job row and preferences, score match quality.',
+				debug: { enabled: true }
+			}
 		});
 		const state = get(graphStore as any);
 		const context = buildNodeDocLlmContext(state as any, modelId);
 		expect(context?.node_kind).toBe('model');
 		expect(String(context?.settings.provider ?? '').length).toBeGreaterThan(0);
 		expect(String(context?.settings.user_prompt ?? '')).toContain('score match quality');
+		expect((context?.settings as any).debug_enabled).toBeUndefined();
 	});
 
 	it('extracts transform context with operation details', () => {
