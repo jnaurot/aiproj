@@ -1,7 +1,14 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { Handle, Position, useUpdateNodeInternals } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
-	import { graphStore, deriveNodeIoForData } from '$lib/flow/store/graphStore';
+	import {
+		graphStore,
+		deriveNodeIoForData,
+		getNodeDocResolvedFromState
+	} from '$lib/flow/store/graphStore';
+	import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
+	import { createNodeDocTooltipState, type NodeDocTooltipState } from '$lib/flow/components/nodeDocTooltipState';
 	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import {
 		reconcileLifecycleForActiveRun,
@@ -72,6 +79,34 @@
 	$: batchSize = Math.max(1, Number((processingPolicy as any)?.batch_size ?? 1) || 1);
 	$: runtimeCounts = resolveNodeRuntimeCounts(($graphStore as any)?.queueRuntime, id);
 	$: executionBadge = buildNodeExecutionBadge(consumeMode, runtimeCounts, batchSize);
+	$: nodeDoc = getNodeDocResolvedFromState($graphStore as any, id);
+	let tooltipOpen = false;
+	let tooltipExpanded = false;
+	let tooltipState: NodeDocTooltipState = createNodeDocTooltipState({
+		onChange: (next) => {
+			tooltipOpen = next.open;
+			tooltipExpanded = next.expanded;
+		}
+	});
+	let tooltipOwnerNodeId = String(id ?? '');
+	$: {
+		const nodeKey = String(id ?? '');
+		if (nodeKey !== tooltipOwnerNodeId) {
+			tooltipState.destroy();
+			tooltipOwnerNodeId = nodeKey;
+			tooltipState = createNodeDocTooltipState({
+				onChange: (next) => {
+					tooltipOpen = next.open;
+					tooltipExpanded = next.expanded;
+				}
+			});
+			tooltipOpen = false;
+			tooltipExpanded = false;
+		}
+	}
+	onDestroy(() => {
+		tooltipState.destroy();
+	});
 
 	// IO contracts are derived from node kind/params.
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
@@ -120,6 +155,19 @@
 		const top = ((index + 1) / (total + 1)) * 100;
 		return `${Math.max(8, Math.min(92, top))}%`;
 	}
+
+	function onNodeEnter(): void {
+		if (nodeDoc?.disabled) return;
+		tooltipState.enter();
+	}
+
+	function onNodeLeave(): void {
+		tooltipState.leave();
+	}
+
+	function onNodeKeydown(evt: KeyboardEvent): void {
+		tooltipState.keydown(String(evt?.key ?? ''));
+	}
 </script>
 
 {#each effectiveTargetHandles as h, i (`target:${h.id}`)}
@@ -155,7 +203,15 @@
 	{/if}
 {/each}
 
-<div class={`node ${selected ? 'selected' : ''} st-${status}`}>
+<div
+	class={`node ${selected ? 'selected' : ''} st-${status}`}
+	tabindex="0"
+	role="button"
+	aria-label={`${label} node documentation`}
+	on:mouseenter={onNodeEnter}
+	on:mouseleave={onNodeLeave}
+	on:keydown={onNodeKeydown}
+>
 	<div class="title">
 		<span class="label">{label}</span>
 		<span class={`badge ${freezeClass} ${debugEnabled ? 'debugEnabled' : ''}`}>{kind}{freezeIcon ? ` ${freezeIcon}` : ''}</span>
@@ -172,6 +228,7 @@
 			<slot name="footer-right" />
 		</div>
 	</div>
+	<NodeDocTooltip doc={nodeDoc} open={tooltipOpen} expanded={tooltipExpanded} />
 </div>
 
 <style>
