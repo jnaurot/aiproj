@@ -26,7 +26,7 @@ src/lib/flow/store/
 ├── graphStore.history.ts        ← [DONE] Undo/redo stack (factory)
 │
 ├── graphStore.audit.ts          ← [DONE] State transition auditing
-├── graphStore.node-schema.ts    ← [NEXT] Node schema canonicalisation + edge constraints
+├── graphStore.node-schema.ts    ← [DONE] Node schema canonicalisation + edge constraints
 │
 ├── graphStore.inspector.ts      ← Inspector / node-config editing
 ├── graphStore.run.ts            ← Run lifecycle (SSE, hydration, event handling)
@@ -498,10 +498,10 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.history.ts` — extracted and on disk
 - [x] `graphStore.types.ts` wired into `graphStore.ts` (replace inline types)
 - [x] `graphStore.history.ts` wired into `graphStore.ts` (replace IIFE history vars)
-- [ ] `graphStore.audit.ts` — extracted
-- [ ] `graphStore.audit.ts` wired into `graphStore.ts`
-- [ ] `graphStore.node-schema.ts` — extracted
-- [ ] `graphStore.node-schema.ts` wired into `graphStore.ts`
+- [x] `graphStore.audit.ts` — extracted
+- [x] `graphStore.audit.ts` wired into `graphStore.ts`
+- [x] `graphStore.node-schema.ts` — extracted
+- [x] `graphStore.node-schema.ts` wired into `graphStore.ts`
 - [ ] `graphStore.inspector.ts` — extracted
 - [ ] `graphStore.inspector.ts` wired into `graphStore.ts`
 - [ ] `graphStore.run.ts` — extracted
