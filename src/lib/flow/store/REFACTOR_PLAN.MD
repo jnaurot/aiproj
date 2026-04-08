@@ -497,7 +497,7 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.types.ts` — extracted and on disk
 - [x] `graphStore.history.ts` — extracted and on disk
 - [x] `graphStore.types.ts` wired into `graphStore.ts` (replace inline types)
-- [ ] `graphStore.history.ts` wired into `graphStore.ts` (replace IIFE history vars)
+- [x] `graphStore.history.ts` wired into `graphStore.ts` (replace IIFE history vars)
 - [ ] `graphStore.audit.ts` — extracted
 - [ ] `graphStore.audit.ts` wired into `graphStore.ts`
 - [ ] `graphStore.node-schema.ts` — extracted

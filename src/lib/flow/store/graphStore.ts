@@ -182,6 +182,7 @@ export {
 	INITIAL_INSPECTOR,
 } from './graphStore.types';
 import { RUN_IDLE, NODE_STATUS_IDLE, NODE_STATUS_SUCCEEDED, INITIAL_INSPECTOR } from './graphStore.types';
+import { createHistoryManager, runInHistoryTransaction } from './graphStore.history';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
 
@@ -6040,88 +6041,22 @@ const initialState: GraphState = {
 export const graphStore = (() => {
 	const { subscribe, set, update: rawUpdate } = writable<GraphState>(initialState);
 	const resolveNodeDocMemoized = createMemoizedNodeDocResolver();
-	const HISTORY_LIMIT_DEFAULT = 100;
-	let historyLimit = HISTORY_LIMIT_DEFAULT;
-	let historyPast: PipelineGraphDTO[] = [];
-	let historyFuture: PipelineGraphDTO[] = [];
-	let historyPresent: PipelineGraphDTO = stripToDTO(
-		initialState.nodes as any,
-		initialState.edges as any,
-		initialState.graphId
+
+	// ── history ──────────────────────────────────────────────────────────
+	const history = createHistoryManager({
+		getState: () => get({ subscribe } as any) as GraphState,
+		applyDocument: (graph, graphId) => {
+			return applyGraphDocument(graph, graphId).ok;
+		},
+		snapshotFromState: (s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId),
+	});
+
+	// ── audited update ───────────────────────────────────────────────────
+	const update = history.wrapUpdate(
+		rawUpdate,
+		auditStateTransition,
+		(s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId),
 	);
-	let historyApplying = false;
-	let historyTransactionDepth = 0;
-	let historyTransactionStartKey: string | null = null;
-
-	function snapshotFromState(state: GraphState): PipelineGraphDTO {
-		return stripToDTO(state.nodes as any, state.edges as any, state.graphId);
-	}
-
-	function snapshotKey(snapshot: PipelineGraphDTO): string {
-		return stableJson(snapshot);
-	}
-
-	function resetHistoryToSnapshot(snapshot: PipelineGraphDTO): void {
-		historyPast = [];
-		historyFuture = [];
-		historyPresent = snapshot;
-	}
-
-	function pushHistorySnapshot(snapshot: PipelineGraphDTO): void {
-		if (historyApplying) return;
-		if (historyTransactionDepth > 0) return;
-		if (snapshotKey(snapshot) === snapshotKey(historyPresent)) return;
-		historyPast = [...historyPast, historyPresent];
-		if (historyPast.length > historyLimit) {
-			historyPast = historyPast.slice(historyPast.length - historyLimit);
-		}
-		historyPresent = snapshot;
-		historyFuture = [];
-	}
-
-	function beginHistoryTxn(): void {
-		if (historyTransactionDepth === 0) {
-			historyTransactionStartKey = snapshotKey(historyPresent);
-		}
-		historyTransactionDepth += 1;
-	}
-
-	function endHistoryTxn(): void {
-		if (historyTransactionDepth <= 0) return;
-		historyTransactionDepth -= 1;
-		if (historyTransactionDepth > 0) return;
-		const current = snapshotFromState(get({ subscribe } as any) as GraphState);
-		const currentKey = snapshotKey(current);
-		if (historyTransactionStartKey != null && currentKey !== historyTransactionStartKey) {
-			historyPast = [...historyPast, historyPresent];
-			if (historyPast.length > historyLimit) {
-				historyPast = historyPast.slice(historyPast.length - historyLimit);
-			}
-			historyPresent = current;
-			historyFuture = [];
-		}
-		historyTransactionStartKey = null;
-	}
-
-	function runInHistoryTransaction<T>(fn: () => T): T {
-		beginHistoryTxn();
-		try {
-			return fn();
-		} finally {
-			endHistoryTxn();
-		}
-	}
-
-	const update = (
-		recipe: (state: GraphState) => GraphState,
-		ctx: AuditContext = { source: 'unknown' }
-	) =>
-		rawUpdate((state) => {
-			const next = recipe(state);
-			auditStateTransition(state, next, ctx);
-			pushHistorySnapshot(snapshotFromState(next));
-			return next;
-		});
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
 	let resumeFallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -7093,27 +7028,14 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			persist(nextState);
 			return nextState;
 		}, { source: 'graph_edit' });
-		if (!historyApplying) {
-			resetHistoryToSnapshot(snapshotFromState(get({ subscribe } as any) as GraphState));
+		if (!history.isApplying()) {
+			history.resetToSnapshot(stripToDTO(
+				(get({ subscribe } as any) as GraphState).nodes as any,
+				(get({ subscribe } as any) as GraphState).edges as any,
+				(get({ subscribe } as any) as GraphState).graphId
+			));
 		}
 		return { ok: true };
-	}
-
-	function applyHistorySnapshot(snapshot: PipelineGraphDTO): boolean {
-		const graph = {
-			nodes: Array.isArray((snapshot as any)?.nodes) ? ((snapshot as any).nodes as unknown[]) : [],
-			edges: Array.isArray((snapshot as any)?.edges) ? ((snapshot as any).edges as unknown[]) : []
-		};
-		const graphId = String((snapshot as any)?.meta?.graphId ?? '').trim() || null;
-		historyApplying = true;
-		try {
-			const applied = applyGraphDocument(graph, graphId);
-			if (!applied.ok) return false;
-			historyPresent = snapshotFromState(get({ subscribe } as any) as GraphState);
-			return true;
-		} finally {
-			historyApplying = false;
-		}
 	}
 
 	function hydrateFromRunSnapshot(
@@ -7176,51 +7098,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 	return {
 		subscribe,
-		canUndo(): boolean {
-			return historyPast.length > 0;
-		},
-		canRedo(): boolean {
-			return historyFuture.length > 0;
-		},
-		setHistoryLimit(limit: number): void {
-			const nextLimit = Math.max(1, Number(limit || HISTORY_LIMIT_DEFAULT));
-			historyLimit = nextLimit;
-			if (historyPast.length > historyLimit) {
-				historyPast = historyPast.slice(historyPast.length - historyLimit);
-			}
-		},
-		clearHistory(): void {
-			resetHistoryToSnapshot(snapshotFromState(get({ subscribe } as any) as GraphState));
-		},
-		beginHistoryTransaction(): void {
-			beginHistoryTxn();
-		},
-		endHistoryTransaction(): void {
-			endHistoryTxn();
-		},
-		undo(): { ok: boolean; reason?: string } {
-			if (historyPast.length === 0) return { ok: false, reason: 'at_oldest' };
-			const target = historyPast[historyPast.length - 1];
-			const current = historyPresent;
-			const applied = applyHistorySnapshot(target);
-			if (!applied) return { ok: false, reason: 'restore_failed' };
-			historyPast = historyPast.slice(0, historyPast.length - 1);
-			historyFuture = [...historyFuture, current];
-			return { ok: true };
-		},
-		redo(): { ok: boolean; reason?: string } {
-			if (historyFuture.length === 0) return { ok: false, reason: 'at_newest' };
-			const target = historyFuture[historyFuture.length - 1];
-			const current = historyPresent;
-			const applied = applyHistorySnapshot(target);
-			if (!applied) return { ok: false, reason: 'restore_failed' };
-			historyFuture = historyFuture.slice(0, historyFuture.length - 1);
-			historyPast = [...historyPast, current];
-			if (historyPast.length > historyLimit) {
-				historyPast = historyPast.slice(historyPast.length - historyLimit);
-			}
-			return { ok: true };
-		},
+		...history.actions,
 		patchInspectorDraft,
 		commitInspectorImmediate,
 		commitSnapshotSelection,
@@ -7417,7 +7295,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
-			return runInHistoryTransaction(() => {
+			return runInHistoryTransaction(history, () => {
 				const nextParams = structuredClone(defaultSourceParamsByKind[nextKind]);
 
 				// 1) update structural subtype on the node
@@ -7470,7 +7348,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		// graphStore.ts (inside your graphStore object)
 		setLlmKind(nodeId: string, nextKind: LlmKind) {
-			return runInHistoryTransaction(() => {
+			return runInHistoryTransaction(history, () => {
 				const nextParams = structuredClone(defaultLlmParamsByKind[nextKind]);
 
 				// 1) update structural subtype on the node
@@ -7525,7 +7403,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 		// graphStore.ts (inside your graphStore object)
 		setTransformKind(nodeId: string, nextKind: TransformKind) {
-			return runInHistoryTransaction(() => {
+			return runInHistoryTransaction(history, () => {
 				const nextParams = structuredClone(defaultTransformParamsByKind[nextKind]);
 
 				// 1) update structural subtype on the node
@@ -7578,7 +7456,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 
 		setToolProvider(nodeId: string, nextProvider: ToolProvider) {
-			return runInHistoryTransaction(() => {
+			return runInHistoryTransaction(history, () => {
 				const nextParams = structuredClone(defaultToolParamsByProvider[nextProvider]);
 				const r = updateNodeConfigImpl(nodeId, { params: nextParams });
 				if (r.ok) {
@@ -8836,7 +8714,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 			const next = buildHardResetState(freshGraphId);
 			persist(next);
 			set(next);
-			resetHistoryToSnapshot(snapshotFromState(next));
+			history.resetToSnapshot(stripToDTO(next.nodes as any, next.edges as any, next.graphId));
 		},
 
 		clearDraft() {
