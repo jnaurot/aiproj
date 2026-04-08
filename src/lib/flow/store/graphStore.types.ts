@@ -5,6 +5,16 @@
 // runtime side-effects – it is pure type/constant declarations so that every
 // downstream module can import from one place without creating circular deps.
 
+// What's in it: Every type, interface, and shared constant that was previously scattered
+//  through the 10k-line file — 42 named exports total.
+// One meaningful improvement beyond a mechanical move: QueueRuntime was previously
+//  an anonymous inline type nested inside GraphState (the massive queueRuntime?:
+//  block). It's now a named export, so any module that needs to work with queue runtime data
+//  can reference it directly instead of writing GraphState['queueRuntime'].
+// The two raw string constants (IDLE, SUCCEEDED) are renamed to NODE_STATUS_IDLE /
+//  NODE_STATUS_SUCCEEDED to be less ambiguous when read out of context.
+//  initialInspector becomes INITIAL_INSPECTOR for the same reason.
+
 import type { Node, Edge } from '@xyflow/svelte';
 import type {
 	NodeStatus,

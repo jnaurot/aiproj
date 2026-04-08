@@ -102,172 +102,88 @@ import {
 	type GraphFreshness as ScopeFreshness
 } from './runScope';
 
-type NodeOutputInfo = {
-	mimeType?: string;
-	payloadType?: string;
-	preview?: string;
-	sourceObservability?: Record<string, unknown>;
-	primingArtifact?: Record<string, unknown>;
-	cached?: boolean;
-	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
-	expectedContractFingerprint?: string;
-	actualContractFingerprint?: string;
-	mismatchKind?: string;
-	lastError?: NodeExecutionError | null;
-};
-
-export type NodeExecutionError = {
-	message?: string;
-	errorCode?: string;
-	op?: string;
-	paramPath?: string;
-	missingColumns?: string[];
-	availableColumns?: string[];
-	availableColumnsSource?: 'schema' | 'inferred' | string;
-};
-type NodeBindingInfo = {
-	status?: string;
-	current?: { execKey?: string | null; artifactId?: string | null } | null;
-	last?: { execKey?: string | null; artifactId?: string | null } | null;
-	lastArtifactId?: string | null; // legacy
-	lastRunId?: string | null;
-	lastExecKey?: string | null; // legacy
-	currentExecKey?: string | null; // legacy
-	currentArtifactId?: string | null; // legacy
-	currentRunId?: string | null;
-	isUpToDate?: boolean;
-	cacheValid?: boolean;
-	staleReason?: string | null;
-};
-type BindingPair = { execKey: string | null; artifactId: string | null };
-export type NormalizedNodeBinding = NodeBindingInfo & {
-	status: string;
-	isUpToDate: boolean;
-	cacheValid: boolean;
-	currentRunId: string | null;
-	staleReason: string | null;
-	current: BindingPair;
-	last: BindingPair;
-};
-type EdgeExec = 'idle' | 'active' | 'done';
-type LogLevel = 'info' | 'warn' | 'error';
-type RunLog = {
-	id: number; // ✅ ADD
-	ts: string;
-	level: LogLevel;
-	message: string;
-	nodeId?: string;
-	edgeId?: string;
-	componentPath?: string[];
-};
-const RUN_IDLE = "idle"
-type RunStatus =
-	| typeof RUN_IDLE
-	| 'running'
-	| 'pausing'
-	| 'paused'
-	| 'resuming'
-	| 'succeeded'
-	| 'failed'
-	| 'canceled';
-type GraphLastRunStatus = 'succeeded' | 'failed' | 'canceled' | 'never_run';
-type AuditContext = {
-	source: 'event' | 'accept_params' | 'hydrate_snapshot' | 'graph_edit' | 'unknown';
-	evt?: KnownRunEvent;
-	allowedNodeIds?: Set<string>;
-	snapshotNodeIds?: Set<string>;
-	expectedDirtyTransition?: boolean;
-};
-type InspectorState = {
-	nodeId: string | null;
-	draftParams: Record<string, any>;
-	dirty: boolean;
-	systemNotice?: string | null;
-	uiByNodeId: Record<string, ApiEditorUiState>;
-};
-
-export type InspectorDraftPatchIntent = 'user_edit' | 'system_canonicalize';
-
-export type ApiEditorUiState = {
-	requestOpen: boolean;
-	authOpen: boolean;
-	transportOpen: boolean;
-	executionOpen: boolean;
-	debugOpen: boolean;
-	queryOpen: boolean;
-	headersOpen: boolean;
-	bodyOpen: boolean;
-};
-
-type SavePreflightSeverity = 'error' | 'warning';
-export type SavePreflightDiagnostic = {
-	code: string;
-	path: string;
-	message: string;
-	severity: SavePreflightSeverity;
-};
-export type SavePreflightResult = {
-	ok: boolean;
-	diagnostics: SavePreflightDiagnostic[];
-};
-export type SaveConsistencyEntity = {
-	id: string;
-	label: string;
-};
-export type SaveConsistencyMismatch = {
-	canvasNodeCount: number;
-	persistedNodeCount: number;
-	canvasEdgeCount: number;
-	persistedEdgeCount: number;
-	missingNodes: SaveConsistencyEntity[];
-	addedNodes: SaveConsistencyEntity[];
-	changedNodes: SaveConsistencyEntity[];
-	missingEdges: SaveConsistencyEntity[];
-	addedEdges: SaveConsistencyEntity[];
-	changedEdges: SaveConsistencyEntity[];
-};
-
-export type EditorContext = 'graph' | 'component';
-
-export type ComponentEditSessionSnapshot = {
-	graphId: string;
-	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
-	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
-	selectedNodeId: string | null;
-	inspector: InspectorState;
-	logs: RunLog[];
-	runStatus: RunStatus;
-	lastRunStatus: GraphLastRunStatus;
-	freshness: ScopeFreshness;
-	staleNodeCount: number;
-	activeRunMode: ActiveRunMode;
-	activeRunFrom: string | null;
-	activeRunNodeSet: Set<string>;
-	nodeOutputs: Record<string, NodeOutputInfo>;
-	nodeBindings: Record<string, NormalizedNodeBinding>;
-	activeRunId: string | null;
-};
-
-export type ComponentEditSession = {
-	componentId: string;
-	revisionId: string;
-	entryNodeId: string | null;
-	contractDraftParams: Record<string, any>;
-	snapshot: ComponentEditSessionSnapshot;
-	parentSession: ComponentEditSession | null;
-};
-
-const IDLE: NodeStatus = 'idle';
-const SUCCEEDED: NodeStatus = 'succeeded';
+import type { BindingPair } from './graphStore.bindings';
+import type {
+	NodeOutputInfo,
+	NodeExecutionError,
+	NodeBindingInfo,
+	NormalizedNodeBinding,
+	RunSnapshotLike,
+	AuditContext,
+	RunLog,
+	RunStatus,
+	GraphLastRunStatus,
+	EdgeExec,
+	LogLevel,
+	ApiEditorUiState,
+	InspectorState,
+	InspectorDraftAcceptValidation,
+	InspectorDraftPatchIntent,
+	SavePreflightSeverity,
+	SavePreflightDiagnostic,
+	SavePreflightResult,
+	SaveConsistencyEntity,
+	SaveConsistencyMismatch,
+	EditorContext,
+	ComponentEditSessionSnapshot,
+	ComponentEditSession,
+	SchemaCompatibility,
+	EdgeCheck,
+	EdgeInvalidReason,
+	AdapterTransformKind,
+	EdgeSchemaConstraint,
+	EdgeSchemaDiagnostic,
+	NodeSchemaContractEdge,
+	NodeSchemaContractSnapshot,
+	InputResolution,
+	GraphState,
+	QueueRuntime,
+} from './graphStore.types';
+export type {
+	NodeOutputInfo,
+	NodeExecutionError,
+	NodeBindingInfo,
+	NormalizedNodeBinding,
+	RunSnapshotLike,
+	AuditContext,
+	RunLog,
+	RunStatus,
+	GraphLastRunStatus,
+	EdgeExec,
+	LogLevel,
+	ApiEditorUiState,
+	InspectorState,
+	InspectorDraftAcceptValidation,
+	InspectorDraftPatchIntent,
+	SavePreflightSeverity,
+	SavePreflightDiagnostic,
+	SavePreflightResult,
+	SaveConsistencyEntity,
+	SaveConsistencyMismatch,
+	EditorContext,
+	ComponentEditSessionSnapshot,
+	ComponentEditSession,
+	SchemaCompatibility,
+	EdgeCheck,
+	EdgeInvalidReason,
+	AdapterTransformKind,
+	EdgeSchemaConstraint,
+	EdgeSchemaDiagnostic,
+	NodeSchemaContractEdge,
+	NodeSchemaContractSnapshot,
+	InputResolution,
+	GraphState,
+	QueueRuntime,
+} from './graphStore.types';
+export {
+	RUN_IDLE,
+	NODE_STATUS_IDLE,
+	NODE_STATUS_SUCCEEDED,
+	INITIAL_INSPECTOR,
+} from './graphStore.types';
+import { RUN_IDLE, NODE_STATUS_IDLE, NODE_STATUS_SUCCEEDED, INITIAL_INSPECTOR } from './graphStore.types';
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
-const initialInspector: InspectorState = {
-	nodeId: null,
-	draftParams: {},
-	dirty: false,
-	systemNotice: null,
-	uiByNodeId: {}
-};
 
 function hasAnyKeys(value: unknown): boolean {
 	return Boolean(value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length > 0);
@@ -793,10 +709,6 @@ function validateComponentDraftForAccept(params: Record<string, any>): { ok: tru
 	return { ok: true };
 }
 
-type InspectorDraftAcceptValidation =
-	| { ok: true; errors: [] }
-	| { ok: false; errors: string[] };
-
 function validateInspectorDraftForAccept(state: GraphState): InspectorDraftAcceptValidation {
 	const nodeId = state.inspector.nodeId;
 	if (!nodeId) return { ok: false, errors: ['No node selected.'] };
@@ -1037,230 +949,6 @@ export function __normalizeBindingForTest(
 ): NormalizedNodeBinding {
 	return _normalizeBinding(binding, nodeId);
 }
-
-export type GraphState = {
-	graphId: string;
-	nodeDocExplanationMode: NodeDocExplanationMode;
-	nodeDocTrainingMode: NodeDocTrainingMode;
-	nodeDocTooltipEnabled: boolean;
-	nodeDocTooltipOpenDelayMs: number;
-	nodeDocPlanesExpansionEnabled: boolean;
-	nodeDocPlanesExpansionDelayMs: number;
-	nodeDocExplainModel: string;
-	nodeDocExplainTemperature: number;
-	nodeDocExplainTopP: number;
-	nodeDocExplainMaxTokens: number;
-	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
-	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
-	selectedNodeId: string | null;
-	inspector: InspectorState; // ✅ add this
-	logs: RunLog[];
-	runStatus: RunStatus;
-	lastRunStatus: GraphLastRunStatus;
-	freshness: ScopeFreshness;
-	staleNodeCount: number;
-	activeRunMode: ActiveRunMode;
-	activeRunFrom: string | null;
-	activeRunNodeSet: Set<string>;
-	nodeOutputs: Record<string, NodeOutputInfo>;
-	nodeBindings: Record<string, NormalizedNodeBinding>;
-	activeRunId: string | null;
-	queueRuntime?: {
-		metrics?: Record<string, unknown>;
-		nodeMetrics?: Record<string, unknown>;
-		runtimeItemMetrics?: Record<string, unknown>;
-		runScoped?: {
-			runId?: string;
-			scope?: string;
-			metrics?: Record<string, unknown>;
-			nodeMetrics?: Record<string, unknown>;
-			runtimeItemMetrics?: Record<string, unknown>;
-		};
-		aggregateDiagnostics?: {
-			queueMetricEvents: number;
-			itemsEnqueued: number;
-			itemsDequeued: number;
-			itemsAccepted: number;
-			itemsRejected: number;
-		};
-		schedulerSnapshot?: {
-			readyCount: number;
-			inflightCount: number;
-			pendingQueueDepth: number;
-			runnableNodeCount: number;
-			stalled: boolean;
-			perNode?: Array<{
-				nodeId: string;
-				readyWork: boolean;
-				inflight: number;
-				pendingInputCount: number;
-				lastBlockedReasonCode?: string;
-			}>;
-			updatedAt?: string;
-		};
-		llmLease?: {
-			state: 'waiting' | 'acquired' | 'released';
-			nodeId?: string;
-			holderNodeId?: string | null;
-			activeNodeIds?: string[];
-			waitQueueLength?: number;
-			waitingNodeIds?: string[];
-			updatedAt?: string;
-		};
-		currentRunSummary?: {
-			runId: string;
-			maxPendingQueueDepth: number;
-			hadStalledSnapshot: boolean;
-			blockedEvents: number;
-			runtimeMs?: number;
-			peakConcurrency?: number;
-		};
-		runHistory?: Array<{
-			runId: string;
-			finishedAt: string;
-			status: RunStatus;
-			runtimeMs: number;
-			peakConcurrency: number;
-			maxPendingQueueDepth: number;
-			hadStalledSnapshot: boolean;
-			blockedEvents: number;
-		}>;
-		adaptiveDecisions?: Array<{
-			at: string;
-			runId: string;
-			mode: 'off' | 'observe' | 'enforce' | string;
-			enforced: boolean;
-			inputs: Record<string, unknown>;
-			reasons: string[];
-			hardCaps: Record<string, number>;
-			minCaps: Record<string, number>;
-			proposedCaps: Record<string, number>;
-			effectiveCaps: Record<string, number>;
-			changedCaps: Record<string, { from: number; to: number }>;
-		}>;
-		handleStates?: Record<string, { state: string; updatedAt?: string }>;
-		handleTimeline?: Array<{
-			nodeId: string;
-			handle: string;
-			signal: string;
-			at: string;
-		}>;
-		branchCascade?: Array<{
-			originNodeId: string;
-			blockedNodeIds: string[];
-			reasonCode?: string;
-			at?: string;
-		}>;
-		handleSatisfaction?: Record<
-			string,
-			{
-				nodeId: string;
-				handle: string;
-				status: 'all' | 'partial' | 'none';
-				connectedEdges: number;
-				providedEdges: number;
-				updatedAt?: string;
-			}
-		>;
-		paramControlWarnings?: Record<
-			string,
-			{
-				nodeId: string;
-				handle: string;
-				edgeId: string;
-				plane: 'param' | 'control';
-				code: 'PARAM_CONTROL_EMPTY_INPUT';
-				reasonCode?: string;
-				upstreamNodeId?: string;
-				updatedAt?: string;
-			}
-		>;
-		warningSummary?: Record<
-			string,
-			{
-				warningKey: string;
-				nodeId: string;
-				handle: string;
-				code: string;
-				plane?: string;
-				edgeId?: string;
-				reasonCode?: string;
-				upstreamNodeId?: string;
-				count: number;
-				firstAt?: string;
-				updatedAt?: string;
-			}
-		>;
-		blockedByNode?: Record<
-			string,
-			{
-				nodeId: string;
-				reasonCode: string;
-				handle?: string;
-				plane?: 'work' | 'param' | 'control';
-				missingEdgeIds?: string[];
-				waitingOnNodeIds?: string[];
-				details?: Record<string, unknown>;
-				updatedAt?: string;
-			}
-		>;
-		softFailByNode?: Record<
-			string,
-			{
-				count: number;
-				itemsRejected: number;
-				lastAt?: string;
-			}
-		>;
-		controlPlaneEdgeState?: Record<
-			string,
-			{
-				edgeId: string;
-				open: boolean;
-				closed: boolean;
-				depth: number;
-				blocked: boolean;
-				lastSeq: number;
-				updatedAt?: string;
-			}
-		>;
-		controlPlaneNodeState?: Record<
-			string,
-			{
-				nodeId: string;
-				lastSignal: string;
-				terminalReasonCode?: string;
-				lastSeq: number;
-				updatedAt?: string;
-			}
-		>;
-		appliedControlSeq?: number;
-	};
-	editingContext: EditorContext;
-	componentEditSession: ComponentEditSession | null;
-	componentContractDraftCache: Record<string, Record<string, any>>;
-	};
-
-export type InputResolution = {
-	inputHandle: string;
-	edge: { fromNodeId: string; sourceHandle: string } | null;
-	status: 'resolved' | 'missing';
-	reason?: 'DISCONNECTED' | 'UPSTREAM_NO_ARTIFACT' | 'UPSTREAM_FAILED' | 'UNKNOWN';
-	artifactId?: string;
-	artifactSource?: 'active_run' | 'bound';
-	upstream: {
-		nodeId: string;
-		sourceHandle: string;
-		status?: string;
-		isUpToDate?: boolean;
-		staleReason?: string | null;
-	};
-	artifactSummary?: {
-		mimeType?: string;
-		schemaFingerprint?: string;
-		contract?: string;
-	};
-};
 
 function normalizeHandleId(handleId: string | null | undefined, fallback: 'in' | 'out'): string {
 	const v = String(handleId ?? '').trim();
@@ -1599,7 +1287,7 @@ function auditSucceededRegressions(prev: GraphState, next: GraphState, ctx: Audi
 	for (const nodeId of ids) {
 		const prevDisplay = displayStatusFromBinding(prev.nodeBindings?.[nodeId]);
 		const nextDisplay = displayStatusFromBinding(next.nodeBindings?.[nodeId]);
-		if (prevDisplay !== SUCCEEDED || nextDisplay === SUCCEEDED) continue;
+		if (prevDisplay !== NODE_STATUS_SUCCEEDED || nextDisplay === NODE_STATUS_SUCCEEDED) continue;
 		if (nextDisplay === 'running') continue;
 		if (nextDisplay === 'idle' && !next.nodeBindings?.[nodeId]) continue;
 		const allowed = isAllowedSucceededRegression(nodeId, ctx);
@@ -3639,16 +3327,6 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 	}
 }
 
-type RunSnapshotLike = {
-	graphId?: string;
-	status?: string;
-	runMode?: ActiveRunMode;
-	plannedNodeIds?: string[];
-	nodeStatus?: Record<string, string>;
-	nodeOutputs?: Record<string, string>;
-	nodeBindings?: Record<string, Record<string, unknown>>;
-};
-
 function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): GraphState {
 	if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== state.graphId) {
 		return state;
@@ -3693,7 +3371,7 @@ function buildHardResetState(freshGraphId: string): GraphState {
 		nodes: [],
 		edges: [],
 		selectedNodeId: null,
-		inspector: initialInspector,
+		inspector: INITIAL_INSPECTOR,
 		logs: [],
 		runStatus: RUN_IDLE,//change or fix 
 		lastRunStatus: 'never_run',
@@ -5254,8 +4932,6 @@ export function __normalizeSchemaFieldsForTest(raw: unknown): SchemaField[] {
 	return normalizeSchemaFields(raw);
 }
 
-type AdapterTransformKind = 'text_to_table' | 'json_to_table' | 'table_to_json';
-
 function adapterKindForTypes(providedType: string, requiredType: string): AdapterTransformKind | null {
 	const key = `${providedType}->${requiredType}`;
 	if (key === 'text->table') return 'text_to_table';
@@ -5271,16 +4947,6 @@ function adapterSuggestionForTypes(providedType: string, requiredType: string): 
 	if (adapterKind === 'table_to_json') return "Insert Transform adapter: op='table_to_json'.";
 	return null;
 }
-
-type SchemaCompatibility =
-	| { ok: true; warning?: 'lossy_coercion'; suggestion?: string | null; adapterKind?: AdapterTransformKind | null }
-	| {
-			ok: false;
-			reason: 'type_mismatch' | 'missing_required_columns' | 'missing_typed_schema';
-			missingColumns?: string[];
-			suggestion?: string | null;
-			adapterKind?: AdapterTransformKind | null;
-	  };
 
 function isSchemaCompatible(
 	providedSchema: Record<string, any> | undefined,
@@ -5354,55 +5020,6 @@ function isSchemaCompatible(
 	}
 	return { ok: true };
 }
-
-export type EdgeSchemaConstraint = {
-	edgeId: string;
-	mode: 'work' | 'param' | 'control';
-	sourceNodeId: string;
-	targetNodeId: string;
-	sourceHandle: string;
-	targetHandle: string;
-	sourceAffinity: 'work' | 'param' | 'control';
-	targetAffinity: 'work' | 'param' | 'control';
-	providedSchema: Record<string, any>;
-	requiredSchema: Record<string, any>;
-	compatible: boolean;
-	warning?: 'lossy_coercion';
-	adapterKind?: AdapterTransformKind | null;
-	reason?: 'type_mismatch' | 'missing_required_columns' | 'missing_typed_schema';
-	missingColumns?: string[];
-	snapshotSourceSchemaFingerprint?: string;
-	snapshotTargetSchemaFingerprint?: string;
-	currentSourceSchemaFingerprint?: string;
-	currentTargetSchemaFingerprint?: string;
-	snapshotDrift?: boolean;
-	suggestions: string[];
-};
-
-export type EdgeSchemaDiagnostic = {
-	edgeId: string;
-	code: SchemaDiagnosticCode;
-	severity: 'error' | 'warning';
-	message: string;
-	details: {
-		providedSchema: Record<string, any>;
-		requiredSchema: Record<string, any>;
-		missingColumns?: string[];
-		targetHandle?: string;
-		sourceHandle?: string;
-		sourceNodeId?: string;
-		targetNodeId?: string;
-		mode?: 'work' | 'param' | 'control';
-		sourceAffinity?: 'work' | 'param' | 'control';
-		targetAffinity?: 'work' | 'param' | 'control';
-		snapshotSourceSchemaFingerprint?: string;
-		snapshotTargetSchemaFingerprint?: string;
-		currentSourceSchemaFingerprint?: string;
-		currentTargetSchemaFingerprint?: string;
-		snapshotDrift?: boolean;
-	};
-	suggestions: string[];
-};
 
 function inferredTransformOutputHint(node: Node<PipelineNodeData>): Record<string, any> | undefined {
 	if (node.data.kind !== 'transform') return undefined;
@@ -5731,21 +5348,6 @@ export function __computeEdgeSchemaDiagnosticsForTest(
 ): Record<string, EdgeSchemaDiagnostic | null> {
 	return computeEdgeSchemaDiagnosticsInternal(constraints);
 }
-
-type EdgeInvalidReason =
-	| 'type_mismatch'
-	| 'schema_mismatch'
-	| 'typed_schema_missing'
-	| 'mode_mismatch';
-type EdgeCheck =
-	| { ok: true; out?: PayloadType; in?: PayloadType }
-	| {
-			ok: false;
-			reason: EdgeInvalidReason;
-			missingColumns?: string[];
-			suggestion?: string | null;
-			adapterKind?: AdapterTransformKind | null;
-	  };
 
 function normalizeHintPayloadType(raw: unknown): PayloadType | undefined {
 	const t = normalizeHintType(raw);
@@ -6086,7 +5688,7 @@ function resetRunUiState(state: GraphState): GraphState {
 		edges,
 		nodeBindings,
 		logs: [],
-		runStatus: IDLE,
+		runStatus: RUN_IDLE,
 		activeRunId: null,
 		activeRunMode: 'from_start',
 		activeRunFrom: null,
@@ -6418,9 +6020,9 @@ const initialState: GraphState = {
 	nodes: loadedNormalized.nodes,
 	edges: loadedEdges,
 	selectedNodeId: null,
-	inspector: initialInspector,
+	inspector: INITIAL_INSPECTOR,
 	logs: [],
-	runStatus: IDLE,
+	runStatus: RUN_IDLE,
 	lastRunStatus: 'never_run',
 	freshness: 'never_run',
 	staleNodeCount: 0,
@@ -7473,9 +7075,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				nodes: normalized.nodes,
 				edges: rechecked.edges,
 				selectedNodeId: null,
-				inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId },
+				inspector: { ...INITIAL_INSPECTOR, uiByNodeId: s.inspector.uiByNodeId },
 				logs: [],
-				runStatus: IDLE,
+				runStatus: RUN_IDLE,
 				lastRunStatus: 'never_run',
 				freshness: 'never_run',
 				staleNodeCount: 0,
@@ -8031,7 +7633,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					return {
 						...s,
 						selectedNodeId: null,
-						inspector: { ...initialInspector, uiByNodeId: s.inspector.uiByNodeId }
+						inspector: { ...INITIAL_INSPECTOR, uiByNodeId: s.inspector.uiByNodeId }
 					};
 				}
 
@@ -9945,7 +9547,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					};
 				});
 				const nextSnapshotInspector = (() => {
-					const currentInspector = snapshot.inspector ?? initialInspector;
+					const currentInspector = snapshot.inspector ?? INITIAL_INSPECTOR;
 					const inspectorNodeId = String((currentInspector as any)?.nodeId ?? '').trim();
 					if (!inspectorNodeId) return currentInspector;
 					if (!targetIds.has(inspectorNodeId)) return currentInspector;
@@ -10857,32 +10459,6 @@ export const edgeSchemaConstraints = derived(graphStore, ($s) =>
 export const edgeSchemaDiagnostics = derived(edgeSchemaConstraints, ($constraints) =>
 	computeEdgeSchemaDiagnosticsInternal($constraints as any)
 );
-
-export type NodeSchemaContractEdge = {
-	edgeId: string;
-	mode: 'work' | 'param' | 'control';
-	direction: 'incoming' | 'outgoing';
-	sourceNodeId: string;
-	targetNodeId: string;
-	sourceHandle: string | null;
-	targetHandle: string | null;
-	providedSchema: Record<string, any>;
-	requiredSchema: Record<string, any>;
-	severity: 'clean' | 'warning' | 'error';
-	snapshotDrift?: boolean;
-	snapshotSourceSchemaFingerprint?: string;
-	snapshotTargetSchemaFingerprint?: string;
-	currentSourceSchemaFingerprint?: string;
-	currentTargetSchemaFingerprint?: string;
-	suggestions: string[];
-	adapterKind: AdapterTransformKind | null;
-};
-
-export type NodeSchemaContractSnapshot = {
-	nodeId: string;
-	status: 'clean' | 'warning' | 'error';
-	edges: NodeSchemaContractEdge[];
-};
 
 function buildNodeSchemaContractSnapshotInternal(
 	state: GraphState,
