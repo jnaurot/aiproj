@@ -25,7 +25,7 @@ src/lib/flow/store/
 ├── graphStore.types.ts          ← [DONE] All types, interfaces, shared constants
 ├── graphStore.history.ts        ← [DONE] Undo/redo stack (factory)
 │
-├── graphStore.audit.ts          ← [NEXT] State transition auditing
+├── graphStore.audit.ts          ← [DONE] State transition auditing
 ├── graphStore.node-schema.ts    ← [NEXT] Node schema canonicalisation + edge constraints
 │
 ├── graphStore.inspector.ts      ← Inspector / node-config editing
@@ -123,7 +123,7 @@ See `MIGRATION.md` Step 2.
 
 ---
 
-### ⬜ 3. `graphStore.audit.ts`  — TODO
+### ✅ 3. `graphStore.audit.ts`  — DONE
 
 **What it contains**
 Pure functions that verify state transitions are legal.  No side effects
