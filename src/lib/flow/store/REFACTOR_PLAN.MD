@@ -357,7 +357,7 @@ export { __stripToDTOForTest, __hardResetGraphForTest } from './graphStore.graph
 
 ---
 
-### ⬜ 8. `graphStore.persistence.ts`  — TODO
+### ✅ 8. `graphStore.persistence.ts`  — DONE
 
 **What it contains**
 All async actions that call the backend API: saving/loading graph revisions,
