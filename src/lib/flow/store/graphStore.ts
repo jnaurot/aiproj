@@ -3,72 +3,16 @@ import { writable, get, derived } from 'svelte/store';
 import type { Node, Edge } from '@xyflow/svelte';
 
 import type {
-	NodeStatus,
-	NodeKind,
 	PipelineNodeData,
 	PipelineEdgeData,
-	PipelineGraphDTO,
-	PayloadType
 } from '$lib/flow/types';
-import { isPayloadType } from '$lib/flow/types/base';
-import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
-import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
-import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
-import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
-import { TOOL_BUILTIN_PROFILE_IDS } from '$lib/flow/schema/toolBuiltinProfiles';
-import { validateCustomPackageDraft } from '$lib/flow/schema/toolBuiltinCustomPackages';
-import { evaluateSchemaCoercion } from '$lib/flow/schema/coercionPolicy';
-import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
-import {
-	getLlmEditorCommitMode,
-	getSourceEditorCommitMode,
-	getToolEditorCommitMode,
-	getTransformEditorCommitMode
-} from '$lib/flow/editorCommitPolicy';
-import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import {
 	createInspectorManager,
-	sanitizeComponentDraftParams,
-	validateInspectorDraftForAccept,
-	pendingInspectorDraftSaveDiagnostic,
-	canonicalComponentSourceHandleForEdge,
-	normalizeHandleId,
-	dedupeEdgesBySignature,
-	reconcileComponentOutgoingEdges,
 	effectiveExecParamsForNode,
-	nodeFreezeMode,
-	listComponentOutputNames,
 } from './graphStore.inspector';
 import {
-	normalizeComponentPayloadType,
-	deriveNodeIoForData,
-	canonicalizeNodeSchemas,
-	deriveObservedSchemaObservationFromNodeOutput,
-	computeSchemaDriftSummary,
-	isEdgeStillValid,
-	normalizeEdgeMode,
-	buildProvidedSchema,
-	buildRequiredSchema,
-	isSchemaCompatible,
-	edgeContractSnapshotFromSchemas,
 	computeEdgeSchemaConstraintsInternal,
 	computeEdgeSchemaDiagnosticsInternal,
-	payloadHintToTypedSchema,
-	fingerprintTypedSchema,
-	hasSchemaEnvelopeContent,
-	declaredPortHandles,
-	sameHandleProvidedSchemaConflict,
-	normalizeEdgeLinkKind,
-	nodePortAffinity,
-	portCardinality,
-	edgeModeCompatible,
-	normalizeHintType,
-	hasPortHandle,
-	sourcePayloadHint,
-	targetPayloadHint,
-	inferEdgeModeFromHandles,
-	adapterKindForTypes,
-	adapterSuggestionForTypes,
 } from './graphStore.node-schema';
 export {
 	__buildNodeSchemaContractSnapshotForTest,
@@ -77,78 +21,22 @@ export {
 	__computeEdgeSchemaDiagnosticsForTest,
 	__normalizeSchemaFieldsForTest,
 } from './graphStore.node-schema';
-import { defaultNodeData } from '$lib/flow/schema/defaults';
-import { updateNodeParamsValidated } from './graph';
+import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
 import {
-	findDuplicateNodeNames,
-	findNodeIdByName,
-	normalizeNodeName,
-	resolveUniqueNodeName
-} from './nodeNameUniqueness';
-import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph, clearGraphDraft } from './persist';
+	acceptNodeParams,
+	getRun,
+	resolveSourceNode,
+} from '$lib/flow/client/runs';
 import {
-	getLatestGraphRevision,
-	getGraphRevision,
-	listGraphRevisions,
-	createGraphRevision,
-	listGraphs as listGraphsClient,
-	deleteGraph as deleteGraphClient,
-	deleteGraphRevision as deleteGraphRevisionClient
-} from '$lib/flow/client/graphs';
-import {
-	getComponentRevision,
-	listComponentRevisions,
-	listComponents,
-	createComponentRevision,
-	renameComponent,
-	deleteComponent,
-	deleteComponentRevision
-} from '$lib/flow/client/components';
-import {
-	comparePublishedProfiles,
-	materializeExposureProfiles,
-	normalizeExposureRegistry
-} from '$lib/flow/components/exposureProfiles';
-import {
-	createMemoizedNodeDocResolver,
 	resolveNodeDocForState,
 	type NodeDocResolved
 } from '$lib/flow/components/nodeDocsViewModel';
 import {
 	NodeDocExplanationModeSchema,
-	sanitizeNodeDocGeneratedExplanation,
 	NodeDocTrainingModeSchema,
 	type NodeDocExplanationMode,
-	type NodeDocGeneratedExplanation,
 	type NodeDocTrainingMode
 } from '$lib/flow/schema/nodeDocs';
-import {
-	acceptNodeParams,
-	cancelAllRuns,
-	createEventBatcher,
-	createRun,
-	getRun,
-	pauseRun,
-	resolveSourceNode,
-	resumeRun,
-	streamRunEvents
-} from '$lib/flow/client/runs';
-import type { KnownRunEvent } from '$lib/flow/types/run';
-import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
-import {
-	buildRunCreateRequest,
-	computeGraphFreshness,
-	computePlannedNodeSet,
-	planRunConnectedComponents,
-	displayStatusFromBinding,
-	getStaleFlipNodeIds,
-	isBindingStale,
-	mergeBindingsSticky,
-	type ActiveRunMode,
-	type GraphFreshness as ScopeFreshness
-} from './runScope';
-
-import type { BindingPair } from './graphStore.bindings';
 import type {
 	NodeOutputInfo,
 	NodeExecutionError,
@@ -228,60 +116,41 @@ export {
 	INITIAL_INSPECTOR,
 } from './graphStore.types';
 import { RUN_IDLE, NODE_STATUS_IDLE, NODE_STATUS_SUCCEEDED, INITIAL_INSPECTOR } from './graphStore.types';
-import { createHistoryManager, runInHistoryTransaction } from './graphStore.history';
+import { createHistoryManager } from './graphStore.history';
 import {
 	mintGraphId,
-	buildHardResetState,
-	captureComponentEditSnapshot,
 	stripToDTO,
-	edgeStructuralSignature,
-	shouldPreserveStoreEdgesOnCanvasSync,
-	normalizeComponentPayloadTypeOrDefault,
-	normalizeComponentNodeForMigration,
 	normalizeGraphForComponentMigration,
-	setEdgeExec,
-	downstreamIds,
-	pruneAndRecontractEdgesStrict,
 	canonicalizeComponentEdgeSourceHandles,
 	recomputeEdgeContractsBestEffort,
-	topoFrom,
+	pruneAndRecontractEdgesStrict,
 	createGraphEditManager,
 } from './graphStore.graph-edit';
+export { __stripToDTOForTest, __hardResetGraphForTest } from './graphStore.graph-edit';
 import {
 	auditStateTransition,
 	withGraphMeta,
 	logPush,
 	stableJson,
-	DEV_MODE,
-	nextLogId,
 	ensureNormalizedBindingsForNodes,
-	pruneNodeOutputsForNodes,
 	_normalizeBinding,
 	_withPair,
-	_pairFromLegacy,
 	_assertBindingPairInvariant,
 	__assertBindingPairForTest as __assertBindingPairForTestFromAudit,
 	__normalizeBindingForTest as __normalizeBindingForTestFromAudit,
 } from './graphStore.audit';
 import {
-	applyRunEventState,
+	isNodeStateFromActiveRunAndFresh,
 	hydrateFromRunSnapshotState,
-	applyLlmHolderToNodes,
-	reduceRunEventState,
-	reconcileModelLeaseRunningInvariant,
-	resetRunUiState,
-	resetEdgesExec,
+	collectPinnedNodeIds,
 	clearNodeCacheUi,
 	clearNodeCacheUiForNodes,
-	collectPinnedNodeIds,
-	collectPinnedArtifactsByNode,
-	clearPerRunPinsOnNodes,
-	isNodeStateFromActiveRunAndFresh,
-	validatePinEligibility,
 	downstreamNodeIds,
 	createRunManager,
 	__setPauseResumeTraceEnabledForTest as __setPauseResumeTraceEnabledForTestFromRun,
+	__setPinHintTraceEnabledForTest as __setPinHintTraceEnabledForTestFromRun,
 	getPauseResumeTraceEnabled,
+	getPinHintTraceEnabled,
 	__applyRunEventForTest,
 	__hydrateFromRunSnapshotForTest,
 	__resetRunUiStateForTest,
@@ -296,7 +165,6 @@ import {
 } from './graphStore.persistence';
 export { __computeSaveConsistencyMismatchForTest } from './graphStore.persistence';
 export { resolveNodeInputsFromState } from './graphStore.persistence';
-export { __stripToDTOForTest, __hardResetGraphForTest } from './graphStore.graph-edit';
 
 // re-export test hooks that moved to graphStore.audit
 export const __assertBindingPairForTest = __assertBindingPairForTestFromAudit;
@@ -305,36 +173,11 @@ export const __normalizeBindingForTest = __normalizeBindingForTestFromAudit;
 // re-export test hooks that moved to graphStore.run
 export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiStateForTest, __collectPinnedArtifactsByNodeForTest } from './graphStore.run';
 export const __setPauseResumeTraceEnabledForTest = __setPauseResumeTraceEnabledForTestFromRun;
+export const __setPinHintTraceEnabledForTest = __setPinHintTraceEnabledForTestFromRun;
 export const __markStaleFromNodeForTest = __markStaleFromNodeForTestFromRun;
 export const __validatePinEligibilityForTest = __validatePinEligibilityForTestFromRun;
 
-// isFailedBindingStatus, resolveUpstreamArtifact, resolveNodeInputsFromState,
-// buildPersistableGraphStrict, computeSaveConsistencyMismatch, buildSavePreflightDiagnostics,
-// summarizeSavePreflightError, toolBuiltinPreflightDiagnostics
-// — all moved to graphStore.persistence.ts
-
-// mintGraphId, buildHardResetState, captureComponentEditSnapshot, stripToDTO,
-// __hardResetGraphForTest, __stripToDTOForTest, edgeStructuralSignature,
-// shouldPreserveStoreEdgesOnCanvasSync, normalizeComponentPayloadTypeOrDefault,
-// normalizeComponentNodeForMigration, normalizeGraphForComponentMigration
-// — all moved to graphStore.graph-edit.ts
-
-// buildPersistableGraphStrict — moved to graphStore.persistence.ts
-
-
-// computeSaveConsistencyMismatch, toolBuiltinPreflightDiagnostics, buildSavePreflightDiagnostics,
-// summarizeSavePreflightError — all moved to graphStore.persistence.ts
-
-
-
-// setEdgeExec, downstreamIds, pruneAndRecontractEdgesStrict,
-// canonicalizeComponentEdgeSourceHandles, recomputeEdgeContractsBestEffort, topoFrom
-// — all moved to graphStore.graph-edit.ts
-
 const loaded = loadGraphFromLocalStorage(emptyGraph);
-// loadNodeDocExplanationMode, persistNodeDocExplanationMode, loadNodeDocTrainingMode,
-// persistNodeDocTrainingMode — all moved to graphStore.persistence.ts
-
 
 const loadedNodes = Array.isArray((loaded as any)?.nodes)
 	? ((loaded as any).nodes as Node<PipelineNodeData>[])
@@ -647,6 +490,12 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		getPauseResumeTraceLoggingEnabled() {
 			return getPauseResumeTraceEnabled();
 		},
+		setPinHintTraceLoggingEnabled(enabled: boolean) {
+			__setPinHintTraceEnabledForTestFromRun(enabled);
+		},
+		getPinHintTraceLoggingEnabled() {
+			return getPinHintTraceEnabled();
+		},
 		...runManager.actions,
 		...graphEdit.actions,
 		...persistence.actions,
@@ -699,4 +548,3 @@ export function getNodeDocPlanesExpansionDelayMsFromState(state: GraphState): nu
 	if (!Number.isFinite(raw)) return 1200;
 	return Math.max(0, Math.min(15000, Math.round(raw)));
 }
-

@@ -484,7 +484,7 @@ export { __buildNodeSchemaContractSnapshotForTest } from './graphStore.node-sche
 | 6 | `graphStore.run.ts` | Medium-High | Largest chunk; async + SSE + timers |
 | 7 | `graphStore.graph-edit.ts` | Medium | Many call sites; use history txns |
 | 8 | `graphStore.persistence.ts` | Low | Mostly async API calls |
-| 9 | `graphStore.ts` slim-down | Low | Just wiring at this point |
+| 9 | `graphStore.ts` slim-down | ✅ Done | Just wiring at this point |
 
 **Rule for each step:** do one module per PR/commit, run `tsc --noEmit` and
 your test suite before merging.  The god file shrinks but stays valid TypeScript
@@ -508,9 +508,9 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.run.ts` wired into `graphStore.ts`
 - [x] `graphStore.graph-edit.ts` — extracted
 - [x] `graphStore.graph-edit.ts` wired into `graphStore.ts`
-- [ ] `graphStore.persistence.ts` — extracted
-- [ ] `graphStore.persistence.ts` wired into `graphStore.ts`
-- [ ] `graphStore.ts` slimmed to orchestrator (~200–300 lines)
+- [x] `graphStore.persistence.ts` — extracted
+- [x] `graphStore.persistence.ts` wired into `graphStore.ts`
+- [x] `graphStore.ts` slimmed to orchestrator (~200–300 lines)
 - [ ] Full `tsc --noEmit` passes
 - [ ] All tests pass
 - [ ] `MIGRATION.md` and `REFACTOR_PLAN.md` removed or moved to docs
