@@ -28,7 +28,7 @@ src/lib/flow/store/
 ├── graphStore.audit.ts          ← [DONE] State transition auditing
 ├── graphStore.node-schema.ts    ← [DONE] Node schema canonicalisation + edge constraints
 │
-├── graphStore.inspector.ts      ← Inspector / node-config editing
+├── graphStore.inspector.ts      ← [DONE] Inspector / node-config editing
 ├── graphStore.run.ts            ← Run lifecycle (SSE, hydration, event handling)
 ├── graphStore.graph-edit.ts     ← Canvas mutations (add/delete/sync nodes & edges)
 ├── graphStore.persistence.ts    ← Save/load API calls, component session actions
@@ -202,7 +202,7 @@ export { __buildNodeSchemaContractSnapshotForTest } from './graphStore.node-sche
 
 ---
 
-### ⬜ 5. `graphStore.inspector.ts`  — TODO
+### ✅ 5. `graphStore.inspector.ts`  — DONE
 
 **What it contains**
 Everything that reads or writes `state.inspector`, plus the node-config commit
@@ -502,8 +502,8 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.audit.ts` wired into `graphStore.ts`
 - [x] `graphStore.node-schema.ts` — extracted
 - [x] `graphStore.node-schema.ts` wired into `graphStore.ts`
-- [ ] `graphStore.inspector.ts` — extracted
-- [ ] `graphStore.inspector.ts` wired into `graphStore.ts`
+- [x] `graphStore.inspector.ts` — extracted
+- [x] `graphStore.inspector.ts` wired into `graphStore.ts`
 - [ ] `graphStore.run.ts` — extracted
 - [ ] `graphStore.run.ts` wired into `graphStore.ts`
 - [ ] `graphStore.graph-edit.ts` — extracted
