@@ -212,7 +212,14 @@ export function buildRunCreateRequest(
 	runMode?: ActiveRunMode,
 	dirtyNodeIds?: string[],
 	pinnedNodeIds?: string[],
-	pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>,
+	pinnedArtifacts?: Record<
+		string,
+		{
+			artifactId: string;
+			execKey?: string | null;
+			outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
+		}
+	>,
 	cacheMode?: 'default_on' | 'force_off' | 'force_on',
 	adaptiveMode?: 'off' | 'observe' | 'enforce' | null
 ): {
@@ -224,7 +231,14 @@ export function buildRunCreateRequest(
 		__executionHints?: {
 			dirtyNodeIds?: string[];
 			pinnedNodeIds?: string[];
-			pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+			pinnedArtifacts?: Record<
+				string,
+				{
+					artifactId: string;
+					execKey?: string | null;
+					outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
+				}
+			>;
 		};
 	};
 	runFrom?: string;
@@ -251,17 +265,65 @@ export function buildRunCreateRequest(
 								nid,
 								{
 									artifactId: aid,
-									...(execKey ? { execKey } : {})
+									...(execKey ? { execKey } : {}),
+									...(() => {
+										const rawOutputs = (value as any)?.outputs;
+										if (!rawOutputs || typeof rawOutputs !== 'object') return {};
+										const outputs = Object.fromEntries(
+											Object.entries(rawOutputs as Record<string, any>)
+												.map(([rawHandle, rawOutput]) => {
+													const handle = String(rawHandle ?? '').trim();
+													const outArtifactId = String((rawOutput as any)?.artifactId ?? '').trim();
+													const outExecKey = String((rawOutput as any)?.execKey ?? '').trim();
+													if (!handle || !outArtifactId) return null;
+													return [
+														handle,
+														{
+															artifactId: outArtifactId,
+															...(outExecKey ? { execKey: outExecKey } : {})
+														}
+													];
+												})
+												.filter(
+													(entry): entry is [
+														string,
+														{
+															artifactId: string;
+															execKey?: string;
+														}
+													] => entry !== null
+												)
+										);
+										return Object.keys(outputs).length > 0 ? { outputs } : {};
+									})()
 								}
 							];
 						})
-						.filter((entry): entry is [string, { artifactId: string; execKey?: string }] => entry !== null)
+						.filter(
+							(
+								entry
+							): entry is [
+								string,
+								{
+									artifactId: string;
+									execKey?: string;
+									outputs?: Record<string, { artifactId: string; execKey?: string }>;
+								}
+							] => entry !== null
+						)
 			  )
 			: {};
 	const executionHints: {
 		dirtyNodeIds?: string[];
 		pinnedNodeIds?: string[];
-		pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+		pinnedArtifacts?: Record<
+			string,
+			{
+				artifactId: string;
+				execKey?: string | null;
+				outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
+			}
+		>;
 	} = {};
 	if (sanitizedDirty.length > 0) executionHints.dirtyNodeIds = sanitizedDirty;
 	if (sanitizedPinned.length > 0) executionHints.pinnedNodeIds = sanitizedPinned;
@@ -295,7 +357,14 @@ export function buildRunCreateRequest(
 			__executionHints?: {
 				dirtyNodeIds?: string[];
 				pinnedNodeIds?: string[];
-				pinnedArtifacts?: Record<string, { artifactId: string; execKey?: string | null }>;
+				pinnedArtifacts?: Record<
+					string,
+					{
+						artifactId: string;
+						execKey?: string | null;
+						outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
+					}
+				>;
 			};
 		};
 		runFrom?: string;

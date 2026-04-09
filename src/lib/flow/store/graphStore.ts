@@ -27,6 +27,19 @@ import {
 } from '$lib/flow/editorCommitPolicy';
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import {
+	createInspectorManager,
+	sanitizeComponentDraftParams,
+	validateInspectorDraftForAccept,
+	pendingInspectorDraftSaveDiagnostic,
+	canonicalComponentSourceHandleForEdge,
+	normalizeHandleId,
+	dedupeEdgesBySignature,
+	reconcileComponentOutgoingEdges,
+	effectiveExecParamsForNode,
+	nodeFreezeMode,
+	listComponentOutputNames,
+} from './graphStore.inspector';
+import {
 	normalizeComponentPayloadType,
 	deriveNodeIoForData,
 	canonicalizeNodeSchemas,
@@ -236,218 +249,9 @@ import {
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
 
-function hasAnyKeys(value: unknown): boolean {
-	return Boolean(value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length > 0);
-}
-
-function defaultApiEditorUiState(params?: Record<string, any>): ApiEditorUiState {
-	const authType = String(params?.auth_type ?? 'none');
-	const bodyMode = String(params?.bodyMode ?? params?.body_mode ?? 'none');
-	return {
-		requestOpen: true,
-		authOpen: authType !== 'none',
-		transportOpen: false,
-		executionOpen: false,
-		debugOpen: false,
-		queryOpen: hasAnyKeys(params?.query),
-		headersOpen: hasAnyKeys(params?.headers),
-		bodyOpen: bodyMode !== 'none'
-	};
-}
-
-function sanitizeComponentDraftParams(params: Record<string, any>): Record<string, any> {
-	const api = params?.api;
-	const exposureRegistry = Array.isArray(params?.exposureRegistry) ? (params.exposureRegistry as any[]) : null;
-	if (!api || typeof api !== 'object' || !Array.isArray(exposureRegistry)) {
-		return params;
-	}
-	const outputs = Array.isArray((api as any).outputs) ? ((api as any).outputs as any[]) : [];
-	const validOutputNames = new Set(
-		outputs
-			.map((out) => String((out as any)?.name ?? '').trim())
-			.filter((name) => name.length > 0)
-	);
-	const nextExposureRegistry = exposureRegistry.filter((rec) => {
-		if (!rec || typeof rec !== 'object') return false;
-		if (String((rec as any).kind ?? '').trim().toLowerCase() !== 'data_output') return true;
-		const alias = String((rec as any).alias ?? '').trim();
-		const handleId = String((rec as any).handle_id ?? '').trim();
-		if (alias && validOutputNames.has(alias)) return true;
-		if (handleId.startsWith('data_out::')) {
-			const outName = handleId.slice('data_out::'.length).trim();
-			return outName.length > 0 && validOutputNames.has(outName);
-		}
-		return false;
-	});
-	return {
-		...params,
-		exposureRegistry: nextExposureRegistry
-	};
-}
-
-function validateComponentDraftForAccept(params: Record<string, any>): { ok: true } | { ok: false; errors: string[] } {
-	const api = params?.api;
-	const outputs = Array.isArray(api?.outputs) ? (api.outputs as any[]) : [];
-	const exposureRegistry = Array.isArray(params?.exposureRegistry) ? (params.exposureRegistry as any[]) : [];
-	const errors: string[] = [];
-	const seenOutputNames = new Set<string>();
-	for (const output of outputs) {
-		const outputName = String(output?.name ?? '').trim();
-		if (!outputName) {
-			errors.push('Component output name is required before Accept.');
-			continue;
-		}
-		const outputNameKey = outputName.toLowerCase();
-		if (seenOutputNames.has(outputNameKey)) {
-			errors.push(`Component output "${outputName}" duplicates another declared output.`);
-			continue;
-		}
-		seenOutputNames.add(outputNameKey);
-		const exposure = exposureRegistry.find(
-			(rec) =>
-				rec &&
-				typeof rec === 'object' &&
-				String((rec as any).kind ?? '').trim().toLowerCase() === 'data_output' &&
-				(
-					String((rec as any).alias ?? '').trim() === outputName ||
-					String((rec as any).handle_id ?? '').trim() === `data_out::${outputName}`
-				)
-		);
-		const internalSourcePath = String((exposure as any)?.internal_source_path ?? '').trim();
-		const isRequired = Boolean((output as any)?.required ?? true);
-		if (isRequired && !internalSourcePath) {
-			errors.push(`Component output "${outputName}" requires an API Contract output source before Accept.`);
-		}
-		const typedSchemaType = normalizeComponentPayloadType(output?.typedSchema?.type);
-		if (typedSchemaType == null) {
-			errors.push(`Component output "${outputName}" must declare typedSchema.type.`);
-		}
-	}
-	if (errors.length > 0) return { ok: false, errors };
-	return { ok: true };
-}
-
-function validateInspectorDraftForAccept(state: GraphState): InspectorDraftAcceptValidation {
-	const nodeId = state.inspector.nodeId;
-	if (!nodeId) return { ok: false, errors: ['No node selected.'] };
-	const node = state.nodes.find((n) => n.id === nodeId);
-	if (!node) return { ok: false, errors: ['Selected node no longer exists.'] };
-	if (node.data.kind !== 'component') return { ok: true, errors: [] };
-	const paramsForCommit = sanitizeComponentDraftParams(
-		(state.inspector.draftParams ?? {}) as Record<string, any>
-	);
-	const validation = validateComponentDraftForAccept(paramsForCommit);
-	if (!validation.ok) return { ok: false, errors: validation.errors };
-	return { ok: true, errors: [] };
-}
-
-function listComponentOutputNames(node: Node<PipelineNodeData>): string[] {
-	if (node.data.kind !== 'component') return [];
-	const outputs = Array.isArray((node.data as any)?.params?.api?.outputs)
-		? ((node.data as any).params.api.outputs as any[])
-		: [];
-	return outputs
-		.map((o) => String((o as any)?.name ?? '').trim())
-		.filter((name): name is string => name.length > 0);
-}
-
-function canonicalComponentSourceHandleForEdge(
-	nodes: Node<PipelineNodeData>[],
-	edge: Edge<PipelineEdgeData>
-): string | null {
-	const sourceNode = nodes.find((n) => n.id === edge.source);
-	if (!sourceNode || sourceNode.data.kind !== 'component') {
-		return normalizeHandleId((edge as any).sourceHandle, 'out');
-	}
-	const outputNames = listComponentOutputNames(sourceNode);
-	if (outputNames.length === 0) return null;
-	const raw = String((edge as any).sourceHandle ?? '').trim();
-	if (!raw || raw === 'out') {
-		return outputNames.length === 1 ? outputNames[0] : null;
-	}
-	return outputNames.includes(raw) ? raw : null;
-}
-
-function dedupeEdgesBySignature(
-	edges: Edge<PipelineEdgeData>[]
-): { edges: Edge<PipelineEdgeData>[]; removedIds: string[] } {
-	const seen = new Set<string>();
-	const next: Edge<PipelineEdgeData>[] = [];
-	const removedIds: string[] = [];
-	for (const edge of edges) {
-		const key = [
-			String(edge.source ?? ''),
-			String((edge as any).sourceHandle ?? 'out'),
-			String(edge.target ?? ''),
-			String((edge as any).targetHandle ?? 'in')
-		].join('|');
-		if (seen.has(key)) {
-			removedIds.push(String(edge.id ?? ''));
-			continue;
-		}
-		seen.add(key);
-		next.push(edge);
-	}
-	return { edges: next, removedIds };
-}
-
-function reconcileComponentOutgoingEdges(
-	nodeId: string,
-	nextNode: Node<PipelineNodeData>,
-	edges: Edge<PipelineEdgeData>[],
-	previousOutputNames: string[]
-): { edges: Edge<PipelineEdgeData>[]; removedIds: string[] } {
-	if (nextNode.data.kind !== 'component') return { edges, removedIds: [] };
-	const nextOutputNames = listComponentOutputNames(nextNode);
-	const nextSet = new Set(nextOutputNames);
-	const renameMap = new Map<string, string>();
-	for (let i = 0; i < Math.min(previousOutputNames.length, nextOutputNames.length); i += 1) {
-		const prevName = String(previousOutputNames[i] ?? '').trim();
-		const nextName = String(nextOutputNames[i] ?? '').trim();
-		if (!prevName || !nextName || prevName === nextName) continue;
-		if (nextSet.has(prevName)) continue;
-		renameMap.set(prevName, nextName);
-	}
-
-	const rewritten = edges
-		.map((edge) => {
-			if (edge.source !== nodeId) return edge;
-			const rawHandle = String((edge as any).sourceHandle ?? '').trim();
-			if (!rawHandle || rawHandle === 'out') {
-				if (nextOutputNames.length === 1) {
-					return { ...edge, sourceHandle: nextOutputNames[0] };
-				}
-				return edge;
-			}
-			if (nextSet.has(rawHandle)) return edge;
-			const mapped = renameMap.get(rawHandle);
-			if (mapped && nextSet.has(mapped)) {
-				return { ...edge, sourceHandle: mapped };
-			}
-			if (nextOutputNames.length === 1) {
-				return { ...edge, sourceHandle: nextOutputNames[0] };
-			}
-			return null;
-		})
-		.filter((edge): edge is Edge<PipelineEdgeData> => Boolean(edge));
-
-	const removedIds = edges
-		.filter((edge) => edge.source === nodeId)
-		.filter((edge) => !rewritten.some((candidate) => candidate.id === edge.id))
-		.map((edge) => String(edge.id ?? ''));
-
-	const deduped = dedupeEdgesBySignature(rewritten);
-	return { edges: deduped.edges, removedIds: [...removedIds, ...deduped.removedIds] };
-}
-
 // re-export test hooks that moved to graphStore.audit
 export const __assertBindingPairForTest = __assertBindingPairForTestFromAudit;
 export const __normalizeBindingForTest = __normalizeBindingForTestFromAudit;
-
-function normalizeHandleId(handleId: string | null | undefined, fallback: 'in' | 'out'): string {
-	const v = String(handleId ?? '').trim();
-	return v ? v : fallback;
-}
 
 function isFailedBindingStatus(binding: NormalizedNodeBinding | undefined): boolean {
 	const display = displayStatusFromBinding(binding as any);
@@ -657,7 +461,73 @@ function reconcileModelLeaseRunningInvariant(state: GraphState): GraphState {
 
 function applyRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
 	const reduced = reduceRunEventState(state, evt, runId);
-	return reconcileModelLeaseRunningInvariant(reduced);
+	const reconciled = reconcileModelLeaseRunningInvariant(reduced);
+	if (!shouldTracePauseResumeEvent(state, reconciled, evt)) return reconciled;
+	const details = buildPauseResumeTraceDetails(evt);
+	return logPush(
+		reconciled,
+		'info',
+		`[trace][pause-resume] evt=${evt.type} runStatus=${String(state.runStatus ?? 'idle')}->${String(reconciled.runStatus ?? 'idle')}${details ? ` ${details}` : ''}`,
+		(evt as any)?.nodeId,
+		(evt as any)?.componentPath,
+		(evt as any)?.edgeId
+	);
+}
+
+let pauseResumeTraceEnabled = false;
+
+const PAUSE_RESUME_RUN_STATUS_TRACE = new Set<RunStatus>(['pausing', 'paused', 'resuming']);
+const PAUSE_RESUME_FORCE_TRACE_EVENTS = new Set<string>([
+	'run_pause_requested',
+	'run_pausing',
+	'run_paused',
+	'run_resume_requested',
+	'run_resuming',
+	'run_resumed',
+	'run_resume_failed'
+]);
+
+function shouldTracePauseResumeEvent(
+	prev: GraphState,
+	next: GraphState,
+	evt: KnownRunEvent
+): boolean {
+	if (!pauseResumeTraceEnabled) return false;
+	if (PAUSE_RESUME_FORCE_TRACE_EVENTS.has(String(evt.type ?? ''))) return true;
+	if (PAUSE_RESUME_RUN_STATUS_TRACE.has(prev.runStatus)) return true;
+	if (PAUSE_RESUME_RUN_STATUS_TRACE.has(next.runStatus)) return true;
+	return false;
+}
+
+export function __setPauseResumeTraceEnabledForTest(enabled: boolean): void {
+	pauseResumeTraceEnabled = Boolean(enabled);
+}
+
+function buildPauseResumeTraceDetails(evt: KnownRunEvent): string {
+	const e = evt as any;
+	const summary: Record<string, unknown> = {
+		runId: typeof e.runId === 'string' ? e.runId : undefined,
+		nodeId: typeof e.nodeId === 'string' ? e.nodeId : undefined,
+		edgeId: typeof e.edgeId === 'string' ? e.edgeId : undefined,
+		status: typeof e.status === 'string' ? e.status : undefined,
+		signal: typeof e.signal === 'string' ? e.signal : undefined,
+		decision: typeof e.decision === 'string' ? e.decision : undefined,
+		exec: typeof e.exec === 'string' ? e.exec : undefined,
+		handle: typeof e.handle === 'string' ? e.handle : undefined,
+		at: typeof e.at === 'string' ? e.at : undefined,
+		plannedNodeCount: Array.isArray(e.plannedNodeIds) ? e.plannedNodeIds.length : undefined
+	};
+	if (e.snapshot && typeof e.snapshot === 'object') {
+		const nodes = (e.snapshot as any)?.frontierValidationBasis?.nodes;
+		if (nodes && typeof nodes === 'object') {
+			summary.snapshotFrontierNodeCount = Object.keys(nodes).length;
+		}
+	}
+	const compact = Object.fromEntries(
+		Object.entries(summary).filter(([, value]) => value !== undefined && value !== null)
+	);
+	if (Object.keys(compact).length === 0) return '';
+	return stableJson(compact);
 }
 
 function clearActiveWorkIncomingEdgesForNode(
@@ -692,6 +562,65 @@ function canApplyNodeEvent(state: GraphState, nodeId: string, evtRunId?: string)
 	// Event streams are run-scoped by runId; do not drop valid per-node events based on
 	// planned sets because scheduler/runtime may execute additional upstream nodes.
 	return true;
+}
+
+function applyPauseSnapshotFrontierBindings(
+	state: GraphState,
+	snapshot: Record<string, any> | null | undefined
+): GraphState {
+	const basisNodes =
+		snapshot &&
+		typeof snapshot === 'object' &&
+		typeof (snapshot as any).frontierValidationBasis === 'object' &&
+		(snapshot as any).frontierValidationBasis &&
+		typeof (snapshot as any).frontierValidationBasis.nodes === 'object'
+			? ((snapshot as any).frontierValidationBasis.nodes as Record<string, any>)
+			: {};
+	const nodeBindings = { ...(state.nodeBindings ?? {}) } as Record<string, NormalizedNodeBinding>;
+	let mutated = false;
+	const applyPair = (nodeId: string, pair: Record<string, any> | null | undefined) => {
+		const execKey = String(pair?.currentExecKey ?? '').trim();
+		const artifactId = String(pair?.currentArtifactId ?? '').trim();
+		if (!execKey || !artifactId) return;
+		const prev = _normalizeBinding(nodeBindings[nodeId], nodeId);
+		let next: NormalizedNodeBinding = {
+			...prev,
+			status:
+				prev.status === 'failed' || prev.status === 'canceled'
+					? prev.status
+					: 'succeeded_up_to_date',
+			cacheValid: true,
+			isUpToDate: true,
+			staleReason: null
+		};
+		next = _withPair(next, 'current', { execKey, artifactId });
+		next = _withPair(next, 'last', { execKey, artifactId });
+		if (
+			prev.currentExecKey !== next.currentExecKey ||
+			prev.currentArtifactId !== next.currentArtifactId ||
+			prev.lastExecKey !== next.lastExecKey ||
+			prev.lastArtifactId !== next.lastArtifactId ||
+			prev.cacheValid !== next.cacheValid ||
+			prev.isUpToDate !== next.isUpToDate ||
+			prev.staleReason !== next.staleReason
+		) {
+			nodeBindings[nodeId] = next;
+			mutated = true;
+		}
+	};
+	for (const [nodeId, rawNode] of Object.entries(basisNodes)) {
+		if (!nodeId || !rawNode || typeof rawNode !== 'object') continue;
+		applyPair(nodeId, (rawNode as any).binding);
+		const upstream =
+			(rawNode as any).upstreamBindings && typeof (rawNode as any).upstreamBindings === 'object'
+				? ((rawNode as any).upstreamBindings as Record<string, any>)
+				: {};
+		for (const [upstreamNodeId, upstreamPair] of Object.entries(upstream)) {
+			applyPair(upstreamNodeId, upstreamPair as Record<string, any>);
+		}
+	}
+	if (!mutated) return state;
+	return { ...state, nodeBindings };
 }
 
 function isNodeStateFromActiveRunAndFresh(cur: GraphState, binding: NormalizedNodeBinding): boolean {
@@ -810,29 +739,6 @@ export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): G
 	return withGraphMeta({ ...state, nodeBindings });
 }
 
-function effectiveExecParamsForNode(node: Node<PipelineNodeData> | undefined): Record<string, unknown> {
-	const raw = { ...(node?.data?.params ?? {}) } as Record<string, unknown>;
-	for (const key of [
-		'recentSnapshotIds',
-		'recent_snapshot_ids',
-		'snapshotMetadata',
-		'snapshot_metadata',
-		'recentSnapshots',
-		'snapshotHistory'
-	]) {
-		delete raw[key];
-	}
-	return raw;
-}
-
-function committedNodeParamsForNode(
-	state: GraphState,
-	nodeId: string
-): Record<string, any> {
-	const node = state.nodes.find((x) => x.id === nodeId);
-	return { ...((node?.data?.params ?? {}) as Record<string, any>) };
-}
-
 function clearNodeCacheUi(
 	nodeOutputs: Record<string, NodeOutputInfo>,
 	nodeId: string
@@ -861,17 +767,6 @@ function clearNodeCacheUiForNodes(
 		next = clearNodeCacheUi(next, nodeId);
 	}
 	return next;
-}
-
-function nodeFreezeMode(
-	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null
-): 'per_run' | 'sticky' | null {
-	const freeze = (node?.data as any)?.meta?.freeze;
-	if (!freeze || typeof freeze !== 'object') return null;
-	if (freeze.enabled !== true) return null;
-	const mode = String(freeze.mode ?? '').trim().toLowerCase();
-	if (mode === 'per_run' || mode === 'sticky') return mode;
-	return null;
 }
 
 function hasCurrentBoundArtifact(binding: NormalizedNodeBinding | undefined | null): boolean {
@@ -917,17 +812,45 @@ function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unkn
 function collectPinnedArtifactsByNode(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
 	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
-): Record<string, { artifactId: string; execKey?: string }> {
-	const out: Record<string, { artifactId: string; execKey?: string }> = {};
+): Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }> {
+	const out: Record<
+		string,
+		{ artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }
+	> = {};
 	for (const node of nodes) {
 		if (nodeFreezeMode(node) === null) continue;
 		const nodeId = String(node.id ?? '').trim();
 		if (!nodeId) continue;
 		const binding = _normalizeBinding(nodeBindings?.[nodeId], nodeId);
-		const artifactId = String(binding.current?.artifactId ?? '').trim();
-		const execKey = String(binding.current?.execKey ?? '').trim();
+		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
+		const artifactId = String(lineage?.artifactId ?? '').trim();
+		const execKey = String(lineage?.execKey ?? '').trim();
 		if (!artifactId || !execKey) continue;
-		out[nodeId] = { artifactId, execKey };
+		const pinned: { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> } = {
+			artifactId,
+			execKey
+		};
+		if (node.data.kind === 'component') {
+			const rawOutputLineage =
+				((binding as any)?.outputLineage && typeof (binding as any).outputLineage === 'object'
+					? ((binding as any).outputLineage as Record<string, any>)
+					: null) ?? null;
+			if (rawOutputLineage) {
+				const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
+				for (const [rawHandle, rawPair] of Object.entries(rawOutputLineage)) {
+					const handle = String(rawHandle ?? '').trim();
+					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
+					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
+					if (!outputArtifactId) continue;
+					outputs[handle] = outputExecKey
+						? { artifactId: outputArtifactId, execKey: outputExecKey }
+						: { artifactId: outputArtifactId };
+				}
+				if (Object.keys(outputs).length > 0) pinned.outputs = outputs;
+			}
+		}
+		out[nodeId] = pinned;
 	}
 	return out;
 }
@@ -1353,14 +1276,19 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					}
 				};
 			});
+			const snapshot = ((evt as any)?.snapshot ?? null) as Record<string, any> | null;
+			const withFrontierBindings = applyPauseSnapshotFrontierBindings(
+				{
+					...state,
+					nodes,
+					edges,
+					runStatus: 'paused'
+				},
+				snapshot
+			);
 			return withGraphMeta(
 				logPush(
-					{
-						...state,
-						nodes,
-						edges,
-						runStatus: 'paused'
-					},
+					withFrontierBindings,
 					'info',
 					'Run paused'
 				)
@@ -2093,6 +2021,9 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 			const inflightCount = Math.max(0, Number((evt as any)?.inflightCount ?? 0));
 			const pendingQueueDepth = Math.max(0, Number((evt as any)?.pendingQueueDepth ?? 0));
 			const runnableNodeCount = Math.max(0, Number((evt as any)?.runnableNodeCount ?? 0));
+			const lastControlSeq = Math.max(0, Number((evt as any)?.lastControlSeq ?? 0));
+			const appliedControlSeq = Math.max(0, Number((state.queueRuntime as any)?.appliedControlSeq ?? 0));
+			const nextAppliedControlSeq = Math.max(appliedControlSeq, lastControlSeq);
 			const stalled = Boolean((evt as any)?.stalled ?? false);
 			const perNodeRaw = Array.isArray((evt as any)?.perNode) ? ((evt as any).perNode as unknown[]) : [];
 			const perNode = perNodeRaw
@@ -2151,7 +2082,8 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
+					appliedControlSeq: nextAppliedControlSeq
 				}
 			};
 			return logPush(
@@ -2491,6 +2423,68 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 					}
 				};
 			});
+			let nodeBindings = state.nodeBindings;
+			if (evt.status === 'succeeded') {
+				const componentNodeIds = new Set(
+					(state.nodes ?? [])
+						.filter((node) => String((node as any)?.data?.kind ?? '').trim().toLowerCase() === 'component')
+						.map((node) => String(node.id ?? '').trim())
+						.filter(Boolean)
+				);
+				if (componentNodeIds.size > 0) {
+					const patched: Record<string, NormalizedNodeBinding> = {
+						...(state.nodeBindings ?? {})
+					} as Record<string, NormalizedNodeBinding>;
+					let changed = false;
+					for (const nodeId of componentNodeIds) {
+						const prevBinding = _normalizeBinding((state.nodeBindings ?? {})[nodeId], nodeId);
+						const hasArtifact = Boolean(
+							prevBinding.currentArtifactId ??
+								prevBinding.current?.artifactId ??
+								prevBinding.lastArtifactId ??
+								prevBinding.last?.artifactId
+						);
+						if (!hasArtifact) continue;
+						const canonicalPair = (() => {
+							const currentPair = _pairFromLegacy(prevBinding, 'current');
+							if (currentPair.execKey && currentPair.artifactId) return currentPair;
+							const lastPair = _pairFromLegacy(prevBinding, 'last');
+							if (lastPair.execKey && lastPair.artifactId) return lastPair;
+							return null;
+						})();
+						let nextBinding: NormalizedNodeBinding = {
+							...prevBinding,
+							status:
+								prevBinding.status === 'failed' || prevBinding.status === 'canceled'
+									? prevBinding.status
+									: 'succeeded_up_to_date',
+							isUpToDate: true,
+							cacheValid: true,
+							staleReason: null
+						};
+						if (canonicalPair) {
+							nextBinding = _withPair(nextBinding, 'current', canonicalPair);
+							nextBinding = _withPair(nextBinding, 'last', canonicalPair);
+						}
+						if (
+							nextBinding.status !== prevBinding.status ||
+							nextBinding.currentExecKey !== prevBinding.currentExecKey ||
+							nextBinding.currentArtifactId !== prevBinding.currentArtifactId ||
+							nextBinding.lastExecKey !== prevBinding.lastExecKey ||
+							nextBinding.lastArtifactId !== prevBinding.lastArtifactId ||
+							nextBinding.isUpToDate !== prevBinding.isUpToDate ||
+							nextBinding.cacheValid !== prevBinding.cacheValid ||
+							nextBinding.staleReason !== prevBinding.staleReason
+						) {
+							patched[nodeId] = nextBinding;
+							changed = true;
+						}
+					}
+					if (changed) {
+						nodeBindings = patched;
+					}
+				}
+			}
 			return withGraphMeta(
 				logPush(
 					{
@@ -2498,6 +2492,7 @@ function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: strin
 						runStatus: evt.status,
 						edges: nextEdges,
 						nodes,
+						nodeBindings,
 						queueRuntime: {
 							...(state.queueRuntime ?? {}),
 							currentRunSummary: undefined,
@@ -2520,9 +2515,99 @@ function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshotLike): 
 	}
 	const nodeBindingsPatch: Record<string, NormalizedNodeBinding> = {};
 	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
+	const componentNodeIds = new Set(
+		(state.nodes ?? [])
+			.filter((node) => String((node as any)?.data?.kind ?? '').trim().toLowerCase() === 'component')
+			.map((node) => String(node.id ?? '').trim())
+			.filter(Boolean)
+	);
+	const hasPair = (binding: NormalizedNodeBinding | undefined | null, which: 'current' | 'last'): boolean => {
+		const pair = which === 'current' ? binding?.current : binding?.last;
+		return Boolean(pair?.execKey && pair?.artifactId);
+	};
+	const pairEquals = (
+		left: { execKey?: string | null; artifactId?: string | null } | null | undefined,
+		right: { execKey?: string | null; artifactId?: string | null } | null | undefined
+	): boolean =>
+		String(left?.execKey ?? '') === String(right?.execKey ?? '') &&
+		String(left?.artifactId ?? '') === String(right?.artifactId ?? '');
+	const isFailureLike = (status: string): boolean =>
+		status === 'failed' || status === 'canceled' || status === 'skipped';
+	const isExplicitInvalidation = (binding: NormalizedNodeBinding): boolean =>
+		String(binding.status ?? '').trim().toLowerCase() === 'stale' &&
+		Boolean(String(binding.staleReason ?? '').trim()) &&
+		String(binding.staleReason ?? '').trim().toUpperCase() !== 'RUN_PENDING';
 	for (const [nodeId, raw] of Object.entries(snap.nodeBindings ?? {})) {
-		const b = _normalizeBinding(raw as NodeBindingInfo, nodeId);
-		nodeBindingsPatch[nodeId] = b;
+		const incoming = _normalizeBinding(raw as NodeBindingInfo, nodeId);
+		const prev = _normalizeBinding((state.nodeBindings ?? {})[nodeId], nodeId);
+		const incomingStatus = String(incoming.status ?? '').trim().toLowerCase();
+		const prevStatus = String(prev.status ?? '').trim().toLowerCase();
+		const isComponentBoundary = componentNodeIds.has(String(nodeId ?? '').trim());
+		const incomingStaleReason = String(incoming.staleReason ?? '').trim().toUpperCase();
+		const incomingRunPendingStale = incomingStatus === 'stale' && incomingStaleReason === 'RUN_PENDING';
+		const incomingNonAuthoritativeFreshness =
+			(incomingStatus === 'stale' && !isExplicitInvalidation(incoming)) ||
+			(incomingStatus === 'idle' && incoming.isUpToDate !== true) ||
+			!hasPair(incoming, 'current');
+		const prevCanonicalPair = hasPair(prev, 'current') ? prev.current : prev.last;
+		const incomingCurrentPair = incoming.current;
+		const incomingMatchesPrevPair =
+			Boolean(incomingCurrentPair?.execKey && incomingCurrentPair?.artifactId) &&
+			pairEquals(incomingCurrentPair, prevCanonicalPair);
+		const prevFromActiveRun = Boolean(
+			state.activeRunId &&
+			prev.currentRunId &&
+			String(prev.currentRunId) === String(state.activeRunId)
+		);
+		const prevLooksFresh = prevStatus === 'running' || prevStatus.startsWith('succeeded') || prev.isUpToDate === true;
+		const incomingLooksWeaker =
+			(incomingStatus === 'idle' || incomingStatus === 'stale') &&
+			incoming.isUpToDate !== true &&
+			(!hasPair(incoming, 'current') || incomingMatchesPrevPair);
+		const preserveActiveRunFreshness =
+			prevFromActiveRun &&
+			prevLooksFresh &&
+			incomingLooksWeaker &&
+			!isFailureLike(incomingStatus) &&
+			(!isExplicitInvalidation(incoming) || incomingMatchesPrevPair);
+		if (preserveActiveRunFreshness) {
+			const canonicalPair = prevCanonicalPair;
+			let next: NormalizedNodeBinding = {
+				...incoming,
+				status: prev.status,
+				isUpToDate: true,
+				cacheValid: prev.cacheValid ?? true,
+				staleReason: null
+			};
+			next = _withPair(next, 'current', canonicalPair);
+			next = _withPair(next, 'last', canonicalPair);
+			_assertBindingPairInvariant(next, nodeId, 'hydrate_snapshot_preserve_active_run_freshness');
+			nodeBindingsPatch[nodeId] = next;
+			continue;
+		}
+		const preserveFreshSuccess =
+			isComponentBoundary &&
+			(prevStatus.startsWith('succeeded') || prev.isUpToDate === true) &&
+			(hasPair(prev, 'current') || hasPair(prev, 'last')) &&
+			(incomingRunPendingStale || incomingNonAuthoritativeFreshness || incomingMatchesPrevPair) &&
+			!isFailureLike(incomingStatus) &&
+			(!isExplicitInvalidation(incoming) || incomingMatchesPrevPair);
+		if (preserveFreshSuccess) {
+			const canonicalPair = prevCanonicalPair;
+			let next: NormalizedNodeBinding = {
+				...incoming,
+				status: prev.status,
+				isUpToDate: true,
+				cacheValid: prev.cacheValid ?? true,
+				staleReason: null
+			};
+			next = _withPair(next, 'current', canonicalPair);
+			next = _withPair(next, 'last', canonicalPair);
+			_assertBindingPairInvariant(next, nodeId, 'hydrate_snapshot_preserve_fresh_success');
+			nodeBindingsPatch[nodeId] = next;
+			continue;
+		}
+		nodeBindingsPatch[nodeId] = incoming;
 	}
 	const nodeBindings = mergeBindingsSticky(state.nodeBindings ?? {}, nodeBindingsPatch);
 	const runStatus = (snap.status as RunStatus) || state.runStatus;
@@ -2603,6 +2688,13 @@ export function __hardResetGraphForTest(_state: GraphState, freshGraphId = 'grap
 
 export function __resetRunUiStateForTest(state: GraphState): GraphState {
 	return resetRunUiState(state);
+}
+
+export function __collectPinnedArtifactsByNodeForTest(
+	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
+	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
+): Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }> {
+	return collectPinnedArtifactsByNode(nodes, nodeBindings);
 }
 
 function stripToDTO(
@@ -3295,50 +3387,6 @@ function buildSavePreflightDiagnostics(
 	};
 }
 
-function pendingInspectorDraftSaveDiagnostic(state: GraphState): SavePreflightDiagnostic | null {
-	if (!Boolean(state?.inspector?.dirty)) return null;
-	const inspectorNodeId = String(state?.inspector?.nodeId ?? '').trim();
-	if (!inspectorNodeId) return null;
-	const node = state.nodes.find((n) => String(n?.id ?? '') === inspectorNodeId);
-	if (!node) return null;
-	const draftParams = (state.inspector?.draftParams ?? {}) as Record<string, any>;
-	const nodeKind = node.data.kind;
-	let editorMode: 'draft' | 'immediate' = 'immediate';
-	let detail = '';
-	if (nodeKind === 'transform') {
-		const transformKind = String(
-			draftParams?.transformKind ??
-				(node?.data as any)?.transformKind ??
-				draftParams?.op ??
-				(node?.data as any)?.params?.op ??
-				'select'
-		).trim();
-		editorMode = getTransformEditorCommitMode(transformKind);
-		detail = `"${transformKind}"`;
-	} else if (nodeKind === 'source') {
-		const sourceKind = String(draftParams?.sourceKind ?? (node?.data as any)?.sourceKind ?? 'file').trim();
-		editorMode = getSourceEditorCommitMode(sourceKind);
-		detail = `"${sourceKind}"`;
-	} else if (nodeKind === 'llm' || nodeKind === 'model') {
-		const llmKind = String(draftParams?.llmKind ?? (node?.data as any)?.llmKind ?? 'ollama').trim();
-		editorMode = getLlmEditorCommitMode(llmKind);
-		detail = `"${llmKind}"`;
-	} else if (nodeKind === 'tool') {
-		const provider = String(draftParams?.provider ?? (node?.data as any)?.params?.provider ?? 'mcp').trim();
-		editorMode = getToolEditorCommitMode(provider);
-		detail = `"${provider}"`;
-	} else {
-		return null;
-	}
-	if (editorMode !== 'draft') return null;
-	return {
-		code: 'INSPECTOR_DRAFT_PENDING_ACCEPT',
-		path: `nodes.${inspectorNodeId}.inspector.draftParams`,
-		message: `Unsaved ${nodeKind} draft changes detected for ${detail}. Click Accept before saving the graph.`,
-		severity: 'error'
-	};
-}
-
 function summarizeSavePreflightError(diagnostics: SavePreflightDiagnostic[]): string {
 	const errors = diagnostics.filter((d) => d.severity === 'error');
 	if (errors.length === 0) return 'Graph preflight failed.';
@@ -3361,6 +3409,7 @@ function resetRunUiState(state: GraphState): GraphState {
 	for (const [nodeId, binding] of Object.entries(normalizedBindings)) {
 		const nodeIdNorm = String(nodeId ?? '').trim();
 		if (!nodeIdNorm) continue;
+		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
 		nodeBindings[nodeIdNorm] = {
 			...binding,
 			status: 'idle',
@@ -3374,13 +3423,13 @@ function resetRunUiState(state: GraphState): GraphState {
 				artifactId: null
 			},
 			last: {
-				execKey: null,
-				artifactId: null
+				execKey: lineage?.execKey ?? null,
+				artifactId: lineage?.artifactId ?? null
 			},
 			currentExecKey: null,
 			currentArtifactId: null,
-			lastExecKey: null,
-			lastArtifactId: null
+			lastExecKey: lineage?.execKey ?? null,
+			lastArtifactId: lineage?.artifactId ?? null
 		};
 	}
 	return withGraphMeta({
@@ -3769,7 +3818,6 @@ export const graphStore = (() => {
 	function attachActiveRunEventStream(runId: string): void {
 		const rid = String(runId ?? '').trim();
 		if (!rid) return;
-		if (activeRunStreamHandle?.runId === rid) return;
 		if (activeRunStreamHandle) {
 			try {
 				activeRunStreamHandle.close();
@@ -3781,6 +3829,7 @@ export const graphStore = (() => {
 		clearResumeFallbackPollTimer();
 
 		let settled = false;
+		let terminalReconciling = false;
 		let subHandle: { close: () => void } | null = null;
 		const settle = () => {
 			if (settled) return;
@@ -3796,6 +3845,7 @@ export const graphStore = (() => {
 			}
 		};
 		const applyEventBatch = (events: KnownRunEvent[]) => {
+			let sawTerminal = false;
 			for (const evt of events) {
 				const cur = get({ subscribe } as any) as GraphState;
 				const evtGraphId = (evt as any)?.graphId;
@@ -3817,28 +3867,32 @@ export const graphStore = (() => {
 						: { source: 'event', evt };
 				update((s) => applyRunEventState(s, evt, rid), auditCtx);
 				if (evt.type === 'run_finished' || evt.type === 'run_paused') {
-					const current = get({ subscribe } as any) as GraphState;
-					persist(current);
-					void getRun(rid)
-						.then((snap) => {
-							const latest = get({ subscribe } as any) as GraphState;
-							if (
-								typeof snap.graphId === 'string' &&
-								snap.graphId &&
-								snap.graphId !== latest.graphId
-							) {
-								return;
-							}
-							update((s) => hydrateFromRunSnapshot(s, snap), {
-								source: 'hydrate_snapshot',
-								snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
-							});
-						})
-						.catch(() => {});
-					settle();
-					return;
+					sawTerminal = true;
 				}
 			}
+			if (!sawTerminal || terminalReconciling || settled) return;
+			terminalReconciling = true;
+			const current = get({ subscribe } as any) as GraphState;
+			persist(current);
+			void getRun(rid)
+				.then((snap) => {
+					const latest = get({ subscribe } as any) as GraphState;
+					if (
+						typeof snap.graphId === 'string' &&
+						snap.graphId &&
+						snap.graphId !== latest.graphId
+					) {
+						return;
+					}
+					update((s) => hydrateFromRunSnapshot(s, snap), {
+						source: 'hydrate_snapshot',
+						snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+					});
+				})
+				.catch(() => {})
+				.finally(() => {
+					settle();
+				});
 		};
 		const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
 			maxBatchSize: 48,
@@ -3951,479 +4005,6 @@ export const graphStore = (() => {
 			}
 		);
 		activeRunStreamHandle = { runId: rid, close: () => subHandle?.close() };
-	}
-
-	function updateNodeConfigImpl(
-		nodeId: string,
-		config: { params?: unknown; schema?: Record<string, unknown> },
-		opts?: { allowComponentContractMutation?: boolean; enforceComponentContractBoundary?: boolean }
-	) {
-		let out: { ok: boolean; error?: string; removedEdgeIds?: string[] } = { ok: true };
-		const allowComponentContractMutation = Boolean(opts?.allowComponentContractMutation ?? false);
-		const enforceComponentContractBoundary = Boolean(opts?.enforceComponentContractBoundary ?? false);
-		const componentContractMutationError =
-			'Component API contract can only be edited in component authoring mode.';
-
-		const hasContractMutationInPatch = (currentParamsRaw: unknown, patchRaw: unknown): boolean => {
-			const currentParams =
-				currentParamsRaw && typeof currentParamsRaw === 'object'
-					? (currentParamsRaw as Record<string, unknown>)
-					: {};
-			const patchParams =
-				patchRaw && typeof patchRaw === 'object' ? (patchRaw as Record<string, unknown>) : null;
-			if (!patchParams) return false;
-			const keyChanged = (key: string): boolean =>
-				Object.prototype.hasOwnProperty.call(patchParams, key) &&
-				stableJson(patchParams[key]) !== stableJson(currentParams[key]);
-			if (keyChanged('api')) return true;
-			if (keyChanged('exposureRegistry')) return true;
-			if (keyChanged('published_profile')) return true;
-			if (keyChanged('debug_profile')) return true;
-			if (Object.prototype.hasOwnProperty.call(patchParams, 'bindings')) {
-				const patchBindings =
-					patchParams.bindings && typeof patchParams.bindings === 'object'
-						? (patchParams.bindings as Record<string, unknown>)
-						: null;
-				if (patchBindings && Object.prototype.hasOwnProperty.call(patchBindings, 'outputs')) {
-					const currentBindings =
-						currentParams.bindings && typeof currentParams.bindings === 'object'
-							? (currentParams.bindings as Record<string, unknown>)
-							: {};
-					const currentOutputs =
-						currentBindings.outputs && typeof currentBindings.outputs === 'object'
-							? (currentBindings.outputs as Record<string, unknown>)
-							: null;
-					const patchOutputs =
-						patchBindings.outputs && typeof patchBindings.outputs === 'object'
-							? (patchBindings.outputs as Record<string, unknown>)
-							: null;
-					if (stableJson(patchOutputs) !== stableJson(currentOutputs)) return true;
-				}
-			}
-			return false;
-		};
-
-		update((s) => {
-			let nodes = s.nodes;
-			let edges = s.edges;
-			let removedEdgeIds: string[] = [];
-			let autoUnpinned = false;
-			let pinAutoClearNotice: string | null = null;
-
-			// 0) Ensure node exists
-			const node = nodes.find((n) => n.id === nodeId);
-			if (!node) {
-				out = { ok: false, error: 'Node not found' };
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-			if (
-				config.params !== undefined &&
-				node.data.kind === 'component' &&
-				enforceComponentContractBoundary &&
-				s.editingContext === 'graph' &&
-				!allowComponentContractMutation &&
-				hasContractMutationInPatch((node.data as any)?.params, config.params)
-			) {
-				out = { ok: false, error: componentContractMutationError };
-				const inspector =
-					String(s.inspector?.nodeId ?? '') === nodeId
-						? {
-								...s.inspector,
-								systemNotice: componentContractMutationError
-							}
-						: s.inspector;
-				return logPush({ ...s, inspector }, 'warn', componentContractMutationError, nodeId);
-			}
-			const beforeExecParams = effectiveExecParamsForNode(node as Node<PipelineNodeData>);
-			const wasPinnedBeforeParams = nodeFreezeMode(node as any) !== null;
-			const previousComponentOutputNames =
-				node.data.kind === 'component' ? listComponentOutputNames(node as Node<PipelineNodeData>) : [];
-
-			// ---- 1) params (must be valid to commit) ----
-			if (config.params !== undefined) {
-				const res = updateNodeParamsValidated(nodes, nodeId, config.params);
-				if (res.error) {
-					out = { ok: false, error: res.error };
-					return logPush(s, 'error', res.error, nodeId);
-				}
-				nodes = res.nodes;
-			}
-			if (config.schema !== undefined) {
-				const parsed = NodeSchemaEnvelopeSchema.safeParse(config.schema ?? {});
-				if (!parsed.success) {
-					out = { ok: false, error: 'Invalid schema envelope payload.' };
-					return logPush(s, 'error', out.error, nodeId);
-				}
-				nodes = nodes.map((n) =>
-					n.id === nodeId
-						? {
-								...n,
-								data: {
-									...n.data,
-									schema: parsed.data
-								}
-							}
-						: n
-				);
-			}
-
-			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
-			const afterExecParams = effectiveExecParamsForNode(currentNode as Node<PipelineNodeData>);
-			const execParamsChanged = stableJson(beforeExecParams) !== stableJson(afterExecParams);
-			if (config.params !== undefined && wasPinnedBeforeParams && execParamsChanged) {
-				nodes = nodes.map((n) => {
-					if (n.id !== nodeId) return n;
-					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
-					delete (nextMeta as any).freeze;
-					return {
-						...n,
-						data: {
-							...(n.data as any),
-							meta: nextMeta
-						}
-					} as Node<PipelineNodeData>;
-				});
-				autoUnpinned = true;
-				pinAutoClearNotice =
-					'[Pin cleared] Parameters changed, so this node was automatically unpinned to keep execution integrity.';
-			}
-			const effectiveIo = deriveNodeIoForData(currentNode.data);
-			const { in: inputType, out: outputType } = effectiveIo;
-			if (inputType !== null && !isPayloadType(inputType)) {
-				out = { ok: false, error: `Invalid derived input payload type: ${String(inputType)}` };
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-			if (outputType !== null && !isPayloadType(outputType)) {
-				out = { ok: false, error: `Invalid derived output payload type: ${String(outputType)}` };
-				return logPush(s, 'warn', out.error!, nodeId);
-			}
-
-			nodes = nodes.map((n) => {
-				if (n.id !== nodeId) return n;
-				return {
-					...n,
-					data: {
-						...n.data,
-						meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
-					}
-				};
-			});
-
-			const updatedNode = nodes.find((n) => n.id === nodeId)!;
-
-			if (updatedNode.data.kind === 'component') {
-				const reconciled = reconcileComponentOutgoingEdges(
-					nodeId,
-					updatedNode as Node<PipelineNodeData>,
-					edges,
-					previousComponentOutputNames
-				);
-				edges = reconciled.edges;
-				if (reconciled.removedIds.length) {
-					removedEdgeIds = [...removedEdgeIds, ...reconciled.removedIds];
-				}
-			}
-
-			const pr = pruneAndRecontractEdgesStrict(nodes, edges);
-			if (pr.ok === false) {
-				out = { ok: false, error: pr.error };
-				return logPush(s, 'warn', pr.error, nodeId);
-			}
-			edges = pr.edges;
-			if (pr.prunedIds?.length) {
-				removedEdgeIds = [...removedEdgeIds, ...pr.prunedIds];
-			}
-			if (removedEdgeIds.length) {
-				const uniq = Array.from(new Set(removedEdgeIds.filter((id) => id.length > 0)));
-				out.removedEdgeIds = uniq;
-			}
-
-			const nextInspector =
-				autoUnpinned && String(s.inspector?.nodeId ?? '') === nodeId
-					? {
-							...s.inspector,
-							systemNotice: pinAutoClearNotice
-						}
-					: s.inspector;
-			const next = logPush({ ...s, nodes, edges, inspector: nextInspector }, 'info', 'Node config updated', nodeId);
-			persist(next);
-			return next;
-		});
-
-		return out;
-	}
-
-	type SchemaEnvelopeChannel = 'expectedSchema' | 'expectedInputSchemas';
-
-	function setNodeSchemaObservationImpl(
-		nodeId: string,
-		channel: SchemaEnvelopeChannel,
-		typedSchema: Record<string, unknown> | null,
-		inputHandleRaw?: string
-	): { ok: boolean; error?: string } {
-		let result: { ok: boolean; error?: string } = { ok: true };
-		update((s) => {
-			const node = s.nodes.find((n) => n.id === nodeId);
-			if (!node) {
-				result = { ok: false, error: 'Node not found' };
-				return s;
-			}
-			const existingSchema =
-				node.data?.schema && typeof node.data.schema === 'object'
-					? ({ ...(node.data.schema as Record<string, unknown>) } as Record<string, unknown>)
-					: {};
-			if (typedSchema == null) {
-				if (channel === 'expectedInputSchemas') {
-					const handle = String(inputHandleRaw ?? 'in').trim() || 'in';
-					const current =
-						(existingSchema as any).expectedInputSchemas &&
-						typeof (existingSchema as any).expectedInputSchemas === 'object'
-							? ({ ...((existingSchema as any).expectedInputSchemas as Record<string, unknown>) } as Record<
-									string,
-									unknown
-								>)
-							: {};
-					delete current[handle];
-					if (Object.keys(current).length === 0) {
-						delete (existingSchema as any).expectedInputSchemas;
-					} else {
-						(existingSchema as any).expectedInputSchemas = current;
-					}
-				} else {
-					delete (existingSchema as any)[channel];
-				}
-			} else {
-				const normalizedTyped = payloadHintToTypedSchema(typedSchema);
-				if (!normalizedTyped) {
-					result = { ok: false, error: 'Expected schema must include a valid typed schema type.' };
-					return logPush(s, 'warn', result.error, nodeId);
-				}
-				const observation = {
-					typedSchema: normalizedTyped,
-					source: 'declared',
-					state: 'fresh',
-					schemaFingerprint: fingerprintTypedSchema(normalizedTyped),
-					updatedAt: new Date().toISOString()
-				};
-				if (channel === 'expectedInputSchemas') {
-					const handle = String(inputHandleRaw ?? 'in').trim() || 'in';
-					const current =
-						(existingSchema as any).expectedInputSchemas &&
-						typeof (existingSchema as any).expectedInputSchemas === 'object'
-							? ({ ...((existingSchema as any).expectedInputSchemas as Record<string, unknown>) } as Record<
-									string,
-									unknown
-								>)
-							: {};
-					current[handle] = observation;
-					(existingSchema as any).expectedInputSchemas = current;
-				} else {
-					(existingSchema as any)[channel] = observation;
-				}
-			}
-			const parsed = NodeSchemaEnvelopeSchema.safeParse(existingSchema);
-			if (!parsed.success) {
-				result = { ok: false, error: 'Expected schema is invalid.' };
-				return logPush(s, 'warn', result.error, nodeId);
-			}
-			const nodes = s.nodes.map((n) => {
-				if (n.id !== nodeId) return n;
-				const schema = parsed.data;
-				const nextData: Record<string, unknown> = {
-					...(n.data as Record<string, unknown>),
-					meta: { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>), updatedAt: new Date().toISOString() }
-				};
-				if (hasSchemaEnvelopeContent(schema)) {
-					nextData.schema = schema;
-				} else {
-					delete nextData.schema;
-				}
-				return {
-					...n,
-					data: nextData as PipelineNodeData & Record<string, unknown>
-				};
-			});
-			const rechecked = pruneAndRecontractEdgesStrict(nodes, s.edges);
-			if (!rechecked.ok) {
-				result = { ok: false, error: rechecked.error };
-				return logPush(s, 'warn', rechecked.error, nodeId);
-			}
-			const next = logPush(
-				{ ...s, nodes, edges: rechecked.edges },
-				'info',
-				channel === 'expectedSchema'
-					? 'Expected schema updated'
-					: channel === 'expectedInputSchemas'
-						? `Expected input schema updated for handle ${String(inputHandleRaw ?? 'in')}`
-						: 'Expected schema updated',
-				nodeId
-			);
-			persist(next);
-			return next;
-		});
-		if (result.ok) {
-			applyLocalStaleInvalidation(nodeId, 'PARAMS_CHANGED');
-		}
-		return result;
-	}
-
-	function setNodeExpectedSchemaImpl(
-		nodeId: string,
-		typedSchema: Record<string, unknown> | null
-	): { ok: boolean; error?: string } {
-		return setNodeSchemaObservationImpl(nodeId, 'expectedSchema', typedSchema);
-	}
-
-	function setNodeExpectedInputSchemaImpl(
-		nodeId: string,
-		typedSchema: Record<string, unknown> | null
-	): { ok: boolean; error?: string } {
-		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchemas', typedSchema, 'in');
-	}
-
-	function setNodeExpectedInputSchemaForHandleImpl(
-		nodeId: string,
-		inputHandle: string,
-		typedSchema: Record<string, unknown> | null
-	): { ok: boolean; error?: string } {
-		return setNodeSchemaObservationImpl(nodeId, 'expectedInputSchemas', typedSchema, inputHandle);
-	}
-
-	type UpdateNodeConfig = {
-		params?: unknown;
-	};
-
-	type PreviewUpdateResult =
-		| {
-			ok: true;
-			prunedEdgeIds: string[];
-			nextNodes: Node<PipelineNodeData>[];
-			nextEdges: Edge<PipelineEdgeData>[];
-		}
-		| { ok: false; error: string };
-
-	//BEGIN
-	function canonicalInspectorDraftForNode(
-		node: Node<PipelineNodeData & Record<string, unknown>> | undefined,
-		params: Record<string, any>
-	): Record<string, any> {
-		if (!node) return params;
-		if (node.data?.kind === 'component') {
-			return sanitizeComponentDraftParams(params);
-		}
-		return params;
-	}
-
-	function patchInspectorDraft(
-		patch: Record<string, any>,
-		opts?: { intent?: InspectorDraftPatchIntent; notice?: string | null }
-	) {
-		update((s) => {
-			if (!s.inspector.nodeId) return s;
-			const node = s.nodes.find((n) => n.id === s.inspector.nodeId);
-			const nextDraftParams = { ...s.inspector.draftParams, ...patch };
-			const intent: InspectorDraftPatchIntent = opts?.intent ?? 'user_edit';
-			const baselineCanonical = canonicalInspectorDraftForNode(
-				node as any,
-				structuredClone((node?.data?.params ?? {}) as Record<string, any>)
-			);
-			const nextCanonical = canonicalInspectorDraftForNode(node as any, structuredClone(nextDraftParams));
-			const changedVsBaseline = JSON.stringify(nextCanonical) !== JSON.stringify(baselineCanonical);
-			const changedVsCurrent = JSON.stringify(nextDraftParams) !== JSON.stringify(s.inspector.draftParams ?? {});
-			const nextDirty = intent === 'system_canonicalize' ? Boolean(s.inspector.dirty) : changedVsBaseline;
-			const nextSystemNotice =
-				intent === 'system_canonicalize' && changedVsCurrent
-					? String(opts?.notice ?? 'Bindings normalized automatically.')
-					: intent === 'user_edit'
-						? null
-						: s.inspector.systemNotice ?? null;
-			return {
-				...s,
-				inspector: {
-					...s.inspector,
-					draftParams: nextDraftParams,
-					dirty: nextDirty,
-					systemNotice: nextSystemNotice
-				}
-			};
-		});
-	}
-
-	// optional: dropdown commit (keeps draft consistent + commits)
-	async function commitInspectorImmediate(patch: Record<string, any>) {
-		const s = get({ subscribe } as any) as GraphState;
-		const nodeId = s.inspector.nodeId;
-		if (!nodeId) return { ok: false, error: 'No node selected' };
-		const targetNode = s.nodes.find((x) => x.id === nodeId);
-		const commitPatch =
-			targetNode?.data?.kind === 'component'
-				? sanitizeComponentDraftParams(patch)
-				: patch;
-		if (patch?.op === 'dedupe' || patch?.dedupe || s.inspector.draftParams?.op === 'dedupe') {
-			console.log('[dedupe-store] commitInspectorImmediate:patch', {
-				nodeId,
-				patch: commitPatch,
-				draftParams: s.inspector.draftParams
-			});
-		}
-		const beforeNode = targetNode;
-		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
-
-		// 2) commit patch (validated/stripped)
-		const result = updateNodeConfigImpl(nodeId, { params: commitPatch }, { enforceComponentContractBoundary: true });
-		if (!result.ok) return result;
-
-		const afterState = get({ subscribe } as any) as GraphState;
-		const paramsForSubmit = committedNodeParamsForNode(afterState, nodeId);
-		if (paramsForSubmit?.op === 'dedupe') {
-			console.log('[dedupe-store] commitInspectorImmediate:paramsForSubmit', {
-				nodeId,
-				paramsForSubmit
-			});
-		}
-		update((cur) => {
-			if (cur.inspector.nodeId !== nodeId) return cur;
-			return {
-				...cur,
-				inspector: {
-					...cur.inspector,
-					draftParams: structuredClone(paramsForSubmit),
-					dirty: false
-				}
-			};
-		});
-
-		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
-		return result;
-	}
-
-	async function commitSnapshotSelection(patch: Record<string, any>) {
-		const s = get({ subscribe } as any) as GraphState;
-		const nodeId = s.inspector.nodeId;
-		if (!nodeId) return { ok: false, error: 'No node selected' };
-		const beforeNode = s.nodes.find((x) => x.id === nodeId);
-		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
-
-		// Commit only the provided snapshot-related patch; do not merge with pending draft.
-		const result = updateNodeConfigImpl(nodeId, { params: patch });
-		if (!result.ok) return result;
-
-		const afterState = get({ subscribe } as any) as GraphState;
-		const paramsForSubmit = committedNodeParamsForNode(afterState, nodeId);
-		update((cur) => {
-			if (cur.inspector.nodeId !== nodeId) return cur;
-			return {
-				...cur,
-				inspector: {
-					...cur.inspector,
-					draftParams: structuredClone(paramsForSubmit),
-					dirty: false
-				}
-			};
-		});
-
-		await syncAcceptParamsForNode(nodeId, paramsForSubmit, beforeExecParams);
-		return result;
 	}
 
 function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
@@ -4606,90 +4187,21 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		}
 	}
 
-	async function applyInspectorDraft() {
-		const s = get({ subscribe } as any) as GraphState;
-		const nodeId = s.inspector.nodeId;
-		if (!nodeId) return { ok: false, error: 'No node selected' };
-		const beforeNode = s.nodes.find((x) => x.id === nodeId);
-		const beforeExecParams = effectiveExecParamsForNode(beforeNode);
-		const paramsForCommit =
-			beforeNode?.data?.kind === 'component'
-				? sanitizeComponentDraftParams(s.inspector.draftParams as Record<string, any>)
-				: (s.inspector.draftParams as Record<string, any>);
-		if (beforeNode?.data?.kind === 'component') {
-			const validation = validateComponentDraftForAccept(paramsForCommit);
-			if (!validation.ok) {
-				update((cur) => {
-					let next = cur;
-					for (const issue of validation.errors) {
-						next = logPush(next, 'warn', issue, nodeId);
-					}
-					return next;
-				});
-				return {
-					ok: false,
-					reason: 'component_accept_blocked',
-					error: validation.errors[0] ?? 'Component output bindings are invalid.',
-					details: validation.errors
-				} as const;
-			}
-		}
-
-		const r = updateNodeConfigImpl(nodeId, { params: paramsForCommit }, { enforceComponentContractBoundary: true });
-
-		if (!r.ok) {
-			if (String(r.error ?? '').toLowerCase().includes('component authoring mode')) {
-				return {
-					ok: false,
-					reason: 'component_contract_readonly' as const,
-					error: r.error
-				};
-			}
-			return r;
-		}
-
-		// only clear dirty if commit succeeded (fail-closed keeps draft)
-		if (r.ok) {
-			update((st) => {
-				const n = st.nodes.find((x) => x.id === nodeId);
-				return {
-					...st,
-					inspector: {
-						nodeId,
-						draftParams: structuredClone((n?.data.params ?? {}) as any),
-						dirty: false,
-						uiByNodeId: st.inspector.uiByNodeId
-					}
-				};
-			});
-
-			await syncAcceptParamsForNode(nodeId, paramsForCommit, beforeExecParams);
-		}
-		return r;
-	}
-
-	function revertInspectorDraft() {
-		update((s) => {
-			const nodeId = s.inspector.nodeId;
-			if (!nodeId) return s;
-			const n = s.nodes.find((x) => x.id === nodeId);
-			return {
-				...s,
-				inspector: {
-					nodeId,
-					draftParams: structuredClone((n?.data.params ?? {}) as any),
-					dirty: false,
-					uiByNodeId: s.inspector.uiByNodeId
-				}
-			};
-		});
-	}
-
-	//END
 
 	function persist(state: GraphState) {
 		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
 	}
+
+	// ── inspector manager ────────────────────────────────────────────────────
+	const inspector = createInspectorManager({
+		update,
+		getState: () => get({ subscribe } as any) as GraphState,
+		persist,
+		applyLocalStaleInvalidation,
+		syncAcceptParamsForNode,
+		pruneAndRecontractEdgesStrict,
+	});
+	const updateNodeConfigImpl = inspector.actions.updateNodeConfig;
 
 	function applyGraphDocument(
 		graph: { nodes: unknown[]; edges: unknown[] },
@@ -4745,34 +4257,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		return hydrateFromRunSnapshotState(state, snap);
 	}
 
-	function getInspectorUi(nodeId: string, paramsHint?: Record<string, any>): ApiEditorUiState {
-		const state = get({ subscribe } as any) as GraphState;
-		const existing = state.inspector.uiByNodeId?.[nodeId];
-		if (existing) return existing;
-		const node = state.nodes.find((n) => n.id === nodeId);
-		const params = paramsHint ?? ((node?.data?.params ?? {}) as Record<string, any>);
-		return defaultApiEditorUiState(params);
-	}
-
-	function setInspectorUi(nodeId: string, patch: Partial<ApiEditorUiState>): void {
-		update((s) => {
-			const node = s.nodes.find((n) => n.id === nodeId);
-			const base =
-				s.inspector.uiByNodeId?.[nodeId] ??
-				defaultApiEditorUiState((node?.data?.params ?? {}) as Record<string, any>);
-			return {
-				...s,
-				inspector: {
-					...s.inspector,
-					uiByNodeId: {
-						...(s.inspector.uiByNodeId ?? {}),
-						[nodeId]: { ...base, ...patch }
-					}
-				}
-			};
-		});
-	}
-
 	function applySemanticSubtypeReset(
 		nodeId: string,
 		payload: Record<string, unknown>
@@ -4799,21 +4283,17 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 	return {
 		subscribe,
 		...history.actions,
-		patchInspectorDraft,
-		commitInspectorImmediate,
-		commitSnapshotSelection,
-		applyInspectorDraft,
-		revertInspectorDraft,
-		getInspectorDraftAcceptValidation(stateOverride?: GraphState): InspectorDraftAcceptValidation {
-			const state = stateOverride ?? (get({ subscribe } as any) as GraphState);
-			return validateInspectorDraftForAccept(state);
+		...inspector.actions,
+		setPauseResumeTraceLoggingEnabled(enabled: boolean) {
+			pauseResumeTraceEnabled = Boolean(enabled);
+		},
+		getPauseResumeTraceLoggingEnabled() {
+			return pauseResumeTraceEnabled;
 		},
 		getSavePreflight(stateOverride?: GraphState): SavePreflightResult {
 			const state = stateOverride ?? (get({ subscribe } as any) as GraphState);
 			return buildSavePreflightDiagnostics(state.nodes as any, state.edges as any);
 		},
-		getInspectorUi,
-		setInspectorUi,
 		resolveNodeInputs(nodeId: string): InputResolution[] {
 			const s = get({ subscribe } as any) as GraphState;
 			return resolveNodeInputsFromState(s, nodeId);
@@ -4978,20 +4458,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				return next;
 			});
 			return changed ? { ok: true } : { ok: false, reason: 'no_change' };
-		},
-		updateNodeConfig: updateNodeConfigImpl,
-		setNodeExpectedSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
-			return setNodeExpectedSchemaImpl(nodeId, typedSchema);
-		},
-		setNodeExpectedInputSchema(nodeId: string, typedSchema: Record<string, unknown> | null) {
-			return setNodeExpectedInputSchemaImpl(nodeId, typedSchema);
-		},
-		setNodeExpectedInputSchemaForHandle(
-			nodeId: string,
-			inputHandle: string,
-			typedSchema: Record<string, unknown> | null
-		) {
-			return setNodeExpectedInputSchemaForHandleImpl(nodeId, inputHandle, typedSchema);
 		},
 
 		setSourceKind(nodeId: string, nextKind: SourceKind) {
@@ -6406,7 +5872,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				const next = resetRunUiState(s);
 				persist(next);
 				return next;
-			});
+			}, { source: 'graph_edit' });
 		},
 
 		hardResetGraph() {
@@ -7695,6 +7161,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				await new Promise<void>((resolve) => {
 					let subHandle: { close: () => void } | null = null;
 					let settled = false;
+					let terminalReconciling = false;
 					const settle = () => {
 						if (settled) return;
 						settled = true;
@@ -7704,6 +7171,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 						resolve();
 					};
 					const applyEventBatch = (events: KnownRunEvent[]) => {
+						let sawTerminal = false;
 						for (const evt of events) {
 							const cur = get({ subscribe } as any) as GraphState;
 							const evtGraphId = (evt as any)?.graphId;
@@ -7735,28 +7203,33 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 							}, auditCtx);
 
 							if (evt.type === 'run_finished' || evt.type === 'run_paused') {
-								const current = get({ subscribe } as any) as GraphState;
-								persist(current);
-								void getRun(runId)
-									.then((snap) => {
-										const latest = get({ subscribe } as any) as GraphState;
-										if (
-											typeof snap.graphId === 'string' &&
-											snap.graphId &&
-											snap.graphId !== latest.graphId
-										) {
-											return;
-										}
-										update((s) => hydrateFromRunSnapshot(s, snap), {
-											source: 'hydrate_snapshot',
-											snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
-										});
-									})
-									.catch(() => {});
-								subHandle?.close();
-								settle();
+								sawTerminal = true;
 							}
 						}
+						if (!sawTerminal || terminalReconciling || settled) return;
+						terminalReconciling = true;
+						const current = get({ subscribe } as any) as GraphState;
+						persist(current);
+						void getRun(runId)
+							.then((snap) => {
+								const latest = get({ subscribe } as any) as GraphState;
+								if (
+									typeof snap.graphId === 'string' &&
+									snap.graphId &&
+									snap.graphId !== latest.graphId
+								) {
+									return;
+								}
+								update((s) => hydrateFromRunSnapshot(s, snap), {
+									source: 'hydrate_snapshot',
+									snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
+								});
+							})
+							.catch(() => {})
+							.finally(() => {
+								subHandle?.close();
+								settle();
+							});
 					};
 					const batcher = createEventBatcher<KnownRunEvent>(applyEventBatch, {
 						maxBatchSize: 48,

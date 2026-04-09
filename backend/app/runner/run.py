@@ -23,7 +23,7 @@ from app.runner.nodes.transform import (
 
 
 from .compile import compile_plan
-from .components import ComponentExpansionError, expand_graph_components
+from .components import ComponentExpansionError, ExpandedComponentGraph, expand_graph_components
 from .events import RunEventBus
 from .validator import GraphValidator, collect_transitive_descendants
 from .metadata import GraphContext, NodeOutput
@@ -3342,7 +3342,7 @@ async def run_graph(
     graph_id: Optional[str] = None,
     resume_snapshot: Optional[Dict[str, Any]] = None,
     adaptive_override: Optional[Dict[str, Any]] = None,
-    ):
+):
     # ---- Create execution context ONCE (do not recreate later) ----
     artifact_store = artifact_store or MemoryArtifactStore()
     if not str(graph_id or "").strip():
@@ -3779,13 +3779,84 @@ async def run_graph(
     # Snapshot the graph at run start so rewires/edits apply on the next run only.
     execution_graph = copy.deepcopy(graph)
     component_store = getattr(runtime_ref, "component_revisions", None) if runtime_ref is not None else None
-    try:
-        component_expansion = expand_graph_components(
-            copy.deepcopy(graph),
-            component_store=component_store,
-            max_depth=5,
+
+    def _looks_preexpanded_component_graph(raw_graph: Dict[str, Any]) -> bool:
+        if not isinstance(raw_graph, dict):
+            return False
+        nodes_list = raw_graph.get("nodes") if isinstance(raw_graph.get("nodes"), list) else []
+        has_component_parent = False
+        has_internal_prefixed = False
+        has_internal_meta = False
+        for raw_node in nodes_list:
+            if not isinstance(raw_node, dict):
+                continue
+            node_id = str(raw_node.get("id") or "").strip()
+            data_obj = raw_node.get("data") if isinstance(raw_node.get("data"), dict) else {}
+            if str(data_obj.get("kind") or "").strip().lower() == "component":
+                has_component_parent = True
+            if node_id.startswith("cmp:"):
+                has_internal_prefixed = True
+            meta_obj = data_obj.get("meta") if isinstance(data_obj.get("meta"), dict) else {}
+            component_meta = meta_obj.get("component") if isinstance(meta_obj.get("component"), dict) else {}
+            if str(component_meta.get("instanceNodeId") or "").strip():
+                has_internal_meta = True
+        return has_component_parent and (has_internal_prefixed or has_internal_meta)
+
+    def _derive_expansion_from_preexpanded_graph(raw_graph: Dict[str, Any]) -> ExpandedComponentGraph:
+        internal_to_parent: Dict[str, str] = {}
+        parent_to_internal: Dict[str, List[str]] = {}
+        parent_component_meta: Dict[str, Dict[str, Any]] = {}
+        nodes_list = raw_graph.get("nodes") if isinstance(raw_graph.get("nodes"), list) else []
+        for raw_node in nodes_list:
+            if not isinstance(raw_node, dict):
+                continue
+            node_id = str(raw_node.get("id") or "").strip()
+            if not node_id:
+                continue
+            data_obj = raw_node.get("data") if isinstance(raw_node.get("data"), dict) else {}
+            meta_obj = data_obj.get("meta") if isinstance(data_obj.get("meta"), dict) else {}
+            component_meta = meta_obj.get("component") if isinstance(meta_obj.get("component"), dict) else {}
+            parent_node_id = str(component_meta.get("instanceNodeId") or "").strip()
+            if not parent_node_id:
+                continue
+            internal_to_parent[node_id] = parent_node_id
+            parent_to_internal.setdefault(parent_node_id, []).append(node_id)
+            parent_component_meta.setdefault(
+                parent_node_id,
+                {
+                    "componentId": str(component_meta.get("componentId") or ""),
+                    "componentRevisionId": str(component_meta.get("componentRevisionId") or ""),
+                    "instanceNodeId": parent_node_id,
+                },
+            )
+        return ExpandedComponentGraph(
+            graph=copy.deepcopy(raw_graph),
+            internal_to_parent=internal_to_parent,
+            parent_to_internal=parent_to_internal,
+            parent_component_meta=parent_component_meta,
         )
-        execution_graph = component_expansion.graph
+
+    resume_preexpanded_graph = bool(isinstance(resume_snapshot, dict) and _looks_preexpanded_component_graph(graph))
+    try:
+        if resume_preexpanded_graph:
+            component_expansion = _derive_expansion_from_preexpanded_graph(copy.deepcopy(graph))
+            execution_graph = component_expansion.graph
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "info",
+                    "message": "[resume] component_graph_reused source=pause_snapshot_expanded",
+                }
+            )
+        else:
+            component_expansion = expand_graph_components(
+                copy.deepcopy(graph),
+                component_store=component_store,
+                max_depth=5,
+            )
+            execution_graph = component_expansion.graph
     except ComponentExpansionError as ex:
         await _emit({
             "type": "log",
@@ -3860,7 +3931,7 @@ async def run_graph(
         raw_hints = graph.get("__executionHints") if isinstance(graph, dict) else None
         dirty_hint_ids = set()
         pinned_hint_ids = set()
-        pinned_artifact_hints: Dict[str, Dict[str, str]] = {}
+        pinned_artifact_hints: Dict[str, Dict[str, Any]] = {}
         if isinstance(raw_hints, dict):
             raw_dirty = raw_hints.get("dirtyNodeIds")
             if isinstance(raw_dirty, list):
@@ -3878,10 +3949,27 @@ async def run_graph(
                     exec_key = str(raw_payload.get("execKey") or "").strip()
                     if not artifact_id:
                         continue
-                    pinned_artifact_hints[node_id] = {
+                    parsed_payload: Dict[str, Any] = {
                         "artifactId": artifact_id,
                         "execKey": exec_key,
                     }
+                    raw_outputs = raw_payload.get("outputs")
+                    if isinstance(raw_outputs, dict):
+                        parsed_outputs: Dict[str, Dict[str, str]] = {}
+                        for raw_handle, raw_output_payload in raw_outputs.items():
+                            handle = str(raw_handle or "").strip()
+                            if not handle or not isinstance(raw_output_payload, dict):
+                                continue
+                            out_artifact_id = str(raw_output_payload.get("artifactId") or "").strip()
+                            if not out_artifact_id:
+                                continue
+                            parsed_outputs[handle] = {
+                                "artifactId": out_artifact_id,
+                                "execKey": str(raw_output_payload.get("execKey") or "").strip(),
+                            }
+                        if parsed_outputs:
+                            parsed_payload["outputs"] = parsed_outputs
+                    pinned_artifact_hints[node_id] = parsed_payload
         plan = compile_plan(
             execution_graph,
             run_from,
@@ -3889,6 +3977,38 @@ async def run_graph(
             dirty_node_ids=dirty_hint_ids,
             pinned_node_ids=pinned_hint_ids,
         )
+        if component_expansion:
+            expanded_nodes_by_id = node_map(execution_graph)
+            pinned_component_parents = {
+                nid
+                for nid in plan.cache_only_nodes
+                if str(((expanded_nodes_by_id.get(nid) or {}).get("data") or {}).get("kind") or "").strip() == "component"
+            }
+            skipped_internal_ids: Set[str] = set()
+            for parent_id in pinned_component_parents:
+                skipped_internal_ids.update(
+                    {
+                        str(internal_id)
+                        for internal_id in component_expansion.parent_to_internal.get(parent_id, [])
+                        if str(internal_id).strip()
+                    }
+                )
+            if skipped_internal_ids:
+                plan.subgraph.difference_update(skipped_internal_ids)
+                plan.execute_nodes.difference_update(skipped_internal_ids)
+                plan.cache_only_nodes.difference_update(skipped_internal_ids)
+                plan.order = [nid for nid in plan.order if nid in plan.subgraph]
+                filtered_incoming: Dict[str, List[str]] = {nid: [] for nid in plan.subgraph}
+                for edge in execution_graph.get("edges", []) if isinstance(execution_graph, dict) else []:
+                    if not isinstance(edge, dict):
+                        continue
+                    edge_id = str(edge.get("id") or "").strip()
+                    src = str(edge.get("source") or "").strip()
+                    tgt = str(edge.get("target") or "").strip()
+                    if not edge_id or src not in plan.subgraph or tgt not in plan.subgraph:
+                        continue
+                    filtered_incoming.setdefault(tgt, []).append(edge_id)
+                plan.incoming_edges = filtered_incoming
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
         planned_node_ids = sorted(list(plan.subgraph))
@@ -3973,7 +4093,7 @@ async def run_graph(
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
-        trusted_pinned_artifacts: Dict[str, Dict[str, str]] = {}
+        trusted_pinned_artifacts: Dict[str, Dict[str, Any]] = {}
         for nid in plan.cache_only_nodes:
             if nid not in pinned_hint_ids:
                 continue
@@ -3984,10 +4104,27 @@ async def run_graph(
             exec_key = str(payload.get("execKey") or "").strip()
             if not artifact_id:
                 continue
-            trusted_pinned_artifacts[nid] = {
+            trusted_payload: Dict[str, Any] = {
                 "artifactId": artifact_id,
                 "execKey": exec_key,
             }
+            raw_outputs = payload.get("outputs")
+            if isinstance(raw_outputs, dict):
+                trusted_outputs: Dict[str, Dict[str, str]] = {}
+                for raw_handle, raw_output_payload in raw_outputs.items():
+                    handle = str(raw_handle or "").strip()
+                    if not handle or not isinstance(raw_output_payload, dict):
+                        continue
+                    out_artifact_id = str(raw_output_payload.get("artifactId") or "").strip()
+                    if not out_artifact_id:
+                        continue
+                    trusted_outputs[handle] = {
+                        "artifactId": out_artifact_id,
+                        "execKey": str(raw_output_payload.get("execKey") or "").strip(),
+                    }
+                if trusted_outputs:
+                    trusted_payload["outputs"] = trusted_outputs
+            trusted_pinned_artifacts[nid] = trusted_payload
         node_param_modes: Dict[str, str] = {nid: _node_runtime_param_mode(node) for nid, node in nodes.items()}
         node_param_snapshots: Dict[str, Dict[str, Any]] = {
             nid: copy.deepcopy((node.get("data", {}) or {}).get("params", {}) or {})
@@ -4519,6 +4656,20 @@ async def run_graph(
                     await _emit_node_started_once()
                     pinned_artifact_id = str(trusted_pin.get("artifactId") or "").strip()
                     pinned_exec_key = str(trusted_pin.get("execKey") or "").strip() or f"pinned:{node_id}"
+                    pinned_outputs_raw = trusted_pin.get("outputs") if isinstance(trusted_pin.get("outputs"), dict) else {}
+                    pinned_outputs_by_handle: Dict[str, Dict[str, str]] = {}
+                    for raw_handle, raw_payload in pinned_outputs_raw.items():
+                        if not isinstance(raw_payload, dict):
+                            continue
+                        handle_key = str(raw_handle or "").strip()
+                        artifact_id = str(raw_payload.get("artifactId") or "").strip()
+                        exec_key = str(raw_payload.get("execKey") or "").strip()
+                        if not handle_key or not artifact_id:
+                            continue
+                        pinned_outputs_by_handle[handle_key] = {
+                            "artifactId": artifact_id,
+                            "execKey": exec_key,
+                        }
                     try:
                         pinned_art = await context.artifact_store.get(pinned_artifact_id)
                     except Exception:
@@ -4550,30 +4701,118 @@ async def run_graph(
                         artifact_id=pinned_artifact_id,
                         reason="PINNED_TRUSTED_ARTIFACT",
                     )
-                    context.bindings.bind(node_id=node_id, artifact_id=pinned_artifact_id, status="cached")
+                    node_obj = execution_nodes_by_id.get(node_id) if isinstance(execution_nodes_by_id.get(node_id), dict) else {}
+                    node_kind = str(((node_obj.get("data") or {}).get("kind") or "")).strip().lower()
+                    output_pairs: List[Dict[str, str]] = []
+                    if node_kind == "component":
+                        component_params = (
+                            ((node_obj.get("data") or {}).get("params") or {})
+                            if isinstance((node_obj.get("data") or {}).get("params"), dict)
+                            else {}
+                        )
+                        component_api = component_params.get("api") if isinstance(component_params.get("api"), dict) else {}
+                        declared_outputs = (
+                            component_api.get("outputs")
+                            if isinstance(component_api.get("outputs"), list)
+                            else []
+                        )
+                        declared_handles = [
+                            str(item.get("name") or "").strip()
+                            for item in declared_outputs
+                            if isinstance(item, dict) and str(item.get("name") or "").strip()
+                        ]
+                        if pinned_outputs_by_handle:
+                            for handle_name in declared_handles:
+                                payload = pinned_outputs_by_handle.get(handle_name)
+                                if not isinstance(payload, dict):
+                                    continue
+                                output_pairs.append(
+                                    {
+                                        "handle": handle_name,
+                                        "artifactId": str(payload.get("artifactId") or "").strip(),
+                                        "execKey": str(payload.get("execKey") or "").strip() or pinned_exec_key,
+                                    }
+                                )
+                        if not output_pairs and declared_handles:
+                            for handle_name in declared_handles:
+                                output_pairs.append(
+                                    {
+                                        "handle": handle_name,
+                                        "artifactId": pinned_artifact_id,
+                                        "execKey": pinned_exec_key,
+                                    }
+                                )
+                    if not output_pairs:
+                        output_pairs = [{"handle": "out", "artifactId": pinned_artifact_id, "execKey": pinned_exec_key}]
+
+                    bound_exec_key = pinned_exec_key
+                    bound_artifact_id = pinned_artifact_id
+                    for pair in output_pairs:
+                        handle_name = str(pair.get("handle") or "").strip() or "out"
+                        artifact_id = str(pair.get("artifactId") or "").strip()
+                        exec_key = str(pair.get("execKey") or "").strip() or pinned_exec_key
+                        if not artifact_id:
+                            continue
+                        if handle_name == "out":
+                            bound_exec_key = exec_key
+                            bound_artifact_id = artifact_id
+                        context.bindings.bind(node_id=node_id, handle=handle_name, artifact_id=artifact_id, status="cached")
+                    if len(output_pairs) == 1 and str(output_pairs[0].get("handle") or "").strip() != "out":
+                        only_artifact = str(output_pairs[0].get("artifactId") or "").strip()
+                        if only_artifact:
+                            context.bindings.bind(node_id=node_id, handle="out", artifact_id=only_artifact, status="cached")
                     _set_authoritative_binding(
                         node_id,
-                        exec_key=str(pinned_exec_key or ""),
-                        artifact_id=str(pinned_artifact_id or ""),
+                        exec_key=str(bound_exec_key or pinned_exec_key or ""),
+                        artifact_id=str(bound_artifact_id or pinned_artifact_id or ""),
                     )
-                    await _emit({
-                        "type": "node_output",
-                        "runId": run_id,
-                        "nodeId": node_id,
-                        "at": iso_now(),
-                        "artifactId": pinned_artifact_id,
-                        "mimeType": pinned_art.mime_type,
-                        "payloadType": _infer_artifact_payload_type(pinned_art),
-                        "sourceObservability": _source_observability_from_artifact(pinned_art),
-                        "primingArtifact": _source_priming_artifact_from_artifact(pinned_art),
-                        "cached": True,
-                    })
-                    await _emit_output_artifact_log(
-                        run_id=run_id,
-                        node_id=node_id,
-                        artifact_id=str(pinned_artifact_id or ""),
-                        cached=True,
-                    )
+                    for pair in output_pairs:
+                        handle_name = str(pair.get("handle") or "").strip() or "out"
+                        artifact_id = str(pair.get("artifactId") or "").strip()
+                        if not artifact_id:
+                            continue
+                        try:
+                            output_art = await context.artifact_store.get(artifact_id)
+                        except Exception:
+                            output_art = pinned_art if artifact_id == pinned_artifact_id else None
+                        output_mime = (
+                            str(getattr(output_art, "mime_type", "") or "").strip()
+                            if output_art is not None
+                            else str(getattr(pinned_art, "mime_type", "") or "").strip()
+                        ) or "application/octet-stream"
+                        output_payload_type = (
+                            _infer_artifact_payload_type(output_art)
+                            if output_art is not None
+                            else _infer_artifact_payload_type(pinned_art)
+                        )
+                        await _emit({
+                            "type": "node_output",
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "at": iso_now(),
+                            "artifactId": artifact_id,
+                            "mimeType": output_mime,
+                            "payloadType": output_payload_type,
+                            "handle": handle_name,
+                            "sourceObservability": (
+                                _source_observability_from_artifact(output_art)
+                                if output_art is not None
+                                else _source_observability_from_artifact(pinned_art)
+                            ),
+                            "primingArtifact": (
+                                _source_priming_artifact_from_artifact(output_art)
+                                if output_art is not None
+                                else _source_priming_artifact_from_artifact(pinned_art)
+                            ),
+                            "cached": True,
+                        })
+                        await _emit_output_artifact_log(
+                            run_id=run_id,
+                            node_id=node_id,
+                            artifact_id=str(artifact_id or ""),
+                            handle=handle_name,
+                            cached=True,
+                        )
                     await _emit({
                         "type": "node_finished",
                         "runId": run_id,
@@ -8520,6 +8759,44 @@ async def run_graph(
                 "currentArtifactId": str(artifact_id or "").strip(),
             }
 
+        def _is_binding_pair_populated(pair: Dict[str, Any] | None) -> bool:
+            if not isinstance(pair, dict):
+                return False
+            return bool(str(pair.get("currentExecKey") or "").strip()) and bool(
+                str(pair.get("currentArtifactId") or "").strip()
+            )
+
+        def _derive_component_parent_binding(parent_node_id: str) -> Dict[str, str] | None:
+            state = component_runtime_state.get(str(parent_node_id))
+            if not isinstance(state, dict):
+                return None
+            raw_edges = state.get("output_binding_edges")
+            output_binding_edges = raw_edges if isinstance(raw_edges, list) else []
+            preferred_edges: List[Dict[str, Any]] = []
+            fallback_edges: List[Dict[str, Any]] = []
+            for edge in output_binding_edges:
+                if not isinstance(edge, dict):
+                    continue
+                target_handle = str(edge.get("targetHandle") or "in").strip().lower() or "in"
+                if target_handle == "out":
+                    preferred_edges.append(edge)
+                elif target_handle not in {"in", "source", "control_in", "param_in"}:
+                    preferred_edges.append(edge)
+                else:
+                    fallback_edges.append(edge)
+            for edge in [*preferred_edges, *fallback_edges]:
+                source_node_id = str(edge.get("source") or "").strip()
+                if not source_node_id:
+                    continue
+                pair = authoritative_frontier_bindings.get(source_node_id)
+                if not _is_binding_pair_populated(pair):
+                    continue
+                return {
+                    "currentExecKey": str(pair.get("currentExecKey") or "").strip(),
+                    "currentArtifactId": str(pair.get("currentArtifactId") or "").strip(),
+                }
+            return None
+
         def _hydrate_runtime_bindings_from_authoritative() -> None:
             # Resume executions must seed runtime bindings from the authoritative
             # frontier snapshot before any node dispatch. Otherwise once-mode nodes
@@ -8540,6 +8817,21 @@ async def run_graph(
             _hydrate_runtime_bindings_from_authoritative()
 
         def _snapshot_frontier_validation_basis() -> Dict[str, Any]:
+            for component_node_id in list(component_runtime_state.keys()):
+                node_key = str(component_node_id or "").strip()
+                if not node_key:
+                    continue
+                existing_pair = authoritative_frontier_bindings.get(node_key)
+                if _is_binding_pair_populated(existing_pair):
+                    continue
+                derived_pair = _derive_component_parent_binding(node_key)
+                if not _is_binding_pair_populated(derived_pair):
+                    continue
+                _set_authoritative_binding(
+                    node_key,
+                    exec_key=str((derived_pair or {}).get("currentExecKey") or ""),
+                    artifact_id=str((derived_pair or {}).get("currentArtifactId") or ""),
+                )
             frontier_nodes = set(ready)
             frontier_nodes.update(
                 nid for nid, depth in _pending_work_depth_by_node(streaming_only=False).items() if int(depth) > 0

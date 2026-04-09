@@ -103,4 +103,84 @@ describe('graphStore resume stream disconnect regression', () => {
 			)
 		).toBe(true);
 	});
+
+	it('reattaches resume stream even when same runId is already attached', async () => {
+		graphStore.addNode('source', { x: 10, y: 10 });
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-resume-reattach';
+
+		createRunMock.mockResolvedValue({ runId, graphId });
+		resumeRunMock.mockResolvedValue({ ok: true });
+		getRunMock
+			.mockResolvedValueOnce({ graphId, status: 'running', nodeBindings: {} })
+			.mockResolvedValue({ graphId, status: 'paused', nodeBindings: {} });
+
+		streamRunEventsMock.mockImplementation(
+			(
+				_streamRunId: string,
+				onEvent: (evt: KnownRunEvent) => void
+			) => {
+				const callIndex = streamRunEventsMock.mock.calls.length;
+				if (callIndex === 1) {
+					queueMicrotask(() =>
+						onEvent({
+							type: 'run_paused',
+							runId,
+							at: '2026-04-01T12:01:00Z'
+						} as KnownRunEvent)
+					);
+				}
+				return { close: vi.fn() };
+			}
+		);
+
+		await graphStore.runRemote(null, 'from_start');
+		expect(get(graphStore as any).runStatus).toBe('paused');
+
+		const firstResume = await graphStore.resumeActiveRun();
+		expect(firstResume.ok).toBe(true);
+		const secondResume = await graphStore.resumeActiveRun();
+		expect(secondResume.ok).toBe(true);
+		expect(streamRunEventsMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it('does not skip trailing events in batch after terminal pause event', async () => {
+		graphStore.addNode('source', { x: 10, y: 10 });
+		const nodeId = String((get(graphStore as any).nodes?.[0]?.id ?? '').trim());
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-terminal-batch';
+
+		createRunMock.mockResolvedValue({ runId, graphId });
+		getRunMock
+			.mockResolvedValueOnce({ graphId, status: 'running', nodeBindings: {} })
+			.mockResolvedValue({ graphId, status: 'paused', nodeBindings: {} });
+
+		streamRunEventsMock.mockImplementation(
+			(
+				_streamRunId: string,
+				onEvent: (evt: KnownRunEvent) => void
+			) => {
+				queueMicrotask(() => {
+					onEvent({
+						type: 'run_paused',
+						runId,
+						at: '2026-04-01T12:02:00Z'
+					} as KnownRunEvent);
+					onEvent({
+						type: 'node_finished',
+						runId,
+						nodeId,
+						status: 'succeeded',
+						at: '2026-04-01T12:02:00.010Z'
+					} as KnownRunEvent);
+				});
+				return { close: vi.fn() };
+			}
+		);
+
+		await graphStore.runRemote(null, 'from_start');
+		const state = get(graphStore as any);
+		expect(state.runStatus).toBe('paused');
+		expect(String(state.nodeBindings?.[nodeId]?.status ?? '')).toBe('succeeded_up_to_date');
+	});
 });

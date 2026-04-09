@@ -122,6 +122,8 @@ When there is ambiguity, prefer these rules over ad-hoc assumptions.
 1. Logs should remain append-only; pause must not clear run history.
 2. During active runs, user manual log scrolling must be respected (no forced autoscroll lock unless user is at bottom).
 3. Debug logging should not flood indefinitely after run completion.
+4. Pause/resume trace logging is off by default. Toggle via `graphStore.setPauseResumeTraceLoggingEnabled(true|false)` in dev sessions.
+5. Test-only toggle also exists: `__setPauseResumeTraceEnabledForTest(true|false)` in `graphStore.ts`.
 
 ## Artifact Retention Rules
 

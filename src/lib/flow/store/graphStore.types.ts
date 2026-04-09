@@ -93,6 +93,7 @@ export type NodeBindingInfo = {
 	status?: string;
 	current?: { execKey?: string | null; artifactId?: string | null } | null;
 	last?: { execKey?: string | null; artifactId?: string | null } | null;
+	outputLineage?: Record<string, { execKey?: string | null; artifactId?: string | null } | null> | null;
 	lastArtifactId?: string | null;     // legacy
 	lastRunId?: string | null;
 	lastExecKey?: string | null;        // legacy

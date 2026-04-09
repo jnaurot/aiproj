@@ -304,6 +304,291 @@ async def test_pause_snapshot_persists_full_basis(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_paused_snapshot_merge_preserves_binding_status_fields(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-pause-merge-preserves-status"
+	graph = _make_graph()
+	handle = rt.create_run(run_id)
+	handle.graph_id = "graph-pause-merge-preserves-status"
+	handle.graph = graph
+	handle.status = "pausing"
+	handle.node_bindings = {
+		"n1": {
+			"status": "succeeded_up_to_date",
+			"isUpToDate": True,
+			"cacheValid": True,
+			"currentRunId": run_id,
+			"currentExecKey": "exec-pre-1",
+			"currentArtifactId": "art-pre-1",
+			"lastExecKey": "exec-pre-1",
+			"lastArtifactId": "art-pre-1",
+			"staleReason": None,
+		},
+		"n2": {
+			"status": "running",
+			"isUpToDate": False,
+			"cacheValid": False,
+			"currentRunId": run_id,
+			"currentExecKey": "exec-pre-2",
+			"currentArtifactId": "art-pre-2",
+			"lastExecKey": "exec-old-2",
+			"lastArtifactId": "art-old-2",
+			"staleReason": "RUN_PENDING",
+		},
+	}
+	basis = _build_frontier_identity_basis(
+		graph=graph,
+		graph_id="graph-pause-merge-preserves-status",
+		node_ids=["n1", "n2"],
+		node_bindings=_make_bindings(exec1="exec-new-1", art1="art-new-1", exec2="exec-new-2", art2="art-new-2"),
+		execution_version="v1",
+	)
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-pause-merge-preserves-status",
+		graph=graph,
+		basis=basis,
+	)
+
+	await handle.bus.emit({"type": "run_paused", "runId": run_id, "at": "2026-04-08T20:00:00Z", "snapshot": snapshot})
+
+	assert handle.status == "paused"
+	assert handle.node_bindings["n1"]["status"] == "succeeded_up_to_date"
+	assert bool(handle.node_bindings["n1"]["isUpToDate"]) is True
+	assert bool(handle.node_bindings["n1"]["cacheValid"]) is True
+	assert str(handle.node_bindings["n1"]["currentExecKey"] or "") == "exec-new-1"
+	assert str(handle.node_bindings["n1"]["currentArtifactId"] or "") == "art-new-1"
+	assert handle.node_bindings["n2"]["status"] == "running"
+	assert bool(handle.node_bindings["n2"]["isUpToDate"]) is False
+	assert str(handle.node_bindings["n2"]["staleReason"] or "") == "RUN_PENDING"
+	assert str(handle.node_bindings["n2"]["currentExecKey"] or "") == "exec-new-2"
+	assert str(handle.node_bindings["n2"]["currentArtifactId"] or "") == "art-new-2"
+
+
+@pytest.mark.asyncio
+async def test_run_paused_snapshot_merge_preserves_component_parent_boundary_binding(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-pause-merge-component-boundary"
+	graph = {
+		"nodes": [
+			{"id": "n_component", "data": {"kind": "component", "params": {}}},
+			{"id": "n_internal", "data": {"kind": "tool", "params": {"provider": "builtin"}}},
+			{"id": "n_down", "data": {"kind": "tool", "params": {"provider": "builtin"}}},
+		],
+		"edges": [
+			{"id": "e_internal_to_component", "source": "n_internal", "target": "n_component", "targetHandle": "summary", "data": {"mode": "work"}},
+			{"id": "e_component_to_down", "source": "n_component", "sourceHandle": "summary", "target": "n_down", "targetHandle": "in", "data": {"mode": "work"}},
+		],
+	}
+	handle = rt.create_run(run_id)
+	handle.graph_id = "graph-pause-merge-component-boundary"
+	handle.graph = graph
+	handle.status = "pausing"
+	handle.node_bindings = {
+		"n_component": {
+			"status": "running",
+			"isUpToDate": False,
+			"cacheValid": False,
+			"currentRunId": run_id,
+			"currentExecKey": None,
+			"currentArtifactId": None,
+			"lastExecKey": "exec-old-component",
+			"lastArtifactId": "art-old-component",
+			"staleReason": None,
+		},
+	}
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-pause-merge-component-boundary",
+		graph=graph,
+		basis={
+			"schemaVersion": 1,
+			"graphId": "graph-pause-merge-component-boundary",
+			"executionVersion": "v1",
+			"environmentHash": "env-hash",
+			"nodes": {
+				"n_component": {
+					"nodeId": "n_component",
+					"nodeStateHash": "state-component",
+					"determinismEnvHash": "env-component",
+					"binding": {"currentExecKey": "exec-component", "currentArtifactId": "art-component"},
+					"upstreamBindings": {
+						"n_internal": {"currentExecKey": "exec-internal", "currentArtifactId": "art-internal"},
+					},
+					"executionVersion": "v1",
+				},
+				"n_down": {
+					"nodeId": "n_down",
+					"nodeStateHash": "state-down",
+					"determinismEnvHash": "env-down",
+					"binding": {"currentExecKey": "", "currentArtifactId": ""},
+					"upstreamBindings": {
+						"n_component": {"currentExecKey": "exec-component", "currentArtifactId": "art-component"},
+					},
+					"executionVersion": "v1",
+				},
+			},
+		},
+	)
+
+	await handle.bus.emit({"type": "run_paused", "runId": run_id, "at": "2026-04-08T20:20:00Z", "snapshot": snapshot})
+
+	assert handle.status == "paused"
+	assert str(handle.node_bindings["n_component"]["currentExecKey"] or "") == "exec-component"
+	assert str(handle.node_bindings["n_component"]["currentArtifactId"] or "") == "art-component"
+	assert str(handle.node_bindings["n_component"]["status"] or "") == "running"
+	assert str((handle.node_bindings.get("n_internal") or {}).get("currentExecKey") or "") == "exec-internal"
+	assert str((handle.node_bindings.get("n_internal") or {}).get("currentArtifactId") or "") == "art-internal"
+
+
+def test_frontier_basis_binding_hydration_marks_artifact_lineage_as_runnable_state(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	graph = _make_graph()
+	basis = _build_frontier_identity_basis(
+		graph=graph,
+		graph_id="graph-frontier-bindings",
+		node_ids=["n2"],
+		node_bindings=_make_bindings(exec2="exec-frontier-2", art2="art-frontier-2"),
+		execution_version="v1",
+	)
+	hydrated = rt._node_bindings_from_frontier_basis(basis)  # pylint: disable=protected-access
+	assert isinstance(hydrated, dict)
+	n2 = hydrated.get("n2") or {}
+	assert str(n2.get("currentExecKey") or "") == "exec-frontier-2"
+	assert str(n2.get("currentArtifactId") or "") == "art-frontier-2"
+	assert str(n2.get("lastExecKey") or "") == "exec-frontier-2"
+	assert str(n2.get("lastArtifactId") or "") == "art-frontier-2"
+	assert str(n2.get("status") or "") == "succeeded_up_to_date"
+	assert bool(n2.get("isUpToDate")) is True
+	assert bool(n2.get("cacheValid")) is True
+
+
+@pytest.mark.asyncio
+async def test_request_resume_rehydrates_graph_from_experiment_params_when_snapshot_graph_missing(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-resume-fallback-graph"
+	graph = _make_graph()
+	bindings = _make_bindings()
+	basis = _build_frontier_identity_basis(
+		graph=graph,
+		graph_id="graph-resume-fallback-graph",
+		node_ids=["n2"],
+		node_bindings=bindings,
+		execution_version="v1",
+	)
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-resume-fallback-graph",
+		graph={"nodes": [], "edges": []},
+		basis=basis,
+	)
+
+	await rt.artifact_store.update_run_status(run_id, "paused")
+	await rt.artifact_store.upsert_run_pause_snapshot(run_id, snapshot)
+	await rt.artifact_store.upsert_run_experiment(
+		{
+			"runId": run_id,
+			"graphId": "graph-resume-fallback-graph",
+			"status": "paused",
+			"params": {"graph": graph},
+		}
+	)
+
+	monkeypatch.setattr(
+		"app.runtime.compare_execution_contracts",
+		lambda *, expected_contract, current_contract: {"ok": True, "mismatches": [], "reasonCodes": [], "nodeIds": []},
+	)
+
+	captured: Dict[str, Any] = {}
+
+	async def _fake_start_run(
+		run_id_arg: str,
+		graph_arg: Dict[str, Any],
+		run_from_arg: Any,
+		*,
+		run_mode: str | None = None,
+		graph_id: str = "",
+		resume_snapshot: Dict[str, Any] | None = None,
+	) -> Any:
+		captured["runId"] = run_id_arg
+		captured["graph"] = graph_arg
+		captured["graphId"] = graph_id
+		captured["runMode"] = run_mode
+		captured["resumeSnapshot"] = resume_snapshot
+		return {"runId": run_id_arg}
+
+	monkeypatch.setattr(rt, "start_run", _fake_start_run)
+	result = await rt.request_resume(run_id)
+	assert result["resumed"] is True
+	assert str(captured.get("runId") or "") == run_id
+	rehydrated_graph = captured.get("graph") if isinstance(captured.get("graph"), dict) else {}
+	assert len(rehydrated_graph.get("nodes") or []) > 0
+	assert str(captured.get("graphId") or "") == "graph-resume-fallback-graph"
+
+
+@pytest.mark.asyncio
+async def test_request_resume_prefers_snapshot_graph_when_live_handle_graph_is_empty(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	rt = RuntimeManager()
+	run_id = "run-resume-live-handle-empty-graph"
+	graph = _make_graph()
+	bindings = _make_bindings()
+	basis = _build_frontier_identity_basis(
+		graph=graph,
+		graph_id="graph-resume-live-handle-empty-graph",
+		node_ids=["n2"],
+		node_bindings=bindings,
+		execution_version="v1",
+	)
+	snapshot = _make_snapshot(
+		run_id=run_id,
+		graph_id="graph-resume-live-handle-empty-graph",
+		graph=graph,
+		basis=basis,
+	)
+	handle = rt.create_run(run_id)
+	handle.status = "paused"
+	handle.graph_id = "graph-resume-live-handle-empty-graph"
+	handle.graph = {"nodes": [], "edges": []}
+	handle.node_bindings = dict(bindings)
+	await rt.artifact_store.upsert_run_pause_snapshot(run_id, snapshot)
+
+	monkeypatch.setattr(
+		"app.runtime.compare_execution_contracts",
+		lambda *, expected_contract, current_contract: {"ok": True, "mismatches": [], "reasonCodes": [], "nodeIds": []},
+	)
+
+	captured: Dict[str, Any] = {}
+
+	async def _fake_start_run(
+		run_id_arg: str,
+		graph_arg: Dict[str, Any],
+		run_from_arg: Any,
+		*,
+		run_mode: str | None = None,
+		graph_id: str = "",
+		resume_snapshot: Dict[str, Any] | None = None,
+	) -> Any:
+		captured["runId"] = run_id_arg
+		captured["graph"] = graph_arg
+		captured["graphId"] = graph_id
+		captured["runMode"] = run_mode
+		captured["resumeSnapshot"] = resume_snapshot
+		return {"runId": run_id_arg}
+
+	monkeypatch.setattr(rt, "start_run", _fake_start_run)
+	result = await rt.request_resume(run_id)
+	assert result["resumed"] is True
+	rehydrated_graph = captured.get("graph") if isinstance(captured.get("graph"), dict) else {}
+	assert len(rehydrated_graph.get("nodes") or []) > 0
+	assert str(captured.get("graphId") or "") == "graph-resume-live-handle-empty-graph"
+
+
+@pytest.mark.asyncio
 async def test_snapshot_load_validates_schema(monkeypatch):
 	monkeypatch.setenv("ARTIFACT_STORE", "memory")
 	rt = RuntimeManager()

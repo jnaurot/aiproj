@@ -10,6 +10,7 @@ import pytest
 
 from app.runner.artifacts import MemoryArtifactStore
 from app.runner.cache import ExecutionCache
+from app.runner.components import ExpandedComponentGraph
 from app.runner.events import RunEventBus
 from app.runner.metadata import NodeOutput
 
@@ -287,6 +288,155 @@ async def test_resume_hydrates_bindings_for_once_node_upstream_inputs(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_resume_skips_component_reexpand_for_preexpanded_pause_graph(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": str(node.get("id") or "")}},
+		)
+
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+	preexpanded_graph = {
+		"nodes": [
+			{
+				"id": "n_component",
+				"data": {
+					"kind": "component",
+					"params": {
+						"componentRef": {"componentId": "c1", "revisionId": "r1", "apiVersion": "v1"},
+						"api": {
+							"outputs": [
+								{"name": "summary", "required": True, "typedSchema": {"type": "json"}}
+							]
+						},
+					},
+				},
+			},
+			{
+				"id": "cmp:n_component:n_internal",
+				"data": {
+					"kind": "tool",
+					"params": {"provider": "builtin", "builtin": {"toolId": "noop"}},
+					"meta": {
+						"component": {
+							"componentId": "c1",
+							"componentRevisionId": "r1",
+							"instanceNodeId": "n_component",
+						}
+					},
+				},
+			},
+			{
+				"id": "n_down",
+				"data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}},
+			},
+		],
+		"edges": [
+			{
+				"id": "e_internal_parent",
+				"source": "cmp:n_component:n_internal",
+				"target": "n_component",
+				"targetHandle": "summary",
+				"data": {"mode": "work"},
+			},
+			{
+				"id": "e_parent_down",
+				"source": "n_component",
+				"sourceHandle": "summary",
+				"target": "n_down",
+				"targetHandle": "in",
+				"data": {"mode": "work"},
+			},
+		],
+	}
+	basis = run_mod._build_frontier_identity_basis(  # pylint: disable=protected-access
+		graph=preexpanded_graph,
+		graph_id="graph-resume-preexpanded",
+		node_ids=["n_down"],
+		node_bindings={"n_component": {"currentExecKey": "exec-parent", "currentArtifactId": "art-parent"}},
+		execution_version="v1",
+	)
+	resume_snapshot = {
+		"schemaVersion": 2,
+		"runId": "run-resume-preexpanded",
+		"graphId": "graph-resume-preexpanded",
+		"graph": preexpanded_graph,
+		"runFrom": None,
+		"runMode": "from_start",
+		"lifecycleState": "paused",
+		"executionVersion": "v1",
+		"pausedAt": "2026-04-08T23:05:00Z",
+		"state": {
+			"ready": ["n_down"],
+			"blockedDescendants": [],
+			"indeg": {"n_component": 1, "cmp:n_component:n_internal": 0, "n_down": 1},
+			"depsReleased": {"n_component": True, "cmp:n_component:n_internal": True, "n_down": True},
+			"edgeDependencyReleased": {"e_internal_parent": True, "e_parent_down": True},
+			"nodeStartedOnce": {"n_component": True, "cmp:n_component:n_internal": True, "n_down": False},
+			"nodeInflightCounts": {"n_component": 0, "cmp:n_component:n_internal": 0, "n_down": 0},
+			"providedWorkEdgesByHandle": {},
+			"providedNonworkEdgesByHandle": {},
+			"queueRegistry": {},
+			"controlPlane": {"edgeControlState": {}, "lastSeq": 0, "activeLeaseNodeIds": []},
+			"runtimeItemMetrics": {},
+			"nodeRuntimeMetrics": {},
+			"runtimeTotals": {"cached": 0, "succeeded": 0, "failed": 0, "softFailed": 0, "peakConcurrency": 0},
+		},
+		"completedNodeIds": ["cmp:n_component:n_internal", "n_component"],
+		"readyNodeIds": ["n_down"],
+		"blockedNodeIds": [],
+		"failedNodeIds": [],
+		"resumabilityByNode": {
+			"n_component": "safe_boundary_resumable",
+			"cmp:n_component:n_internal": "safe_boundary_resumable",
+			"n_down": "safe_boundary_resumable",
+		},
+		"nodeCheckpoints": {
+			"n_component": {"started": True, "inflightCount": 0, "resumability": "safe_boundary_resumable"},
+			"cmp:n_component:n_internal": {"started": True, "inflightCount": 0, "resumability": "safe_boundary_resumable"},
+			"n_down": {"started": False, "inflightCount": 0, "resumability": "safe_boundary_resumable"},
+		},
+		"frontierValidationBasis": basis,
+		"executionContract": {
+			"contractVersion": 1,
+			"graphId": "graph-resume-preexpanded",
+			"basis": basis,
+		},
+		"leaseState": {"released": True, "activeLeases": 0},
+	}
+
+	events: list[dict[str, Any]] = []
+	bus = RunEventBus("run-resume-preexpanded", on_emit=lambda evt: events.append(dict(evt)))
+	await run_mod.run_graph(
+		run_id="run-resume-preexpanded",
+		graph=preexpanded_graph,
+		run_from=None,
+		bus=bus,
+		artifact_store=MemoryArtifactStore(),
+		cache=ExecutionCache(),
+		graph_id="graph-resume-preexpanded",
+		resume_snapshot=resume_snapshot,
+	)
+
+	queue_start_logs = [
+		str(evt.get("message") or "")
+		for evt in events
+		if str(evt.get("type") or "") == "log" and "[scheduler] queue start" in str(evt.get("message") or "")
+	]
+	assert queue_start_logs
+	assert any("nodes=0" not in msg for msg in queue_start_logs)
+	finished_evt = next((evt for evt in events if str(evt.get("type") or "") == "run_finished"), None)
+	assert isinstance(finished_evt, dict)
+	assert str(finished_evt.get("errorCode") or "") != "COMPONENT_STORE_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
 async def test_missing_resumability_declaration_fails(monkeypatch) -> None:
 	_ensure_duckdb_stub()
 	run_mod = importlib.import_module("app.runner.run")
@@ -530,6 +680,99 @@ async def test_pause_snapshot_not_empty_when_runtime_binding_exists(monkeypatch)
 	n1_upstream = upstream.get("n1") if isinstance(upstream.get("n1"), dict) else {}
 	assert str(n1_upstream.get("currentExecKey") or "").strip() != ""
 	assert str(n1_upstream.get("currentArtifactId") or "").strip() != ""
+
+
+@pytest.mark.asyncio
+async def test_pause_snapshot_preserves_component_parent_boundary_binding_after_internal_finish(monkeypatch) -> None:
+	_ensure_duckdb_stub()
+	run_mod = importlib.import_module("app.runner.run")
+
+	parent_node_id = "n_component"
+	internal_source_id = "cmp:n_component:n_source"
+	internal_model_id = "cmp:n_component:n_model"
+	downstream_id = "n_downstream"
+	model_started = asyncio.Event()
+	model_release = asyncio.Event()
+
+	def _fake_expand_graph_components(graph, component_store=None, max_depth=5):
+		expanded_graph = {
+			"nodes": [
+				{"id": parent_node_id, "data": {"kind": "component", "params": {}}},
+				{"id": internal_source_id, "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+				{"id": internal_model_id, "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+				{"id": downstream_id, "data": {"kind": "tool", "params": {"provider": "builtin", "builtin": {"toolId": "noop"}}}},
+			],
+			"edges": [
+				{"id": "e_internal_chain", "source": internal_source_id, "target": internal_model_id, "targetHandle": "in", "data": {"mode": "work"}},
+				{"id": "e_component_summary", "source": internal_model_id, "target": parent_node_id, "targetHandle": "summary", "data": {"mode": "work"}},
+				{"id": "e_downstream", "source": parent_node_id, "sourceHandle": "summary", "target": downstream_id, "targetHandle": "in", "data": {"mode": "work"}},
+			],
+		}
+		return ExpandedComponentGraph(
+			graph=expanded_graph,
+			internal_to_parent={internal_source_id: parent_node_id, internal_model_id: parent_node_id},
+			parent_to_internal={parent_node_id: [internal_source_id, internal_model_id]},
+			parent_component_meta={parent_node_id: {"componentId": "c1", "componentRevisionId": "r1"}},
+		)
+
+	async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+		node_id = str(node.get("id") or "")
+		if node_id == internal_model_id:
+			model_started.set()
+			await model_release.wait()
+		return NodeOutput(
+			status="succeeded",
+			metadata=None,
+			execution_time_ms=1.0,
+			data={"kind": "json", "payload": {"node": node_id}},
+		)
+
+	monkeypatch.setattr(run_mod, "expand_graph_components", _fake_expand_graph_components)
+	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+	graph = {
+		"nodes": [{"id": parent_node_id, "data": {"kind": "component", "params": {"componentRef": {"componentId": "c1", "revisionId": "r1"}}}}],
+		"edges": [],
+	}
+	events: list[dict[str, Any]] = []
+	bus = RunEventBus(
+		"run-pause-component-boundary-binding",
+		on_emit=lambda evt: events.append(dict(evt)),
+	)
+	pause_event = asyncio.Event()
+	task = asyncio.create_task(
+		run_mod.run_graph(
+			run_id="run-pause-component-boundary-binding",
+			graph=graph,
+			run_from=None,
+			bus=bus,
+			artifact_store=MemoryArtifactStore(),
+			cache=ExecutionCache(),
+			graph_id="graph-pause-component-boundary-binding",
+			pause_event=pause_event,
+		)
+	)
+	await asyncio.wait_for(model_started.wait(), timeout=2.0)
+	pause_event.set()
+	await asyncio.sleep(0.05)
+	model_release.set()
+	await asyncio.wait_for(task, timeout=5.0)
+	paused_evt = next((evt for evt in events if str(evt.get("type") or "") == "run_paused"), None)
+	assert isinstance(paused_evt, dict)
+	snapshot = paused_evt.get("snapshot") if isinstance(paused_evt.get("snapshot"), dict) else {}
+	basis = snapshot.get("frontierValidationBasis") if isinstance(snapshot.get("frontierValidationBasis"), dict) else {}
+	basis_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+	parent_basis = basis_nodes.get(parent_node_id) if isinstance(basis_nodes.get(parent_node_id), dict) else {}
+	parent_binding = parent_basis.get("binding") if isinstance(parent_basis.get("binding"), dict) else {}
+	parent_upstream = parent_basis.get("upstreamBindings") if isinstance(parent_basis.get("upstreamBindings"), dict) else {}
+	model_pair = parent_upstream.get(internal_model_id) if isinstance(parent_upstream.get(internal_model_id), dict) else {}
+	downstream_basis = basis_nodes.get(downstream_id) if isinstance(basis_nodes.get(downstream_id), dict) else {}
+	downstream_upstream = downstream_basis.get("upstreamBindings") if isinstance(downstream_basis.get("upstreamBindings"), dict) else {}
+	downstream_parent_pair = downstream_upstream.get(parent_node_id) if isinstance(downstream_upstream.get(parent_node_id), dict) else {}
+	assert str(parent_binding.get("currentExecKey") or "").strip() != ""
+	assert str(parent_binding.get("currentArtifactId") or "").strip() != ""
+	assert parent_binding == model_pair
+	assert downstream_parent_pair == parent_binding
 
 
 @pytest.mark.asyncio

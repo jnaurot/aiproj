@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(git stash:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(grep -v \"^$\")",
+      "Bash(ls /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)",
+      "Bash(sed -n '224,721p' src/lib/flow/store/graphStore.ts)",
+      "Bash(sed -n '3750,5235p' src/lib/flow/store/graphStore.ts)",
+      "Bash(sed -n '9926,9977p' src/lib/flow/store/graphStore.ts)",
+      "Bash(python3 -)",
+      "Bash(node -e ':*)",
+      "Bash(git -C /c/Users/Owner/Desktop/aiproj log --oneline -5)",
+      "Bash(node)"
+    ]
+  }
+}

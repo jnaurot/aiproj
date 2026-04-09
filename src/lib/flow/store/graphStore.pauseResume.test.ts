@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GraphState } from './graphStore';
-import { __applyRunEventForTest, __resetRunUiStateForTest } from './graphStore';
+import {
+	__applyRunEventForTest,
+	__hydrateFromRunSnapshotForTest,
+	__resetRunUiStateForTest,
+	__setPauseResumeTraceEnabledForTest
+} from './graphStore';
+import { displayStatusFromBinding } from './runScope';
 import type { KnownRunEvent } from '$lib/flow/types/run';
 
 function makeState(runStatus: GraphState['runStatus'] = 'running'): GraphState {
@@ -193,53 +199,557 @@ describe('graphStore pause/resume lifecycle', () => {
 		expect(Boolean((((next.nodes as any[])[0]?.data ?? {})?.meta ?? {}).llmAllocated)).toBe(false);
 	});
 
-	it('resetRunUi marks unpinned node bindings stale', () => {
+	it('emits pause/resume trace log for explicit pause request event', () => {
+		__setPauseResumeTraceEnabledForTest(true);
 		const state = makeState('running');
-		(state as any).nodeBindings = {
-			n1: {
-				status: 'succeeded',
-				isUpToDate: true,
-				cacheValid: true,
-				currentRunId: 'run-pause',
-				staleReason: null,
-				current: { execKey: 'exec-1', artifactId: 'art-1' },
-				last: { execKey: 'exec-1', artifactId: 'art-1' }
-			}
-		};
-		const next = __resetRunUiStateForTest(state);
-		expect(next.runStatus).toBe('idle');
-		expect(next.activeRunId).toBeNull();
-		expect(next.logs).toEqual([]);
-		expect(next.nodeBindings.n1?.status).toBe('stale');
-		expect(next.nodeBindings.n1?.isUpToDate).toBe(false);
-		expect(next.nodeBindings.n1?.staleReason).toBe('RESET');
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'run_pause_requested', runId: 'run-pause', at: '2026-04-09T00:00:00Z' } as any,
+			'run-pause'
+		);
+		__setPauseResumeTraceEnabledForTest(false);
+		const hasTrace = (next.logs ?? []).some((entry: any) =>
+			String(entry?.message ?? '').includes('[trace][pause-resume] evt=run_pause_requested')
+		);
+		expect(hasTrace).toBe(true);
 	});
 
-	it('resetRunUi preserves pinned node binding status', () => {
-		const state = makeState('running');
-		(state as any).nodes = [
-			{
-				id: 'n1',
-				data: {
-					kind: 'model',
-					meta: { llmAllocated: true, freeze: { enabled: true, mode: 'sticky' } }
-				}
-			}
-		] as any;
-		(state as any).nodeBindings = {
-			n1: {
-				status: 'succeeded',
-				isUpToDate: true,
-				cacheValid: true,
-				currentRunId: 'run-pause',
-				staleReason: null,
-				current: { execKey: 'exec-1', artifactId: 'art-1' },
-				last: { execKey: 'exec-1', artifactId: 'art-1' }
+	it('emits pause/resume trace logs for non-control events while pausing', () => {
+		__setPauseResumeTraceEnabledForTest(true);
+		const state: GraphState = {
+			...makeState('pausing'),
+			nodeBindings: {
+				n1: {
+					graphId: 'graph-pause',
+					status: 'running',
+					lastArtifactId: null,
+					lastRunId: null,
+					lastExecKey: null,
+					currentExecKey: null,
+					currentArtifactId: null,
+					currentRunId: null,
+					isUpToDate: false,
+					cacheValid: false,
+					staleReason: null
+				} as any
 			}
 		};
-		const next = __resetRunUiStateForTest(state);
-		expect(next.nodeBindings.n1?.status).toBe('succeeded');
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'node_finished', runId: 'run-pause', nodeId: 'n1', status: 'succeeded', at: '2026-04-09T00:00:01Z' } as any,
+			'run-pause'
+		);
+		__setPauseResumeTraceEnabledForTest(false);
+		const hasTrace = (next.logs ?? []).some((entry: any) =>
+			String(entry?.message ?? '').includes('[trace][pause-resume] evt=node_finished')
+		);
+		expect(hasTrace).toBe(true);
+	});
+
+	it('run_paused snapshot preserves component parent boundary binding lineage', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [
+				{ id: 'n_component', data: { kind: 'component', meta: { llmAllocated: true } } },
+				{ id: 'n_down', data: { kind: 'model', meta: { llmAllocated: false } } }
+			] as any,
+			edges: [
+				{
+					id: 'e_component_down',
+					source: 'n_component',
+					sourceHandle: 'summary',
+					target: 'n_down',
+					targetHandle: 'in',
+					data: { mode: 'work', exec: 'active' }
+				}
+			] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'idle',
+					lastArtifactId: null,
+					lastRunId: null,
+					lastExecKey: null,
+					currentExecKey: null,
+					currentArtifactId: null,
+					currentRunId: null,
+					isUpToDate: false,
+					cacheValid: false,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_paused',
+				runId: 'run-pause',
+				at: '2026-04-08T22:45:58Z',
+				snapshot: {
+					frontierValidationBasis: {
+						nodes: {
+							n_component: {
+								binding: {
+									currentExecKey: 'exec-component',
+									currentArtifactId: 'art-component'
+								},
+								upstreamBindings: {}
+							},
+							n_down: {
+								binding: { currentExecKey: '', currentArtifactId: '' },
+								upstreamBindings: {
+									n_component: {
+										currentExecKey: 'exec-component',
+										currentArtifactId: 'art-component'
+									}
+								}
+							}
+						}
+					}
+				}
+			} as any,
+			'run-pause'
+		);
+		expect(next.runStatus).toBe('paused');
+		expect(next.nodeBindings.n_component?.currentExecKey).toBe('exec-component');
+		expect(next.nodeBindings.n_component?.currentArtifactId).toBe('art-component');
+		expect(next.nodeBindings.n_component?.lastExecKey).toBe('exec-component');
+		expect(next.nodeBindings.n_component?.lastArtifactId).toBe('art-component');
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.cacheValid).toBe(true);
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('run_paused snapshot clears stale freshness for just-completed component boundary binding', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'stale',
+					lastArtifactId: 'art-old',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-old',
+					currentExecKey: null,
+					currentArtifactId: null,
+					currentRunId: null,
+					isUpToDate: false,
+					cacheValid: false,
+					staleReason: 'RUN_PENDING'
+				} as any
+			}
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_paused',
+				runId: 'run-pause',
+				at: '2026-04-08T23:00:00Z',
+				snapshot: {
+					frontierValidationBasis: {
+						nodes: {
+							n_component: {
+								binding: {
+									currentExecKey: 'exec-new',
+									currentArtifactId: 'art-new'
+								},
+								upstreamBindings: {}
+							}
+						}
+					}
+				}
+			} as any,
+			'run-pause'
+		);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.currentExecKey).toBe('exec-new');
+		expect(next.nodeBindings.n_component?.lastExecKey).toBe('exec-new');
+		expect(next.nodeBindings.n_component?.currentArtifactId).toBe('art-new');
+		expect(next.nodeBindings.n_component?.lastArtifactId).toBe('art-new');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('run_finished(succeeded) clears stale freshness for component parent with artifact lineage', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'stale',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-pause',
+					isUpToDate: false,
+					cacheValid: false,
+					staleReason: 'RUN_PENDING'
+				} as any
+			}
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'run_finished', runId: 'run-pause', at: '2026-04-08T23:20:00Z', status: 'succeeded' } as any,
+			'run-pause'
+		);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.cacheValid).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('run_finished(succeeded) normalizes component parent lineage pair and clears exec drift', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-old',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-old',
+					currentExecKey: 'exec-new',
+					currentArtifactId: 'art-new',
+					currentRunId: 'run-pause',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'run_finished', runId: 'run-pause', at: '2026-04-08T23:23:00Z', status: 'succeeded' } as any,
+			'run-pause'
+		);
+		expect(next.nodeBindings.n_component?.currentExecKey).toBe('exec-new');
+		expect(next.nodeBindings.n_component?.currentArtifactId).toBe('art-new');
+		expect(next.nodeBindings.n_component?.lastExecKey).toBe('exec-new');
+		expect(next.nodeBindings.n_component?.lastArtifactId).toBe('art-new');
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('run_finished(succeeded) does not overwrite failed component status', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'failed',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-pause',
+					isUpToDate: false,
+					cacheValid: false,
+					staleReason: 'COMPONENT_FAILED'
+				} as any
+			}
+		};
+		const next = __applyRunEventForTest(
+			state,
+			{ type: 'run_finished', runId: 'run-pause', at: '2026-04-08T23:25:00Z', status: 'succeeded' } as any,
+			'run-pause'
+		);
+		expect(next.nodeBindings.n_component?.status).toBe('failed');
+	});
+
+	it('snapshot hydrate does not downgrade fresh completed component to stale/idle when incoming snapshot lacks current pair', () => {
+		const state: GraphState = {
+			...makeState('paused'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-pause',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-pause',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n_component: {
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: null,
+					currentArtifactId: null,
+					staleReason: 'RUN_PENDING'
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.currentExecKey).toBe('exec-component');
+		expect(next.nodeBindings.n_component?.currentArtifactId).toBe('art-component');
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate preserves completed component from last lineage when current lineage is missing', () => {
+		const state: GraphState = {
+			...makeState('paused'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-last',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-last',
+					currentExecKey: null,
+					currentArtifactId: null,
+					currentRunId: null,
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n_component: {
+					status: 'idle',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: null,
+					currentArtifactId: null,
+					staleReason: null
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.currentExecKey).toBe('exec-last');
+		expect(next.nodeBindings.n_component?.currentArtifactId).toBe('art-last');
+		expect(next.nodeBindings.n_component?.lastExecKey).toBe('exec-last');
+		expect(next.nodeBindings.n_component?.lastArtifactId).toBe('art-last');
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate does not downgrade completed component on RUN_PENDING stale payload even when current pair is present', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-prev',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'running',
+			nodeBindings: {
+				n_component: {
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					lastExecKey: 'exec-component',
+					lastArtifactId: 'art-component',
+					staleReason: 'RUN_PENDING'
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate does not downgrade completed component on stale payload with empty staleReason', () => {
+		const state: GraphState = {
+			...makeState('paused'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-prev',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n_component: {
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					lastExecKey: 'exec-component',
+					lastArtifactId: 'art-component',
+					staleReason: null
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate does not downgrade completed component on idle payload with current lineage', () => {
+		const state: GraphState = {
+			...makeState('paused'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-prev',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n_component: {
+					status: 'idle',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					lastExecKey: 'exec-component',
+					lastArtifactId: 'art-component',
+					staleReason: null
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate preserves completed component when incoming stale reason is explicit but lineage pair is unchanged', () => {
+		const state: GraphState = {
+			...makeState('paused'),
+			nodes: [{ id: 'n_component', data: { kind: 'component', meta: {} } }] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-component',
+					lastRunId: 'run-prev',
+					lastExecKey: 'exec-component',
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					currentRunId: 'run-prev',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n_component: {
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: 'exec-component',
+					currentArtifactId: 'art-component',
+					lastExecKey: 'exec-component',
+					lastArtifactId: 'art-component',
+					staleReason: 'UPSTREAM_CHANGED'
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n_component?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n_component?.isUpToDate).toBe(true);
+		expect(next.nodeBindings.n_component?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n_component as any)).toBe('succeeded');
+	});
+
+	it('snapshot hydrate keeps active-run fresh binding when incoming stale snapshot is weaker', () => {
+		const state: GraphState = {
+			...makeState('pausing'),
+			activeRunId: 'run-pause',
+			nodes: [{ id: 'n1', data: { kind: 'model', meta: {} } }] as any,
+			nodeBindings: {
+				n1: {
+					graphId: 'graph-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-n1',
+					lastRunId: 'run-pause',
+					lastExecKey: 'exec-n1',
+					currentExecKey: 'exec-n1',
+					currentArtifactId: 'art-n1',
+					currentRunId: 'run-pause',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			}
+		};
+		const next = __hydrateFromRunSnapshotForTest(state, {
+			status: 'paused',
+			nodeBindings: {
+				n1: {
+					status: 'stale',
+					isUpToDate: false,
+					cacheValid: false,
+					currentExecKey: 'exec-n1',
+					currentArtifactId: 'art-n1',
+					lastExecKey: 'exec-n1',
+					lastArtifactId: 'art-n1',
+					staleReason: 'UPSTREAM_CHANGED'
+				}
+			}
+		} as any);
+		expect(next.nodeBindings.n1?.status).toBe('succeeded_up_to_date');
 		expect(next.nodeBindings.n1?.isUpToDate).toBe(true);
 		expect(next.nodeBindings.n1?.staleReason).toBeNull();
+		expect(displayStatusFromBinding(next.nodeBindings.n1 as any)).toBe('succeeded');
 	});
+
 });

@@ -162,10 +162,15 @@ export function projectNodeStatus(
 		lifecycle = 'completed';
 		execution = 'inactive';
 	} else if (runtime === 'idle' && hasArtifact) {
-		// Preserve completed lifecycle once a node has produced/bound artifact history.
-		// The next run can still transition it via normal run-start/run-event updates.
-		lifecycle = 'completed';
-		execution = 'finished';
+		// Idle + artifact can represent either retained historical lineage (e.g. reset)
+		// or a genuinely current completed result.
+		if (source.isUpToDate === false) {
+			lifecycle = 'idle';
+			execution = 'inactive';
+		} else {
+			lifecycle = 'completed';
+			execution = 'finished';
+		}
 	} else if (!runtime && hasArtifact) {
 		lifecycle = 'completed';
 		execution = 'finished';

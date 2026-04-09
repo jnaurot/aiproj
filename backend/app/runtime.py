@@ -854,6 +854,60 @@ class RuntimeManager:
         )
         return {"runId": run_id, "found": True, "pauseRequested": True, "status": "pausing"}
 
+    def _node_bindings_from_frontier_basis(self, basis: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        basis_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
+        node_bindings: Dict[str, Dict[str, Any]] = {}
+
+        def _binding_payload_from_pair(pair: Dict[str, Any], *, graph_id: str) -> Dict[str, Any]:
+            exec_key = str(pair.get("currentExecKey") or "").strip()
+            artifact_id = str(pair.get("currentArtifactId") or "").strip()
+            has_artifact = bool(exec_key) and bool(artifact_id)
+            return {
+                "graphId": graph_id,
+                "status": "succeeded_up_to_date" if has_artifact else "idle",
+                "lastArtifactId": artifact_id or None,
+                "lastRunId": None,
+                "lastExecKey": exec_key or None,
+                "currentExecKey": exec_key or None,
+                "currentArtifactId": artifact_id or None,
+                "currentRunId": None,
+                "isUpToDate": bool(has_artifact),
+                "cacheValid": bool(has_artifact),
+                "staleReason": None,
+            }
+
+        for node_id, node_basis in basis_nodes.items():
+            if not isinstance(node_basis, dict):
+                continue
+            pair = node_basis.get("binding") if isinstance(node_basis.get("binding"), dict) else {}
+            node_key = str(node_id or "").strip()
+            if not node_key:
+                continue
+            graph_id = str(basis.get("graphId") or "").strip()
+            node_bindings[node_key] = _binding_payload_from_pair(pair, graph_id=graph_id)
+            upstream = (
+                node_basis.get("upstreamBindings")
+                if isinstance(node_basis.get("upstreamBindings"), dict)
+                else {}
+            )
+            for upstream_node_id, upstream_pair in upstream.items():
+                if not isinstance(upstream_pair, dict):
+                    continue
+                upstream_key = str(upstream_node_id or "").strip()
+                if not upstream_key:
+                    continue
+                node_bindings.setdefault(
+                    upstream_key,
+                    _binding_payload_from_pair(
+                        {
+                            "currentExecKey": str(upstream_pair.get("currentExecKey") or "").strip(),
+                            "currentArtifactId": str(upstream_pair.get("currentArtifactId") or "").strip(),
+                        },
+                        graph_id=str(basis.get("graphId") or "").strip(),
+                    ),
+                )
+        return node_bindings
+
     def _build_current_resume_identity_basis(
         self,
         *,
@@ -902,38 +956,31 @@ class RuntimeManager:
             handle = self.create_run(run_id)
             self._set_run_status(handle, "paused", reason="request_resume:rehydrate_snapshot")
             handle.graph_id = str(snapshot_only.get("graphId") or "")
-            handle.graph = snapshot_only.get("graph") if isinstance(snapshot_only.get("graph"), dict) else {"nodes": [], "edges": []}
+            snapshot_graph = (
+                snapshot_only.get("graph")
+                if isinstance(snapshot_only.get("graph"), dict)
+                else None
+            )
+            if isinstance(snapshot_graph, dict) and isinstance(snapshot_graph.get("nodes"), list) and len(snapshot_graph.get("nodes") or []) > 0:
+                handle.graph = snapshot_graph
+            else:
+                experiment_fn = getattr(self.artifact_store, "get_run_experiment", None)
+                experiment = await experiment_fn(run_id) if callable(experiment_fn) else None
+                experiment_graph = None
+                if isinstance(experiment, dict):
+                    if isinstance(experiment.get("graph"), dict):
+                        experiment_graph = experiment.get("graph")
+                    else:
+                        params = experiment.get("params") if isinstance(experiment.get("params"), dict) else {}
+                        if isinstance(params.get("graph"), dict):
+                            experiment_graph = params.get("graph")
+                handle.graph = experiment_graph if isinstance(experiment_graph, dict) else {"nodes": [], "edges": []}
             basis = (
                 snapshot_only.get("frontierValidationBasis")
                 if isinstance(snapshot_only.get("frontierValidationBasis"), dict)
                 else {}
             )
-            basis_nodes = basis.get("nodes") if isinstance(basis.get("nodes"), dict) else {}
-            node_bindings: Dict[str, Dict[str, Any]] = {}
-            for node_id, node_basis in basis_nodes.items():
-                if not isinstance(node_basis, dict):
-                    continue
-                pair = node_basis.get("binding") if isinstance(node_basis.get("binding"), dict) else {}
-                node_bindings[str(node_id)] = {
-                    "currentExecKey": str(pair.get("currentExecKey") or ""),
-                    "currentArtifactId": str(pair.get("currentArtifactId") or ""),
-                }
-                upstream = (
-                    node_basis.get("upstreamBindings")
-                    if isinstance(node_basis.get("upstreamBindings"), dict)
-                    else {}
-                )
-                for upstream_node_id, upstream_pair in upstream.items():
-                    if not isinstance(upstream_pair, dict):
-                        continue
-                    node_bindings.setdefault(
-                        str(upstream_node_id),
-                        {
-                            "currentExecKey": str(upstream_pair.get("currentExecKey") or ""),
-                            "currentArtifactId": str(upstream_pair.get("currentArtifactId") or ""),
-                        },
-                    )
-            handle.node_bindings = node_bindings
+            handle.node_bindings = self._node_bindings_from_frontier_basis(basis)
             self.runs[run_id] = handle
         if handle.status != "paused":
             return {"runId": run_id, "found": True, "resumed": False, "status": handle.status}
@@ -1099,7 +1146,83 @@ class RuntimeManager:
                 "at": datetime_from_ts(time.time()),
             }
         )
-        graph = handle.graph if isinstance(handle.graph, dict) else {}
+        snapshot_graph = snapshot.get("graph") if isinstance(snapshot.get("graph"), dict) else None
+        handle_graph = handle.graph if isinstance(handle.graph, dict) else None
+        handle_pause_graph = (
+            handle.pause_snapshot.get("graph")
+            if isinstance(getattr(handle, "pause_snapshot", None), dict)
+            and isinstance(handle.pause_snapshot.get("graph"), dict)
+            else None
+        )
+        selected_graph_source = ""
+        graph: Dict[str, Any] = {}
+        if isinstance(handle_graph, dict) and isinstance(handle_graph.get("nodes"), list) and len(handle_graph.get("nodes") or []) > 0:
+            graph = handle_graph
+            selected_graph_source = "live_handle"
+        elif isinstance(snapshot_graph, dict) and isinstance(snapshot_graph.get("nodes"), list) and len(snapshot_graph.get("nodes") or []) > 0:
+            graph = snapshot_graph
+            selected_graph_source = "pause_snapshot_store"
+        elif isinstance(handle_pause_graph, dict) and isinstance(handle_pause_graph.get("nodes"), list) and len(handle_pause_graph.get("nodes") or []) > 0:
+            graph = handle_pause_graph
+            selected_graph_source = "pause_snapshot_memory"
+        if not graph:
+            experiment_fn = getattr(self.artifact_store, "get_run_experiment", None)
+            experiment = await experiment_fn(run_id) if callable(experiment_fn) else None
+            experiment_graph = None
+            if isinstance(experiment, dict):
+                if isinstance(experiment.get("graph"), dict):
+                    experiment_graph = experiment.get("graph")
+                else:
+                    params = experiment.get("params") if isinstance(experiment.get("params"), dict) else {}
+                    if isinstance(params.get("graph"), dict):
+                        experiment_graph = params.get("graph")
+            if isinstance(experiment_graph, dict):
+                graph = experiment_graph
+                selected_graph_source = "run_experiment"
+            else:
+                graph = {}
+                selected_graph_source = "missing"
+        graph_node_count = (
+            len(graph.get("nodes") or [])
+            if isinstance(graph, dict) and isinstance(graph.get("nodes"), list)
+            else 0
+        )
+        await handle.bus.emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": datetime_from_ts(time.time()),
+                "level": "info",
+                "message": (
+                    "[resume] graph_rehydrate "
+                    f"source={selected_graph_source} "
+                    f"nodes={graph_node_count}"
+                ),
+            }
+        )
+        if graph_node_count <= 0:
+            await handle.bus.emit(
+                {
+                    "type": "run_resume_failed",
+                    "runId": run_id,
+                    "at": datetime_from_ts(time.time()),
+                    "errorCode": "RESUME_GRAPH_REHYDRATION_FAILED",
+                    "error": "Unable to rehydrate paused graph for resume",
+                    "details": {
+                        "source": selected_graph_source,
+                        "nodeCount": graph_node_count,
+                    },
+                }
+            )
+            self._set_run_status(handle, "paused", reason="request_resume:graph_missing")
+            return {
+                "runId": run_id,
+                "found": True,
+                "resumed": False,
+                "status": "paused",
+                "errorCode": "RESUME_GRAPH_REHYDRATION_FAILED",
+                "details": {"source": selected_graph_source, "nodeCount": graph_node_count},
+            }
         run_from = snapshot.get("runFrom")
         run_mode = str(snapshot.get("runMode") or "").strip() or None
         await self.start_run(
@@ -1928,6 +2051,49 @@ class RuntimeManager:
             changed = self._set_run_status(handle, "paused", reason="event:run_paused")
             snapshot = ev.get("snapshot") if isinstance(ev.get("snapshot"), dict) else {}
             handle.pause_snapshot = dict(snapshot or {})
+            snapshot_graph = snapshot.get("graph") if isinstance(snapshot.get("graph"), dict) else {}
+            if snapshot_graph:
+                handle.graph = snapshot_graph
+            snapshot_basis = (
+                snapshot.get("frontierValidationBasis")
+                if isinstance(snapshot.get("frontierValidationBasis"), dict)
+                else {}
+            )
+            snapshot_bindings = self._node_bindings_from_frontier_basis(snapshot_basis)
+            if snapshot_bindings:
+                merged_bindings: Dict[str, Dict[str, Any]] = {}
+                existing_bindings = handle.node_bindings if isinstance(handle.node_bindings, dict) else {}
+                for node_id, binding in existing_bindings.items():
+                    key = str(node_id or "").strip()
+                    if not key:
+                        continue
+                    merged_bindings[key] = dict(binding) if isinstance(binding, dict) else {}
+                for node_id, pair in snapshot_bindings.items():
+                    key = str(node_id or "").strip()
+                    if not key:
+                        continue
+                    default_binding = {
+                        "graphId": handle.graph_id,
+                        "status": "idle",
+                        "lastArtifactId": None,
+                        "lastRunId": None,
+                        "lastExecKey": None,
+                        "currentExecKey": None,
+                        "currentArtifactId": None,
+                        "currentRunId": None,
+                        "isUpToDate": False,
+                        "cacheValid": False,
+                        "staleReason": None,
+                    }
+                    base = (
+                        dict(merged_bindings.get(key))
+                        if isinstance(merged_bindings.get(key), dict)
+                        else dict(default_binding)
+                    )
+                    base["currentExecKey"] = str(pair.get("currentExecKey") or "").strip() or None
+                    base["currentArtifactId"] = str(pair.get("currentArtifactId") or "").strip() or None
+                    merged_bindings[key] = base
+                handle.node_bindings = merged_bindings
             snapshot_contract = snapshot.get("executionContract") if isinstance(snapshot, dict) else None
             if isinstance(snapshot_contract, dict):
                 handle.execution_contract = dict(snapshot_contract)
@@ -2109,6 +2275,24 @@ class RuntimeManager:
                 b["currentRunId"] = handle.run_id
                 b["lastArtifactId"] = aid
                 b["lastRunId"] = handle.run_id
+                handle_name = str(ev.get("handle") or "").strip() or "out"
+                output_lineage_raw = b.get("outputLineage")
+                output_lineage = (
+                    dict(output_lineage_raw)
+                    if isinstance(output_lineage_raw, dict)
+                    else {}
+                )
+                output_exec_key = str(
+                    ev.get("execKey")
+                    or b.get("currentExecKey")
+                    or b.get("lastExecKey")
+                    or ""
+                ).strip()
+                output_lineage[handle_name] = {
+                    "artifactId": str(aid),
+                    "execKey": output_exec_key or None,
+                }
+                b["outputLineage"] = output_lineage
                 if b.get("currentExecKey"):
                     b["lastExecKey"] = b.get("currentExecKey")
                 handle.node_outputs[nid] = aid
