@@ -20,7 +20,13 @@ import TransformCategoricalEncodeEditor from './TransformCategoricalEncodeEditor
 import TransformNumericScaleEditor from './TransformNumericScaleEditor.svelte';
 import TransformEmbeddingEditor from './TransformEmbeddingEditor.svelte';
 import TransformFeatureSelectionEditor from './TransformFeatureSelectionEditor.svelte';
-import TransformMlPreAdvancedEditor from './TransformMlPreAdvancedEditor.svelte';
+import TransformLeakageDetectEditor from './TransformLeakageDetectEditor.svelte';
+import TransformQualityProfileEditor from './TransformQualityProfileEditor.svelte';
+import TransformDriftCompareEditor from './TransformDriftCompareEditor.svelte';
+import TransformDeterminismProfileEditor from './TransformDeterminismProfileEditor.svelte';
+import TransformFitStateRegistryEditor from './TransformFitStateRegistryEditor.svelte';
+import TransformPiiGuardEditor from './TransformPiiGuardEditor.svelte';
+import TransformInferenceParityEditor from './TransformInferenceParityEditor.svelte';
 import TransformSplitEditor from './TransformSplitEditor.svelte';
 import TransformQualityGateEditor from './TransformQualityGateEditor.svelte';
 import TransformMlContractEditor from './TransformMlContractEditor.svelte';
@@ -57,13 +63,13 @@ export const TransformEditorByKind = {
     numeric_scale: TransformNumericScaleEditor,
     embedding: TransformEmbeddingEditor,
     feature_selection: TransformFeatureSelectionEditor,
-    leakage_detect: TransformMlPreAdvancedEditor,
-    quality_profile: TransformMlPreAdvancedEditor,
-    drift_compare: TransformMlPreAdvancedEditor,
-    determinism_profile: TransformMlPreAdvancedEditor,
-    fit_state_registry: TransformMlPreAdvancedEditor,
-    pii_guard: TransformMlPreAdvancedEditor,
-    inference_parity: TransformMlPreAdvancedEditor,
+    leakage_detect: TransformLeakageDetectEditor,
+    quality_profile: TransformQualityProfileEditor,
+    drift_compare: TransformDriftCompareEditor,
+    determinism_profile: TransformDeterminismProfileEditor,
+    fit_state_registry: TransformFitStateRegistryEditor,
+    pii_guard: TransformPiiGuardEditor,
+    inference_parity: TransformInferenceParityEditor,
     split: TransformSplitEditor,
     quality_gate: TransformQualityGateEditor,
     ml_contract: TransformMlContractEditor,

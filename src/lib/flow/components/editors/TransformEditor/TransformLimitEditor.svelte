@@ -2,9 +2,11 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformLimitParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
 	import { parseOptionalInt } from '$lib/flow/components/editors/shared';
 	import { graphStore } from '$lib/flow/store/graphStore';
 
@@ -19,6 +21,7 @@
 	let nDraft = String(initialDefaultValue);
 	let lastNodeId = '';
 	let lastStoreN = initialDefaultValue;
+	const meta = getTransformMeta('limit');
 
 	function toFiniteInt(value: unknown): number | undefined {
 		if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value);
@@ -63,7 +66,8 @@
 	}
 </script>
 
-<Section title="Limit">
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 	<div class="hint">Return only the first <code>n</code> rows.</div>
 
 	<Field >

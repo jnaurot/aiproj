@@ -17,6 +17,7 @@
 	import { getArtifactMetaUrl, getArtifactPreviewUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
+	import { TRANSFORM_META } from '$lib/flow/schema/transformMeta';
 	import {
 		buildTransformAutoFixes,
 		buildTransformPreviewDiff,
@@ -133,6 +134,7 @@
 	$: modelGuidedControls = isLlm ? guidedControlsForModelKind(modelKind) : [];
 
 	$: transformKind = (selectedNode?.data as any)?.transformKind ?? 'select';
+	$: transformMeta = TRANSFORM_META[(transformKind as TransformKind) ?? 'select'];
 	$: toolProvider = ((params as any)?.provider ??
 		(selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider;
@@ -1700,6 +1702,10 @@
 						No inferred input schema yet. Run upstream once or declare expected schema to unlock field-aware controls.
 					</div>
 				{/if}
+			</div>
+			<div class="guidedAssistCard">
+				<div class="guidedAssistHead">{transformMeta?.label ?? String(transformKind)}</div>
+				<div class="guidedAssistDesc">{transformMeta?.description ?? ''}</div>
 			</div>
 			<div class="guidedModeRow">
 				<label class="guidedToggle">

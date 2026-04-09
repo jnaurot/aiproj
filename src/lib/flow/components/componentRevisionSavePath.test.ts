@@ -10,4 +10,11 @@ describe('component revision save path', () => {
 		expect(text.includes('const draftApi = draftParams?.api;')).toBe(true);
 		expect(text.includes('exposureRegistry: draftExposureRegistry')).toBe(true);
 	});
+
+	it('tracks pin metadata in component dirty snapshot detection', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/FlowCanvas.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes('function canonicalPersistentNodeMeta')).toBe(true);
+		expect(text.includes('meta: canonicalPersistentNodeMeta(data)')).toBe(true);
+	});
 });

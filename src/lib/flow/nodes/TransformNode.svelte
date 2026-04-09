@@ -29,14 +29,21 @@
 			return count > 0 ? `JSON Rules (${count} condition${count === 1 ? '' : 's'})` : 'JSON Rules';
 		}
 		if (op === 'select') return (params.select?.columns || []).join(', ') || '-';
-		if (op === 'rename') return Object.keys(params.rename?.map || {}).length > 0 ? 'Rename columns' : '-';
+		if (op === 'rename') {
+			const count = Object.keys(params.rename?.map || {}).length;
+			return count > 0 ? `${count} column${count === 1 ? '' : 's'} renamed` : '-';
+		}
 		if (op === 'derive') return (params.derive?.columns || []).length > 0 ? 'Derive columns' : '-';
 		if (op === 'aggregate') return (params.aggregate?.metrics || []).length > 0 ? 'Aggregate' : '-';
 		if (op === 'join') return (params.join?.clauses || []).length > 0 ? 'Join' : '-';
 		if (op === 'sort') return (params.sort?.by || []).length > 0 ? 'Sort' : '-';
 		if (op === 'limit') return params.limit?.n ? `Limit ${params.limit.n}` : '-';
 		if (op === 'dedupe') return 'Deduplicate';
-		if (op === 'null_policy') return `Null policy: ${String(params.null_policy?.mode ?? 'report')}`;
+		if (op === 'null_policy') {
+			const mode = String(params.null_policy?.mode ?? 'report');
+			const columns = Array.isArray(params.null_policy?.columns) ? params.null_policy.columns.length : 0;
+			return `${mode}${columns > 0 ? ` (${columns} col)` : ' (all)'}`;
+		}
 		if (op === 'outlier_policy') return `Outlier policy: ${String(params.outlier_policy?.mode ?? 'clip')}`;
 		if (op === 'text_clean') return 'Text clean';
 		if (op === 'nlp_normalize') return `NLP normalize (${String(params.nlp_normalize?.language ?? 'en')})`;
@@ -49,13 +56,23 @@
 		if (op === 'feature_selection') return `Feature select (${String(params.feature_selection?.method ?? 'variance')})`;
 		if (op === 'leakage_detect') return 'Leakage detect';
 		if (op === 'quality_profile') return 'Quality profile';
-		if (op === 'drift_compare') return 'Drift compare';
+		if (op === 'drift_compare') {
+			const metric = String(params.drift_compare?.metric ?? 'psi');
+			const baseline = String(params.drift_compare?.baselineRef ?? '').trim() || 'baseline';
+			const threshold = Number(params.drift_compare?.threshold ?? 0.2);
+			return `${metric} vs ${baseline}, threshold=${threshold}`;
+		}
 		if (op === 'determinism_profile') return 'Determinism profile';
 		if (op === 'fit_state_registry') return `Fit state (${String(params.fit_state_registry?.mode ?? 'fit')})`;
 		if (op === 'pii_guard') return `PII guard (${String(params.pii_guard?.action ?? 'report')})`;
 		if (op === 'inference_parity') return 'Inference parity';
 		if (op === 'split') return 'Split text';
-		if (op === 'quality_gate') return (params.quality_gate?.checks || []).length > 0 ? 'Quality gate' : '-';
+		if (op === 'quality_gate') {
+			const checks = Array.isArray(params.quality_gate?.checks) ? params.quality_gate.checks : [];
+			if (checks.length === 0) return '-';
+			const firstKind = String(checks[0]?.kind ?? '').trim();
+			return `${checks.length} check${checks.length === 1 ? '' : 's'}${firstKind ? ` (${firstKind})` : ''}`;
+		}
 		if (op === 'ml_contract') {
 			const label = String(params.ml_contract?.labelColumn ?? 'label').trim() || 'label';
 			const featureCount = Array.isArray(params.ml_contract?.featureColumns)
@@ -63,7 +80,12 @@
 				: 0;
 			return `ML contract (${label}, ${featureCount} features)`;
 		}
-		if (op === 'sql') return params.sql?.query ? 'SQL Query' : '-';
+		if (op === 'sql') {
+			const query = String(params.sql?.query ?? '').trim();
+			if (!query) return '-';
+			const firstLine = query.split(/\r?\n/)[0]?.trim() ?? '';
+			return firstLine.length > 40 ? `${firstLine.slice(0, 40)}...` : firstLine;
+		}
 		if (op === 'json_to_table') return 'JSON to table';
 		if (op === 'text_to_table') return 'Text to table';
 		if (op === 'table_to_json') return 'Table to JSON';

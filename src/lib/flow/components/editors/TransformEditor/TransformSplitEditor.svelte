@@ -2,10 +2,12 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformSplitParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformSplitParams> | Record<string, unknown>;
@@ -68,6 +70,7 @@
 					: 'Delimiter is required for delimiter mode.'
 				: null;
 	$: canCommit = !flagsError && !modeError;
+	const meta = getTransformMeta('split');
 
 	function isObject(v: unknown): v is Record<string, unknown> {
 		return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -124,7 +127,8 @@
 	}
 </script>
 
-<Section title="Split">
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 	<Field label="mode">
 		<select
 			value={mode}
@@ -141,6 +145,11 @@
 	</Field>
 
 	<div class="hint">{modeHint}</div>
+	{#if mode === 'regex'}
+		<ConditionalHint text="Regex mode requires a pattern and supports i/m/s flags." />
+	{:else if mode === 'delimiter'}
+		<ConditionalHint text="Delimiter mode requires a delimiter value." />
+	{/if}
 
 	<div class="colsWrap">
 		<div class="colsHeader">Available Cols</div>

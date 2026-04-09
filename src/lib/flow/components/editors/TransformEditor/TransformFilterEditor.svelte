@@ -163,6 +163,17 @@
 	}
 
 	function setMode(nextMode: FilterMode): void {
+		if (nextMode === mode) return;
+		const leavingRules = mode === 'rules' && nextMode === 'sql' && (rulesDraft.conditions?.length ?? 0) > 0;
+		const leavingSql = mode === 'sql' && nextMode === 'rules' && exprDraft.trim().length > 0;
+		const shouldConfirm = leavingRules || leavingSql;
+		if (shouldConfirm && typeof window !== 'undefined') {
+			const message =
+				nextMode === 'sql'
+					? 'Switching to SQL hides current rules. Continue?'
+					: 'Switching to Rules hides the current SQL expression. Continue?';
+			if (!window.confirm(message)) return;
+		}
 		commitPatch({ mode: nextMode }, true);
 	}
 

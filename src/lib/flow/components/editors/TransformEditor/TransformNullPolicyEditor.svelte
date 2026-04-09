@@ -2,10 +2,13 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformNullPolicyParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
+	import ColumnTokenInput from './ColumnTokenInput.svelte';
 
 	type NullPolicyMode = TransformNullPolicyParams['mode'];
 
@@ -30,6 +33,7 @@
 		(a, b) => a.localeCompare(b)
 	);
 	$: columnOptions = schemaColumns.length > 0 ? schemaColumns : fallbackColumns;
+	const meta = getTransformMeta('null_policy');
 
 	function isObject(v: unknown): v is Record<string, unknown> {
 		return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -65,21 +69,10 @@
 		}
 		onDraft(merged);
 	}
-
-	function addColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		if (!value) return;
-		commitPatch({ columns: uniqueStrings([...columns, value]) });
-	}
-
-	function removeColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		commitPatch({ columns: columns.filter((c) => c !== value) });
-	}
 </script>
 
-<Section title="Null Policy">
-	<div class="hint">Report, drop, or fill nulls with deterministic policy controls.</div>
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 
 	<Field label="mode">
 		<select
@@ -95,24 +88,11 @@
 	</Field>
 
 	<Field label="columns">
-		<div class="colControls">
-			<select on:change={(event) => addColumn((event.currentTarget as HTMLSelectElement).value)}>
-				<option value="">Select column...</option>
-				{#each columnOptions as col (col)}
-					<option value={col}>{col}</option>
-				{/each}
-			</select>
-		</div>
-		{#if columns.length > 0}
-			<div class="chips">
-				{#each columns as col (col)}
-					<button type="button" class="chip" on:click={() => removeColumn(col)}>{col} ×</button>
-				{/each}
-			</div>
-		{/if}
+		<ColumnTokenInput value={columns} schema={columnOptions} onChange={(next) => commitPatch({ columns: next })} placeholder="Add nullable column" />
 	</Field>
 
 	{#if mode === 'fill_constant'}
+		<ConditionalHint text="fill_constant mode requires a fill value." />
 		<Field label="fill value">
 			<Input
 				value={String(fillValue ?? '')}
@@ -123,6 +103,7 @@
 	{/if}
 
 	{#if mode === 'fill_stat'}
+		<ConditionalHint text="fill_stat mode requires a statistic." />
 		<Field label="stat">
 			<select
 				value={stat}
@@ -136,33 +117,3 @@
 		</Field>
 	{/if}
 </Section>
-
-<style>
-	.hint {
-		font-size: 12px;
-		opacity: 0.75;
-		margin-top: 6px;
-	}
-
-	.colControls {
-		display: grid;
-		gap: 8px;
-	}
-
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 8px;
-	}
-
-	.chip {
-		border: 1px solid rgba(148, 163, 184, 0.4);
-		background: rgba(15, 23, 42, 0.45);
-		color: #e2e8f0;
-		border-radius: 999px;
-		padding: 2px 10px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-</style>

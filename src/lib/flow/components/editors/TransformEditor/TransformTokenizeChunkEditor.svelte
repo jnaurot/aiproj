@@ -2,10 +2,13 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformTokenizeChunkParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
+	import ColumnTokenInput from './ColumnTokenInput.svelte';
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformTokenizeChunkParams> | Record<string, unknown>;
@@ -24,6 +27,8 @@
 	$: overlap = Number(nested.overlap ?? 32);
 	$: sentenceAware = nested.sentenceAware ?? true;
 	$: outColumn = nested.outColumn ?? 'chunk';
+	$: overlapValid = overlap < maxTokens;
+	const meta = getTransformMeta('tokenize_chunk');
 	$: schemaColumns = uniqueStrings(
 		inputSchemaColumns.map((c) => String(c?.name ?? '').trim()).filter(Boolean)
 	).sort((a, b) => a.localeCompare(b));
@@ -68,36 +73,13 @@
 		}
 		onDraft(merged);
 	}
-
-	function addColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		if (!value) return;
-		commitPatch({ columns: uniqueStrings([...columns, value]) });
-	}
-
-	function removeColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		commitPatch({ columns: columns.filter((c) => c !== value) });
-	}
 </script>
 
-<Section title="Tokenize Chunk">
-	<div class="hint">Chunk text by token budget with overlap and sentence-aware boundaries.</div>
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 
 	<Field label="columns">
-		<select on:change={(event) => addColumn((event.currentTarget as HTMLSelectElement).value)}>
-			<option value="">Select column...</option>
-			{#each columnOptions as col (col)}
-				<option value={col}>{col}</option>
-			{/each}
-		</select>
-		{#if columns.length > 0}
-			<div class="chips">
-				{#each columns as col (col)}
-					<button type="button" class="chip" on:click={() => removeColumn(col)}>{col} ×</button>
-				{/each}
-			</div>
-		{/if}
+		<ColumnTokenInput value={columns} schema={columnOptions} onChange={(next) => commitPatch({ columns: next })} placeholder="Add text column" />
 	</Field>
 
 	<Field label="tokenizer">
@@ -108,6 +90,7 @@
 	</Field>
 
 	{#if tokenizer === 'regex'}
+		<ConditionalHint text="Regex tokenizer requires a token pattern." />
 		<Field label="token pattern">
 			<Input
 				value={tokenPattern}
@@ -121,6 +104,7 @@
 		<Input
 			type="number"
 			min="1"
+			max="100000"
 			step="1"
 			value={maxTokens}
 			onInput={(event) => commitPatch({ maxTokens: Number((event.currentTarget as HTMLInputElement).value || 256) })}
@@ -131,11 +115,15 @@
 		<Input
 			type="number"
 			min="0"
+			max="50000"
 			step="1"
 			value={overlap}
 			onInput={(event) => commitPatch({ overlap: Number((event.currentTarget as HTMLInputElement).value || 0) })}
 		/>
 	</Field>
+	{#if !overlapValid}
+		<ConditionalHint tone="warn" text="Overlap must be less than max tokens." />
+	{/if}
 
 	<Field label="out column">
 		<Input
@@ -152,26 +140,6 @@
 </Section>
 
 <style>
-	.hint {
-		font-size: 12px;
-		opacity: 0.75;
-		margin-top: 6px;
-	}
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 8px;
-	}
-	.chip {
-		border: 1px solid rgba(148, 163, 184, 0.4);
-		background: rgba(15, 23, 42, 0.45);
-		color: #e2e8f0;
-		border-radius: 999px;
-		padding: 2px 10px;
-		font-size: 12px;
-		cursor: pointer;
-	}
 	.check {
 		display: flex;
 		align-items: center;

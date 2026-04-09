@@ -2,10 +2,13 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformOutlierPolicyParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
+	import ColumnTokenInput from './ColumnTokenInput.svelte';
 
 	type OutlierMode = TransformOutlierPolicyParams['mode'];
 	type OutlierMethod = TransformOutlierPolicyParams['method'];
@@ -34,6 +37,8 @@
 		(a, b) => a.localeCompare(b)
 	);
 	$: columnOptions = schemaColumns.length > 0 ? schemaColumns : fallbackColumns;
+	$: quantileValid = lowerQuantile < upperQuantile;
+	const meta = getTransformMeta('outlier_policy');
 
 	function isObject(v: unknown): v is Record<string, unknown> {
 		return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -71,21 +76,10 @@
 		}
 		onDraft(merged);
 	}
-
-	function addColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		if (!value) return;
-		commitPatch({ columns: uniqueStrings([...columns, value]) });
-	}
-
-	function removeColumn(col: string): void {
-		const value = String(col ?? '').trim();
-		commitPatch({ columns: columns.filter((c) => c !== value) });
-	}
 </script>
 
-<Section title="Outlier Policy">
-	<div class="hint">Clip, winsorize, or drop outliers with explicit threshold controls.</div>
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 
 	<Field label="mode">
 		<select
@@ -112,24 +106,11 @@
 	</Field>
 
 	<Field label="columns">
-		<div class="colControls">
-			<select on:change={(event) => addColumn((event.currentTarget as HTMLSelectElement).value)}>
-				<option value="">Select column...</option>
-				{#each columnOptions as col (col)}
-					<option value={col}>{col}</option>
-				{/each}
-			</select>
-		</div>
-		{#if columns.length > 0}
-			<div class="chips">
-				{#each columns as col (col)}
-					<button type="button" class="chip" on:click={() => removeColumn(col)}>{col} ×</button>
-				{/each}
-			</div>
-		{/if}
+		<ColumnTokenInput value={columns} schema={columnOptions} onChange={(next) => commitPatch({ columns: next })} placeholder="Add outlier column" />
 	</Field>
 
 	{#if method === 'iqr'}
+		<ConditionalHint text="IQR method requires an IQR multiplier." />
 		<Field label="iqr multiplier">
 			<Input
 				type="number"
@@ -143,6 +124,7 @@
 	{/if}
 
 	{#if method === 'zscore'}
+		<ConditionalHint text="Z-score method requires a z-score threshold." />
 		<Field label="zscore threshold">
 			<Input
 				type="number"
@@ -156,6 +138,7 @@
 	{/if}
 
 	{#if method === 'quantile'}
+		<ConditionalHint text="Quantile method requires both lower and upper quantiles." />
 		<Field label="lower quantile">
 			<Input
 				type="number"
@@ -178,35 +161,8 @@
 					commitPatch({ upperQuantile: Number((event.currentTarget as HTMLInputElement).value || 0.99) })}
 			/>
 		</Field>
+		{#if !quantileValid}
+			<ConditionalHint tone="warn" text="Upper quantile must be greater than lower quantile." />
+		{/if}
 	{/if}
 </Section>
-
-<style>
-	.hint {
-		font-size: 12px;
-		opacity: 0.75;
-		margin-top: 6px;
-	}
-
-	.colControls {
-		display: grid;
-		gap: 8px;
-	}
-
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-top: 8px;
-	}
-
-	.chip {
-		border: 1px solid rgba(148, 163, 184, 0.4);
-		background: rgba(15, 23, 42, 0.45);
-		color: #e2e8f0;
-		border-radius: 999px;
-		padding: 2px 10px;
-		font-size: 12px;
-		cursor: pointer;
-	}
-</style>

@@ -129,6 +129,10 @@ export let onRemoveGroup: (() => void) | null = null;
 			<button class="small danger" type="button" on:click={() => onRemoveGroup?.()}>Remove group</button>
 		{/if}
 	</div>
+	<div class="groupActions groupActionsTop">
+		<button class="small" type="button" on:click={addCondition}>+ Condition</button>
+		<button class="small ghost" type="button" on:click={addGroup}>+ Group</button>
+	</div>
 
 	<div class="groupBody">
 		{#if group.conditions.length === 0}
@@ -317,6 +321,10 @@ export let onRemoveGroup: (() => void) | null = null;
 		display: flex;
 		gap: 8px;
 		margin-top: 8px;
+	}
+	.groupActionsTop {
+		margin-top: 6px;
+		margin-bottom: 6px;
 	}
 	button.small {
 		padding: 6px 10px;

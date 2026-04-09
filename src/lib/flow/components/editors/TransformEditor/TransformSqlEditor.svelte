@@ -112,8 +112,9 @@
 	</label>
 
 	<div class="actions">
-		<button class="small" type="button" on:click={() => insertSnippet('SELECT * FROM input LIMIT 10;')}>Limit</button>
-		<button class="small" type="button" on:click={() => insertSnippet('SELECT COUNT(*) AS cnt FROM input;')}>Count</button>
+		<button class="small" type="button" on:click={() => insertSnippet('SELECT *\nFROM input\nWHERE <condition>;')}>WHERE condition</button>
+		<button class="small" type="button" on:click={() => insertSnippet('SELECT CASE WHEN <condition> THEN <value_a> ELSE <value_b> END AS derived\nFROM input;')}>SELECT CASE WHEN</button>
+		<button class="small" type="button" on:click={() => insertSnippet('SELECT <column>, COUNT(*) AS cnt\nFROM input\nGROUP BY <column>;')}>GROUP BY</button>
 		<button
 			class="small"
 			type="button"

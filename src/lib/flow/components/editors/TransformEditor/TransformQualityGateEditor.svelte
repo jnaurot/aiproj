@@ -2,10 +2,17 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformQualityGateParams } from '$lib/flow/schema/transform';
+	import { getTransformMeta } from '$lib/flow/schema/transformMeta';
 	import { uniqueStrings } from '$lib/flow/components/editors/shared';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
+	import ConditionalHint from './ConditionalHint.svelte';
+	import QualityCheckNullPct from './QualityCheckNullPct.svelte';
+	import QualityCheckRange from './QualityCheckRange.svelte';
+	import QualityCheckUniqueness from './QualityCheckUniqueness.svelte';
+	import QualityCheckClassBalance from './QualityCheckClassBalance.svelte';
+	import QualityCheckLeakage from './QualityCheckLeakage.svelte';
 
 	type GateCheck = TransformQualityGateParams['checks'][number];
 	type GateSeverity = Extract<GateCheck, { severity: string }>['severity'];
@@ -30,6 +37,7 @@
 	);
 	$: columnOptions = schemaColumns.length > 0 ? schemaColumns : fallbackColumns;
 	let pendingKind: GateKind = 'null_pct';
+	const meta = getTransformMeta('quality_gate');
 
 	function isObject(v: unknown): v is Record<string, unknown> {
 		return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -50,50 +58,35 @@
 		const out: GateCheck[] = [];
 		for (const item of raw) {
 			if (!isObject(item)) continue;
-			const severity = (String(item.severity ?? 'fail').trim().toLowerCase() === 'warn'
-				? 'warn'
-				: 'fail') as GateSeverity;
+			const severity = (String(item.severity ?? 'fail').trim().toLowerCase() === 'warn' ? 'warn' : 'fail') as GateSeverity;
 			const kind = String(item.kind ?? '').trim().toLowerCase() as GateKind;
 			if (kind === 'null_pct') {
-				out.push({
-					kind,
-					column: String(item.column ?? ''),
-					maxNullPct: toRatio(item.maxNullPct, 0),
-					severity
-				});
+				out.push({ kind, column: String(item.column ?? ''), maxNullPct: ratio(item.maxNullPct, 0), severity });
 				continue;
 			}
 			if (kind === 'range') {
-				const minValue = parseOptionalNumber(item.min);
-				const maxValue = parseOptionalNumber(item.max);
-				if (minValue === undefined && maxValue === undefined) continue;
 				out.push({
 					kind,
 					column: String(item.column ?? ''),
-					min: minValue,
-					max: maxValue,
-					inclusiveMin: toBool(item.inclusiveMin, true),
-					inclusiveMax: toBool(item.inclusiveMax, true),
-					maxOutOfRangePct: toRatio(item.maxOutOfRangePct, 0),
+					min: optionalNumber(item.min),
+					max: optionalNumber(item.max),
+					inclusiveMin: bool(item.inclusiveMin, true),
+					inclusiveMax: bool(item.inclusiveMax, true),
+					maxOutOfRangePct: ratio(item.maxOutOfRangePct, 0),
 					severity
 				});
 				continue;
 			}
 			if (kind === 'uniqueness') {
-				out.push({
-					kind,
-					column: String(item.column ?? ''),
-					minUniqueRatio: toRatio(item.minUniqueRatio, 1),
-					severity
-				});
+				out.push({ kind, column: String(item.column ?? ''), minUniqueRatio: ratio(item.minUniqueRatio, 1), severity });
 				continue;
 			}
 			if (kind === 'class_balance') {
 				out.push({
 					kind,
 					column: String(item.column ?? ''),
-					minMinorityRatio: toRatio(item.minMinorityRatio, 0),
-					maxDominantRatio: toRatio(item.maxDominantRatio, 1),
+					minMinorityRatio: ratio(item.minMinorityRatio, 0),
+					maxDominantRatio: ratio(item.maxDominantRatio, 1),
 					severity
 				});
 				continue;
@@ -103,7 +96,7 @@
 					kind,
 					featureColumn: String(item.featureColumn ?? ''),
 					targetColumn: String(item.targetColumn ?? ''),
-					maxAbsCorrelation: toRatio(item.maxAbsCorrelation, 0.95),
+					maxAbsCorrelation: ratio(item.maxAbsCorrelation, 0.95),
 					severity
 				});
 			}
@@ -111,17 +104,17 @@
 		return out;
 	}
 
-	function toRatio(value: unknown, fallback: number): number {
+	function ratio(value: unknown, fallback: number): number {
 		const n = Number(value);
 		if (!Number.isFinite(n)) return fallback;
 		return Math.max(0, Math.min(1, n));
 	}
 
-	function toBool(value: unknown, fallback: boolean): boolean {
+	function bool(value: unknown, fallback: boolean): boolean {
 		return typeof value === 'boolean' ? value : fallback;
 	}
 
-	function parseOptionalNumber(value: unknown): number | undefined {
+	function optionalNumber(value: unknown): number | undefined {
 		const text = String(value ?? '').trim();
 		if (!text) return undefined;
 		const n = Number(text);
@@ -129,9 +122,7 @@
 	}
 
 	function defaultCheck(kind: GateKind): GateCheck {
-		if (kind === 'null_pct') {
-			return { kind, column: 'text', maxNullPct: 0, severity: 'fail' };
-		}
+		if (kind === 'null_pct') return { kind, column: 'text', maxNullPct: 0, severity: 'fail' };
 		if (kind === 'range') {
 			return {
 				kind,
@@ -144,12 +135,8 @@
 				severity: 'fail'
 			};
 		}
-		if (kind === 'uniqueness') {
-			return { kind, column: 'id', minUniqueRatio: 1, severity: 'fail' };
-		}
-		if (kind === 'class_balance') {
-			return { kind, column: 'label', minMinorityRatio: 0.1, maxDominantRatio: 0.9, severity: 'warn' };
-		}
+		if (kind === 'uniqueness') return { kind, column: 'id', minUniqueRatio: 1, severity: 'fail' };
+		if (kind === 'class_balance') return { kind, column: 'label', minMinorityRatio: 0.1, maxDominantRatio: 0.9, severity: 'warn' };
 		return { kind, featureColumn: 'feature', targetColumn: 'target', maxAbsCorrelation: 0.95, severity: 'warn' };
 	}
 
@@ -171,46 +158,26 @@
 		onCommit(merged);
 	}
 
-	function replaceChecks(nextChecks: GateCheck[], immediate = true) {
+	function replaceChecks(nextChecks: GateCheck[], immediate = true): void {
 		patchDraft({ checks: nextChecks });
-		if (immediate) {
-			patchCommit({ checks: nextChecks });
-		}
+		if (immediate) patchCommit({ checks: nextChecks });
 	}
 
-	function addCheck(kind: GateKind) {
+	function addCheck(kind: GateKind): void {
 		replaceChecks([...checks, defaultCheck(kind)], true);
 	}
 
-	function removeCheck(index: number) {
+	function removeCheck(index: number): void {
 		replaceChecks(checks.filter((_, i) => i !== index), true);
 	}
 
-	function updateCheck(index: number, next: Partial<GateCheck>, immediate = false) {
-		const updated = checks.map((check, i) => {
-			if (i !== index) return check;
-			return { ...check, ...next } as GateCheck;
-		});
-		replaceChecks(updated, immediate);
-	}
-
-	function updateRangeBound(index: number, side: 'min' | 'max', rawValue: string) {
-		const value = parseOptionalNumber(rawValue);
-		const updated = checks.map((check, i) => {
-			if (i !== index || check.kind !== 'range') return check;
-			if (value === undefined) {
-				const nextCheck = { ...check };
-				delete (nextCheck as Record<string, unknown>)[side];
-				return nextCheck;
-			}
-			return { ...check, [side]: value };
-		});
-		replaceChecks(updated, false);
+	function updateCheck(index: number, next: GateCheck, immediate = false): void {
+		replaceChecks(checks.map((check, i) => (i === index ? next : check)), immediate);
 	}
 </script>
 
-<Section title="Quality Gate">
-	<div class="hint">Validate table quality before downstream execution.</div>
+<Section title={meta.label}>
+	<ConditionalHint text={meta.description} />
 
 	<Field label="stop on fail">
 		<Input
@@ -235,10 +202,6 @@
 		<button class="small ghost" type="button" on:click={() => addCheck(pendingKind)}>Add Check</button>
 	</div>
 
-	{#if columnOptions.length > 0}
-		<div class="hint">Available columns: {columnOptions.join(', ')}</div>
-	{/if}
-
 	{#if checks.length === 0}
 		<div class="empty">No checks configured.</div>
 	{/if}
@@ -254,7 +217,7 @@
 				<select
 					value={check.severity}
 					on:change={(event) =>
-						updateCheck(index, { severity: (event.currentTarget as HTMLSelectElement).value as GateSeverity }, true)}
+						updateCheck(index, { ...check, severity: (event.currentTarget as HTMLSelectElement).value as GateSeverity }, true)}
 				>
 					<option value="fail">fail</option>
 					<option value="warn">warn</option>
@@ -262,173 +225,21 @@
 			</Field>
 
 			{#if check.kind === 'null_pct'}
-				<Field label="column">
-					<Input
-						value={check.column}
-						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="max null %">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.maxNullPct}
-						onInput={(event) =>
-							updateCheck(index, {
-								maxNullPct: toRatio((event.currentTarget as HTMLInputElement).value, check.maxNullPct)
-							}, false)}
-					/>
-				</Field>
+				<QualityCheckNullPct check={check} {columnOptions} onChange={(next) => updateCheck(index, next, false)} />
 			{:else if check.kind === 'range'}
-				<Field label="column">
-					<Input
-						value={check.column}
-						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="min">
-					<Input
-						type="number"
-						value={check.min ?? ''}
-						onInput={(event) => updateRangeBound(index, 'min', (event.currentTarget as HTMLInputElement).value)}
-					/>
-				</Field>
-				<Field label="max">
-					<Input
-						type="number"
-						value={check.max ?? ''}
-						onInput={(event) => updateRangeBound(index, 'max', (event.currentTarget as HTMLInputElement).value)}
-					/>
-				</Field>
-				<Field label="inclusive min">
-					<Input
-						type="checkbox"
-						checked={check.inclusiveMin}
-						onChange={(event) =>
-							updateCheck(index, { inclusiveMin: (event.currentTarget as HTMLInputElement).checked }, true)}
-					/>
-				</Field>
-				<Field label="inclusive max">
-					<Input
-						type="checkbox"
-						checked={check.inclusiveMax}
-						onChange={(event) =>
-							updateCheck(index, { inclusiveMax: (event.currentTarget as HTMLInputElement).checked }, true)}
-					/>
-				</Field>
-				<Field label="max out-of-range %">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.maxOutOfRangePct}
-						onInput={(event) =>
-							updateCheck(index, {
-								maxOutOfRangePct: toRatio((event.currentTarget as HTMLInputElement).value, check.maxOutOfRangePct)
-							}, false)}
-					/>
-				</Field>
+				<QualityCheckRange check={check} {columnOptions} onChange={(next) => updateCheck(index, next, false)} />
 			{:else if check.kind === 'uniqueness'}
-				<Field label="column">
-					<Input
-						value={check.column}
-						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="min unique ratio">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.minUniqueRatio}
-						onInput={(event) =>
-							updateCheck(index, {
-								minUniqueRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.minUniqueRatio)
-							}, false)}
-					/>
-				</Field>
+				<QualityCheckUniqueness check={check} {columnOptions} onChange={(next) => updateCheck(index, next, false)} />
 			{:else if check.kind === 'class_balance'}
-				<Field label="column">
-					<Input
-						value={check.column}
-						onInput={(event) =>
-							updateCheck(index, { column: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="min minority ratio">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.minMinorityRatio}
-						onInput={(event) =>
-							updateCheck(index, {
-								minMinorityRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.minMinorityRatio)
-							}, false)}
-					/>
-				</Field>
-				<Field label="max dominant ratio">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.maxDominantRatio}
-						onInput={(event) =>
-							updateCheck(index, {
-								maxDominantRatio: toRatio((event.currentTarget as HTMLInputElement).value, check.maxDominantRatio)
-							}, false)}
-					/>
-				</Field>
+				<QualityCheckClassBalance check={check} {columnOptions} onChange={(next) => updateCheck(index, next, false)} />
 			{:else if check.kind === 'leakage'}
-				<Field label="feature column">
-					<Input
-						value={check.featureColumn}
-						onInput={(event) =>
-							updateCheck(index, { featureColumn: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="target column">
-					<Input
-						value={check.targetColumn}
-						onInput={(event) =>
-							updateCheck(index, { targetColumn: (event.currentTarget as HTMLInputElement).value }, false)}
-					/>
-				</Field>
-				<Field label="max abs corr">
-					<Input
-						type="number"
-						min="0"
-						max="1"
-						step="0.01"
-						value={check.maxAbsCorrelation}
-						onInput={(event) =>
-							updateCheck(index, {
-								maxAbsCorrelation: toRatio((event.currentTarget as HTMLInputElement).value, check.maxAbsCorrelation)
-							}, false)}
-					/>
-				</Field>
+				<QualityCheckLeakage check={check} {columnOptions} onChange={(next) => updateCheck(index, next, false)} />
 			{/if}
 		</div>
 	{/each}
-
 </Section>
 
 <style>
-	.hint {
-		opacity: 0.8;
-		font-size: 12px;
-		margin-bottom: 10px;
-	}
-
 	.newCheckRow {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;

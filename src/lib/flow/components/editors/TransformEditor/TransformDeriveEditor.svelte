@@ -157,6 +157,17 @@
 	}
 
 	function setMode(nextMode: DeriveMode): void {
+		if (nextMode === mode) return;
+		const leavingRules = mode === 'rules' && nextMode === 'sql' && rulesDraft.length > 0;
+		const leavingSql = mode === 'sql' && nextMode === 'rules' && sqlColumnsDraft.some((item) => isFilled(item.name) || isFilled(item.expr));
+		const shouldConfirm = leavingRules || leavingSql;
+		if (shouldConfirm && typeof window !== 'undefined') {
+			const message =
+				nextMode === 'sql'
+					? 'Switching to SQL hides current rules. Continue?'
+					: 'Switching to Rules hides current SQL-derived columns. Continue?';
+			if (!window.confirm(message)) return;
+		}
 		commitPatch({ mode: nextMode }, false);
 	}
 

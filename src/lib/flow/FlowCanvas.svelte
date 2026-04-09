@@ -10,6 +10,12 @@
 	import type { PipelineNodeData, PipelineEdgeData, NodeKind, PayloadType } from '$lib/flow/types';
 	import type { SourceKind, LlmKind, TransformKind, ToolProvider, ComponentKind } from '$lib/flow/types/paramsMap';
 	import {
+		TRANSFORM_META,
+		TRANSFORM_CATEGORY_LABEL,
+		TRANSFORM_CATEGORY_ORDER,
+		type TransformCategory
+	} from '$lib/flow/schema/transformMeta';
+	import {
 		graphStore,
 		selectedNode,
 		edgeSchemaDiagnostics,
@@ -809,6 +815,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		(((inspectorParams as any)?.sourceKind ?? ($selectedNode?.data as any)?.sourceKind ?? 'file') as SourceKind);
 	$: selectedTransformKind =
 		(((inspectorParams as any)?.transformKind ?? ($selectedNode?.data as any)?.transformKind ?? 'select') as TransformKind);
+	$: transformKindsByCategory = TRANSFORM_CATEGORY_ORDER.map((category) => {
+		const kinds = (Object.keys(TRANSFORM_META) as TransformKind[]).filter(
+			(kind) => TRANSFORM_META[kind].category === category
+		);
+		return {
+			category,
+			label: TRANSFORM_CATEGORY_LABEL[category as TransformCategory],
+			kinds
+		};
+	});
 	$: selectedToolProvider = (((inspectorParams as any)?.provider ??
 		($selectedNode?.data as any)?.params?.provider ??
 		'mcp') as ToolProvider);
@@ -1485,6 +1501,18 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return value;
 	}
 
+	function canonicalPersistentNodeMeta(data: Record<string, unknown>): Record<string, unknown> | undefined {
+		const meta = ((data?.meta ?? {}) as Record<string, unknown>) || {};
+		const freeze = meta.freeze && typeof meta.freeze === 'object' ? meta.freeze : undefined;
+		const freezeLineage =
+			meta.freezeLineage && typeof meta.freezeLineage === 'object' ? meta.freezeLineage : undefined;
+		if (!freeze && !freezeLineage) return undefined;
+		const canonicalMeta: Record<string, unknown> = {};
+		if (freeze) canonicalMeta.freeze = stableCanonicalValue(freeze);
+		if (freezeLineage) canonicalMeta.freezeLineage = stableCanonicalValue(freezeLineage);
+		return canonicalMeta;
+	}
+
 	function canonicalGraphSnapshot(
 		graphId: string | null | undefined,
 		nodeList: Node<PipelineNodeData>[],
@@ -1509,7 +1537,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 							modelKind: typeof data.modelKind === 'string' ? data.modelKind : undefined,
 							taskKind: typeof data.taskKind === 'string' ? data.taskKind : undefined,
 							componentKind: typeof data.componentKind === 'string' ? data.componentKind : undefined,
-							params: stableCanonicalValue(data.params ?? {})
+							params: stableCanonicalValue(data.params ?? {}),
+							meta: canonicalPersistentNodeMeta(data)
 						}
 					};
 				})
@@ -5438,41 +5467,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 											<option value="ollama">ollama</option>
 											<option value="openai_compat">openai_compat</option>
 										{:else if $selectedNode.data.kind === 'transform'}
-											<option value="filter">filter</option>
-											<option value="select">select</option>
-											<option value="rename">rename</option>
-											<option value="derive">derive</option>
-											<option value="aggregate">aggregate</option>
-											<option value="join">join</option>
-											<option value="sort">sort</option>
-											<option value="limit">limit</option>
-											<option value="dedupe">dedupe</option>
-											<option value="null_policy">null_policy</option>
-											<option value="outlier_policy">outlier_policy</option>
-											<option value="text_clean">text_clean</option>
-											<option value="nlp_normalize">nlp_normalize</option>
-											<option value="tokenize_chunk">tokenize_chunk</option>
-											<option value="dataset_split">dataset_split</option>
-											<option value="class_imbalance">class_imbalance</option>
-											<option value="categorical_encode">categorical_encode</option>
-											<option value="numeric_scale">numeric_scale</option>
-											<option value="embedding">embedding</option>
-											<option value="feature_selection">feature_selection</option>
-											<option value="leakage_detect">leakage_detect</option>
-											<option value="quality_profile">quality_profile</option>
-											<option value="drift_compare">drift_compare</option>
-											<option value="determinism_profile">determinism_profile</option>
-											<option value="fit_state_registry">fit_state_registry</option>
-											<option value="pii_guard">pii_guard</option>
-											<option value="inference_parity">inference_parity</option>
-											<option value="split">split</option>
-											<option value="quality_gate">quality_gate</option>
-											<option value="ml_contract">ml_contract</option>
-											<option value="sql">sql</option>
-											<option value="json_filter">json_filter</option>
-											<option value="json_to_table">json_to_table</option>
-											<option value="text_to_table">text_to_table</option>
-											<option value="table_to_json">table_to_json</option>
+											{#each transformKindsByCategory as group (`${group.category}`)}
+												<optgroup label={group.label}>
+													{#each group.kinds as kind (kind)}
+														<option value={kind} title={TRANSFORM_META[kind].description}>
+															{TRANSFORM_META[kind].label}
+														</option>
+													{/each}
+												</optgroup>
+											{/each}
 										{:else if $selectedNode.data.kind === 'tool'}
 											<option value="mcp">mcp</option>
 											<option value="http">http</option>

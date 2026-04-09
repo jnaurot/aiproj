@@ -41,7 +41,10 @@
       "Bash(grep -n \"setSourceKind\\(nodeId: string, nextKind: SourceKind\\)\\\\|loadGraphDocument\\(graph: { nodes: unknown\\\\[\\\\]; edges: unknown\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore.ts)",
       "Bash(git commit:*)",
       "Bash(grep -r \"pinned\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)",
-      "Bash(grep -n \"freeze.*enabled\\\\|\\\\.freeze\\\\s*=\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)"
+      "Bash(grep -n \"freeze.*enabled\\\\|\\\\.freeze\\\\s*=\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)",
+      "Bash(wc -l /c/Users/Owner/Desktop/aiproj/src/lib/flow/components/editors/SourceEditor/*.svelte)",
+      "Bash(xargs grep:*)",
+      "Bash(xargs wc:*)"
     ]
   }
 }

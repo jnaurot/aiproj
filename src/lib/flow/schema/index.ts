@@ -2,6 +2,7 @@
 export * from "./base";
 export * from "./source";
 export * from "./transform";
+export * from "./transformMeta";
 export * from "./llm";
 export * from "./tool";
 export * from "./component";
