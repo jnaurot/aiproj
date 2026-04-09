@@ -164,6 +164,41 @@ describe('runScope partial-run binding behavior', () => {
 		});
 	});
 
+	it('drops invalid component output pinned lineage entries during sanitization', () => {
+		const graph = { version: 1, nodes: [], edges: [] };
+		const req = buildRunCreateRequest(
+			graph,
+			'graph-test',
+			null,
+			'from_start',
+			[],
+			['component_1'],
+			{
+				component_1: {
+					artifactId: 'component-root',
+					execKey: 'component-exec',
+					outputs: {
+						valid: { artifactId: 'valid-art', execKey: 'valid-exec' },
+						missingArtifact: { artifactId: '' as any, execKey: 'x' },
+						' ': { artifactId: 'ignored' } as any
+					}
+				}
+			}
+		);
+		expect(req.graph.__executionHints).toEqual({
+			pinnedNodeIds: ['component_1'],
+			pinnedArtifacts: {
+				component_1: {
+					artifactId: 'component-root',
+					execKey: 'component-exec',
+					outputs: {
+						valid: { artifactId: 'valid-art', execKey: 'valid-exec' }
+					}
+				}
+			}
+		});
+	});
+
 	it('stales only affected nodes for accept-params style updates', () => {
 		const previous = {
 			a1: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-a1' },

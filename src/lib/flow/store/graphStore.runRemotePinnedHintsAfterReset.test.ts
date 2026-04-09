@@ -51,6 +51,7 @@ describe('graphStore runRemote pinned hints after reset', () => {
 		streamRunEventsMock.mockReset();
 		graphStore.hardResetGraph();
 		graphStore.clearHistory();
+		graphStore.setPinHintTraceLoggingEnabled(false);
 	});
 
 	it('emits pinned execution hints from preserved lineage after reset', async () => {
@@ -121,5 +122,59 @@ describe('graphStore runRemote pinned hints after reset', () => {
 				}
 			}
 		});
+	});
+
+	it('emits pin trace logs from collect through submit when enabled', async () => {
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'n1',
+					type: 'component',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'component',
+						label: 'Pinned Component',
+						params: {
+							componentRef: {
+								componentId: 'cmp_test',
+								revisionId: 'crev_test',
+								apiVersion: 'v1'
+							},
+							api: { outputs: [{ name: 'out', required: true }] }
+						},
+						meta: { freeze: { enabled: true, mode: 'sticky' } }
+					}
+				}
+			],
+			edges: []
+		});
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const nodeId = 'n1';
+		const runId = 'run-trace-pin';
+
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+		getRunMock.mockImplementation(async (rid: string) =>
+			makeSnapshot(graphId, 'succeeded', nodeId, String(rid || runId))
+		);
+		streamRunEventsMock.mockImplementation((streamRunId: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() =>
+				onEvent({
+					type: 'run_finished',
+					runId: streamRunId,
+					at: '2026-04-09T00:00:00Z',
+					status: 'succeeded'
+				} as KnownRunEvent)
+			);
+			return { close: vi.fn() };
+		});
+
+		graphStore.setPinHintTraceLoggingEnabled(true);
+		await graphStore.runRemote(null, 'from_start');
+		graphStore.setPinHintTraceLoggingEnabled(false);
+
+		const logs = (get(graphStore as any)?.logs ?? []).map((entry: any) => String(entry?.message ?? ''));
+		expect(logs.some((message: string) => message.includes('[trace][pin.collect]'))).toBe(true);
+		expect(logs.some((message: string) => message.includes('[trace][pin.request_build]'))).toBe(true);
+		expect(logs.some((message: string) => message.includes('[trace][pin.submit]'))).toBe(true);
 	});
 });

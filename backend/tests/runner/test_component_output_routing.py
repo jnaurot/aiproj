@@ -193,3 +193,59 @@ async def test_component_output_routing_is_deterministic_across_reruns_and_keys(
     )
     assert refs_3 == [("in", "artifact_source_v2")]
     assert key_3 != key_1
+
+
+@pytest.mark.asyncio
+async def test_component_output_routing_falls_back_to_boundary_handle_artifact_when_runtime_binding_missing():
+    nodes = {
+        "component_1": {
+            "id": "component_1",
+            "data": {
+                "kind": "component",
+                "params": {
+                    "api": {
+                        "inputs": [],
+                        "outputs": [
+                            {"name": "summary", "typedSchema": {"type": "text", "fields": []}},
+                            {"name": "source", "typedSchema": {"type": "text", "fields": []}},
+                        ],
+                    },
+                },
+            },
+        },
+        "llm_down": _llm_node("llm_down"),
+    }
+    edges = {
+        # Internal published output bridge exists but its runtime node artifact is absent.
+        "ce_output_summary": {
+            "id": "ce_output_summary",
+            "source": "cmp:component_1:n_summary",
+            "target": "component_1",
+            "targetHandle": "summary",
+        },
+        "e_parent_summary": {
+            "id": "e_parent_summary",
+            "source": "component_1",
+            "sourceHandle": "summary",
+            "target": "llm_down",
+            "targetHandle": "in",
+        },
+    }
+
+    def _get_artifact(node_id, source_handle="out"):
+        nid = str(node_id)
+        handle = str(source_handle or "out")
+        if nid == "component_1" and handle == "summary":
+            return "artifact_component_summary"
+        # Simulate missing internal runtime binding for published output source.
+        return None
+
+    refs = await resolve_input_refs(
+        edges=edges,
+        node_id="llm_down",
+        get_current_artifact=_get_artifact,
+        get_node_by_id=lambda nid: nodes.get(str(nid), None),
+        artifact_store=None,
+    )
+
+    assert refs == [("in", "artifact_component_summary")]

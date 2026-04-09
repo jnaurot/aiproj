@@ -90,6 +90,52 @@ def _runner_visual_delay_seconds() -> float:
     return ms / 1000.0
 
 
+def _node_freeze_mode(node: Dict[str, Any] | None) -> Optional[str]:
+    if not isinstance(node, dict):
+        return None
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    freeze = meta.get("freeze") if isinstance(meta.get("freeze"), dict) else {}
+    if freeze.get("enabled") is not True:
+        return None
+    mode = str(freeze.get("mode") or "").strip().lower()
+    if mode in {"per_run", "sticky"}:
+        return mode
+    return None
+
+
+def _node_freeze_lineage(node: Dict[str, Any] | None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if not isinstance(node, dict):
+        return None, "PIN_HINT_INVALID_MALFORMED_PAYLOAD"
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    lineage = meta.get("freezeLineage") if isinstance(meta.get("freezeLineage"), dict) else {}
+    artifact_id = str(lineage.get("artifactId") or "").strip()
+    exec_key = str(lineage.get("execKey") or "").strip()
+    if not artifact_id:
+        return None, "PIN_HINT_INVALID_MISSING_ARTIFACT_ID"
+    if not exec_key:
+        return None, "PIN_HINT_INVALID_MISSING_EXEC_KEY"
+    parsed: Dict[str, Any] = {"artifactId": artifact_id, "execKey": exec_key}
+    raw_outputs = lineage.get("outputs") if isinstance(lineage.get("outputs"), dict) else {}
+    if isinstance(raw_outputs, dict):
+        parsed_outputs: Dict[str, Dict[str, str]] = {}
+        for raw_handle, raw_payload in raw_outputs.items():
+            handle = str(raw_handle or "").strip()
+            if not handle or not isinstance(raw_payload, dict):
+                continue
+            out_artifact_id = str(raw_payload.get("artifactId") or "").strip()
+            if not out_artifact_id:
+                continue
+            parsed_outputs[handle] = {
+                "artifactId": out_artifact_id,
+                "execKey": str(raw_payload.get("execKey") or "").strip(),
+            }
+        if parsed_outputs:
+            parsed["outputs"] = parsed_outputs
+    return parsed, None
+
+
 def node_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return {n["id"]: n for n in graph.get("nodes", [])}
 
@@ -279,6 +325,11 @@ async def resolve_input_refs(
             )
             if bridge.get("artifactId"):
                 aid = str(bridge["artifactId"])
+            elif aid:
+                # Pinned component boundary reuse can provide per-handle artifacts on the
+                # component node without also hydrating internal runtime-node bindings.
+                # In that case, keep the boundary artifact for this handle.
+                pass
             elif bridge.get("runtimeNodeId"):
                 raise ContractMismatchError(
                     f"Component output '{source_handle}' could not be resolved from published output edges",
@@ -3457,6 +3508,28 @@ async def run_graph(
                 payload = {**payload, "componentPath": component_path}
         await context.bus.emit(payload)
 
+    async def _emit_pin_trace(
+        event_key: str,
+        payload: Dict[str, Any],
+        *,
+        node_id: Optional[str] = None,
+        level: str = "info",
+    ) -> None:
+        try:
+            details = json.dumps(payload, sort_keys=True, default=str)
+        except Exception:
+            details = str(payload)
+        await _emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": level,
+                "message": f"[trace][{event_key}] {details}",
+                "nodeId": node_id,
+            }
+        )
+
     async def _emit_output_artifact_log(
         *,
         run_id: str,
@@ -3932,6 +4005,16 @@ async def run_graph(
         dirty_hint_ids = set()
         pinned_hint_ids = set()
         pinned_artifact_hints: Dict[str, Dict[str, Any]] = {}
+        invalid_pinned_hint_entries: List[Dict[str, Any]] = []
+        derived_graph_lineage_pinned_node_ids: Set[str] = set()
+        graph_pinned_node_ids: Set[str] = set()
+        for node_id, node_payload in node_map(execution_graph).items():
+            mode = _node_freeze_mode(node_payload)
+            if mode is None:
+                continue
+            node_key = str(node_id or "").strip()
+            if node_key:
+                graph_pinned_node_ids.add(node_key)
         if isinstance(raw_hints, dict):
             raw_dirty = raw_hints.get("dirtyNodeIds")
             if isinstance(raw_dirty, list):
@@ -3944,10 +4027,30 @@ async def run_graph(
                 for raw_node_id, raw_payload in raw_pinned_artifacts.items():
                     node_id = str(raw_node_id or "").strip()
                     if not node_id or not isinstance(raw_payload, dict):
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "PIN_HINT_INVALID_MALFORMED_PAYLOAD",
+                            }
+                        )
                         continue
                     artifact_id = str(raw_payload.get("artifactId") or "").strip()
                     exec_key = str(raw_payload.get("execKey") or "").strip()
                     if not artifact_id:
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "PIN_HINT_INVALID_MISSING_ARTIFACT_ID",
+                            }
+                        )
+                        continue
+                    if not exec_key:
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "PIN_HINT_INVALID_MISSING_EXEC_KEY",
+                            }
+                        )
                         continue
                     parsed_payload: Dict[str, Any] = {
                         "artifactId": artifact_id,
@@ -3970,6 +4073,41 @@ async def run_graph(
                         if parsed_outputs:
                             parsed_payload["outputs"] = parsed_outputs
                     pinned_artifact_hints[node_id] = parsed_payload
+        pinned_hint_ids.update(graph_pinned_node_ids)
+        execution_nodes_by_id = node_map(execution_graph)
+        for pinned_node_id in sorted(list(graph_pinned_node_ids)):
+            if pinned_node_id in pinned_artifact_hints:
+                continue
+            parsed_lineage, lineage_error = _node_freeze_lineage(execution_nodes_by_id.get(pinned_node_id))
+            if isinstance(parsed_lineage, dict):
+                pinned_artifact_hints[pinned_node_id] = parsed_lineage
+                derived_graph_lineage_pinned_node_ids.add(pinned_node_id)
+                continue
+            if lineage_error:
+                invalid_pinned_hint_entries.append(
+                    {
+                        "nodeId": pinned_node_id,
+                        "reasonCode": lineage_error,
+                    }
+                )
+        await _emit_pin_trace(
+            "pin.backend_parse",
+            {
+                "runId": run_id,
+                "runFrom": run_from,
+                "runMode": run_mode,
+                "pinnedNodeIdsParsed": sorted(list(pinned_hint_ids)),
+                "pinnedArtifactsParsed": sorted(list(pinned_artifact_hints.keys())),
+                "graphPinnedNodeIdsParsed": sorted(list(graph_pinned_node_ids)),
+                "graphPinnedDerivedLineageNodeIds": sorted(list(derived_graph_lineage_pinned_node_ids)),
+                "invalidHints": invalid_pinned_hint_entries,
+                "reasonCode": (
+                    "PIN_HINT_VALID"
+                    if len(invalid_pinned_hint_entries) == 0
+                    else "PIN_HINT_DROPPED_SANITIZATION"
+                ),
+            },
+        )
         plan = compile_plan(
             execution_graph,
             run_from,
@@ -4009,6 +4147,35 @@ async def run_graph(
                         continue
                     filtered_incoming.setdefault(tgt, []).append(edge_id)
                 plan.incoming_edges = filtered_incoming
+        non_cache_only_pinned_reasons: List[Dict[str, str]] = []
+        for pinned_node_id in sorted(list(pinned_hint_ids)):
+            if pinned_node_id not in plan.subgraph:
+                non_cache_only_pinned_reasons.append(
+                    {"nodeId": pinned_node_id, "reasonCode": "PIN_HINT_NOT_IN_SUBGRAPH"}
+                )
+                continue
+            if pinned_node_id not in plan.cache_only_nodes:
+                non_cache_only_pinned_reasons.append(
+                    {"nodeId": pinned_node_id, "reasonCode": "PIN_HINT_NOT_MARKED_CACHE_ONLY"}
+                )
+        await _emit_pin_trace(
+            "pin.plan",
+            {
+                "runId": run_id,
+                "runFrom": run_from,
+                "runMode": run_mode,
+                "subgraphNodeIds": sorted(list(plan.subgraph)),
+                "requestedPinnedNodeIds": sorted(list(pinned_hint_ids)),
+                "effectivePinnedNodeIds": sorted(list(nid for nid in plan.cache_only_nodes if nid in pinned_hint_ids)),
+                "cacheOnlyNodeIds": sorted(list(plan.cache_only_nodes)),
+                "nonCacheOnlyPinnedReasons": non_cache_only_pinned_reasons,
+                "reasonCode": (
+                    "PIN_HINT_VALID"
+                    if len(non_cache_only_pinned_reasons) == 0
+                    else "PIN_HINT_NOT_MARKED_CACHE_ONLY"
+                ),
+            },
+        )
         context.planner_ref = plan
         effective_run_mode = "from_start" if run_from is None else (str(run_mode or "from_selected_onward"))
         planned_node_ids = sorted(list(plan.subgraph))
@@ -4093,22 +4260,55 @@ async def run_graph(
         nodes = node_map(execution_graph)
         execution_nodes_by_id = nodes
         edges = edge_map(execution_graph)
+
+        def _runtime_binding_pair(binding_payload: Dict[str, Any], *, handle: str = "out") -> Tuple[str, str]:
+            payload = binding_payload if isinstance(binding_payload, dict) else {}
+            handle_key = str(handle or "out").strip() or "out"
+            artifact_id = ""
+            exec_key = ""
+            if handle_key != "out":
+                output_lineage = (
+                    payload.get("outputLineage")
+                    if isinstance(payload.get("outputLineage"), dict)
+                    else {}
+                )
+                handle_pair = output_lineage.get(handle_key) if isinstance(output_lineage, dict) else None
+                if isinstance(handle_pair, dict):
+                    artifact_id = str(handle_pair.get("artifactId") or "").strip()
+                    exec_key = str(handle_pair.get("execKey") or "").strip()
+            if not artifact_id:
+                current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
+                artifact_id = str(current.get("artifactId") or "").strip()
+                exec_key = str(current.get("execKey") or "").strip()
+            if not artifact_id:
+                artifact_id = str(payload.get("currentArtifactId") or "").strip()
+                exec_key = str(payload.get("currentExecKey") or "").strip() or exec_key
+            return artifact_id, exec_key
+
         trusted_pinned_artifacts: Dict[str, Dict[str, Any]] = {}
         for nid in plan.cache_only_nodes:
             if nid not in pinned_hint_ids:
                 continue
             payload = pinned_artifact_hints.get(nid)
-            if not isinstance(payload, dict):
-                continue
-            artifact_id = str(payload.get("artifactId") or "").strip()
-            exec_key = str(payload.get("execKey") or "").strip()
+            payload_obj = payload if isinstance(payload, dict) else {}
+            artifact_id = str(payload_obj.get("artifactId") or "").strip()
+            exec_key = str(payload_obj.get("execKey") or "").strip()
+            runtime_binding_payload = (
+                runtime_handle_bindings.get(str(nid))
+                if isinstance(runtime_handle_bindings.get(str(nid)), dict)
+                else {}
+            )
+            if not artifact_id and isinstance(runtime_binding_payload, dict):
+                artifact_id, runtime_exec_key = _runtime_binding_pair(runtime_binding_payload, handle="out")
+                if runtime_exec_key and not exec_key:
+                    exec_key = runtime_exec_key
             if not artifact_id:
                 continue
             trusted_payload: Dict[str, Any] = {
                 "artifactId": artifact_id,
                 "execKey": exec_key,
             }
-            raw_outputs = payload.get("outputs")
+            raw_outputs = payload_obj.get("outputs")
             if isinstance(raw_outputs, dict):
                 trusted_outputs: Dict[str, Dict[str, str]] = {}
                 for raw_handle, raw_output_payload in raw_outputs.items():
@@ -4124,6 +4324,26 @@ async def run_graph(
                     }
                 if trusted_outputs:
                     trusted_payload["outputs"] = trusted_outputs
+            elif isinstance(runtime_binding_payload, dict):
+                runtime_output_lineage = (
+                    runtime_binding_payload.get("outputLineage")
+                    if isinstance(runtime_binding_payload.get("outputLineage"), dict)
+                    else {}
+                )
+                runtime_outputs: Dict[str, Dict[str, str]] = {}
+                for raw_handle, raw_pair in runtime_output_lineage.items():
+                    handle_name = str(raw_handle or "").strip()
+                    if not handle_name or not isinstance(raw_pair, dict):
+                        continue
+                    out_artifact_id = str(raw_pair.get("artifactId") or "").strip()
+                    if not out_artifact_id:
+                        continue
+                    runtime_outputs[handle_name] = {
+                        "artifactId": out_artifact_id,
+                        "execKey": str(raw_pair.get("execKey") or "").strip(),
+                    }
+                if runtime_outputs:
+                    trusted_payload["outputs"] = runtime_outputs
             trusted_pinned_artifacts[nid] = trusted_payload
         node_param_modes: Dict[str, str] = {nid: _node_runtime_param_mode(node) for nid, node in nodes.items()}
         node_param_snapshots: Dict[str, Dict[str, Any]] = {
@@ -4651,6 +4871,24 @@ async def run_graph(
             token_overrides = _work_input_overrides.set(override_map)
             token_batch = _active_work_batch.set(work_batch_list)
             try:
+                node_requested_pinned = node_id in pinned_hint_ids
+                async def _emit_pin_execute_decision(decision: str, reason_code: str) -> None:
+                    if not node_requested_pinned and not cache_only:
+                        return
+                    await _emit_pin_trace(
+                        "pin.execute_decision",
+                        {
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "nodeKind": str(((execution_nodes_by_id.get(node_id) or {}).get("data") or {}).get("kind") or ""),
+                            "cacheOnly": bool(cache_only),
+                            "requestedPinned": bool(node_requested_pinned),
+                            "trustedPinPresent": bool(node_id in trusted_pinned_artifacts),
+                            "decision": decision,
+                            "reasonCode": reason_code,
+                        },
+                        node_id=node_id,
+                    )
                 trusted_pin = trusted_pinned_artifacts.get(node_id) if cache_only else None
                 if isinstance(trusted_pin, dict):
                     await _emit_node_started_once()
@@ -4675,6 +4913,7 @@ async def run_graph(
                     except Exception:
                         pinned_art = None
                     if pinned_art is None:
+                        await _emit_pin_execute_decision("fail", "PIN_TRUSTED_ARTIFACT_MISSING_IN_STORE")
                         msg = (
                             f"Pinned checkpoint artifact is unavailable for node '{node_id}'. "
                             "Re-run upstream to refresh the pin."
@@ -4692,6 +4931,7 @@ async def run_graph(
                             "cached": False,
                         })
                         return {"ok": False, "cached": False}
+                    await _emit_pin_execute_decision("reuse", "PIN_TRUSTED_ARTIFACT_PRESENT")
 
                     await _emit_cache_decision(
                         node_id=node_id,
@@ -4721,6 +4961,8 @@ async def run_graph(
                             for item in declared_outputs
                             if isinstance(item, dict) and str(item.get("name") or "").strip()
                         ]
+                        fallback_applied = False
+                        component_output_reason = "PIN_HINT_VALID"
                         if pinned_outputs_by_handle:
                             for handle_name in declared_handles:
                                 payload = pinned_outputs_by_handle.get(handle_name)
@@ -4734,6 +4976,8 @@ async def run_graph(
                                     }
                                 )
                         if not output_pairs and declared_handles:
+                            fallback_applied = True
+                            component_output_reason = "PIN_FALLBACK_RECOMPUTE"
                             for handle_name in declared_handles:
                                 output_pairs.append(
                                     {
@@ -4742,6 +4986,18 @@ async def run_graph(
                                         "execKey": pinned_exec_key,
                                     }
                                 )
+                        await _emit_pin_trace(
+                            "pin.component_output_map",
+                            {
+                                "runId": run_id,
+                                "nodeId": node_id,
+                                "declaredOutputHandles": declared_handles,
+                                "pinnedOutputHandles": sorted(list(pinned_outputs_by_handle.keys())),
+                                "fallbackApplied": fallback_applied,
+                                "reasonCode": component_output_reason,
+                            },
+                            node_id=node_id,
+                        )
                     if not output_pairs:
                         output_pairs = [{"handle": "out", "artifactId": pinned_artifact_id, "execKey": pinned_exec_key}]
 
@@ -4839,6 +5095,10 @@ async def run_graph(
                         "decision": "cache_hit",
                         "reasonCode": "PINNED_TRUSTED_ARTIFACT",
                     }
+                if node_requested_pinned and not cache_only:
+                    await _emit_pin_execute_decision("recompute", "PIN_HINT_NOT_MARKED_CACHE_ONLY")
+                elif cache_only and not isinstance(trusted_pin, dict):
+                    await _emit_pin_execute_decision("recompute", "PIN_FALLBACK_RECOMPUTE")
                 resolved = await _resolve_node_execution(node_id, work_batch=work_batch_list)
             finally:
                 _active_work_batch.reset(token_batch)
@@ -8422,7 +8682,11 @@ async def run_graph(
                 )
                 if kind_sem is None:
                     try:
-                        result = await _execute_node(node_id, work_batch=work_batch)
+                        result = await _execute_node(
+                            node_id,
+                            cache_only=(node_id in plan.cache_only_nodes),
+                            work_batch=work_batch,
+                        )
                         await _component_mark_node_finish(
                             node_id,
                             ok=bool(result.get("ok")),

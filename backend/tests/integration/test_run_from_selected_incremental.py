@@ -266,6 +266,19 @@ async def test_run_from_selected_uses_trusted_pinned_artifact_without_upstream_r
         and e.get("nodeId") == "tool_mid"
         and e.get("decision") == "cache_miss"
     ]
+    trace_messages = [
+        str(e.get("message") or "")
+        for e in events_2
+        if e.get("type") == "log"
+    ]
+    assert any("[trace][pin.backend_parse]" in msg for msg in trace_messages)
+    assert any("[trace][pin.plan]" in msg for msg in trace_messages)
+    execute_msgs = [
+        msg for msg in trace_messages
+        if "[trace][pin.execute_decision]" in msg and '"nodeId": "tool_mid"' in msg
+    ]
+    assert len(execute_msgs) == 1
+    assert "PIN_TRUSTED_ARTIFACT_PRESENT" in execute_msgs[0]
     run_finished = [e for e in events_2 if e.get("type") == "run_finished"]
     assert run_finished and run_finished[-1].get("status") == "succeeded"
 
@@ -568,3 +581,581 @@ async def test_pinned_component_reuses_boundary_artifact_for_downstream(monkeypa
     assert calls["source"] == 1
     assert observed_upstream_for_end
     assert observed_upstream_for_end[-1] == [pinned_artifact_id]
+
+
+@pytest.mark.asyncio
+async def test_run_from_selected_respects_pinned_internal_component_node_from_graph_meta(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"tool": 0}
+    calls_by_node: dict[str, int] = {}
+    observed_upstream_for_end: list[list[str]] = []
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        calls["tool"] += 1
+        node_id = str((node or {}).get("id") or "")
+        calls_by_node[node_id] = int(calls_by_node.get(node_id, 0)) + 1
+        if node_id == "tool_end":
+            observed_upstream_for_end.append(
+                sorted([str(a) for a in (upstream_artifact_ids or []) if str(a).strip()])
+            )
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node_id}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    internal_node_id = "cmp:component_wrap:n_summary"
+    internal_seed_graph = {
+        "nodes": [
+            {
+                "id": internal_node_id,
+                "data": {
+                    "kind": "tool",
+                    "label": "Internal Summary",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                },
+            }
+        ],
+        "edges": [],
+    }
+    seed_events = []
+    await run_mod.run_graph(
+        run_id="run-seed-internal-pin",
+        graph=internal_seed_graph,
+        run_from=None,
+        bus=RunEventBus("run-seed-internal-pin", on_emit=lambda e: seed_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-internal-pin",
+    )
+    internal_seed_outputs = [
+        e for e in seed_events if e.get("type") == "node_output" and e.get("nodeId") == internal_node_id
+    ]
+    assert internal_seed_outputs
+    internal_artifact_id = str(internal_seed_outputs[-1].get("artifactId") or "").strip()
+    assert internal_artifact_id
+    assert calls["tool"] == 1
+
+    run_id = "run-from-selected-internal-pin"
+    component_revision = types.SimpleNamespace(
+        definition={
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "n_summary",
+                        "data": {
+                            "kind": "tool",
+                            "label": "Internal Summary",
+                            "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                            "meta": {"freeze": {"enabled": True, "mode": "sticky"}},
+                        },
+                    }
+                ],
+                "edges": [],
+            }
+        }
+    )
+
+    class _ComponentStore:
+        def get_revision(self, component_id, revision_id):
+            if str(component_id) == "cmp_test" and str(revision_id) == "crev_test":
+                return component_revision
+            return None
+
+    runtime_ref = types.SimpleNamespace(
+        component_revisions=_ComponentStore(),
+        runs={
+            run_id: types.SimpleNamespace(
+                node_bindings={
+                    internal_node_id: {
+                        "status": "succeeded",
+                        "current": {"artifactId": internal_artifact_id, "execKey": "trusted-internal-pin"},
+                        "outputLineage": {
+                            "out": {"artifactId": internal_artifact_id, "execKey": "trusted-internal-pin"}
+                        },
+                    }
+                }
+            )
+        },
+    )
+
+    graph = {
+        "nodes": [
+            {
+                "id": "component_wrap",
+                "data": {
+                    "kind": "component",
+                    "label": "Component",
+                    "params": {
+                        "componentRef": {"componentId": "cmp_test", "revisionId": "crev_test", "apiVersion": "v1"},
+                        "api": {
+                            "outputs": [{"name": "summary", "required": True, "typedSchema": {"type": "json"}}]
+                        },
+                        "published_profile": [
+                            {
+                                "kind": "data_output",
+                                "alias": "summary",
+                                "handle_id": "data_out::summary",
+                                "internal_source_path": "n_summary.out",
+                            }
+                        ],
+                    },
+                },
+            },
+            {
+                "id": "tool_end",
+                "data": {
+                    "kind": "tool",
+                    "label": "Downstream",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                },
+            },
+        ],
+        "edges": [
+            {
+                "id": "e_component_end",
+                "source": "component_wrap",
+                "sourceHandle": "summary",
+                "target": "tool_end",
+                "targetHandle": "in",
+            },
+        ],
+    }
+
+    events = []
+    await run_mod.run_graph(
+        run_id=run_id,
+        graph=graph,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus(run_id, on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-internal-pin",
+        runtime_ref=runtime_ref,
+    )
+
+    # Seed run executes internal once; from-selected run must not re-execute pinned internal node.
+    assert calls_by_node.get(internal_node_id, 0) == 1
+    if observed_upstream_for_end:
+        assert observed_upstream_for_end[-1] == [internal_artifact_id]
+
+    trace_messages = [str(e.get("message") or "") for e in events if e.get("type") == "log"]
+    backend_parse_with_graph_pin = any(
+        "[trace][pin.backend_parse]" in msg
+        and "graphPinnedNodeIdsParsed" in msg
+        and internal_node_id in msg
+        for msg in trace_messages
+    )
+    assert backend_parse_with_graph_pin, trace_messages
+    execute_reuse_trace = any(
+        "[trace][pin.execute_decision]" in msg
+        and '"nodeId": "cmp:component_wrap:n_summary"' in msg
+        and '"decision": "reuse"' in msg
+        and "PIN_TRUSTED_ARTIFACT_PRESENT" in msg
+        for msg in trace_messages
+    )
+    assert execute_reuse_trace, trace_messages
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished and run_finished[-1].get("status") == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_run_from_selected_derives_nested_internal_pin_hints_from_component_lineage(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls_by_node: dict[str, int] = {}
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        node_id = str((node or {}).get("id") or "")
+        calls_by_node[node_id] = int(calls_by_node.get(node_id, 0)) + 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node_id}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    nested_internal_runtime_id = "cmp:component_wrap:cmp:inner_node:n_leaf"
+    seed_events = []
+    await run_mod.run_graph(
+        run_id="run-seed-nested-internal-pin",
+        graph={
+            "nodes": [
+                {
+                    "id": nested_internal_runtime_id,
+                    "data": {
+                        "kind": "tool",
+                        "label": "Nested Internal Leaf",
+                        "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                    },
+                }
+            ],
+            "edges": [],
+        },
+        run_from=None,
+        bus=RunEventBus("run-seed-nested-internal-pin", on_emit=lambda e: seed_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-nested-internal-pin",
+    )
+    seeded = [
+        e for e in seed_events if e.get("type") == "node_output" and e.get("nodeId") == nested_internal_runtime_id
+    ]
+    assert seeded
+    nested_artifact_id = str(seeded[-1].get("artifactId") or "").strip()
+    assert nested_artifact_id
+    assert calls_by_node.get(nested_internal_runtime_id, 0) == 1
+
+    component_revision_inner = types.SimpleNamespace(
+        definition={
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "n_leaf",
+                        "data": {
+                            "kind": "tool",
+                            "label": "Inner Leaf",
+                            "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                            "meta": {
+                                "freeze": {"enabled": True, "mode": "sticky"},
+                                "freezeLineage": {
+                                    "artifactId": nested_artifact_id,
+                                    "execKey": "trusted-nested-pin",
+                                    "outputs": {
+                                        "out": {
+                                            "artifactId": nested_artifact_id,
+                                            "execKey": "trusted-nested-pin",
+                                        }
+                                    },
+                                },
+                            },
+                        },
+                    }
+                ],
+                "edges": [],
+            }
+        }
+    )
+
+    component_revision_outer = types.SimpleNamespace(
+        definition={
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "inner_node",
+                        "data": {
+                            "kind": "component",
+                            "label": "Inner Component Node",
+                            "params": {
+                                "componentRef": {
+                                    "componentId": "cmp_inner",
+                                    "revisionId": "crev_inner",
+                                    "apiVersion": "v1",
+                                },
+                                "api": {
+                                    "outputs": [
+                                        {"name": "summary", "required": True, "typedSchema": {"type": "json"}}
+                                    ]
+                                },
+                                "published_profile": [
+                                    {
+                                        "kind": "data_output",
+                                        "alias": "summary",
+                                        "handle_id": "data_out::summary",
+                                        "internal_source_path": "n_leaf.out",
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                ],
+                "edges": [],
+            }
+        }
+    )
+
+    class _ComponentStore:
+        def get_revision(self, component_id, revision_id):
+            component_id = str(component_id)
+            revision_id = str(revision_id)
+            if component_id == "cmp_outer" and revision_id == "crev_outer":
+                return component_revision_outer
+            if component_id == "cmp_inner" and revision_id == "crev_inner":
+                return component_revision_inner
+            return None
+
+    graph = {
+        "nodes": [
+            {
+                "id": "component_wrap",
+                "data": {
+                    "kind": "component",
+                    "label": "Outer Component",
+                    "params": {
+                        "componentRef": {"componentId": "cmp_outer", "revisionId": "crev_outer", "apiVersion": "v1"},
+                        "api": {"outputs": [{"name": "summary", "required": True, "typedSchema": {"type": "json"}}]},
+                        "published_profile": [
+                            {
+                                "kind": "data_output",
+                                "alias": "summary",
+                                "handle_id": "data_out::summary",
+                                "internal_source_path": "inner_node.summary",
+                            }
+                        ],
+                    },
+                },
+            },
+            {
+                "id": "tool_end",
+                "data": {
+                    "kind": "tool",
+                    "label": "Downstream",
+                    "params": {"provider": "builtin", "builtin": {"toolId": "noop", "args": {}}},
+                },
+            },
+        ],
+        "edges": [
+            {
+                "id": "e_component_end",
+                "source": "component_wrap",
+                "sourceHandle": "summary",
+                "target": "tool_end",
+                "targetHandle": "in",
+            }
+        ],
+    }
+
+    events = []
+    await run_mod.run_graph(
+        run_id="run-from-selected-nested-internal-pin",
+        graph=graph,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-from-selected-nested-internal-pin", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-nested-internal-pin",
+        runtime_ref=types.SimpleNamespace(component_revisions=_ComponentStore(), runs={}),
+    )
+
+    assert calls_by_node.get(nested_internal_runtime_id, 0) == 1
+
+    trace_messages = [str(e.get("message") or "") for e in events if e.get("type") == "log"]
+    assert any(
+        "[trace][pin.backend_parse]" in msg
+        and "graphPinnedDerivedLineageNodeIds" in msg
+        and nested_internal_runtime_id in msg
+        for msg in trace_messages
+    ), trace_messages
+    assert any(
+        "[trace][pin.execute_decision]" in msg
+        and f'"nodeId": "{nested_internal_runtime_id}"' in msg
+        and '"decision": "reuse"' in msg
+        and "PIN_TRUSTED_ARTIFACT_PRESENT" in msg
+        for msg in trace_messages
+    ), trace_messages
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished and run_finished[-1].get("status") == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_run_from_selected_pinned_artifact_missing_emits_pin_execute_fail_trace(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"source": 0, "tool": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        calls["source"] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        calls["tool"] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    graph = _graph()
+    graph["__executionHints"] = {
+        "pinnedNodeIds": ["tool_mid"],
+        "pinnedArtifacts": {
+            "tool_mid": {
+                "artifactId": "missing-artifact-id",
+                "execKey": "trusted-mid-missing",
+            }
+        },
+    }
+
+    events = []
+    await run_mod.run_graph(
+        run_id="run-from-end-pin-missing-artifact",
+        graph=graph,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-from-end-pin-missing-artifact", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-pin-missing-artifact",
+    )
+
+    # Pinned ancestor should fail in trusted-pin branch before normal execution.
+    assert calls["source"] == 0
+
+    trace_messages = [
+        str(e.get("message") or "")
+        for e in events
+        if e.get("type") == "log"
+    ]
+    assert any("[trace][pin.backend_parse]" in msg for msg in trace_messages)
+    assert any("[trace][pin.plan]" in msg for msg in trace_messages)
+    assert any(
+        "[trace][pin.execute_decision]" in msg and "PIN_TRUSTED_ARTIFACT_MISSING_IN_STORE" in msg
+        for msg in trace_messages
+    )
+
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished and run_finished[-1].get("status") == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_from_selected_pin_plan_marks_not_in_subgraph_reason(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    graph = _graph()
+    graph["__executionHints"] = {
+        "pinnedNodeIds": ["ghost_node"],
+        "pinnedArtifacts": {
+            "ghost_node": {
+                "artifactId": "ghost-artifact",
+                "execKey": "ghost-exec",
+            }
+        },
+    }
+    events = []
+    await run_mod.run_graph(
+        run_id="run-pin-not-in-subgraph",
+        graph=graph,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-pin-not-in-subgraph", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-pin-not-in-subgraph",
+    )
+
+    trace_messages = [
+        str(e.get("message") or "")
+        for e in events
+        if e.get("type") == "log"
+    ]
+    assert any("[trace][pin.plan]" in msg and "PIN_HINT_NOT_IN_SUBGRAPH" in msg for msg in trace_messages)
+
+
+@pytest.mark.asyncio
+async def test_run_from_selected_cache_only_without_trusted_pin_emits_fallback_recompute(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    graph = _graph()
+    graph["__executionHints"] = {
+        "pinnedNodeIds": ["tool_mid"],
+        "pinnedArtifacts": {
+            # Missing execKey forces parse rejection for trusted pin payload.
+            "tool_mid": {
+                "artifactId": "some-artifact",
+            }
+        },
+    }
+
+    events = []
+    await run_mod.run_graph(
+        run_id="run-pin-fallback-recompute",
+        graph=graph,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-pin-fallback-recompute", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-pin-fallback-recompute",
+    )
+
+    trace_messages = [
+        str(e.get("message") or "")
+        for e in events
+        if e.get("type") == "log"
+    ]
+    assert any(
+        "[trace][pin.execute_decision]" in msg and "PIN_FALLBACK_RECOMPUTE" in msg and '"nodeId": "tool_mid"' in msg
+        for msg in trace_messages
+    )

@@ -169,6 +169,7 @@ export function applyRunEventState(state: GraphState, evt: KnownRunEvent, runId:
 }
 
 let pauseResumeTraceEnabled = false;
+let pinHintTraceEnabled = false;
 
 const PAUSE_RESUME_RUN_STATUS_TRACE = new Set<RunStatus>(['pausing', 'paused', 'resuming']);
 const PAUSE_RESUME_FORCE_TRACE_EVENTS = new Set<string>([
@@ -199,6 +200,14 @@ export function __setPauseResumeTraceEnabledForTest(enabled: boolean): void {
 
 export function getPauseResumeTraceEnabled(): boolean {
 	return pauseResumeTraceEnabled;
+}
+
+export function __setPinHintTraceEnabledForTest(enabled: boolean): void {
+	pinHintTraceEnabled = Boolean(enabled);
+}
+
+export function getPinHintTraceEnabled(): boolean {
+	return pinHintTraceEnabled;
 }
 
 function buildPauseResumeTraceDetails(evt: KnownRunEvent): string {
@@ -553,6 +562,144 @@ export function collectPinnedArtifactsByNode(
 	return out;
 }
 
+function countPinnedOutputLineageHandles(binding: NormalizedNodeBinding): number {
+	const rawOutputLineage =
+		((binding as any)?.outputLineage && typeof (binding as any).outputLineage === 'object'
+			? ((binding as any).outputLineage as Record<string, any>)
+			: null) ?? null;
+	if (!rawOutputLineage) return 0;
+	let count = 0;
+	for (const [rawHandle, rawPair] of Object.entries(rawOutputLineage)) {
+		const handle = String(rawHandle ?? '').trim();
+		if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+		const artifactId = String((rawPair as any)?.artifactId ?? '').trim();
+		if (!artifactId) continue;
+		count += 1;
+	}
+	return count;
+}
+
+function tracePinCollect(
+	deps: RunDeps,
+	state: GraphState,
+	pinnedNodeIds: string[],
+	pinnedArtifacts: Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }>
+): void {
+	if (!pinHintTraceEnabled || pinnedNodeIds.length === 0) return;
+	const nodesById = new Map<string, Node<PipelineNodeData & Record<string, unknown>>>(
+		(state.nodes as Node<PipelineNodeData & Record<string, unknown>>[]).map((node) => [String(node.id ?? '').trim(), node])
+	);
+	for (const nodeId of pinnedNodeIds) {
+		const node = nodesById.get(nodeId);
+		const kind = String((node?.data as any)?.kind ?? '').trim().toLowerCase() || 'unknown';
+		const binding = _normalizeBinding((state.nodeBindings ?? {})[nodeId], nodeId);
+		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
+		const artifactIdPresent = Boolean(String(lineage?.artifactId ?? '').trim());
+		const execKeyPresent = Boolean(String(lineage?.execKey ?? '').trim());
+		const outputsCount = countPinnedOutputLineageHandles(binding);
+		const hasHint = Boolean(pinnedArtifacts[nodeId]);
+		let reasonCode = 'PIN_HINT_VALID';
+		if (!hasHint && !artifactIdPresent) reasonCode = 'PIN_HINT_INVALID_MISSING_ARTIFACT_ID';
+		else if (!hasHint && !execKeyPresent) reasonCode = 'PIN_HINT_INVALID_MISSING_EXEC_KEY';
+		else if (!hasHint) reasonCode = 'PIN_HINT_DROPPED_SANITIZATION';
+		deps.update((s) =>
+			logPush(
+				s,
+				'info',
+				`[trace][pin.collect] ${stableJson({
+					nodeId,
+					kind,
+					isPinned: true,
+					artifactIdPresent,
+					execKeyPresent,
+					outputsCount,
+					hasHint,
+					reasonCode
+				})}`,
+				nodeId
+			)
+		);
+	}
+}
+
+function tracePinRequestBuild(
+	deps: RunDeps,
+	payload: ReturnType<typeof buildRunCreateRequest>,
+	params: {
+		runFrom: string | null;
+		runMode: ActiveRunMode;
+		pinnedNodeIds: string[];
+		pinnedArtifacts: Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }>;
+	}
+): void {
+	if (!pinHintTraceEnabled) return;
+	const inPinnedNodeIds = Array.from(new Set(params.pinnedNodeIds.map((value) => String(value ?? '').trim()).filter(Boolean)));
+	const inPinnedArtifactNodeIds = Object.keys(params.pinnedArtifacts ?? {}).map((value) => String(value ?? '').trim()).filter(Boolean);
+	const hints = (payload as any)?.graph?.__executionHints ?? {};
+	const outPinnedNodeIds = Array.isArray(hints?.pinnedNodeIds) ? (hints.pinnedNodeIds as string[]) : [];
+	const outPinnedArtifactNodeIds =
+		hints?.pinnedArtifacts && typeof hints.pinnedArtifacts === 'object'
+			? Object.keys(hints.pinnedArtifacts as Record<string, unknown>)
+			: [];
+	const droppedNodeIds = inPinnedNodeIds.filter((nodeId) => !outPinnedNodeIds.includes(nodeId));
+	const droppedArtifactNodeIds = inPinnedArtifactNodeIds.filter((nodeId) => !outPinnedArtifactNodeIds.includes(nodeId));
+	const reasonCode =
+		droppedNodeIds.length > 0 || droppedArtifactNodeIds.length > 0
+			? 'PIN_HINT_DROPPED_SANITIZATION'
+			: 'PIN_HINT_VALID';
+	deps.update((s) =>
+		logPush(
+			s,
+			'info',
+			`[trace][pin.request_build] ${stableJson({
+				runFrom: params.runFrom,
+				runMode: params.runMode,
+				pinnedNodeIdsIn: inPinnedNodeIds,
+				pinnedNodeIdsOut: outPinnedNodeIds,
+				pinnedArtifactsInCount: inPinnedArtifactNodeIds.length,
+				pinnedArtifactsOutCount: outPinnedArtifactNodeIds.length,
+				droppedNodeIds,
+				droppedArtifactNodeIds,
+				reasonCode
+			})}`
+		)
+	);
+}
+
+function tracePinSubmit(
+	deps: RunDeps,
+	payload: ReturnType<typeof buildRunCreateRequest>,
+	params: {
+		graphId: string;
+		runFrom: string | null;
+		runMode: ActiveRunMode;
+		plannedNodeSet: Set<string>;
+	}
+): void {
+	if (!pinHintTraceEnabled) return;
+	const hints = (payload as any)?.graph?.__executionHints ?? {};
+	const pinnedNodeIds = Array.isArray(hints?.pinnedNodeIds) ? (hints.pinnedNodeIds as string[]) : [];
+	const pinnedArtifactsNodeIds =
+		hints?.pinnedArtifacts && typeof hints.pinnedArtifacts === 'object'
+			? Object.keys(hints.pinnedArtifacts as Record<string, unknown>)
+			: [];
+	deps.update((s) =>
+		logPush(
+			s,
+			'info',
+			`[trace][pin.submit] ${stableJson({
+				graphId: params.graphId,
+				runFrom: params.runFrom,
+				runMode: params.runMode,
+				plannedNodeSetSize: params.plannedNodeSet.size,
+				pinnedNodeIds,
+				pinnedArtifactsNodeIds,
+				reasonCode: 'PIN_HINT_VALID'
+			})}`
+		)
+	);
+}
+
 export function clearPerRunPinsOnNodes(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[]
 ): Node<PipelineNodeData & Record<string, unknown>>[] {
@@ -561,6 +708,7 @@ export function clearPerRunPinsOnNodes(
 		if (nodeFreezeMode(node) !== 'per_run') return node;
 		const meta = { ...(((node.data as any)?.meta ?? {}) as Record<string, unknown>) };
 		delete (meta as any).freeze;
+		delete (meta as any).freezeLineage;
 		changed = true;
 		return {
 			...node,
@@ -2641,6 +2789,7 @@ export function createRunManager(deps: RunDeps) {
 				s1.nodes,
 				(s1.nodeBindings ?? {}) as Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
 			);
+			tracePinCollect(deps, s1, pinnedNodeIds, pinnedArtifacts);
 			const clearPerRunPinsIfAny = () => {
 				deps.update((s) => {
 					const nextNodes = clearPerRunPinsOnNodes(s.nodes);
@@ -3007,6 +3156,18 @@ export function createRunManager(deps: RunDeps) {
 					adaptiveMode ?? null
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
+				tracePinRequestBuild(deps, payload, {
+					runFrom,
+					runMode: effectiveRunMode,
+					pinnedNodeIds,
+					pinnedArtifacts
+				});
+				tracePinSubmit(deps, payload, {
+					graphId: s1.graphId,
+					runFrom,
+					runMode: effectiveRunMode,
+					plannedNodeSet
+				});
 				await runSingleWithStream(payload, plannedNodeSet);
 				clearPerRunPinsIfAny();
 				return;
@@ -3061,6 +3222,18 @@ export function createRunManager(deps: RunDeps) {
 						cacheMode,
 						adaptiveMode ?? null
 					);
+					tracePinRequestBuild(deps, payload, {
+						runFrom: null,
+						runMode: 'from_start',
+						pinnedNodeIds,
+						pinnedArtifacts
+					});
+					tracePinSubmit(deps, payload, {
+						graphId: s1.graphId,
+						runFrom: null,
+						runMode: 'from_start',
+						plannedNodeSet: componentSet
+					});
 					const created = await createRun(payload);
 					const { snap, completionSource } = await waitForTerminalViaSse(created.runId, {
 						fallbackIntervalMs: 3000,

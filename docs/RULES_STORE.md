@@ -124,6 +124,8 @@ When there is ambiguity, prefer these rules over ad-hoc assumptions.
 3. Debug logging should not flood indefinitely after run completion.
 4. Pause/resume trace logging is off by default. Toggle via `graphStore.setPauseResumeTraceLoggingEnabled(true|false)` in dev sessions.
 5. Test-only toggle also exists: `__setPauseResumeTraceEnabledForTest(true|false)` in `graphStore.ts`.
+6. Pin-hint trace logging is off by default. Toggle via `graphStore.setPinHintTraceLoggingEnabled(true|false)` in dev sessions.
+7. Test-only pin toggle exists: `__setPinHintTraceEnabledForTest(true|false)` in `graphStore.ts`.
 
 ## Artifact Retention Rules
 
@@ -143,6 +145,7 @@ When there is ambiguity, prefer these rules over ad-hoc assumptions.
 1. When user states a persistent rule, append/update this file in the same PR/change set.
 2. If a new rule conflicts with an older rule, update this file and mark old rule superseded.
 3. Keep rule text concrete and testable.
+4. For pinned-component reuse diagnostics and regression coverage, follow `docs/PINNED_COMPONENT_PIN_HINT_CHECKLIST.md`.
 
 ## Hidden Items
 

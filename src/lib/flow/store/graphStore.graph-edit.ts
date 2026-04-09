@@ -1662,10 +1662,11 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				out = { ok: false, error: 'Node not found.' };
 				return s;
 			}
+			const normalizedBinding = _normalizeBinding(s.nodeBindings?.[nodeId], nodeId);
 			if (mode !== null) {
 				const eligibility = validatePinEligibility(
 					targetNode,
-					_normalizeBinding(s.nodeBindings?.[nodeId], nodeId)
+					normalizedBinding
 				);
 				if (!eligibility.ok) {
 					out = { ok: false, error: eligibility.error };
@@ -1676,13 +1677,42 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 					return logPush({ ...s, inspector }, 'warn', eligibility.error, nodeId);
 				}
 			}
+			const pinnedLineage = (() => {
+				if (mode === null) return null;
+				const lineage =
+					normalizedBinding && (normalizedBinding.last?.artifactId || normalizedBinding.last?.execKey)
+						? normalizedBinding.last
+						: normalizedBinding?.current;
+				const artifactId = String(lineage?.artifactId ?? '').trim();
+				const execKey = String(lineage?.execKey ?? '').trim();
+				if (!artifactId || !execKey) return null;
+				const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
+				const outputLineage = ((normalizedBinding as any)?.outputLineage ?? {}) as Record<string, any>;
+				for (const [rawHandle, rawPair] of Object.entries(outputLineage)) {
+					const handle = String(rawHandle ?? '').trim();
+					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
+					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
+					if (!outputArtifactId) continue;
+					outputs[handle] = outputExecKey
+						? { artifactId: outputArtifactId, execKey: outputExecKey }
+						: { artifactId: outputArtifactId };
+				}
+				return Object.keys(outputs).length > 0
+					? { artifactId, execKey, outputs }
+					: { artifactId, execKey };
+			})();
 			const nodes = s.nodes.map((n) => {
 				if (n.id !== nodeId) return n;
 				const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
 				if (mode === null) {
 					delete (nextMeta as any).freeze;
+					delete (nextMeta as any).freezeLineage;
 				} else {
 					(nextMeta as any).freeze = { enabled: true, mode };
+					if (pinnedLineage) {
+						(nextMeta as any).freezeLineage = pinnedLineage;
+					}
 				}
 				nextMeta.updatedAt = new Date().toISOString();
 				return {

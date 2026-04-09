@@ -71,6 +71,22 @@ void (_logPush as unknown);
 
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
+const COMPONENT_DRAFT_GRAPH_KEY = '__graphDraft';
+
+function readComponentDraftGraph(
+	value: unknown
+): { nodes: unknown[]; edges: unknown[] } | null {
+	if (!value || typeof value !== 'object') return null;
+	const graph = (value as Record<string, unknown>)[COMPONENT_DRAFT_GRAPH_KEY];
+	if (!graph || typeof graph !== 'object') return null;
+	const nodes = Array.isArray((graph as any).nodes) ? ((graph as any).nodes as unknown[]) : null;
+	const edges = Array.isArray((graph as any).edges) ? ((graph as any).edges as unknown[]) : null;
+	if (!nodes || !edges) return null;
+	return {
+		nodes: structuredClone(nodes),
+		edges: structuredClone(edges)
+	};
+}
 
 // ── PART A: Top-level pure function exports ──────────────────────────────────
 
@@ -1296,6 +1312,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					: useEntryDraftParams && entryParams?.api && typeof entryParams.api === 'object'
 						? (entryParams.api as ComponentApiContract)
 						: detailApi;
+			const cachedDraftGraph = readComponentDraftGraph(cachedDraftRaw);
 			const draftExposureRegistry = normalizeExposureRegistry(
 				cachedDraftRaw
 					? cachedDraftRaw?.exposureRegistry
@@ -1317,7 +1334,12 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				debug_profile: draftProfiles.debug_profile,
 				config: {}
 			});
-			const graph = (detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] };
+			const graph = (
+				cachedDraftGraph ?? ((detail?.definition?.graph ?? {}) as { nodes?: unknown[]; edges?: unknown[] })
+			) as {
+				nodes?: unknown[];
+				edges?: unknown[];
+			};
 			const applied = applyGraphDocument(
 				{
 					nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
@@ -1342,7 +1364,10 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					},
 					componentContractDraftCache: {
 						...(s.componentContractDraftCache ?? {}),
-						[draftCacheKey]: contractDraftParams
+						[draftCacheKey]: {
+							...((cachedDraftRaw ?? {}) as Record<string, unknown>),
+							...contractDraftParams
+						}
 					},
 					lastRunStatus: 'never_run' as const,
 					logs: [
@@ -1351,7 +1376,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 							id: nextLogId(),
 							ts: new Date().toLocaleTimeString(),
 							level: 'info' as const,
-							message: `[component-edit] Loaded internals: ${cid}@${rid}`
+							message: `[component-edit] Loaded internals: ${cid}@${rid}${cachedDraftGraph ? ' (draft graph)' : ''}`
 						}
 					]
 				};
@@ -1370,8 +1395,21 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 		if (!session) return { ok: false as const, reason: 'no_component_edit_session' as const };
 		const snapshot = session.snapshot;
 		const parentSession = session.parentSession ? structuredClone(session.parentSession) : null;
+		const cacheKey = `${String(session.componentId ?? '').trim()}@${String(session.revisionId ?? '').trim()}`;
 		update((s) => {
 			const nextEditingContext: EditorContext = parentSession ? 'component' : 'graph';
+			const existingDraftCacheEntry =
+				cacheKey && s.componentContractDraftCache && typeof s.componentContractDraftCache === 'object'
+					? ((s.componentContractDraftCache[cacheKey] as Record<string, any> | undefined) ?? {})
+					: {};
+			const nextDraftCacheEntry = {
+				...(existingDraftCacheEntry ?? {}),
+				...(session.contractDraftParams ?? {}),
+				[COMPONENT_DRAFT_GRAPH_KEY]: {
+					nodes: structuredClone(s.nodes),
+					edges: structuredClone(s.edges)
+				}
+			};
 			const next: GraphState = {
 				...s,
 				graphId: snapshot.graphId,
@@ -1402,7 +1440,13 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				),
 				activeRunId: snapshot.activeRunId,
 				editingContext: nextEditingContext,
-				componentEditSession: parentSession
+				componentEditSession: parentSession,
+				componentContractDraftCache: cacheKey
+					? {
+							...(s.componentContractDraftCache ?? {}),
+							[cacheKey]: nextDraftCacheEntry
+						}
+					: (s.componentContractDraftCache ?? {})
 			};
 			persist(next);
 			return withGraphMeta(next);
@@ -1467,10 +1511,22 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 			const baseline = sanitizeComponentDraftParams(session.contractDraftParams ?? {});
 			const changed = stableJson(nextDraft) !== stableJson(baseline);
 			const cacheKey = `${String(session.componentId ?? '').trim()}@${String(session.revisionId ?? '').trim()}`;
+			const existingCacheEntry =
+				cacheKey && s.componentContractDraftCache && typeof s.componentContractDraftCache === 'object'
+					? ((s.componentContractDraftCache[cacheKey] as Record<string, any> | undefined) ?? {})
+					: {};
 			const nextNotice =
 				intent === 'system_canonicalize' && changed
 					? String(opts?.notice ?? 'Component contract normalized automatically.')
 					: null;
+			const nextCacheEntry =
+				COMPONENT_DRAFT_GRAPH_KEY in (existingCacheEntry ?? {})
+					? {
+							...nextDraft,
+							[COMPONENT_DRAFT_GRAPH_KEY]:
+								(existingCacheEntry as Record<string, unknown>)[COMPONENT_DRAFT_GRAPH_KEY]
+						}
+					: nextDraft;
 			updated = true;
 			return {
 				...s,
@@ -1481,7 +1537,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				componentContractDraftCache: cacheKey
 					? {
 							...(s.componentContractDraftCache ?? {}),
-							[cacheKey]: nextDraft
+							[cacheKey]: nextCacheEntry
 						}
 					: (s.componentContractDraftCache ?? {}),
 				inspector: {

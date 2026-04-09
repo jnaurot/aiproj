@@ -476,6 +476,7 @@ export function createInspectorManager(deps: InspectorDeps) {
 					if (n.id !== nodeId) return n;
 					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
 					delete (nextMeta as any).freeze;
+					delete (nextMeta as any).freezeLineage;
 					return {
 						...n,
 						data: {

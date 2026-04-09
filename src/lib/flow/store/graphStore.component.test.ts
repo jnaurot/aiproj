@@ -1412,6 +1412,180 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('preserves internal node pin metadata across return + reopen for same component revision', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_pin/revisions/crev_pin') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_pin',
+						revisionId: 'crev_pin',
+						parentRevisionId: null,
+						createdAt: '2026-04-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'source', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_pin', 'crev_pin', componentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+			graphStore.setNodeMeta('n_internal_source', {
+				freeze: { enabled: true, mode: 'sticky' }
+			});
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+
+			const reopened = await graphStore.openComponentRevisionForEditing('cmp_pin', 'crev_pin', componentNodeId);
+			expect((reopened as any)?.ok).toBe(true);
+			const state = get(graphStore);
+			const internal = state.nodes.find((n) => n.id === 'n_internal_source');
+			expect((internal?.data as any)?.meta?.freeze).toEqual({ enabled: true, mode: 'sticky' });
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('preserves per-run and sticky pin modes across component draft reopen', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_pin_mode/revisions/crev_pin_mode') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_pin_mode',
+						revisionId: 'crev_pin_mode',
+						parentRevisionId: null,
+						createdAt: '2026-04-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: []
+							},
+							api: {
+								inputs: [],
+								outputs: [{ name: 'source', payloadType: 'text', required: true, typedSchema: { type: 'text', fields: [] } }]
+							},
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const openedPerRun = await graphStore.openComponentRevisionForEditing(
+				'cmp_pin_mode',
+				'crev_pin_mode',
+				componentNodeId
+			);
+			expect((openedPerRun as any)?.ok).toBe(true);
+			graphStore.setNodeMeta('n_internal_source', {
+				freeze: { enabled: true, mode: 'per_run' }
+			});
+			expect((graphStore.returnFromComponentEditSession() as any)?.ok).toBe(true);
+			expect(
+				(
+					get(graphStore).componentContractDraftCache['cmp_pin_mode@crev_pin_mode'] as any
+				)?.__graphDraft?.nodes?.[0]?.data?.meta?.freeze
+			).toEqual({ enabled: true, mode: 'per_run' });
+
+			const reopenedPerRun = await graphStore.openComponentRevisionForEditing(
+				'cmp_pin_mode',
+				'crev_pin_mode',
+				componentNodeId
+			);
+			expect((reopenedPerRun as any)?.ok).toBe(true);
+			let state = get(graphStore);
+			let internal = state.nodes.find((n) => n.id === 'n_internal_source');
+			expect((internal?.data as any)?.meta?.freeze).toEqual({ enabled: true, mode: 'per_run' });
+
+			graphStore.setNodeMeta('n_internal_source', {
+				freeze: { enabled: true, mode: 'sticky' }
+			});
+			expect((graphStore.returnFromComponentEditSession() as any)?.ok).toBe(true);
+			expect(
+				(
+					get(graphStore).componentContractDraftCache['cmp_pin_mode@crev_pin_mode'] as any
+				)?.__graphDraft?.nodes?.[0]?.data?.meta?.freeze
+			).toEqual({ enabled: true, mode: 'sticky' });
+
+			const reopenedSticky = await graphStore.openComponentRevisionForEditing(
+				'cmp_pin_mode',
+				'crev_pin_mode',
+				componentNodeId
+			);
+			expect((reopenedSticky as any)?.ok).toBe(true);
+			state = get(graphStore);
+			internal = state.nodes.find((n) => n.id === 'n_internal_source');
+			expect((internal?.data as any)?.meta?.freeze).toEqual({ enabled: true, mode: 'sticky' });
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
 	it('persists toggled output required flag when apply scope is this instance (one)', async () => {
 		graphStore.hardResetGraph();
 		const firstComponentNodeId = graphStore.addNode('component', { x: 40, y: 40 });
