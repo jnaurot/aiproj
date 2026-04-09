@@ -39,7 +39,9 @@
       "Bash(grep -n \"async function runRemote\\\\|clearPerRunPinsIfAny\\(\\);\\\\|const current = deps.getState\\(\\) as GraphState;\\\\s*$\\\\|deps\\\\.persist\\(current\\);\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore.run.ts)",
       "Bash(grep -n \"- \\\\[ \\\\] \\\\`graphStore.run\\\\|- \\\\[ \\\\] \\\\`graphStore.run\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/REFACTOR_PLAN.MD)",
       "Bash(grep -n \"setSourceKind\\(nodeId: string, nextKind: SourceKind\\)\\\\|loadGraphDocument\\(graph: { nodes: unknown\\\\[\\\\]; edges: unknown\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore.ts)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(grep -r \"pinned\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)",
+      "Bash(grep -n \"freeze.*enabled\\\\|\\\\.freeze\\\\s*=\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)"
     ]
   }
 }

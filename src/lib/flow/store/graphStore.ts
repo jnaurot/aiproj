@@ -21,7 +21,13 @@ export {
 	__computeEdgeSchemaDiagnosticsForTest,
 	__normalizeSchemaFieldsForTest,
 } from './graphStore.node-schema';
-import { saveGraphToLocalStorage, loadGraphFromLocalStorage, emptyGraph } from './persist';
+import {
+	saveGraphToLocalStorage,
+	loadGraphFromLocalStorage,
+	emptyGraph,
+	saveComponentDraftCache,
+	loadComponentDraftCache
+} from './persist';
 import {
 	acceptNodeParams,
 	getRun,
@@ -225,7 +231,7 @@ const initialState: GraphState = {
 	activeRunId: null,
 	editingContext: 'graph',
 	componentEditSession: null,
-	componentContractDraftCache: {}
+	componentContractDraftCache: loadComponentDraftCache() as Record<string, any>
 };
 
 export const graphStore = (() => {
@@ -432,7 +438,10 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 
 	function persist(state: GraphState) {
-		saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
+		if (state.editingContext !== 'component') {
+			saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
+		}
+		saveComponentDraftCache((state.componentContractDraftCache ?? {}) as Record<string, unknown>);
 	}
 
 	// ── inspector manager ────────────────────────────────────────────────────

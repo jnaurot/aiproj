@@ -1586,6 +1586,161 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('blocks graph save actions while editing a component revision', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_save_guard/revisions/crev_save_guard') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_save_guard',
+						revisionId: 'crev_save_guard',
+						parentRevisionId: null,
+						createdAt: '2026-04-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: { nodes: [], edges: [] },
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_save_guard',
+				'crev_save_guard',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+
+			const save = await graphStore.saveGraph('save');
+			expect((save as any)?.ok).toBe(false);
+			expect(String((save as any)?.reason ?? '')).toBe('in_component_edit');
+
+			const saveVersion = await graphStore.saveGraphVersion('v1', 'save');
+			expect((saveVersion as any)?.ok).toBe(false);
+			expect(String((saveVersion as any)?.reason ?? '')).toBe('in_component_edit');
+
+			const saveAs = await graphStore.saveGraphAs('new-graph', 'save');
+			expect((saveAs as any)?.ok).toBe(false);
+			expect(String((saveAs as any)?.reason ?? '')).toBe('in_component_edit');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('saves component revision with sticky pins and strips per-run pin metadata', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+		let postedBody: any = null;
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_save/revisions/crev_old') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_save',
+						revisionId: 'crev_old',
+						parentRevisionId: null,
+						createdAt: '2026-04-09T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_sticky',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: { kind: 'source', sourceKind: 'file', label: 'sticky', params: {}, status: 'idle' }
+									},
+									{
+										id: 'n_per_run',
+										type: 'source',
+										position: { x: 60, y: 10 },
+										data: { kind: 'source', sourceKind: 'file', label: 'per_run', params: {}, status: 'idle' }
+									}
+								],
+								edges: []
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			if (url.includes('/api/components') && method === 'POST') {
+				postedBody = init?.body ? JSON.parse(String(init.body)) : null;
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_save',
+						revisionId: 'crev_new',
+						parentRevisionId: 'crev_old',
+						createdAt: '2026-04-09T00:00:01Z',
+						message: 'save_component',
+						checksum: 'new'
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_save', 'crev_old', componentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+
+			graphStore.setNodeMeta('n_sticky', {
+				freeze: { enabled: true, mode: 'sticky' },
+				freezeLineage: { artifactId: 'a-sticky', execKey: 'e-sticky' }
+			});
+			graphStore.setNodeMeta('n_per_run', {
+				freeze: { enabled: true, mode: 'per_run' },
+				freezeLineage: { artifactId: 'a-per-run', execKey: 'e-per-run' }
+			});
+
+			const save = await graphStore.saveComponentRevision({ message: 'save_component' });
+			expect((save as any)?.ok).toBe(true);
+			expect(String((save as any)?.revisionId ?? '')).toBe('crev_new');
+			expect(String(postedBody?.parentRevisionId ?? '')).toBe('crev_old');
+
+			const savedNodes = Array.isArray(postedBody?.graph?.nodes) ? postedBody.graph.nodes : [];
+			const savedSticky = savedNodes.find((n: any) => String(n?.id ?? '') === 'n_sticky');
+			const savedPerRun = savedNodes.find((n: any) => String(n?.id ?? '') === 'n_per_run');
+			expect((savedSticky?.data as any)?.meta?.freeze).toEqual({ enabled: true, mode: 'sticky' });
+			expect((savedPerRun?.data as any)?.meta?.freeze).toBeUndefined();
+			expect((savedPerRun?.data as any)?.meta?.freezeLineage).toBeUndefined();
+
+			const state = get(graphStore);
+			expect(String((state.componentEditSession as any)?.revisionId ?? '')).toBe('crev_new');
+			expect((state.componentContractDraftCache as any)?.['cmp_save@crev_old']).toBeUndefined();
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
 	it('persists toggled output required flag when apply scope is this instance (one)', async () => {
 		graphStore.hardResetGraph();
 		const firstComponentNodeId = graphStore.addNode('component', { x: 40, y: 40 });

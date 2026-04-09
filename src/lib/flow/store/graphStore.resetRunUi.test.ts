@@ -226,6 +226,66 @@ describe('graphStore resetRunUiState', () => {
 		expect(next.nodeBindings.n1?.last?.artifactId ?? null).toBe('art-current');
 	});
 
+	it('collects pinned artifacts from freezeLineage when nodeBindings are empty', () => {
+		const nodes = [
+			{
+				id: 'n_pinned',
+				type: 'transform',
+				position: { x: 0, y: 0 },
+				data: {
+					kind: 'transform',
+					label: 'Pinned internal',
+					params: {},
+					meta: {
+						freeze: { enabled: true, mode: 'sticky' },
+						freezeLineage: { artifactId: 'art-from-meta', execKey: 'exec-from-meta' }
+					}
+				}
+			}
+		] as any;
+		const pinnedArtifacts = __collectPinnedArtifactsByNodeForTest(nodes, {} as any);
+		expect(pinnedArtifacts).toEqual({
+			n_pinned: { artifactId: 'art-from-meta', execKey: 'exec-from-meta' }
+		});
+	});
+
+	it('collects component pinned output hints from freezeLineage outputs fallback', () => {
+		const nodes = [
+			{
+				id: 'n_component',
+				type: 'component',
+				position: { x: 0, y: 0 },
+				data: {
+					kind: 'component',
+					label: 'Pinned component',
+					params: {},
+					meta: {
+						freeze: { enabled: true, mode: 'sticky' },
+						freezeLineage: {
+							artifactId: 'art-component',
+							execKey: 'exec-component',
+							outputs: {
+								summary: { artifactId: 'art-summary', execKey: 'exec-summary' },
+								source: { artifactId: 'art-source', execKey: 'exec-source' }
+							}
+						}
+					}
+				}
+			}
+		] as any;
+		const pinnedArtifacts = __collectPinnedArtifactsByNodeForTest(nodes, {} as any);
+		expect(pinnedArtifacts).toEqual({
+			n_component: {
+				artifactId: 'art-component',
+				execKey: 'exec-component',
+				outputs: {
+					summary: { artifactId: 'art-summary', execKey: 'exec-summary' },
+					source: { artifactId: 'art-source', execKey: 'exec-source' }
+				}
+			}
+		});
+	});
+
 	it('clears transient run visuals and runtime fields while keeping graph shape', () => {
 		const state = {
 			graphId: 'g-reset-transient',

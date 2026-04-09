@@ -2,6 +2,7 @@
 import type { PipelineGraphDTO } from "$lib/flow/types";
 
 const KEY = "flow:graph:v1";
+const DRAFT_CACHE_KEY = "flow:componentDraftCache:v1";
 const SCHEMA_VERSION = 1;
 
 function hasLocalStorage(): boolean {
@@ -91,6 +92,27 @@ export function getGraphDraftInfo(): { updatedAt?: string | null; graphId?: stri
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
       graphId: typeof parsed.graphId === "string" ? parsed.graphId : null
     };
+  } catch {
+    return {};
+  }
+}
+
+export function saveComponentDraftCache(cache: Record<string, unknown>): void {
+  if (!hasLocalStorage()) return;
+  try {
+    window.localStorage.setItem(DRAFT_CACHE_KEY, JSON.stringify(cache ?? {}));
+  } catch (e) {
+    console.warn("Failed to save component draft cache to localStorage", e);
+  }
+}
+
+export function loadComponentDraftCache(): Record<string, unknown> {
+  if (!hasLocalStorage()) return {};
+  try {
+    const raw = window.localStorage.getItem(DRAFT_CACHE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
   } catch {
     return {};
   }

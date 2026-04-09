@@ -897,6 +897,14 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 
 	async function saveGraph(message?: string, opts?: { graphName?: string }) {
 		const current = getState();
+		if (current.editingContext === 'component') {
+			return {
+				ok: false,
+				reason: 'in_component_edit' as const,
+				error:
+					'Cannot save graph while in component edit mode. Exit component edit, or use saveComponentRevision.'
+			};
+		}
 		const graphId = String(current.graphId ?? '').trim();
 		if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
 		const pendingDraftDiagnostic = pendingInspectorDraftSaveDiagnostic(current);
@@ -968,6 +976,14 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 
 	async function saveGraphVersion(versionName: string, message?: string) {
 		const current = getState();
+		if (current.editingContext === 'component') {
+			return {
+				ok: false,
+				reason: 'in_component_edit' as const,
+				error:
+					'Cannot save graph while in component edit mode. Exit component edit, or use saveComponentRevision.'
+			};
+		}
 		const graphId = String(current.graphId ?? '').trim();
 		const nextVersionName = String(versionName ?? '').trim();
 		if (!graphId) return { ok: false, reason: 'missing_graph_id' as const };
@@ -1043,6 +1059,14 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 		const nextGraphName = String(graphName ?? '').trim();
 		if (!nextGraphName) return { ok: false, reason: 'missing_graph_name' as const };
 		const current = getState();
+		if (current.editingContext === 'component') {
+			return {
+				ok: false,
+				reason: 'in_component_edit' as const,
+				error:
+					'Cannot save graph while in component edit mode. Exit component edit, or use saveComponentRevision.'
+			};
+		}
 		const pendingDraftDiagnostic = pendingInspectorDraftSaveDiagnostic(current);
 		if (pendingDraftDiagnostic) {
 			return {
@@ -1114,6 +1138,89 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				createdAt: String(created.createdAt),
 				diagnostics: preflight.diagnostics
 			};
+		} catch (error) {
+			return { ok: false, reason: 'save_failed' as const, error: String(error) };
+		}
+	}
+
+	async function saveComponentRevision(opts?: { message?: string }) {
+		const s = getState();
+		const session = s.componentEditSession;
+		if (!session || s.editingContext !== 'component') {
+			return { ok: false, reason: 'not_in_component_edit' as const };
+		}
+		const cid = String(session.componentId ?? '').trim();
+		const rid = String(session.revisionId ?? '').trim();
+		if (!cid || !rid) return { ok: false, reason: 'missing_component_ref' as const };
+
+		const cleanNodes = (s.nodes as any[]).map((node) => {
+			const freeze = (node?.data as any)?.meta?.freeze;
+			if ((freeze as any)?.mode !== 'per_run') return node;
+			const nextMeta = { ...(((node?.data as any)?.meta ?? {}) as Record<string, unknown>) };
+			delete (nextMeta as any).freeze;
+			delete (nextMeta as any).freezeLineage;
+			return {
+				...node,
+				data: {
+					...(node.data ?? {}),
+					meta: nextMeta
+				}
+			};
+		});
+		const strictGraph = buildPersistableGraphStrict(cleanNodes as any, s.edges as any);
+		if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
+
+		try {
+			const existingDetail = await getComponentRevision(cid, rid);
+			const created = await createComponentRevision({
+				componentId: cid,
+				parentRevisionId: rid,
+				message: String(opts?.message ?? '').trim() || 'save_component',
+				schemaVersion: Number((existingDetail as any)?.schemaVersion ?? 1) || 1,
+				graph: {
+					nodes: strictGraph.graph.nodes,
+					edges: strictGraph.graph.edges
+				},
+				api: ((existingDetail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract),
+				configSchema: structuredClone(
+					(existingDetail?.definition?.configSchema ?? {}) as Record<string, unknown>
+				),
+				exposureRegistry: structuredClone(
+					Array.isArray((existingDetail?.definition as any)?.exposureRegistry)
+						? ((existingDetail?.definition as any).exposureRegistry as unknown[])
+						: []
+				)
+			});
+			const nextRid = String((created as any)?.revisionId ?? '').trim();
+			if (!nextRid) return { ok: false, reason: 'save_failed' as const, error: 'missing_revision_id' };
+			const updateResult = updateComponentEditSessionRevision(nextRid);
+			if (!(updateResult as any)?.ok) {
+				return {
+					ok: false,
+					reason: 'save_failed' as const,
+					error: String((updateResult as any)?.reason ?? 'revision_update_failed')
+				};
+			}
+			const oldCacheKey = `${cid}@${rid}`;
+			const newCacheKey = `${cid}@${nextRid}`;
+			update((state) => {
+				const prevCache = (state.componentContractDraftCache ?? {}) as Record<string, unknown>;
+				const oldEntry =
+					oldCacheKey && oldCacheKey in prevCache ? (prevCache[oldCacheKey] as Record<string, unknown>) : null;
+				const nextCache = Object.fromEntries(
+					Object.entries(prevCache).filter(([k]) => k !== oldCacheKey)
+				) as Record<string, unknown>;
+				if (oldEntry && nextCache[newCacheKey] == null) {
+					nextCache[newCacheKey] = oldEntry;
+				}
+				const nextState = {
+					...state,
+					componentContractDraftCache: nextCache
+				};
+				persist(nextState);
+				return nextState;
+			});
+			return { ok: true, revisionId: nextRid };
 		} catch (error) {
 			return { ok: false, reason: 'save_failed' as const, error: String(error) };
 		}
@@ -2055,6 +2162,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 			saveGraph,
 			saveGraphVersion,
 			saveGraphAs,
+			saveComponentRevision,
 			listGraphs,
 			listGraphRevisionHistory,
 			listGraphRevisionHistoryForGraph,

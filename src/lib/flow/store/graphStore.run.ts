@@ -530,8 +530,18 @@ export function collectPinnedArtifactsByNode(
 		if (!nodeId) continue;
 		const binding = _normalizeBinding(nodeBindings?.[nodeId], nodeId);
 		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
-		const artifactId = String(lineage?.artifactId ?? '').trim();
-		const execKey = String(lineage?.execKey ?? '').trim();
+		let artifactId = String(lineage?.artifactId ?? '').trim();
+		let execKey = String(lineage?.execKey ?? '').trim();
+		const freezeLineage =
+			((node.data as any)?.meta?.freezeLineage &&
+			typeof (node.data as any)?.meta?.freezeLineage === 'object'
+				? ((node.data as any).meta.freezeLineage as Record<string, any>)
+				: null) ?? null;
+		if ((!artifactId || !execKey) && freezeLineage) {
+			// Component edit sessions reset nodeBindings; preserve pin hints from snapshotted lineage on the node.
+			artifactId = String(freezeLineage.artifactId ?? '').trim();
+			execKey = String(freezeLineage.execKey ?? '').trim();
+		}
 		if (!artifactId || !execKey) continue;
 		const pinned: { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> } = {
 			artifactId,
@@ -542,8 +552,8 @@ export function collectPinnedArtifactsByNode(
 				((binding as any)?.outputLineage && typeof (binding as any).outputLineage === 'object'
 					? ((binding as any).outputLineage as Record<string, any>)
 					: null) ?? null;
+			const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
 			if (rawOutputLineage) {
-				const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
 				for (const [rawHandle, rawPair] of Object.entries(rawOutputLineage)) {
 					const handle = String(rawHandle ?? '').trim();
 					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
@@ -554,8 +564,20 @@ export function collectPinnedArtifactsByNode(
 						? { artifactId: outputArtifactId, execKey: outputExecKey }
 						: { artifactId: outputArtifactId };
 				}
-				if (Object.keys(outputs).length > 0) pinned.outputs = outputs;
 			}
+			if (Object.keys(outputs).length === 0 && freezeLineage?.outputs && typeof freezeLineage.outputs === 'object') {
+				for (const [rawHandle, rawPair] of Object.entries(freezeLineage.outputs as Record<string, any>)) {
+					const handle = String(rawHandle ?? '').trim();
+					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
+					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
+					if (!outputArtifactId) continue;
+					outputs[handle] = outputExecKey
+						? { artifactId: outputArtifactId, execKey: outputExecKey }
+						: { artifactId: outputArtifactId };
+				}
+			}
+			if (Object.keys(outputs).length > 0) pinned.outputs = outputs;
 		}
 		out[nodeId] = pinned;
 	}
