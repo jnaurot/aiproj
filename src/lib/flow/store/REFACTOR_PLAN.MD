@@ -29,7 +29,7 @@ src/lib/flow/store/
 ├── graphStore.node-schema.ts    ← [DONE] Node schema canonicalisation + edge constraints
 │
 ├── graphStore.inspector.ts      ← [DONE] Inspector / node-config editing
-├── graphStore.run.ts            ← Run lifecycle (SSE, hydration, event handling)
+├── graphStore.run.ts            ← [DONE] Run lifecycle (SSE, hydration, event handling)
 ├── graphStore.graph-edit.ts     ← Canvas mutations (add/delete/sync nodes & edges)
 ├── graphStore.persistence.ts    ← Save/load API calls, component session actions
 │
@@ -240,7 +240,7 @@ Returns `{ actions }` spread into the public store object.
 
 ---
 
-### ⬜ 6. `graphStore.run.ts`  — TODO
+### ✅ 6. `graphStore.run.ts`  — DONE
 
 **What it contains**
 Everything related to run lifecycle: creating runs, streaming events,
@@ -504,8 +504,8 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.node-schema.ts` wired into `graphStore.ts`
 - [x] `graphStore.inspector.ts` — extracted
 - [x] `graphStore.inspector.ts` wired into `graphStore.ts`
-- [ ] `graphStore.run.ts` — extracted
-- [ ] `graphStore.run.ts` wired into `graphStore.ts`
+- [x] `graphStore.run.ts` — extracted
+- [x] `graphStore.run.ts` wired into `graphStore.ts`
 - [ ] `graphStore.graph-edit.ts` — extracted
 - [ ] `graphStore.graph-edit.ts` wired into `graphStore.ts`
 - [ ] `graphStore.persistence.ts` — extracted
