@@ -30,7 +30,7 @@ src/lib/flow/store/
 │
 ├── graphStore.inspector.ts      ← [DONE] Inspector / node-config editing
 ├── graphStore.run.ts            ← [DONE] Run lifecycle (SSE, hydration, event handling)
-├── graphStore.graph-edit.ts     ← Canvas mutations (add/delete/sync nodes & edges)
+├── graphStore.graph-edit.ts     ← [DONE] Canvas mutations (add/delete/sync nodes & edges)
 ├── graphStore.persistence.ts    ← Save/load API calls, component session actions
 │
 ├── graphStore.ts                ← Orchestrator (target: ~200–300 lines)
@@ -290,7 +290,7 @@ export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest,
 
 ---
 
-### ⬜ 7. `graphStore.graph-edit.ts`  — TODO
+### ✅ 7. `graphStore.graph-edit.ts`  — DONE
 
 **What it contains**
 All canvas mutations: adding/deleting/syncing nodes and edges, edge preflight,
@@ -506,8 +506,8 @@ at every intermediate stage — nothing breaks mid-refactor.
 - [x] `graphStore.inspector.ts` wired into `graphStore.ts`
 - [x] `graphStore.run.ts` — extracted
 - [x] `graphStore.run.ts` wired into `graphStore.ts`
-- [ ] `graphStore.graph-edit.ts` — extracted
-- [ ] `graphStore.graph-edit.ts` wired into `graphStore.ts`
+- [x] `graphStore.graph-edit.ts` — extracted
+- [x] `graphStore.graph-edit.ts` wired into `graphStore.ts`
 - [ ] `graphStore.persistence.ts` — extracted
 - [ ] `graphStore.persistence.ts` wired into `graphStore.ts`
 - [ ] `graphStore.ts` slimmed to orchestrator (~200–300 lines)
