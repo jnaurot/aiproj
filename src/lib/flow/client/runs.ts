@@ -136,6 +136,8 @@ export async function getRun(runId: string) {
     nodeStatus?: Record<string, string>;
     nodeOutputs?: Record<string, string>;
     nodeBindings?: Record<string, Record<string, unknown>>;
+    checkpoint_outcomes?: Record<string, string>;
+    checkpointOutcomes?: Record<string, string>;
   };
 }
 

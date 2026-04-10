@@ -1159,3 +1159,265 @@ async def test_run_from_selected_cache_only_without_trusted_pin_emits_fallback_r
         "[trace][pin.execute_decision]" in msg and "PIN_FALLBACK_RECOMPUTE" in msg and '"nodeId": "tool_mid"' in msg
         for msg in trace_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_hint_valid_marks_cache_only_and_reuses(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"source": 0, "tool_mid": 0, "tool_end": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        calls["source"] += 1
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data={"text": "hello"})
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        node_id = str((node or {}).get("id") or "")
+        if node_id in calls:
+            calls[node_id] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"node": node_id}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+    graph = _graph()
+
+    baseline_events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-valid-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-checkpoint-valid-baseline", on_emit=lambda e: baseline_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-valid",
+    )
+    source_artifact = str(
+        next(e for e in baseline_events if e.get("type") == "node_output" and e.get("nodeId") == "source_1").get(
+            "artifactId"
+        )
+        or ""
+    ).strip()
+    mid_artifact = str(
+        next(e for e in baseline_events if e.get("type") == "node_output" and e.get("nodeId") == "tool_mid").get(
+            "artifactId"
+        )
+        or ""
+    ).strip()
+    assert source_artifact
+    assert mid_artifact
+    missing_graph_basis = _graph()
+    missing_graph_basis["nodes"][1]["data"]["params"]["extra"] = "recompute"
+    checkpoint_fp = run_mod.compute_memo_key_for_node(
+        next(node for node in missing_graph_basis["nodes"] if node.get("id") == "tool_mid"),
+        [source_artifact],
+    )
+    source_checkpoint_fp = run_mod.compute_memo_key_for_node(
+        next(node for node in graph["nodes"] if node.get("id") == "source_1"),
+        [],
+    )
+    assert isinstance(checkpoint_fp, str) and len(checkpoint_fp) == 64
+    assert isinstance(source_checkpoint_fp, str) and len(source_checkpoint_fp) == 64
+
+    graph_with_checkpoint = _graph()
+    graph_with_checkpoint["__executionHints"] = {
+        "checkpoints": {
+            "source_1": {
+                "artifactId": source_artifact,
+                "execKey": "trusted-checkpoint-source",
+                "fingerprintAtCreation": source_checkpoint_fp,
+            },
+            "tool_mid": {
+                "artifactId": mid_artifact,
+                "execKey": "trusted-checkpoint-mid",
+                "fingerprintAtCreation": checkpoint_fp,
+            }
+        }
+    }
+    events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-valid-reuse",
+        graph=graph_with_checkpoint,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-checkpoint-valid-reuse", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-valid",
+    )
+
+    assert calls["tool_mid"] == 1
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished
+    outcomes = run_finished[-1].get("checkpoint_outcomes") or {}
+    assert outcomes.get("source_1") == "valid"
+    assert outcomes.get("tool_mid") in {"valid", "stale"}
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_hint_stale_recomputes(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"tool_mid": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data={"text": "hello"})
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        node_id = str((node or {}).get("id") or "")
+        if node_id == "tool_mid":
+            calls["tool_mid"] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"node": node_id}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+
+    graph = _graph()
+    baseline_events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-stale-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-checkpoint-stale-baseline", on_emit=lambda e: baseline_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-stale",
+    )
+    mid_artifact = str(
+        next(e for e in baseline_events if e.get("type") == "node_output" and e.get("nodeId") == "tool_mid").get(
+            "artifactId"
+        )
+        or ""
+    ).strip()
+    assert mid_artifact
+
+    graph_stale = _graph()
+    graph_stale["nodes"][1]["data"]["params"]["extra"] = "changed"
+    graph_stale["__executionHints"] = {
+        "checkpoints": {
+            "tool_mid": {
+                "artifactId": mid_artifact,
+                "execKey": "trusted-checkpoint-mid",
+                "fingerprintAtCreation": "a" * 64,
+            }
+        }
+    }
+    events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-stale-recompute",
+        graph=graph_stale,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-checkpoint-stale-recompute", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-stale",
+    )
+
+    assert calls["tool_mid"] == 2
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished
+    assert (run_finished[-1].get("checkpoint_outcomes") or {}).get("tool_mid") == "stale"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_hint_missing_artifact_recomputes(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+    calls = {"tool_mid": 0}
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(status="succeeded", metadata=None, execution_time_ms=1.0, data={"text": "hello"})
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        node_id = str((node or {}).get("id") or "")
+        if node_id == "tool_mid":
+            calls["tool_mid"] += 1
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"node": node_id}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+    graph = _graph()
+
+    baseline_events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-missing-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-checkpoint-missing-baseline", on_emit=lambda e: baseline_events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-missing",
+    )
+    source_artifact = str(
+        next(e for e in baseline_events if e.get("type") == "node_output" and e.get("nodeId") == "source_1").get(
+            "artifactId"
+        )
+        or ""
+    ).strip()
+    checkpoint_fp = run_mod.compute_memo_key_for_node(
+        next(node for node in graph["nodes"] if node.get("id") == "tool_mid"),
+        [source_artifact],
+    )
+    source_checkpoint_fp = run_mod.compute_memo_key_for_node(
+        next(node for node in graph["nodes"] if node.get("id") == "source_1"),
+        [],
+    )
+    assert isinstance(checkpoint_fp, str) and len(checkpoint_fp) == 64
+    assert isinstance(source_checkpoint_fp, str) and len(source_checkpoint_fp) == 64
+
+    graph_missing = _graph()
+    graph_missing["nodes"][1]["data"]["params"]["extra"] = "recompute"
+    graph_missing["__executionHints"] = {
+        "checkpoints": {
+            "source_1": {
+                "artifactId": source_artifact,
+                "execKey": "trusted-checkpoint-source",
+                "fingerprintAtCreation": source_checkpoint_fp,
+            },
+            "tool_mid": {
+                "artifactId": "missing-artifact-id",
+                "execKey": "trusted-checkpoint-mid",
+                "fingerprintAtCreation": checkpoint_fp,
+            }
+        }
+    }
+    events = []
+    await run_mod.run_graph(
+        run_id="run-checkpoint-missing-recompute",
+        graph=graph_missing,
+        run_from="tool_end",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-checkpoint-missing-recompute", on_emit=lambda e: events.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-checkpoint-missing",
+    )
+
+    assert calls["tool_mid"] == 2
+    run_finished = [e for e in events if e.get("type") == "run_finished"]
+    assert run_finished
+    assert (run_finished[-1].get("checkpoint_outcomes") or {}).get("tool_mid") == "artifact_missing"

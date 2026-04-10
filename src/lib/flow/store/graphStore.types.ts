@@ -26,7 +26,7 @@ import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { BindingPair } from './graphStore.bindings';
 import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/schema/nodeDocs';
 import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
-import type { CheckpointRegistry } from '$lib/flow/types/checkpoint';
+import type { CheckpointRegistry, CheckpointStaleness } from '$lib/flow/types/checkpoint';
 
 // ---------------------------------------------------------------------------
 // Primitive aliases
@@ -133,6 +133,7 @@ export type RunSnapshotLike = {
 	nodeStatus?: Record<string, string>;
 	nodeOutputs?: Record<string, string>;
 	nodeBindings?: Record<string, Record<string, unknown>>;
+	checkpoint_outcomes?: Record<string, CheckpointStaleness | string>;
 };
 
 // ---------------------------------------------------------------------------

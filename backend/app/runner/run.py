@@ -55,7 +55,7 @@ from .contracts import (
     schema_fingerprint as contract_schema_fingerprint,
 )
 from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
-from .memo import compute_memo_key
+from .memo import compute_memo_key, compute_memo_key_for_node
 
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
@@ -3430,6 +3430,7 @@ async def run_graph(
     component_parent_for_internal: Dict[str, str] = {}
     component_meta_by_parent: Dict[str, Dict[str, Any]] = {}
     execution_nodes_by_id: Dict[str, Dict[str, Any]] = {}
+    checkpoint_outcomes: Dict[str, str] = {}
 
     def _component_path_for_log_node(node_id: Optional[str]) -> Optional[list[str]]:
         raw = str(node_id or "").strip()
@@ -3841,7 +3842,9 @@ async def run_graph(
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "failed"
+            "status": "failed",
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
         return
@@ -3974,6 +3977,8 @@ async def run_graph(
             "error": str(ex),
             "errorCode": ex.code,
             "errorDetails": ex.details,
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
         return
@@ -3999,6 +4004,8 @@ async def run_graph(
             "status": "failed",
             "error": msg,
             "errorCode": "RESOURCE_LIMIT_NODES",
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
         return
@@ -4021,6 +4028,8 @@ async def run_graph(
             "status": "failed",
             "error": msg,
             "errorCode": "RESOURCE_LIMIT_EDGES",
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
         return
@@ -4032,9 +4041,24 @@ async def run_graph(
         pinned_hint_ids = set()
         pinned_artifact_hints: Dict[str, Dict[str, Any]] = {}
         invalid_pinned_hint_entries: List[Dict[str, Any]] = []
-        derived_graph_lineage_pinned_node_ids: Set[str] = set()
-        graph_pinned_node_ids: Set[str] = set()
-        for node_id, node_payload in node_map(execution_graph).items():
+        derived_graph_lineage_pinned_node_ids: set[str] = set()
+        graph_pinned_node_ids: set[str] = set()
+        checkpoint_hints: Dict[str, Dict[str, Any]] = {}
+        execution_nodes_by_id = node_map(execution_graph)
+        runtime_handle_bindings: Dict[str, Dict[str, Any]] = {}
+        if runtime_ref is not None:
+            try:
+                run_handle = (runtime_ref.runs or {}).get(run_id) if hasattr(runtime_ref, "runs") else None
+                raw_bindings = (run_handle.node_bindings if run_handle is not None else None)
+                if isinstance(raw_bindings, dict):
+                    runtime_handle_bindings = {
+                        str(node_id): (dict(payload) if isinstance(payload, dict) else {})
+                        for node_id, payload in raw_bindings.items()
+                        if str(node_id).strip()
+                    }
+            except Exception:
+                runtime_handle_bindings = {}
+        for node_id, node_payload in execution_nodes_by_id.items():
             mode = _node_freeze_mode(node_payload)
             if mode is None:
                 continue
@@ -4099,8 +4123,69 @@ async def run_graph(
                         if parsed_outputs:
                             parsed_payload["outputs"] = parsed_outputs
                     pinned_artifact_hints[node_id] = parsed_payload
+            raw_checkpoints = raw_hints.get("checkpoints")
+            if isinstance(raw_checkpoints, dict):
+                for raw_node_id, raw_payload in raw_checkpoints.items():
+                    node_id = str(raw_node_id or "").strip()
+                    payload_obj = raw_payload if isinstance(raw_payload, dict) else {}
+                    if not node_id or not isinstance(raw_payload, dict):
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "CHECKPOINT_HINT_INVALID_MALFORMED_PAYLOAD",
+                            }
+                        )
+                        continue
+                    artifact_id = str(payload_obj.get("artifactId") or "").strip()
+                    exec_key = str(payload_obj.get("execKey") or "").strip()
+                    fingerprint = str(payload_obj.get("fingerprintAtCreation") or "").strip().lower()
+                    if not artifact_id:
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "CHECKPOINT_HINT_INVALID_MISSING_ARTIFACT_ID",
+                            }
+                        )
+                        continue
+                    if not exec_key:
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "CHECKPOINT_HINT_INVALID_MISSING_EXEC_KEY",
+                            }
+                        )
+                        continue
+                    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+                        invalid_pinned_hint_entries.append(
+                            {
+                                "nodeId": node_id,
+                                "reasonCode": "CHECKPOINT_HINT_INVALID_FINGERPRINT",
+                            }
+                        )
+                        continue
+                    parsed_payload: Dict[str, Any] = {
+                        "artifactId": artifact_id,
+                        "execKey": exec_key,
+                        "fingerprintAtCreation": fingerprint,
+                    }
+                    raw_outputs = payload_obj.get("outputs")
+                    if isinstance(raw_outputs, dict):
+                        parsed_outputs: Dict[str, Dict[str, str]] = {}
+                        for raw_handle, raw_output_payload in raw_outputs.items():
+                            handle = str(raw_handle or "").strip()
+                            if not handle or not isinstance(raw_output_payload, dict):
+                                continue
+                            out_artifact_id = str(raw_output_payload.get("artifactId") or "").strip()
+                            if not out_artifact_id:
+                                continue
+                            parsed_outputs[handle] = {
+                                "artifactId": out_artifact_id,
+                                "execKey": str(raw_output_payload.get("execKey") or "").strip(),
+                            }
+                        if parsed_outputs:
+                            parsed_payload["outputs"] = parsed_outputs
+                    checkpoint_hints[node_id] = parsed_payload
         pinned_hint_ids.update(graph_pinned_node_ids)
-        execution_nodes_by_id = node_map(execution_graph)
         for pinned_node_id in sorted(list(graph_pinned_node_ids)):
             if pinned_node_id in pinned_artifact_hints:
                 continue
@@ -4116,6 +4201,118 @@ async def run_graph(
                         "reasonCode": lineage_error,
                     }
                 )
+        def _runtime_binding_pair_for_checkpoint(
+            binding_payload: Dict[str, Any],
+            *,
+            handle: str = "out",
+        ) -> Tuple[str, str]:
+            payload = binding_payload if isinstance(binding_payload, dict) else {}
+            handle_key = str(handle or "out").strip() or "out"
+            artifact_id = ""
+            exec_key = ""
+            if handle_key != "out":
+                output_lineage = (
+                    payload.get("outputLineage")
+                    if isinstance(payload.get("outputLineage"), dict)
+                    else {}
+                )
+                handle_pair = output_lineage.get(handle_key) if isinstance(output_lineage, dict) else None
+                if isinstance(handle_pair, dict):
+                    artifact_id = str(handle_pair.get("artifactId") or "").strip()
+                    exec_key = str(handle_pair.get("execKey") or "").strip()
+            if not artifact_id:
+                current = payload.get("current") if isinstance(payload.get("current"), dict) else {}
+                artifact_id = str(current.get("artifactId") or "").strip()
+                exec_key = str(current.get("execKey") or "").strip()
+            if not artifact_id:
+                artifact_id = str(payload.get("currentArtifactId") or "").strip()
+                exec_key = str(payload.get("currentExecKey") or "").strip() or exec_key
+            return artifact_id, exec_key
+
+        checkpoint_nodes_seen = set(checkpoint_hints.keys())
+        for checkpoint_node_id in checkpoint_nodes_seen:
+            pinned_hint_ids.discard(checkpoint_node_id)
+            pinned_artifact_hints.pop(checkpoint_node_id, None)
+
+        for checkpoint_node_id in sorted(checkpoint_hints.keys()):
+            hint_payload = checkpoint_hints.get(checkpoint_node_id) or {}
+            node_payload = execution_nodes_by_id.get(checkpoint_node_id)
+            incoming_artifact_ids: List[str] = []
+            seen_artifact_ids: set[str] = set()
+            for raw_edge in execution_graph.get("edges", []) if isinstance(execution_graph, dict) else []:
+                if not isinstance(raw_edge, dict):
+                    continue
+                edge_target = str(raw_edge.get("target") or "").strip()
+                if edge_target != checkpoint_node_id:
+                    continue
+                if _edge_mode(raw_edge) != "work":
+                    continue
+                source_node_id = str(raw_edge.get("source") or "").strip()
+                if not source_node_id:
+                    continue
+                source_handle = str(raw_edge.get("sourceHandle") or "out").strip() or "out"
+                source_artifact_id = ""
+                source_checkpoint = checkpoint_hints.get(source_node_id)
+                if isinstance(source_checkpoint, dict):
+                    source_artifact_id = str(source_checkpoint.get("artifactId") or "").strip()
+                if not source_artifact_id:
+                    source_pin = pinned_artifact_hints.get(source_node_id)
+                    if isinstance(source_pin, dict):
+                        source_artifact_id = str(source_pin.get("artifactId") or "").strip()
+                if not source_artifact_id:
+                    runtime_payload = (
+                        runtime_handle_bindings.get(source_node_id)
+                        if isinstance(runtime_handle_bindings.get(source_node_id), dict)
+                        else {}
+                    )
+                    source_artifact_id, _ = _runtime_binding_pair_for_checkpoint(
+                        runtime_payload,
+                        handle=source_handle,
+                    )
+                if source_artifact_id and source_artifact_id not in seen_artifact_ids:
+                    incoming_artifact_ids.append(source_artifact_id)
+                    seen_artifact_ids.add(source_artifact_id)
+
+            stored_key = str(hint_payload.get("fingerprintAtCreation") or "").strip().lower()
+            current_key = compute_memo_key_for_node(node_payload or {}, incoming_artifact_ids)
+            artifact_id = str(hint_payload.get("artifactId") or "").strip()
+            artifact_exists = bool(artifact_id) and await context.artifact_store.exists(artifact_id)
+            staleness = "stale"
+            reason_code = "CHECKPOINT_STALE"
+            if not artifact_exists:
+                staleness = "artifact_missing"
+                reason_code = "CHECKPOINT_ARTIFACT_MISSING"
+            elif current_key is None:
+                staleness = "unknown"
+                reason_code = "CHECKPOINT_SKIP_NON_MEMOIZABLE"
+            elif current_key == stored_key:
+                staleness = "valid"
+                reason_code = "CHECKPOINT_VALID"
+            checkpoint_outcomes[checkpoint_node_id] = staleness
+            await _emit_pin_trace(
+                "checkpoint.backend_validate",
+                {
+                    "runId": run_id,
+                    "nodeId": checkpoint_node_id,
+                    "staleness": staleness,
+                    "storedKey": stored_key,
+                    "currentKey": current_key,
+                    "reasonCode": reason_code,
+                },
+                node_id=checkpoint_node_id,
+            )
+            if staleness != "valid":
+                continue
+            pinned_hint_ids.add(checkpoint_node_id)
+            pinned_artifact_hints[checkpoint_node_id] = {
+                "artifactId": str(hint_payload.get("artifactId") or "").strip(),
+                "execKey": str(hint_payload.get("execKey") or "").strip(),
+                **(
+                    {"outputs": dict(hint_payload.get("outputs"))}
+                    if isinstance(hint_payload.get("outputs"), dict)
+                    else {}
+                ),
+            }
         await _emit_pin_trace(
             "pin.backend_parse",
             {
@@ -4126,6 +4323,10 @@ async def run_graph(
                 "pinnedArtifactsParsed": sorted(list(pinned_artifact_hints.keys())),
                 "graphPinnedNodeIdsParsed": sorted(list(graph_pinned_node_ids)),
                 "graphPinnedDerivedLineageNodeIds": sorted(list(derived_graph_lineage_pinned_node_ids)),
+                "checkpointNodeIdsParsed": sorted(list(checkpoint_hints.keys())),
+                "checkpointValidNodeIds": sorted(
+                    [nid for nid, st in checkpoint_outcomes.items() if str(st) == "valid"]
+                ),
                 "invalidHints": invalid_pinned_hint_entries,
                 "reasonCode": (
                     "PIN_HINT_VALID"
@@ -4215,19 +4416,6 @@ async def run_graph(
                 if nid in component_expansion.internal_to_parent
             }
             planned_node_ids = sorted({*planned_node_ids, *{p for p in parent_ids if p}})
-        runtime_handle_bindings: Dict[str, Dict[str, Any]] = {}
-        if runtime_ref is not None:
-            try:
-                run_handle = (runtime_ref.runs or {}).get(run_id) if hasattr(runtime_ref, "runs") else None
-                raw_bindings = (run_handle.node_bindings if run_handle is not None else None)
-                if isinstance(raw_bindings, dict):
-                    runtime_handle_bindings = {
-                        str(node_id): (dict(payload) if isinstance(payload, dict) else {})
-                        for node_id, payload in raw_bindings.items()
-                        if str(node_id).strip()
-                    }
-            except Exception:
-                runtime_handle_bindings = {}
         execution_contract = _build_execution_contract(
             graph=execution_graph,
             graph_id=graph_id,
@@ -4245,6 +4433,8 @@ async def run_graph(
                     "status": "failed",
                     "errorCode": "EXECUTION_CONTRACT_INVALID",
                     "error": ";".join(str(item) for item in contract_errors if str(item).strip()),
+                    "checkpointOutcomes": dict(checkpoint_outcomes),
+                    "checkpoint_outcomes": dict(checkpoint_outcomes),
                 }
             )
             await _emit_cache_summary_once()
@@ -9043,6 +9233,8 @@ async def run_graph(
                     "status": "failed",
                     "errorCode": "RESUMABILITY_DECLARATION_MISSING",
                     "error": str(ex),
+                    "checkpointOutcomes": dict(checkpoint_outcomes),
+                    "checkpoint_outcomes": dict(checkpoint_outcomes),
                 }
             )
             await _emit_cache_summary_once()
@@ -9343,6 +9535,8 @@ async def run_graph(
                         "status": "failed",
                         "errorCode": "PAUSE_SNAPSHOT_PERSIST_FAILED",
                         "error": str(ex),
+                        "checkpointOutcomes": dict(checkpoint_outcomes),
+                        "checkpoint_outcomes": dict(checkpoint_outcomes),
                     }
                 )
                 await _emit_cache_summary_once()
@@ -9376,6 +9570,8 @@ async def run_graph(
                         "status": "failed",
                         "errorCode": "PAUSE_SNAPSHOT_SCHEMA_INVALID",
                         "error": ";".join(schema_errors),
+                        "checkpointOutcomes": dict(checkpoint_outcomes),
+                        "checkpoint_outcomes": dict(checkpoint_outcomes),
                     }
                 )
                 await _emit_cache_summary_once()
@@ -10516,6 +10712,8 @@ async def run_graph(
                         "status": "failed",
                         "error": "QUEUE_STRANDED_ITEMS",
                         "errorCode": "QUEUE_STRANDED_ITEMS",
+                        "checkpointOutcomes": dict(checkpoint_outcomes),
+                        "checkpoint_outcomes": dict(checkpoint_outcomes),
                     }
                 )
                 await _emit_cache_summary_once()
@@ -10535,6 +10733,8 @@ async def run_graph(
                         "status": "failed",
                         "error": timeout_msg,
                         "errorCode": "RUN_TIMEOUT",
+                        "checkpointOutcomes": dict(checkpoint_outcomes),
+                        "checkpoint_outcomes": dict(checkpoint_outcomes),
                     }
                 )
                 await _emit_cache_summary_once()
@@ -10556,7 +10756,16 @@ async def run_graph(
                     }
                 )
                 await _emit({"type": "run_canceled", "runId": run_id, "at": iso_now()})
-                await _emit({"type": "run_finished", "runId": run_id, "at": iso_now(), "status": "canceled"})
+                await _emit(
+                    {
+                        "type": "run_finished",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "status": "canceled",
+                        "checkpointOutcomes": dict(checkpoint_outcomes),
+                        "checkpoint_outcomes": dict(checkpoint_outcomes),
+                    }
+                )
                 await _emit_cache_summary_once()
                 return
 
@@ -11295,6 +11504,8 @@ async def run_graph(
                 "at": iso_now(),
                 "status": "failed",
                 "executionContract": final_execution_contract,
+                "checkpointOutcomes": dict(checkpoint_outcomes),
+                "checkpoint_outcomes": dict(checkpoint_outcomes),
             })
             await _emit_cache_summary_once()
             return
@@ -11305,6 +11516,8 @@ async def run_graph(
             "at": iso_now(),
             "status": "succeeded",
             "executionContract": final_execution_contract,
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
     except asyncio.CancelledError:
@@ -11317,7 +11530,9 @@ async def run_graph(
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "canceled"
+            "status": "canceled",
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
         return
@@ -11334,7 +11549,9 @@ async def run_graph(
             "type": "run_finished",
             "runId": run_id,
             "at": iso_now(),
-            "status": "failed"
+            "status": "failed",
+            "checkpointOutcomes": dict(checkpoint_outcomes),
+            "checkpoint_outcomes": dict(checkpoint_outcomes),
         })
         await _emit_cache_summary_once()
 

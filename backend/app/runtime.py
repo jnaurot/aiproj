@@ -75,6 +75,7 @@ class RunHandle:
     node_status: Dict[str, str] = field(default_factory=dict)   # idle|active|done|error|skipped|blocked|paused
     node_outputs: Dict[str, str] = field(default_factory=dict)  # node_id -> artifact_id
     node_bindings: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # node_id -> ui binding state
+    checkpoint_outcomes: Dict[str, str] = field(default_factory=dict)
     active_run_planned: set[str] = field(default_factory=set)
     graph: Optional[Dict[str, Any]] = None
     run_telemetry: Dict[str, Any] = field(default_factory=dict)
@@ -2144,6 +2145,19 @@ class RuntimeManager:
             contract = ev.get("executionContract")
             if isinstance(contract, dict):
                 handle.execution_contract = dict(contract)
+            checkpoint_outcomes = ev.get("checkpoint_outcomes")
+            if isinstance(checkpoint_outcomes, dict):
+                handle.checkpoint_outcomes = {
+                    str(node_id): str(status)
+                    for node_id, status in checkpoint_outcomes.items()
+                    if str(node_id).strip()
+                }
+            elif isinstance(ev.get("checkpointOutcomes"), dict):
+                handle.checkpoint_outcomes = {
+                    str(node_id): str(status)
+                    for node_id, status in dict(ev.get("checkpointOutcomes") or {}).items()
+                    if str(node_id).strip()
+                }
             if self._set_run_status(handle, next_status, reason="event:run_finished"):
                 handle.active_run_planned = set()
                 asyncio.create_task(self.artifact_store.update_run_status(handle.run_id, handle.status))

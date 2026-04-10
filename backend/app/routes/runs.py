@@ -1487,6 +1487,8 @@ async def get_run(run_id: str, request: Request):
             "nodeStatus": {},
             "nodeOutputs": {},
             "nodeBindings": {},
+            "checkpoint_outcomes": {},
+            "checkpointOutcomes": {},
         }
     if h.status == "deleted":
         raise HTTPException(404, "Unknown runId")
@@ -1501,4 +1503,6 @@ async def get_run(run_id: str, request: Request):
         "nodeStatus": h.node_status,
         "nodeOutputs": h.node_outputs,
         "nodeBindings": h.node_bindings,
+        "checkpoint_outcomes": h.checkpoint_outcomes,
+        "checkpointOutcomes": h.checkpoint_outcomes,
     }

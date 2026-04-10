@@ -53,6 +53,7 @@ import {
 import { nodeFreezeMode, effectiveExecParamsForNode } from './graphStore.inspector';
 import { deriveObservedSchemaObservationFromNodeOutput, computeSchemaDriftSummary } from './graphStore.node-schema';
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
+import type { CheckpointStaleness } from '$lib/flow/types/checkpoint';
 
 
 export function applyLlmHolderToNodes(
@@ -2442,6 +2443,29 @@ export function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshot
 	if (typeof snap.graphId === 'string' && snap.graphId && snap.graphId !== state.graphId) {
 		return state;
 	}
+	const rawCheckpointOutcomes = (() => {
+		const snake = (snap as any)?.checkpoint_outcomes;
+		if (snake && typeof snake === 'object') return snake as Record<string, string>;
+		const camel = (snap as any)?.checkpointOutcomes;
+		if (camel && typeof camel === 'object') return camel as Record<string, string>;
+		return null;
+	})();
+	const checkpointOutcomes = rawCheckpointOutcomes
+		? Object.entries(rawCheckpointOutcomes).reduce<Record<string, CheckpointStaleness>>((acc, [nodeId, raw]) => {
+				const key = String(nodeId ?? '').trim();
+				const status = String(raw ?? '').trim().toLowerCase();
+				if (!key) return acc;
+				if (
+					status === 'valid' ||
+					status === 'stale' ||
+					status === 'artifact_missing' ||
+					status === 'unknown'
+				) {
+					acc[key] = status as CheckpointStaleness;
+				}
+				return acc;
+			}, {})
+		: {};
 	const nodeBindingsPatch: Record<string, NormalizedNodeBinding> = {};
 	const nodeOutputs: Record<string, NodeOutputInfo> = { ...(state.nodeOutputs ?? {}) };
 	const componentNodeIds = new Set(
@@ -2544,6 +2568,20 @@ export function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshot
 	const activeRunNodeSet = Array.isArray(snap.plannedNodeIds)
 		? new Set<string>(snap.plannedNodeIds)
 		: state.activeRunNodeSet;
+	const checkpointRegistry = { ...(state.checkpointRegistry ?? {}) };
+	let checkpointRegistryChanged = false;
+	if (Object.keys(checkpointOutcomes).length > 0) {
+		for (const [nodeId, staleness] of Object.entries(checkpointOutcomes)) {
+			const existing = checkpointRegistry[nodeId];
+			if (!existing) continue;
+			if (String(existing.staleness ?? '') === String(staleness)) continue;
+			checkpointRegistry[nodeId] = {
+				...existing,
+				staleness
+			};
+			checkpointRegistryChanged = true;
+		}
+	}
 	return withGraphMeta({
 		...state,
 		runStatus,
@@ -2551,7 +2589,8 @@ export function hydrateFromRunSnapshotState(state: GraphState, snap: RunSnapshot
 		nodeOutputs,
 		activeRunMode: runMode,
 		activeRunFrom: state.activeRunFrom,
-		activeRunNodeSet
+		activeRunNodeSet,
+		checkpointRegistry: checkpointRegistryChanged ? checkpointRegistry : state.checkpointRegistry
 	});
 }
 
