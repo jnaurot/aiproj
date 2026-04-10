@@ -55,6 +55,7 @@ from .contracts import (
     schema_fingerprint as contract_schema_fingerprint,
 )
 from .schema_infer import get_schema_infer_stats, infer_json_schema_cached
+from .memo import compute_memo_key
 
 from ..executors.source import exec_source
 from ..executors.llm import exec_llm
@@ -3544,6 +3545,17 @@ async def run_graph(
             }
         )
 
+    async def _emit_memo_trace(
+        payload: Dict[str, Any],
+        *,
+        node_id: Optional[str] = None,
+    ) -> None:
+        await _emit_pin_trace(
+            "memo.execute_decision",
+            payload,
+            node_id=node_id,
+        )
+
     async def _emit_output_artifact_log(
         *,
         run_id: str,
@@ -4645,6 +4657,8 @@ async def run_graph(
                 cache_bypass_reason = "COMPONENT_NATIVE_BOUNDARY"
             elif processing_policy.get("consume_mode") in {"single_item", "batch"}:
                 cache_bypass_reason = "STREAMING_WORK_ITEM"
+            elif not _node_is_memoizable(n):
+                cache_bypass_reason = "NON_MEMOIZABLE_NODE"
             use_cache_for_node = cache_bypass_reason is None
 
             up_nodes = sorted(upstream_node_ids(edges, node_id))
@@ -4766,6 +4780,13 @@ async def run_graph(
                 execution_version=context.execution_version,
                 node_impl_version=node_impl_version,
             )
+            memo_key: Optional[str] = None
+            if _node_is_memoizable(n):
+                memo_key = compute_memo_key(
+                    kind,
+                    normalized_params_for_hash,
+                    upstream_ids,
+                )
             expected_schema = _expected_schema_contract_for_node(n)
             cached_artifact_id = exec_key if (use_cache_for_node and await context.artifact_store.exists(exec_key)) else None
             cache_resolution = "CACHE_HIT" if cached_artifact_id else "CACHE_MISS"
@@ -4807,6 +4828,7 @@ async def run_graph(
                 "cachedArtifactId": cached_artifact_id,
                 "cache_miss_reason": cache_miss_reason,
                 "resolve_input_refs_error": resolve_input_refs_error,
+                "memo_key": memo_key,
             }
 
         async def _execute_node(
@@ -5136,6 +5158,7 @@ async def run_graph(
             cached_artifact_id = resolved["cachedArtifactId"]
             cache_miss_reason = str(resolved.get("cache_miss_reason") or "CACHE_ENTRY_MISSING")
             resolve_input_refs_error = resolved.get("resolve_input_refs_error")
+            memo_key = str(resolved.get("memo_key") or "").strip()
             expected_schema_source = str((expected_schema or {}).get("schemaSource") or "")
             lease_gated_node = kind in {"llm", "model"}
 
@@ -5287,6 +5310,17 @@ async def run_graph(
                 exec_key,
             )
             if not use_cache_for_node:
+                await _emit_memo_trace(
+                    {
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "nodeKind": kind,
+                        "decision": "skip_non_memoizable" if cache_bypass_reason == "NON_MEMOIZABLE_NODE" else "compute",
+                        "reasonCode": str(cache_bypass_reason or "CACHE_BYPASSED"),
+                        "memoKey": memo_key or None,
+                    },
+                    node_id=node_id,
+                )
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
@@ -5321,6 +5355,18 @@ async def run_graph(
 
             # ---- Resolve phase result ----
             if cache_resolution == "CACHE_HIT" and cached_artifact_id:
+                await _emit_memo_trace(
+                    {
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "nodeKind": kind,
+                        "decision": "reuse",
+                        "reasonCode": "CACHE_HIT",
+                        "memoKey": memo_key or None,
+                        "artifactId": str(cached_artifact_id or ""),
+                    },
+                    node_id=node_id,
+                )
                 await _emit_cache_decision(
                     node_id=node_id,
                     node_kind=kind,
@@ -5468,6 +5514,17 @@ async def run_graph(
                         "reasonCode": decision_reason_code,
                     }
             if use_cache_for_node and cache_resolution == "CACHE_MISS":
+                await _emit_memo_trace(
+                    {
+                        "runId": run_id,
+                        "nodeId": node_id,
+                        "nodeKind": kind,
+                        "decision": "compute",
+                        "reasonCode": cache_miss_reason,
+                        "memoKey": memo_key or None,
+                    },
+                    node_id=node_id,
+                )
                 cache_stats["miss"] += 1
                 await _emit_cache_decision(
                     node_id=node_id,
