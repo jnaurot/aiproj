@@ -90,6 +90,7 @@ def _runner_visual_delay_seconds() -> float:
     return ms / 1000.0
 
 
+## DEPRECATED: legacy pin system
 def _node_freeze_mode(node: Dict[str, Any] | None) -> Optional[str]:
     if not isinstance(node, dict):
         return None
@@ -104,6 +105,7 @@ def _node_freeze_mode(node: Dict[str, Any] | None) -> Optional[str]:
     return None
 
 
+## DEPRECATED: legacy pin system
 def _node_freeze_lineage(node: Dict[str, Any] | None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     if not isinstance(node, dict):
         return None, "PIN_HINT_INVALID_MALFORMED_PAYLOAD"

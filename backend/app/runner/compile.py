@@ -143,6 +143,7 @@ def compile_plan(
                 sub.add(r)
                 sub |= _downstream(r, edges)
         execute_nodes = set(sub)
+    # DEPRECATED: legacy pin boundary logic
     pinned = {
         nid
         for nid in requested_pins

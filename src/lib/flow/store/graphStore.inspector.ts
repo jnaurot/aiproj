@@ -270,6 +270,7 @@ export function committedNodeParamsForNode(
 	return { ...((node?.data?.params ?? {}) as Record<string, any>) };
 }
 
+/** @deprecated use checkpoint creation/removal system */
 export function nodeFreezeMode(
 	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null
 ): 'per_run' | 'sticky' | null {

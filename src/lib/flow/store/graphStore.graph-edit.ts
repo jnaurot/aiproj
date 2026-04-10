@@ -1652,6 +1652,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		return { ok: true as const, cleanedName: cleaned };
 	}
 
+	/** @deprecated use checkpoint creation/removal system */
 	function setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
 		let out: { ok: boolean; error?: string } = { ok: true };
 		update((s) => {
@@ -1740,6 +1741,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		return out;
 	}
 
+	/** @deprecated use checkpoint creation/removal system */
 	function setSelectedNodeFreezeMode(mode: 'per_run' | 'sticky' | null) {
 		const cur = getState();
 		const nodeId = String(cur.selectedNodeId ?? '').trim();

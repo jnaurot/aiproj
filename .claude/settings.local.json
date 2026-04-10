@@ -44,7 +44,8 @@
       "Bash(grep -n \"freeze.*enabled\\\\|\\\\.freeze\\\\s*=\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/*.ts)",
       "Bash(wc -l /c/Users/Owner/Desktop/aiproj/src/lib/flow/components/editors/SourceEditor/*.svelte)",
       "Bash(xargs grep:*)",
-      "Bash(xargs wc:*)"
+      "Bash(xargs wc:*)",
+      "Bash(find C:/Users/Owner/Desktop/aiproj -type f \\\\\\( -name \"*.test.ts\" -o -name \"*test*.py\" \\\\\\) -exec grep -l \"freeze\\\\|pin\" {} \\\\;)"
     ]
   }
 }

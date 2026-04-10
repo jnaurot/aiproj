@@ -482,6 +482,7 @@ function hasCurrentBoundArtifact(binding: NormalizedNodeBinding | undefined | nu
 	return execKey.length > 0 && artifactId.length > 0;
 }
 
+/** @deprecated use memoization/checkpoint system */
 export function validatePinEligibility(
 	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null,
 	binding: NormalizedNodeBinding | undefined | null
@@ -509,6 +510,7 @@ export function __validatePinEligibilityForTest(
 	return validatePinEligibility(node, normalized);
 }
 
+/** @deprecated use memoization/checkpoint system */
 export function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): string[] {
 	return nodes
 		.filter((node) => nodeFreezeMode(node) !== null)
@@ -516,6 +518,7 @@ export function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<strin
 		.filter(Boolean);
 }
 
+/** @deprecated use memoization/checkpoint system */
 export function collectPinnedArtifactsByNode(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
 	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
@@ -601,6 +604,7 @@ function countPinnedOutputLineageHandles(binding: NormalizedNodeBinding): number
 	return count;
 }
 
+/** @deprecated use memoization/checkpoint system */
 function tracePinCollect(
 	deps: RunDeps,
 	state: GraphState,
@@ -644,6 +648,7 @@ function tracePinCollect(
 	}
 }
 
+/** @deprecated use memoization/checkpoint system */
 function tracePinRequestBuild(
 	deps: RunDeps,
 	payload: ReturnType<typeof buildRunCreateRequest>,
@@ -688,6 +693,7 @@ function tracePinRequestBuild(
 	);
 }
 
+/** @deprecated use memoization/checkpoint system */
 function tracePinSubmit(
 	deps: RunDeps,
 	payload: ReturnType<typeof buildRunCreateRequest>,
@@ -722,6 +728,7 @@ function tracePinSubmit(
 	);
 }
 
+/** @deprecated use memoization/checkpoint system */
 export function clearPerRunPinsOnNodes(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[]
 ): Node<PipelineNodeData & Record<string, unknown>>[] {

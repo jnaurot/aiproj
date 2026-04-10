@@ -62,9 +62,16 @@ export type NodeMeta = {
       };
     };
   };
+  /** @deprecated Legacy pin system. Use CheckpointRecord instead. Removed in Phase 8. */
   freeze?: {
     enabled?: boolean;
     mode?: "per_run" | "sticky";
+  };
+  /** @deprecated Legacy pin system. Use CheckpointRecord instead. Removed in Phase 8. */
+  freezeLineage?: {
+    artifactId: string;
+    execKey: string;
+    outputs?: Record<string, { artifactId: string; execKey?: string }>;
   };
   presetRef?: {
     id: string;
