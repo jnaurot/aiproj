@@ -199,6 +199,72 @@ describe('runScope partial-run binding behavior', () => {
 		});
 	});
 
+	it('includes checkpoint execution hints from registry when valid', () => {
+		const graph = { version: 1, nodes: [], edges: [] };
+		const req = buildRunCreateRequest(
+			graph,
+			'graph-test',
+			null,
+			'from_start',
+			[],
+			[],
+			{},
+			undefined,
+			null,
+			{
+				n1: {
+					id: '00000000-0000-4000-8000-000000000001',
+					name: 'ck-1',
+					nodeId: 'n1',
+					graphId: 'graph-test',
+					runId: 'run-1',
+					artifactId: 'art-1',
+					execKey: 'exec-1',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid'
+				}
+			} as any
+		);
+		expect((req.graph.__executionHints as any)?.checkpoints).toEqual({
+			n1: {
+				artifactId: 'art-1',
+				execKey: 'exec-1',
+				fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+			}
+		});
+	});
+
+	it('omits checkpoint hints with invalid fingerprint', () => {
+		const graph = { version: 1, nodes: [], edges: [] };
+		const req = buildRunCreateRequest(
+			graph,
+			'graph-test',
+			null,
+			'from_start',
+			[],
+			[],
+			{},
+			undefined,
+			null,
+			{
+				n1: {
+					id: '00000000-0000-4000-8000-000000000001',
+					name: 'ck-1',
+					nodeId: 'n1',
+					graphId: 'graph-test',
+					runId: 'run-1',
+					artifactId: 'art-1',
+					execKey: 'exec-1',
+					fingerprintAtCreation: 'bad',
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid'
+				}
+			} as any
+		);
+		expect((req.graph.__executionHints as any)?.checkpoints).toBeUndefined();
+	});
+
 	it('stales only affected nodes for accept-params style updates', () => {
 		const previous = {
 			a1: { status: 'succeeded_up_to_date', isUpToDate: true, lastArtifactId: 'art-a1' },

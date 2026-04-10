@@ -62,6 +62,13 @@ export type RunStatus =
 
 export type GraphLastRunStatus = 'succeeded' | 'failed' | 'canceled' | 'never_run';
 
+export type RunBlockedReason =
+	| {
+			type: 'unsaved_checkpoint_changes';
+			componentNodeIds: string[];
+			message: string;
+	  };
+
 // ---------------------------------------------------------------------------
 // Node execution / binding
 // ---------------------------------------------------------------------------
@@ -100,6 +107,7 @@ export type NodeBindingInfo = {
 		memoKey?: string;
 		resolvedAt?: string;
 	} | null;
+	checkpointable?: boolean;
 	lastArtifactId?: string | null;     // legacy
 	lastRunId?: string | null;
 	lastExecKey?: string | null;        // legacy
@@ -242,6 +250,7 @@ export type ComponentEditSessionSnapshot = {
 	activeRunMode: ActiveRunMode;
 	activeRunFrom: string | null;
 	activeRunNodeSet: Set<string>;
+	runBlockedReason?: RunBlockedReason | null;
 	nodeOutputs: Record<string, NodeOutputInfo>;
 	nodeBindings: Record<string, NormalizedNodeBinding>;
 	activeRunId: string | null;

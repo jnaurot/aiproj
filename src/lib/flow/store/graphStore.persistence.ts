@@ -72,6 +72,7 @@ void (_logPush as unknown);
 const allowedPorts = new Set(['table', 'text', 'json', 'binary', 'embeddings', 'image', 'audio', 'video']);
 const allowedBuiltinProfileIds = new Set<string>(TOOL_BUILTIN_PROFILE_IDS);
 const COMPONENT_DRAFT_GRAPH_KEY = '__graphDraft';
+const COMPONENT_DRAFT_LAST_COMMITTED_CHECKPOINTS_KEY = '__lastCommittedCheckpointRegistry';
 
 function readComponentDraftGraph(
 	value: unknown
@@ -1545,7 +1546,9 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 						...(s.componentContractDraftCache ?? {}),
 						[draftCacheKey]: {
 							...((cachedDraftRaw ?? {}) as Record<string, unknown>),
-							...contractDraftParams
+							...contractDraftParams,
+							[COMPONENT_DRAFT_LAST_COMMITTED_CHECKPOINTS_KEY]:
+								structuredClone(revisionCheckpointRegistry)
 						}
 					},
 					lastRunStatus: 'never_run' as const,
@@ -1566,6 +1569,38 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 		} catch (error) {
 			return { ok: false, reason: 'open_component_failed' as const, error: String(error) };
 		}
+	}
+
+	function hasUnsavedCheckpointChanges(componentNodeId: string): boolean {
+		const nodeId = String(componentNodeId ?? '').trim();
+		if (!nodeId) return false;
+		const state = getState();
+		const node = (state.nodes ?? []).find((candidate) => String((candidate as any)?.id ?? '').trim() === nodeId);
+		if (!node || String((node as any)?.data?.kind ?? '').trim().toLowerCase() !== 'component') return false;
+		const ref = (((node as any)?.data?.params ?? {}) as any)?.componentRef ?? {};
+		const componentId = String(ref?.componentId ?? '').trim();
+		const revisionId = String(ref?.revisionId ?? '').trim();
+		if (!componentId || !revisionId) return false;
+		const cacheKey = `${componentId}@${revisionId}`;
+		const cacheEntryRaw =
+			state.componentContractDraftCache && typeof state.componentContractDraftCache === 'object'
+				? (state.componentContractDraftCache[cacheKey] as Record<string, unknown> | undefined)
+				: undefined;
+		if (!cacheEntryRaw || typeof cacheEntryRaw !== 'object') return false;
+		const draftGraph = readComponentDraftGraph(cacheEntryRaw);
+		if (!draftGraph) return false;
+		const draftCheckpointRegistry =
+			draftGraph.checkpointRegistry && typeof draftGraph.checkpointRegistry === 'object'
+				? (draftGraph.checkpointRegistry as Record<string, unknown>)
+				: {};
+		const lastCommittedRaw = (cacheEntryRaw as Record<string, unknown>)[
+			COMPONENT_DRAFT_LAST_COMMITTED_CHECKPOINTS_KEY
+		];
+		const lastCommitted =
+			lastCommittedRaw && typeof lastCommittedRaw === 'object'
+				? (lastCommittedRaw as Record<string, unknown>)
+				: {};
+		return stableJson(lastCommitted) !== stableJson(draftCheckpointRegistry);
 	}
 
 	function returnFromComponentEditSession() {
@@ -1598,10 +1633,39 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					checkpointRegistry: structuredClone(internalCheckpoints)
 				}
 			};
+			const checkpointRows = Object.values(internalCheckpoints ?? {}) as Array<Record<string, unknown>>;
+			const checkpointTotal = checkpointRows.length;
+			const checkpointValid = checkpointRows.filter(
+				(checkpoint) => String((checkpoint as any)?.staleness ?? '').trim().toLowerCase() === 'valid'
+			).length;
+			const checkpointStale = checkpointRows.filter((checkpoint) => {
+				const staleness = String((checkpoint as any)?.staleness ?? '').trim().toLowerCase();
+				return staleness === 'stale' || staleness === 'artifact_missing';
+			}).length;
+			const nextSnapshotNodes = structuredClone(snapshot.nodes).map((node) => {
+				if (String((node as any)?.id ?? '').trim() !== String(session.entryNodeId ?? '').trim()) return node;
+				const meta = { ...((((node as any)?.data ?? {}) as any)?.meta ?? {}) } as Record<string, unknown>;
+				if (checkpointTotal > 0) {
+					(meta as any).checkpointSummary = {
+						total: checkpointTotal,
+						valid: checkpointValid,
+						stale: checkpointStale
+					};
+				} else {
+					delete (meta as any).checkpointSummary;
+				}
+				return {
+					...node,
+					data: {
+						...((node as any)?.data ?? {}),
+						meta
+					}
+				};
+			});
 			const next: GraphState = {
 				...s,
 				graphId: snapshot.graphId,
-				nodes: structuredClone(snapshot.nodes),
+				nodes: nextSnapshotNodes,
 				edges: structuredClone(snapshot.edges),
 				selectedNodeId: snapshot.selectedNodeId,
 				inspector: structuredClone(snapshot.inspector),
@@ -2266,6 +2330,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 			deleteComponent,
 			deleteComponentRevision,
 			applyComponentRevisionToNode,
+			hasUnsavedCheckpointChanges,
 		}
 	};
 }

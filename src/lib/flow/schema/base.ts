@@ -24,6 +24,14 @@ export const NodeMetaSchema = z.object({
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
   memoizable: z.boolean().optional(),
+  checkpointSummary: z
+    .object({
+      total: z.number().int().nonnegative(),
+      valid: z.number().int().nonnegative(),
+      stale: z.number().int().nonnegative()
+    })
+    .strip()
+    .optional(),
   nodeDoc: z
     .object({
       summary: z.string().optional(),

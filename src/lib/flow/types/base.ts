@@ -51,6 +51,11 @@ export type NodeMeta = {
    * When false, memoization cache is bypassed for the node.
    */
   memoizable?: boolean;
+  checkpointSummary?: {
+    total: number;
+    valid: number;
+    stale: number;
+  };
   nodeDoc?: {
     summary?: string;
     notes?: string[];

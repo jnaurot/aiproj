@@ -1098,10 +1098,11 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			const nodeBindings = { ...state.nodeBindings };
 			for (const [nodeId, rawBinding] of Object.entries(nodeBindings)) {
 				const prevBinding = _normalizeBinding(rawBinding, nodeId);
-				if (prevBinding.memoState == null) continue;
+				if (prevBinding.memoState == null && prevBinding.checkpointable !== true) continue;
 				nodeBindings[nodeId] = {
 					...prevBinding,
-					memoState: undefined
+					memoState: undefined,
+					checkpointable: false
 				};
 			}
 			for (const nodeId of evtPlanned) {
@@ -2264,7 +2265,8 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				currentRunId: evt.runId ?? runId,
 				isUpToDate: succeeded ? true : false,
 				cacheValid: succeeded ? true : false,
-				staleReason: succeeded ? null : prevBinding.staleReason
+				staleReason: succeeded ? null : prevBinding.staleReason,
+				checkpointable: succeeded && !state.checkpointRegistry?.[evt.nodeId]
 			};
 			if (succeeded) {
 				const current = _pairFromLegacy(nextBinding, 'current');
@@ -2662,7 +2664,8 @@ export function resetRunUiState(state: GraphState): GraphState {
 		activeRunId: null,
 		activeRunMode: 'from_start',
 		activeRunFrom: null,
-		activeRunNodeSet: new Set<string>()
+		activeRunNodeSet: new Set<string>(),
+		runBlockedReason: null
 	});
 }
 
@@ -2684,6 +2687,47 @@ export type RunDeps = {
 export function createRunManager(deps: RunDeps) {
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
 	let resumeFallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+	const componentDraftGraphKey = '__graphDraft';
+	const componentDraftLastCommittedCheckpointsKey = '__lastCommittedCheckpointRegistry';
+
+	function draftCheckpointRegistryFromCacheEntry(entry: unknown): Record<string, unknown> {
+		if (!entry || typeof entry !== 'object') return {};
+		const graph = (entry as Record<string, unknown>)[componentDraftGraphKey];
+		if (!graph || typeof graph !== 'object') return {};
+		const checkpoints = (graph as Record<string, unknown>).checkpointRegistry;
+		if (!checkpoints || typeof checkpoints !== 'object') return {};
+		return checkpoints as Record<string, unknown>;
+	}
+
+	function committedCheckpointRegistryFromCacheEntry(entry: unknown): Record<string, unknown> {
+		if (!entry || typeof entry !== 'object') return {};
+		const checkpoints = (entry as Record<string, unknown>)[componentDraftLastCommittedCheckpointsKey];
+		if (!checkpoints || typeof checkpoints !== 'object') return {};
+		return checkpoints as Record<string, unknown>;
+	}
+
+	function collectComponentNodesWithUnsavedCheckpointChanges(state: GraphState): string[] {
+		const out: string[] = [];
+		const draftCache = (state.componentContractDraftCache ?? {}) as Record<string, unknown>;
+		for (const node of state.nodes ?? []) {
+			if (String((node as any)?.data?.kind ?? '').trim().toLowerCase() !== 'component') continue;
+			const nodeId = String((node as any)?.id ?? '').trim();
+			if (!nodeId) continue;
+			const ref = (((node as any)?.data?.params ?? {}) as any)?.componentRef ?? {};
+			const componentId = String(ref?.componentId ?? '').trim();
+			const revisionId = String(ref?.revisionId ?? '').trim();
+			if (!componentId || !revisionId) continue;
+			const cacheKey = `${componentId}@${revisionId}`;
+			const cacheEntry = draftCache[cacheKey];
+			if (!cacheEntry || typeof cacheEntry !== 'object') continue;
+			const draftRegistry = draftCheckpointRegistryFromCacheEntry(cacheEntry);
+			const committedRegistry = committedCheckpointRegistryFromCacheEntry(cacheEntry);
+			if (stableJson(draftRegistry) !== stableJson(committedRegistry)) {
+				out.push(nodeId);
+			}
+		}
+		return out;
+	}
 
 	function clearResumeFallbackPollTimer(): void {
 		if (!resumeFallbackPollTimer) return;
@@ -2887,14 +2931,51 @@ export function createRunManager(deps: RunDeps) {
 		runFrom: string | null,
 		runMode?: ActiveRunMode,
 		cacheMode?: 'default_on' | 'force_off' | 'force_on',
-		adaptiveMode?: 'off' | 'observe' | 'enforce' | null
+		adaptiveMode?: 'off' | 'observe' | 'enforce' | null,
+		opts?: { allowUnsavedCheckpointChanges?: boolean }
 	) {
 			// prevent concurrent runs
 			const s0 = deps.getState() as GraphState;
-			if (s0.runStatus === 'running' || s0.runStatus === 'pausing' || s0.runStatus === 'resuming') return;
+			if (s0.runStatus === 'running' || s0.runStatus === 'pausing' || s0.runStatus === 'resuming') {
+				return { ok: false as const, reason: 'run_already_active' as const };
+			}
+
+			const allowUnsavedCheckpointChanges = Boolean(opts?.allowUnsavedCheckpointChanges ?? false);
+			if (!allowUnsavedCheckpointChanges) {
+				const blockedComponentNodeIds = collectComponentNodesWithUnsavedCheckpointChanges(s0);
+				if (blockedComponentNodeIds.length > 0) {
+					const message = `Unsaved checkpoint changes detected in ${blockedComponentNodeIds.length} component node${blockedComponentNodeIds.length === 1 ? '' : 's'}.`;
+					deps.update((s) =>
+						withGraphMeta(
+							logPush(
+								{
+									...s,
+									runBlockedReason: {
+										type: 'unsaved_checkpoint_changes',
+										componentNodeIds: blockedComponentNodeIds,
+										message
+									}
+								},
+								'warn',
+								message
+							)
+						)
+					);
+					return {
+						ok: false as const,
+						reason: 'unsaved_checkpoint_changes' as const,
+						componentNodeIds: blockedComponentNodeIds,
+						message
+					};
+				}
+			}
 
 			// reset UI
-			deps.update((s) => { const next = resetRunUiState(s); deps.persist(next); return next; }, { source: 'graph_edit' });
+			deps.update((s) => {
+				const next = resetRunUiState(s);
+				deps.persist(next);
+				return next;
+			}, { source: 'graph_edit' });
 			deps.update((s) => withGraphMeta({ ...s, runStatus: 'running' }));
 
 			// snapshot graph DTO
@@ -3275,7 +3356,8 @@ export function createRunManager(deps: RunDeps) {
 					pinnedNodeIds,
 					pinnedArtifacts,
 					cacheMode,
-					adaptiveMode ?? null
+					adaptiveMode ?? null,
+					s1.checkpointRegistry
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
 				tracePinRequestBuild(deps, payload, {
@@ -3292,7 +3374,7 @@ export function createRunManager(deps: RunDeps) {
 				});
 				await runSingleWithStream(payload, plannedNodeSet);
 				clearPerRunPinsIfAny();
-				return;
+				return { ok: true as const };
 			}
 
 			const allPlannedNodeSet = new Set<string>();
@@ -3342,7 +3424,8 @@ export function createRunManager(deps: RunDeps) {
 						pinnedNodeIds,
 						pinnedArtifacts,
 						cacheMode,
-						adaptiveMode ?? null
+						adaptiveMode ?? null,
+						s1.checkpointRegistry
 					);
 					tracePinRequestBuild(deps, payload, {
 						runFrom: null,
@@ -3410,6 +3493,7 @@ export function createRunManager(deps: RunDeps) {
 			clearPerRunPinsIfAny();
 			const current = deps.getState() as GraphState;
 			deps.persist(current);
+			return { ok: true as const };
 	}
 
 	return {
@@ -3471,6 +3555,12 @@ export function createRunManager(deps: RunDeps) {
 					deps.persist(next);
 					return next;
 				}, { source: 'graph_edit' });
+			},
+			clearRunBlockedReason() {
+				deps.update((s) => {
+					if (!s.runBlockedReason) return s;
+					return withGraphMeta({ ...s, runBlockedReason: null });
+				});
 			},
 		},
 	};

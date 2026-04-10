@@ -45,7 +45,21 @@
       "Bash(wc -l /c/Users/Owner/Desktop/aiproj/src/lib/flow/components/editors/SourceEditor/*.svelte)",
       "Bash(xargs grep:*)",
       "Bash(xargs wc:*)",
-      "Bash(find C:/Users/Owner/Desktop/aiproj -type f \\\\\\( -name \"*.test.ts\" -o -name \"*test*.py\" \\\\\\) -exec grep -l \"freeze\\\\|pin\" {} \\\\;)"
+      "Bash(find C:/Users/Owner/Desktop/aiproj -type f \\\\\\( -name \"*.test.ts\" -o -name \"*test*.py\" \\\\\\) -exec grep -l \"freeze\\\\|pin\" {} \\\\;)",
+      "Read(//c/Users/Owner/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/5ce673f1-a744-40f7-a1d5-e35fcb1c892d/bcc41d64-5e5c-48e4-b282-2e4139da47f2/skills/docx/scripts/office/**)",
+      "Bash(npm list:*)",
+      "Read(//c/Users/Owner/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/5ce673f1-a744-40f7-a1d5-e35fcb1c892d/bcc41d64-5e5c-48e4-b282-2e4139da47f2/skills/docx/**)",
+      "Bash(npm install:*)",
+      "Bash(node schema_plane_doc.js)",
+      "Bash(python C:/Users/Owner/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/5ce673f1-a744-40f7-a1d5-e35fcb1c892d/bcc41d64-5e5c-48e4-b282-2e4139da47f2/skills/docx/scripts/office/validate.py /c/Users/Owner/Desktop/SchemaPlane_Specification.docx)",
+      "Bash(pip install:*)",
+      "Bash(python __TRACKED_VAR__/scripts/office/validate.py /c/Users/Owner/Desktop/SchemaPlane_Specification.docx)",
+      "Bash(pandoc \"/c/Users/Owner/Desktop/SchemaPlane_Specification.docx\" -t plain)",
+      "Bash(python C:/Users/Owner/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/5ce673f1-a744-40f7-a1d5-e35fcb1c892d/bcc41d64-5e5c-48e4-b282-2e4139da47f2/skills/docx/scripts/office/unpack.py /c/Users/Owner/Desktop/SchemaPlane_Specification.docx /c/Users/Owner/Desktop/schema_unpacked)",
+      "Bash(pandoc \"/c/Users/Owner/Desktop/SchemaPlane_Specification.docx\" -t markdown --wrap=none)",
+      "Bash(python -c \"import docx2txt; print\\('ok'\\)\")",
+      "Bash(python -c \"import docx2txt; print\\(docx2txt.process\\('/c/Users/Owner/Desktop/SchemaPlane_Specification.docx'\\)[:200]\\)\")",
+      "Bash(python -c ':*)"
     ]
   }
 }

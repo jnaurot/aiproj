@@ -226,6 +226,7 @@ const initialState: GraphState = {
 	activeRunMode: 'from_start',
 	activeRunFrom: null,
 	activeRunNodeSet: new Set<string>(),
+	runBlockedReason: null,
 	nodeOutputs: {},
 	nodeBindings: ensureNormalizedBindingsForNodes(loadedNormalized.nodes, {}),
 	activeRunId: null,

@@ -23,6 +23,9 @@
 	} from '$lib/flow/store/graphStore';
 	import type { GraphState, InputResolution, SaveConsistencyMismatch } from '$lib/flow/store/graphStore';
 	import NodeInspector from '$lib/flow/components/NodeInspector.svelte';
+	import CheckpointRegistryPanel, {
+		type CheckpointPanelRow
+	} from '$lib/flow/components/panels/CheckpointRegistryPanel.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
@@ -390,7 +393,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runLogsCollapsed = false;
 	let runMonitorNodeFilter: RunMonitorFilter = 'all';
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
-	let runMonitorTab: 'live' | 'diagnostics' | 'history' = 'live';
+	let runMonitorTab: 'live' | 'diagnostics' | 'history' | 'checkpoints' = 'live';
 	let runMonitorNodeStatusFilters: string[] = [];
 	let runMonitorEdgeStatusFilters: Array<
 		'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full'
@@ -540,6 +543,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorAnalyticsLoading = false;
 	let runMonitorAnalyticsError: string | null = null;
 	let runMonitorAnalyticsRefreshKey = '';
+	let checkpointPanelRows: CheckpointPanelRow[] = [];
 	let guidedDsmlDismissed = true;
 	type GraphUiReturnSnapshot = {
 		viewport: { x: number; y: number; zoom: number };
@@ -1050,6 +1054,36 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		0
 	);
 	$: runMonitorGlobalStalled = Boolean(($graphStore.queueRuntime?.schedulerSnapshot as any)?.stalled ?? false);
+	$: checkpointPanelRows = Object.entries(($graphStore.checkpointRegistry ?? {}) as Record<string, any>)
+		.map(([nodeId, checkpoint]) => {
+			const nodeName =
+				String(
+					($graphStore.nodes ?? []).find((node) => String((node as any)?.id ?? '') === nodeId)?.data?.label ??
+						nodeId
+				).trim() || nodeId;
+			return {
+				nodeId,
+				nodeName,
+				checkpoint
+			} as CheckpointPanelRow;
+		})
+		.sort((a, b) => String(b.checkpoint?.createdAt ?? '').localeCompare(String(a.checkpoint?.createdAt ?? '')));
+
+	function removeCheckpointFromPanel(nodeId: string): void {
+		graphStore.removeCheckpoint(String(nodeId ?? '').trim());
+	}
+
+	function renameCheckpointFromPanel(nodeId: string, name: string): void {
+		graphStore.renameCheckpoint(String(nodeId ?? '').trim(), String(name ?? '').trim());
+	}
+
+	function removeAllStaleCheckpointsFromPanel(): void {
+		graphStore.removeAllStaleCheckpoints();
+	}
+
+	function removeAllCheckpointsFromPanel(): void {
+		graphStore.clearAllCheckpoints();
+	}
 	$: runMonitorNodeRows = buildRunMonitorNodeRows({
 		nodes: ($graphStore.nodes ?? []) as any,
 		edges: ($graphStore.edges ?? []) as any,
@@ -3026,7 +3060,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorAdaptiveModeOverride === 'default'
 				? null
 				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
-		void graphStore.runRemote(null, 'from_start', globalCacheMode, adaptiveMode);
+		void runRemoteWithCheckpointGuard(null, 'from_start', adaptiveMode);
 	}
 
 	function runFromSelected() {
@@ -3034,12 +3068,23 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			runMonitorAdaptiveModeOverride === 'default'
 				? null
 				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
-		void graphStore.runRemote(
-			$selectedNode?.id ?? null,
-			'from_selected_onward',
-			globalCacheMode,
-			adaptiveMode
-		);
+		void runRemoteWithCheckpointGuard($selectedNode?.id ?? null, 'from_selected_onward', adaptiveMode);
+	}
+
+	async function runRemoteWithCheckpointGuard(
+		runFrom: string | null,
+		mode: 'from_start' | 'from_selected_onward',
+		adaptiveMode: 'off' | 'observe' | 'enforce' | null
+	): Promise<void> {
+		const result = await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode);
+		if (result?.ok !== false || String(result?.reason ?? '') !== 'unsaved_checkpoint_changes') return;
+		const message = `${String(result?.message ?? 'Unsaved component checkpoint changes detected.')}\n\nRun without these unsaved checkpoint changes?`;
+		const proceed = window.confirm(message);
+		if (!proceed) return;
+		(graphStore as any).clearRunBlockedReason?.();
+		await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode, {
+			allowUnsavedCheckpointChanges: true
+		});
 	}
 
 	function pauseRun() {
@@ -5715,6 +5760,15 @@ async function returnFromComponentEditMode() {
 										>
 											History
 										</button>
+										<button
+											type="button"
+											class={`pill pinBtn ${runMonitorTab === 'checkpoints' ? 'is-active' : ''}`}
+											role="tab"
+											aria-selected={runMonitorTab === 'checkpoints'}
+											on:click={() => (runMonitorTab = 'checkpoints')}
+										>
+											Checkpoints
+										</button>
 									</div>
 									<button
 										type="button"
@@ -5804,6 +5858,10 @@ async function returnFromComponentEditMode() {
 													<option value="enforce">Enforce</option>
 												</select>
 											</label>
+										</div>
+									{:else if runMonitorTab === 'checkpoints'}
+										<div class="envPanelSummary">
+											checkpoints {checkpointPanelRows.length}
 										</div>
 									{/if}
 									{#if runMonitorTab === 'live'}
@@ -5900,6 +5958,15 @@ async function returnFromComponentEditMode() {
 											</div>
 										</div>
 									</div>
+									{/if}
+									{#if runMonitorTab === 'checkpoints'}
+										<CheckpointRegistryPanel
+											rows={checkpointPanelRows}
+											onRemove={removeCheckpointFromPanel}
+											onRename={renameCheckpointFromPanel}
+											onRemoveAllStale={removeAllStaleCheckpointsFromPanel}
+											onRemoveAll={removeAllCheckpointsFromPanel}
+										/>
 									{/if}
 									{#if runMonitorTab === 'diagnostics'}
 									<div class="runMonitorHistoryTable" role="table" aria-label="Adaptive decision timeline">

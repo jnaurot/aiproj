@@ -9,7 +9,7 @@ import type {
 	PipelineGraphDTO,
 	PayloadType
 } from '$lib/flow/types';
-import type { CheckpointRegistry } from '$lib/flow/types/checkpoint';
+import type { CheckpointRecord, CheckpointRegistry } from '$lib/flow/types/checkpoint';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { defaultSourceMetaByKind, defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
@@ -1673,6 +1673,160 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		return { ok: true as const, cleanedName: cleaned };
 	}
 
+	function createCheckpoint(
+		nodeId: string,
+		name: string,
+		description?: string
+	): { ok: true; checkpoint: CheckpointRecord } | { ok: false; error: string } {
+		const state = getState();
+		const node = state.nodes.find((n) => n.id === nodeId) as
+			| Node<PipelineNodeData & Record<string, unknown>>
+			| undefined;
+		if (!node) return { ok: false, error: 'Node not found.' };
+
+		const checkpointName = String(name ?? '').trim();
+		if (!checkpointName) return { ok: false, error: 'Checkpoint name is required.' };
+
+		const normalizedBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
+		const eligibility = validatePinEligibility(node, normalizedBinding);
+		if (!eligibility.ok) return { ok: false, error: eligibility.error };
+
+		const lineage =
+			normalizedBinding && (normalizedBinding.last?.artifactId || normalizedBinding.last?.execKey)
+				? normalizedBinding.last
+				: normalizedBinding.current;
+		const artifactId = String(lineage?.artifactId ?? '').trim();
+		const execKey = String(lineage?.execKey ?? '').trim();
+		if (!artifactId || !execKey) return { ok: false, error: 'No artifact available.' };
+
+		const memoKey = String(normalizedBinding?.memoState?.memoKey ?? '').trim();
+		if (!memoKey || memoKey.length !== 64) {
+			return { ok: false, error: 'No fingerprint available. Run the node first.' };
+		}
+
+		const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
+		const outputLineage = (normalizedBinding?.outputLineage ?? {}) as Record<string, any>;
+		for (const [rawHandle, rawPair] of Object.entries(outputLineage)) {
+			const handle = String(rawHandle ?? '').trim();
+			if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+			const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
+			const outputExecKey = String((rawPair as any).execKey ?? '').trim();
+			if (!outputArtifactId) continue;
+			outputs[handle] = outputExecKey
+				? { artifactId: outputArtifactId, execKey: outputExecKey }
+				: { artifactId: outputArtifactId };
+		}
+
+		const checkpoint: CheckpointRecord = {
+			id:
+				typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+					? crypto.randomUUID()
+					: `ck_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+			name: checkpointName,
+			...(String(description ?? '').trim() ? { description: String(description).trim() } : {}),
+			nodeId,
+			graphId: state.graphId,
+			runId: String(state.lastRunId ?? '').trim(),
+			artifactId,
+			execKey,
+			fingerprintAtCreation: memoKey,
+			createdAt: new Date().toISOString(),
+			staleness: 'valid',
+			...(Object.keys(outputs).length > 0 ? { outputs } : {})
+		};
+
+		update((s) => {
+			const nodeBindings = {
+				...s.nodeBindings,
+				[nodeId]: {
+					..._normalizeBinding(s.nodeBindings?.[nodeId], nodeId),
+					checkpointable: false
+				}
+			};
+			const next = withGraphMeta({
+				...s,
+				nodeBindings,
+				checkpointRegistry: {
+					...(s.checkpointRegistry ?? {}),
+					[nodeId]: checkpoint
+				}
+			});
+			persist(next);
+			return next;
+		});
+
+		return { ok: true, checkpoint };
+	}
+
+	function removeCheckpoint(nodeId: string): { ok: true } {
+		update((s) => {
+			const checkpointRegistry = { ...(s.checkpointRegistry ?? {}) };
+			delete checkpointRegistry[nodeId];
+			const next = withGraphMeta({
+				...s,
+				checkpointRegistry
+			});
+			persist(next);
+			return next;
+		});
+		return { ok: true };
+	}
+
+	function renameCheckpoint(nodeId: string, name: string): { ok: boolean; error?: string } {
+		const nextName = String(name ?? '').trim();
+		if (!nextName) return { ok: false, error: 'Checkpoint name is required.' };
+		let exists = false;
+		update((s) => {
+			const current = (s.checkpointRegistry ?? {})[nodeId];
+			if (!current) return s;
+			exists = true;
+			const next = withGraphMeta({
+				...s,
+				checkpointRegistry: {
+					...(s.checkpointRegistry ?? {}),
+					[nodeId]: {
+						...current,
+						name: nextName
+					}
+				}
+			});
+			persist(next);
+			return next;
+		});
+		return exists ? { ok: true } : { ok: false, error: 'Checkpoint not found.' };
+	}
+
+	function removeAllStaleCheckpoints(): { ok: true; removed: number } {
+		let removed = 0;
+		update((s) => {
+			const checkpointRegistry = { ...(s.checkpointRegistry ?? {}) };
+			for (const [nodeId, checkpoint] of Object.entries(checkpointRegistry)) {
+				const staleness = String((checkpoint as any)?.staleness ?? '').trim().toLowerCase();
+				if (staleness === 'stale' || staleness === 'artifact_missing') {
+					delete checkpointRegistry[nodeId];
+					removed += 1;
+				}
+			}
+			if (removed <= 0) return s;
+			const next = withGraphMeta({ ...s, checkpointRegistry });
+			persist(next);
+			return next;
+		});
+		return { ok: true, removed };
+	}
+
+	function clearAllCheckpoints(): { ok: true; removed: number } {
+		let removed = 0;
+		update((s) => {
+			removed = Object.keys(s.checkpointRegistry ?? {}).length;
+			if (removed <= 0) return s;
+			const next = withGraphMeta({ ...s, checkpointRegistry: {} });
+			persist(next);
+			return next;
+		});
+		return { ok: true, removed };
+	}
+
 	/** @deprecated use checkpoint creation/removal system */
 	function setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
 		let out: { ok: boolean; error?: string } = { ok: true };
@@ -2147,6 +2301,11 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			insertSchemaAdapterForEdgeConnection,
 			updateNodeTitle,
 			validateNodeName,
+			createCheckpoint,
+			removeCheckpoint,
+			renameCheckpoint,
+			removeAllStaleCheckpoints,
+			clearAllCheckpoints,
 			setNodeFreezeMode,
 			setSelectedNodeFreezeMode,
 			updateNodeProcessingPolicy,

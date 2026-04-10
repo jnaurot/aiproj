@@ -1,6 +1,7 @@
 import type { Edge, Node } from '@xyflow/svelte';
 
 import type { NodeStatus, PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
+import type { CheckpointExecutionHints, CheckpointRegistry } from '$lib/flow/types/checkpoint';
 import { projectNodeDisplayState, type NodeBindingProjectionInput } from './displayState';
 import { projectNodeStatus, type NodeStatusProjection } from './statusModel';
 
@@ -221,7 +222,8 @@ export function buildRunCreateRequest(
 		}
 	>,
 	cacheMode?: 'default_on' | 'force_off' | 'force_on',
-	adaptiveMode?: 'off' | 'observe' | 'enforce' | null
+	adaptiveMode?: 'off' | 'observe' | 'enforce' | null,
+	checkpoints?: CheckpointRegistry
 ): {
 	graphId: string;
 	graph: {
@@ -239,6 +241,7 @@ export function buildRunCreateRequest(
 					outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
 				}
 			>;
+			checkpoints?: CheckpointExecutionHints['checkpoints'];
 		};
 	};
 	runFrom?: string;
@@ -313,6 +316,70 @@ export function buildRunCreateRequest(
 						)
 			  )
 			: {};
+	const sanitizedCheckpoints: CheckpointExecutionHints['checkpoints'] =
+		checkpoints && typeof checkpoints === 'object'
+			? Object.fromEntries(
+					Object.entries(checkpoints)
+						.map(([nodeId, checkpoint]) => {
+							const nid = String(nodeId ?? '').trim();
+							const aid = String((checkpoint as any)?.artifactId ?? '').trim();
+							const execKey = String((checkpoint as any)?.execKey ?? '').trim();
+							const fingerprintAtCreation = String((checkpoint as any)?.fingerprintAtCreation ?? '').trim();
+							if (!nid || !aid || !execKey || !/^[0-9a-f]{64}$/i.test(fingerprintAtCreation)) return null;
+							const rawOutputs = (checkpoint as any)?.outputs;
+							const outputs =
+								rawOutputs && typeof rawOutputs === 'object'
+									? Object.fromEntries(
+											Object.entries(rawOutputs as Record<string, any>)
+												.map(([rawHandle, rawOutput]) => {
+													const handle = String(rawHandle ?? '').trim();
+													const outArtifactId = String((rawOutput as any)?.artifactId ?? '').trim();
+													const outExecKey = String((rawOutput as any)?.execKey ?? '').trim();
+													if (!handle || !outArtifactId) return null;
+													return [
+														handle,
+														{
+															artifactId: outArtifactId,
+															...(outExecKey ? { execKey: outExecKey } : {})
+														}
+													];
+												})
+												.filter(
+													(entry): entry is [
+														string,
+														{
+															artifactId: string;
+															execKey?: string;
+														}
+													] => entry !== null
+												)
+									  )
+									: {};
+							return [
+								nid,
+								{
+									artifactId: aid,
+									execKey,
+									fingerprintAtCreation,
+									...(Object.keys(outputs).length > 0 ? { outputs } : {})
+								}
+							];
+						})
+						.filter(
+							(
+								entry
+							): entry is [
+								string,
+								{
+									artifactId: string;
+									execKey: string;
+									fingerprintAtCreation: string;
+									outputs?: Record<string, { artifactId: string; execKey?: string }>;
+								}
+							] => entry !== null
+						)
+			  )
+			: {};
 	const executionHints: {
 		dirtyNodeIds?: string[];
 		pinnedNodeIds?: string[];
@@ -324,10 +391,12 @@ export function buildRunCreateRequest(
 				outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
 			}
 		>;
+		checkpoints?: CheckpointExecutionHints['checkpoints'];
 	} = {};
 	if (sanitizedDirty.length > 0) executionHints.dirtyNodeIds = sanitizedDirty;
 	if (sanitizedPinned.length > 0) executionHints.pinnedNodeIds = sanitizedPinned;
 	if (Object.keys(sanitizedPinnedArtifacts).length > 0) executionHints.pinnedArtifacts = sanitizedPinnedArtifacts;
+	if (Object.keys(sanitizedCheckpoints).length > 0) executionHints.checkpoints = sanitizedCheckpoints;
 	const payloadGraph =
 		Object.keys(executionHints).length > 0
 			? {
@@ -365,6 +434,7 @@ export function buildRunCreateRequest(
 						outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
 					}
 				>;
+				checkpoints?: CheckpointExecutionHints['checkpoints'];
 			};
 		};
 		runFrom?: string;

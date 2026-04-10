@@ -30,6 +30,15 @@
 	) as Record<string, string>;
 	$: inputCount = Array.isArray(api.inputs) ? api.inputs.length : 0;
 	$: outputCount = Array.isArray(api.outputs) ? api.outputs.length : 0;
+	$: checkpointSummary = (((data as any)?.meta ?? {}) as any)?.checkpointSummary ?? null;
+	$: checkpointTotal = Math.max(0, Number((checkpointSummary as any)?.total ?? 0));
+	$: checkpointValid = Math.max(0, Number((checkpointSummary as any)?.valid ?? 0));
+	$: checkpointStale = Math.max(0, Number((checkpointSummary as any)?.stale ?? 0));
+	$: checkpointBadgeTone = checkpointStale > 0 ? 'checkpointBadgeStale' : 'checkpointBadgeValid';
+	$: checkpointBadgeText =
+		checkpointStale > 0
+			? `ckpt ${checkpointTotal} (${checkpointStale} stale)`
+			: `ckpt ${checkpointTotal} (${checkpointValid} valid)`;
 	function internalNodeNameFromOutputRef(outputRef: string): string {
 		const raw = String(outputRef ?? '').trim();
 		if (!raw) return '';
@@ -73,4 +82,35 @@
 	<div style="font-size:11px; opacity:0.75; margin-top:2px;">
 		api in {inputCount} / out {outputCount}
 	</div>
+	<svelte:fragment slot="footer-right">
+		{#if checkpointTotal > 0}
+			<span class={`checkpointBadge ${checkpointBadgeTone}`} title="Internal component checkpoints">
+				{checkpointBadgeText}
+			</span>
+		{/if}
+	</svelte:fragment>
 </BaseNode>
+
+<style>
+	.checkpointBadge {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		border-radius: 999px;
+		padding: 2px 8px;
+		font-size: 11px;
+		line-height: 1.2;
+	}
+
+	.checkpointBadgeValid {
+		border: 1px solid rgba(34, 197, 94, 0.45);
+		color: #86efac;
+		background: rgba(22, 101, 52, 0.25);
+	}
+
+	.checkpointBadgeStale {
+		border: 1px solid rgba(245, 158, 11, 0.45);
+		color: #fcd34d;
+		background: rgba(120, 53, 15, 0.28);
+	}
+</style>

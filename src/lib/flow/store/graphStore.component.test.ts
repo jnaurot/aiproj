@@ -1633,6 +1633,18 @@ describe('graphStore component integration', () => {
 											params: {},
 											status: 'succeeded'
 										}
+									},
+									{
+										id: 'n_internal_other',
+										type: 'source',
+										position: { x: 80, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Other',
+											params: {},
+											status: 'succeeded'
+										}
 									}
 								],
 								edges: [],
@@ -1667,6 +1679,183 @@ describe('graphStore component integration', () => {
 			const reopened = await graphStore.openComponentRevisionForEditing('cmp_ck', 'crev_ck', componentNodeId);
 			expect((reopened as any)?.ok).toBe(true);
 			expect((get(graphStore).checkpointRegistry as any)?.n_internal_source?.artifactId).toBe('art_ck');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('writes component checkpoint summary on return from component edit session', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+		graphStore.updateNodeConfig(componentNodeId, {
+			params: {
+				componentRef: { componentId: 'cmp_ck_summary', revisionId: 'crev_ck_summary', apiVersion: 'v1' },
+				api: { inputs: [], outputs: [] }
+			} as any
+		});
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_ck_summary/revisions/crev_ck_summary') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_ck_summary',
+						revisionId: 'crev_ck_summary',
+						parentRevisionId: null,
+						createdAt: '2026-04-10T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: [],
+								checkpointRegistry: {
+									n_internal_source: {
+										id: '8c9f15b5-bd8b-4f73-8f6e-66c7f5bc6f79',
+										name: 'stale',
+										nodeId: 'n_internal_source',
+										graphId: 'cmp_graph',
+										runId: 'run_ck_1',
+										artifactId: 'art_ck_1',
+										execKey: 'exec_ck_1',
+										fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+										createdAt: '2026-04-10T00:00:00.000Z',
+										staleness: 'stale'
+									}
+								}
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_ck_summary',
+				'crev_ck_summary',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+			const componentNode = get(graphStore).nodes.find((node) => node.id === componentNodeId);
+			expect((componentNode?.data as any)?.meta?.checkpointSummary).toEqual({
+				total: 1,
+				valid: 0,
+				stale: 1
+			});
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('blocks run when component draft has unsaved checkpoint changes', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+		graphStore.updateNodeConfig(componentNodeId, {
+			params: {
+				componentRef: { componentId: 'cmp_ck_guard', revisionId: 'crev_ck_guard', apiVersion: 'v1' },
+				api: { inputs: [], outputs: [] }
+			} as any
+		});
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_ck_guard/revisions/crev_ck_guard') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_ck_guard',
+						revisionId: 'crev_ck_guard',
+						parentRevisionId: null,
+						createdAt: '2026-04-10T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: [],
+								checkpointRegistry: {
+									n_internal_source: {
+										id: '8c9f15b5-bd8b-4f73-8f6e-66c7f5bc6f79',
+										name: 'base',
+										nodeId: 'n_internal_source',
+										graphId: 'cmp_graph',
+										runId: 'run_ck',
+										artifactId: 'art_ck',
+										execKey: 'exec_ck',
+										fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+										createdAt: '2026-04-10T00:00:00.000Z',
+										staleness: 'unknown'
+									}
+								}
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_ck_guard',
+				'crev_ck_guard',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			graphStore.removeCheckpoint('n_internal_source');
+			expect((graphStore.returnFromComponentEditSession() as any)?.ok).toBe(true);
+			expect((graphStore as any).hasUnsavedCheckpointChanges(componentNodeId)).toBe(true);
+			const result = await graphStore.runRemote(null, 'from_start');
+			expect((result as any)?.ok).toBe(false);
+			expect((result as any)?.reason).toBe('unsaved_checkpoint_changes');
+			expect((get(graphStore) as any)?.runBlockedReason?.type).toBe('unsaved_checkpoint_changes');
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 			graphStore.returnFromComponentEditSession();
