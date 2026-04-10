@@ -46,6 +46,11 @@ export type NodeMeta = {
   updatedAt?: string;     // ISO
   description?: string;
   tags?: string[];
+  /**
+   * Controls backend memoization eligibility for this node.
+   * When false, memoization cache is bypassed for the node.
+   */
+  memoizable?: boolean;
   nodeDoc?: {
     summary?: string;
     notes?: string[];

@@ -148,6 +148,17 @@ export const defaultSourceParamsByKind = {
 	warehouse: defaultSourceWarehouseParams
 } as const;
 
+export const defaultSourceMetaByKind: Record<
+	keyof typeof defaultSourceParamsByKind,
+	{ memoizable?: boolean }
+> = {
+	file: {},
+	database: {},
+	api: { memoizable: false },
+	object_store: {},
+	warehouse: {}
+} as const;
+
 // Optional: keep your original name as "file default"
 export const defaultSourceParams = defaultSourceFileParams;
 

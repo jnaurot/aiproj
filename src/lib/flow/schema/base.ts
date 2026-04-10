@@ -23,6 +23,7 @@ export const NodeMetaSchema = z.object({
   updatedAt: z.string().optional(),
   description: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  memoizable: z.boolean().optional(),
   nodeDoc: z
     .object({
       summary: z.string().optional(),

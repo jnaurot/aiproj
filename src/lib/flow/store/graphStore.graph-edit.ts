@@ -10,7 +10,7 @@ import type {
 	PayloadType
 } from '$lib/flow/types';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
-import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
+import { defaultSourceMetaByKind, defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
 import { defaultTransformParamsByKind } from '$lib/flow/schema/transformDefaults';
 import { defaultToolParamsByProvider, type ToolProvider } from '$lib/flow/schema/toolDefaults';
@@ -737,6 +737,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 	function setSourceKind(nodeId: string, nextKind: SourceKind) {
 		return runInHistoryTransaction(history, () => {
 			const nextParams = structuredClone(defaultSourceParamsByKind[nextKind]);
+			const nextMetaDefaults = defaultSourceMetaByKind[nextKind] ?? {};
 
 			// 1) update structural subtype on the node
 			update((s) => {
@@ -750,7 +751,15 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 							data: {
 								...n.data,
 								sourceKind: nextKind, // ✅ structural
-								meta: { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() }
+								meta: (() => {
+									const nextMeta = { ...(n.data.meta ?? {}), updatedAt: new Date().toISOString() } as Record<string, unknown>;
+									if (nextMetaDefaults.memoizable === false) {
+										nextMeta.memoizable = false;
+									} else {
+										delete nextMeta.memoizable;
+									}
+									return nextMeta;
+								})()
 							}
 						}
 						: n

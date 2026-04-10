@@ -6,6 +6,7 @@ export * from "./transformMeta";
 export * from "./llm";
 export * from "./tool";
 export * from "./component";
+export * from "./checkpoint";
 export * from "./debug";
 export * from "./nodeDocs";
 

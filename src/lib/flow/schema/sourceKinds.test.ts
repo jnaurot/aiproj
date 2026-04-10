@@ -5,7 +5,10 @@ import {
 	SourceObjectStoreParamsSchema,
 	SourceWarehouseParamsSchema
 } from '$lib/flow/schema/source';
-import { defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
+import {
+	defaultSourceMetaByKind,
+	defaultSourceParamsByKind
+} from '$lib/flow/schema/sourceDefaults';
 
 describe('source kinds schema coverage', () => {
 	it('parses object_store params with defaults', () => {
@@ -71,6 +74,11 @@ describe('source kinds schema coverage', () => {
 	it('exposes defaults for new source kinds', () => {
 		expect(defaultSourceParamsByKind.object_store.provider).toBeDefined();
 		expect(defaultSourceParamsByKind.warehouse.provider).toBeDefined();
+	});
+
+	it('marks api source kind as non-memoizable by default', () => {
+		expect(defaultSourceMetaByKind.api.memoizable).toBe(false);
+		expect(defaultSourceMetaByKind.file.memoizable).toBeUndefined();
 	});
 
 	it('parses csv dialect and locale controls', () => {

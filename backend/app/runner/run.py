@@ -138,6 +138,18 @@ def _node_freeze_lineage(node: Dict[str, Any] | None) -> Tuple[Optional[Dict[str
     return parsed, None
 
 
+def _node_is_memoizable(node: Dict[str, Any] | None) -> bool:
+    """Returns True unless node.data.meta.memoizable is explicitly False."""
+    if not isinstance(node, dict):
+        return True
+    data = node.get("data") if isinstance(node.get("data"), dict) else {}
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    value = meta.get("memoizable")
+    if value is False:
+        return False
+    return True
+
+
 def node_map(graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return {n["id"]: n for n in graph.get("nodes", [])}
 

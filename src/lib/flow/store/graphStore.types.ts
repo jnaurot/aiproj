@@ -26,6 +26,7 @@ import type { KnownRunEvent } from '$lib/flow/types/run';
 import type { BindingPair } from './graphStore.bindings';
 import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/schema/nodeDocs';
 import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
+import type { CheckpointRegistry } from '$lib/flow/types/checkpoint';
 
 // ---------------------------------------------------------------------------
 // Primitive aliases
@@ -407,6 +408,7 @@ export type GraphState = {
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
 	componentContractDraftCache: Record<string, Record<string, any>>;
+	checkpointRegistry?: CheckpointRegistry;
 };
 
 // Pulled out of GraphState to keep it readable.
