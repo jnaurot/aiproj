@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-	__collectPinnedArtifactsByNodeForTest,
 	__normalizeBindingForTest,
 	__resetRunUiStateForTest,
 	type GraphState
@@ -19,8 +18,7 @@ describe('graphStore resetRunUiState', () => {
 					data: {
 						kind: 'source',
 						label: 'Source',
-						params: {},
-						meta: { freeze: { enabled: true, mode: 'sticky' } }
+						params: {}
 					}
 				},
 				{
@@ -96,7 +94,7 @@ describe('graphStore resetRunUiState', () => {
 		}
 	});
 
-	it('keeps pinned lineage reusable after reset while status stays idle', () => {
+	it('keeps checkpoint lineage reusable after reset while status stays idle', () => {
 		const state = {
 			graphId: 'g-reset-pinned',
 			nodes: [
@@ -119,8 +117,7 @@ describe('graphStore resetRunUiState', () => {
 									{ name: 'out_b', required: true }
 								]
 							}
-						},
-						meta: { freeze: { enabled: true, mode: 'sticky' } }
+						}
 					}
 				}
 			] as any,
@@ -156,6 +153,24 @@ describe('graphStore resetRunUiState', () => {
 					'n1'
 				)
 			},
+			checkpointRegistry: {
+				n1: {
+					id: '00000000-0000-4000-8000-000000000111',
+					name: 'ck-n1',
+					nodeId: 'n1',
+					graphId: 'g-reset-pinned',
+					runId: 'run-1',
+					artifactId: 'art-1',
+					execKey: 'exec-1',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid',
+					outputs: {
+						out_a: { artifactId: 'art-a', execKey: 'exec-a' },
+						out_b: { artifactId: 'art-b', execKey: 'exec-b' }
+					}
+				}
+			},
 			activeRunId: 'run-1'
 		} as unknown as GraphState;
 
@@ -166,18 +181,9 @@ describe('graphStore resetRunUiState', () => {
 		expect(next.nodeBindings.n1?.last?.execKey ?? null).toBe('exec-1');
 		expect(next.nodeBindings.n1?.last?.artifactId ?? null).toBe('art-1');
 		expect(next.nodeOutputs.n1).toBeTruthy();
-
-		const pinnedArtifacts = __collectPinnedArtifactsByNodeForTest(next.nodes as any, next.nodeBindings as any);
-		expect(pinnedArtifacts).toEqual({
-			n1: {
-				artifactId: 'art-1',
-				execKey: 'exec-1',
-				outputs: {
-					out_a: { artifactId: 'art-a', execKey: 'exec-a' },
-					out_b: { artifactId: 'art-b', execKey: 'exec-b' }
-				}
-			}
-		});
+		expect(next.checkpointRegistry?.n1).toBeTruthy();
+		expect(next.checkpointRegistry?.n1?.artifactId).toBe('art-1');
+		expect(next.checkpointRegistry?.n1?.execKey).toBe('exec-1');
 	});
 
 	it('falls back to current lineage when last lineage is empty', () => {
@@ -224,66 +230,6 @@ describe('graphStore resetRunUiState', () => {
 		expect(next.nodeBindings.n1?.current?.artifactId ?? null).toBeNull();
 		expect(next.nodeBindings.n1?.last?.execKey ?? null).toBe('exec-current');
 		expect(next.nodeBindings.n1?.last?.artifactId ?? null).toBe('art-current');
-	});
-
-	it('collects pinned artifacts from freezeLineage when nodeBindings are empty', () => {
-		const nodes = [
-			{
-				id: 'n_pinned',
-				type: 'transform',
-				position: { x: 0, y: 0 },
-				data: {
-					kind: 'transform',
-					label: 'Pinned internal',
-					params: {},
-					meta: {
-						freeze: { enabled: true, mode: 'sticky' },
-						freezeLineage: { artifactId: 'art-from-meta', execKey: 'exec-from-meta' }
-					}
-				}
-			}
-		] as any;
-		const pinnedArtifacts = __collectPinnedArtifactsByNodeForTest(nodes, {} as any);
-		expect(pinnedArtifacts).toEqual({
-			n_pinned: { artifactId: 'art-from-meta', execKey: 'exec-from-meta' }
-		});
-	});
-
-	it('collects component pinned output hints from freezeLineage outputs fallback', () => {
-		const nodes = [
-			{
-				id: 'n_component',
-				type: 'component',
-				position: { x: 0, y: 0 },
-				data: {
-					kind: 'component',
-					label: 'Pinned component',
-					params: {},
-					meta: {
-						freeze: { enabled: true, mode: 'sticky' },
-						freezeLineage: {
-							artifactId: 'art-component',
-							execKey: 'exec-component',
-							outputs: {
-								summary: { artifactId: 'art-summary', execKey: 'exec-summary' },
-								source: { artifactId: 'art-source', execKey: 'exec-source' }
-							}
-						}
-					}
-				}
-			}
-		] as any;
-		const pinnedArtifacts = __collectPinnedArtifactsByNodeForTest(nodes, {} as any);
-		expect(pinnedArtifacts).toEqual({
-			n_component: {
-				artifactId: 'art-component',
-				execKey: 'exec-component',
-				outputs: {
-					summary: { artifactId: 'art-summary', execKey: 'exec-summary' },
-					source: { artifactId: 'art-source', execKey: 'exec-source' }
-				}
-			}
-		});
 	});
 
 	it('clears transient run visuals and runtime fields while keeping graph shape', () => {

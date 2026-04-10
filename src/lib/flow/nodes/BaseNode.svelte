@@ -77,13 +77,6 @@ import MemoIndicator from './MemoIndicator.svelte';
 		effectiveLifecycle === 'completed' && statusProjection.freshness === 'stale' ? ' (stale)' : '';
 	$: kind = data?.kind ?? 'node';
 	$: label = data?.label ?? 'Node';
-	$: freezeMeta = (data as any)?.meta?.freeze;
-	$: freezeMode =
-		freezeMeta && freezeMeta.enabled === true && (freezeMeta.mode === 'per_run' || freezeMeta.mode === 'sticky')
-			? freezeMeta.mode
-			: null;
-	$: freezeIcon = freezeMode === 'sticky' ? '#' : '';
-	$: freezeClass = freezeMode === 'sticky' ? 'freeze-sticky' : freezeMode === 'per_run' ? 'freeze-per-run' : '';
 	$: debugEnabled = Boolean((data as any)?.params?.debug?.enabled ?? false);
 	$: processingPolicy = (data as any)?.processingPolicy ?? {};
 	$: consumeMode = normalizeConsumeMode(processingPolicy);
@@ -257,7 +250,7 @@ import MemoIndicator from './MemoIndicator.svelte';
 >
 	<div class="title">
 		<span class="label">{label}</span>
-		<span class={`badge ${freezeClass} ${debugEnabled ? 'debugEnabled' : ''}`}>{kind}{freezeIcon ? ` ${freezeIcon}` : ''}</span>
+		<span class={`badge ${debugEnabled ? 'debugEnabled' : ''}`}>{kind}</span>
 	</div>
 
 	<slot />
@@ -337,13 +330,6 @@ import MemoIndicator from './MemoIndicator.svelte';
 		position: relative;
 	}
 
-	.badge.freeze-per-run {
-		color: #fff1c2;
-		border-color: #f59e0b;
-		background: rgba(245, 158, 11, 0.22);
-		opacity: 1;
-	}
-
 	.badge.debugEnabled::after {
 		content: '🐞';
 		position: absolute;
@@ -353,13 +339,6 @@ import MemoIndicator from './MemoIndicator.svelte';
 		line-height: 1;
 		opacity: 0.95;
 		pointer-events: none;
-	}
-
-	.badge.freeze-sticky {
-		color: #cfe3ff;
-		border-color: #3b82f6;
-		background: rgba(59, 130, 246, 0.2);
-		opacity: 1;
 	}
 
 	.footer {

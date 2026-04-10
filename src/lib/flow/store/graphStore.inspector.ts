@@ -271,17 +271,6 @@ export function committedNodeParamsForNode(
 }
 
 /** @deprecated use checkpoint creation/removal system */
-export function nodeFreezeMode(
-	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null
-): 'per_run' | 'sticky' | null {
-	const freeze = (node?.data as any)?.meta?.freeze;
-	if (!freeze || typeof freeze !== 'object') return null;
-	if (freeze.enabled !== true) return null;
-	const mode = String(freeze.mode ?? '').trim().toLowerCase();
-	if (mode === 'per_run' || mode === 'sticky') return mode;
-	return null;
-}
-
 export function pendingInspectorDraftSaveDiagnostic(state: GraphState): SavePreflightDiagnostic | null {
 	if (!Boolean(state?.inspector?.dirty)) return null;
 	const inspectorNodeId = String(state?.inspector?.nodeId ?? '').trim();
@@ -409,8 +398,7 @@ export function createInspectorManager(deps: InspectorDeps) {
 			let nodes = s.nodes;
 			let edges = s.edges;
 			let removedEdgeIds: string[] = [];
-			let autoUnpinned = false;
-			let pinAutoClearNotice: string | null = null;
+			let checkpointNotice: string | null = null;
 
 			// 0) Ensure node exists
 			const node = nodes.find((n) => n.id === nodeId);
@@ -437,7 +425,6 @@ export function createInspectorManager(deps: InspectorDeps) {
 				return logPush({ ...s, inspector }, 'warn', componentContractMutationError, nodeId);
 			}
 			const beforeExecParams = effectiveExecParamsForNode(node as Node<PipelineNodeData>);
-			const wasPinnedBeforeParams = nodeFreezeMode(node as any) !== null;
 			const previousComponentOutputNames =
 				node.data.kind === 'component' ? listComponentOutputNames(node as Node<PipelineNodeData>) : [];
 
@@ -472,23 +459,13 @@ export function createInspectorManager(deps: InspectorDeps) {
 			const currentNode = nodes.find((n) => n.id === nodeId) ?? node;
 			const afterExecParams = effectiveExecParamsForNode(currentNode as Node<PipelineNodeData>);
 			const execParamsChanged = stableJson(beforeExecParams) !== stableJson(afterExecParams);
-			if (config.params !== undefined && wasPinnedBeforeParams && execParamsChanged) {
-				nodes = nodes.map((n) => {
-					if (n.id !== nodeId) return n;
-					const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
-					delete (nextMeta as any).freeze;
-					delete (nextMeta as any).freezeLineage;
-					return {
-						...n,
-						data: {
-							...(n.data as any),
-							meta: nextMeta
-						}
-					} as Node<PipelineNodeData>;
-				});
-				autoUnpinned = true;
-				pinAutoClearNotice =
-					'[Pin cleared] Parameters changed, so this node was automatically unpinned to keep execution integrity.';
+			if (
+				config.params !== undefined &&
+				execParamsChanged &&
+				(s.checkpointRegistry ?? {})[nodeId]
+			) {
+				checkpointNotice =
+					'[Checkpoint present] Parameters changed. Existing checkpoint remains, and staleness will be re-evaluated on next run.';
 			}
 			const effectiveIo = deriveNodeIoForData(currentNode.data);
 			const { in: inputType, out: outputType } = effectiveIo;
@@ -542,11 +519,8 @@ export function createInspectorManager(deps: InspectorDeps) {
 			}
 
 			const nextInspector =
-				autoUnpinned && String(s.inspector?.nodeId ?? '') === nodeId
-					? {
-							...s.inspector,
-							systemNotice: pinAutoClearNotice
-						}
+				checkpointNotice && String(s.inspector?.nodeId ?? '') === nodeId
+					? { ...s.inspector, systemNotice: checkpointNotice }
 					: s.inspector;
 			const next = logPush({ ...s, nodes, edges, inspector: nextInspector }, 'info', 'Node config updated', nodeId);
 			persist(next);

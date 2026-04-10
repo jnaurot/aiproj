@@ -148,21 +148,16 @@ import {
 import {
 	isNodeStateFromActiveRunAndFresh,
 	hydrateFromRunSnapshotState,
-	collectPinnedNodeIds,
 	clearNodeCacheUi,
 	clearNodeCacheUiForNodes,
 	downstreamNodeIds,
 	createRunManager,
 	__setPauseResumeTraceEnabledForTest as __setPauseResumeTraceEnabledForTestFromRun,
-	__setPinHintTraceEnabledForTest as __setPinHintTraceEnabledForTestFromRun,
 	getPauseResumeTraceEnabled,
-	getPinHintTraceEnabled,
 	__applyRunEventForTest,
 	__hydrateFromRunSnapshotForTest,
 	__resetRunUiStateForTest,
-	__collectPinnedArtifactsByNodeForTest,
 	__markStaleFromNodeForTest as __markStaleFromNodeForTestFromRun,
-	__validatePinEligibilityForTest as __validatePinEligibilityForTestFromRun,
 } from './graphStore.run';
 import {
 	createPersistenceManager,
@@ -177,11 +172,9 @@ export const __assertBindingPairForTest = __assertBindingPairForTestFromAudit;
 export const __normalizeBindingForTest = __normalizeBindingForTestFromAudit;
 
 // re-export test hooks that moved to graphStore.run
-export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiStateForTest, __collectPinnedArtifactsByNodeForTest } from './graphStore.run';
+export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiStateForTest } from './graphStore.run';
 export const __setPauseResumeTraceEnabledForTest = __setPauseResumeTraceEnabledForTestFromRun;
-export const __setPinHintTraceEnabledForTest = __setPinHintTraceEnabledForTestFromRun;
 export const __markStaleFromNodeForTest = __markStaleFromNodeForTestFromRun;
-export const __validatePinEligibilityForTest = __validatePinEligibilityForTestFromRun;
 
 const loaded = loadGraphFromLocalStorage(emptyGraph);
 
@@ -263,13 +256,13 @@ export const graphStore = (() => {
 	);
 function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
 		update((cur) => {
-			const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(cur.nodes as any));
-			const candidateIds = downstreamNodeIds(cur.edges, nodeId, pinnedNodeIds);
+			const checkpointBoundaryNodeIds = new Set<string>(Object.keys(cur.checkpointRegistry ?? {}));
+			const candidateIds = downstreamNodeIds(cur.edges, nodeId, checkpointBoundaryNodeIds);
 			const nodeBindings = { ...cur.nodeBindings };
 			let nodeOutputs = { ...cur.nodeOutputs };
 			let changed = false;
 			for (const affectedId of candidateIds) {
-				if (affectedId !== nodeId && pinnedNodeIds.has(affectedId)) continue;
+				if (affectedId !== nodeId && checkpointBoundaryNodeIds.has(affectedId)) continue;
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 				if (!hadArtifact && affectedId !== nodeId) continue;
@@ -297,11 +290,11 @@ function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAM
 function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string): void {
 		if (!Array.isArray(affectedNodeIds) || affectedNodeIds.length === 0) return;
 		update((cur) => {
-			const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(cur.nodes as any));
+			const checkpointBoundaryNodeIds = new Set<string>(Object.keys(cur.checkpointRegistry ?? {}));
 			const nodeBindings = { ...cur.nodeBindings };
 			const touchedIds: string[] = [];
 			for (const affectedId of affectedNodeIds) {
-				if (affectedId !== rootNodeId && pinnedNodeIds.has(affectedId)) continue;
+				if (affectedId !== rootNodeId && checkpointBoundaryNodeIds.has(affectedId)) continue;
 				const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 				if (isNodeStateFromActiveRunAndFresh(cur, prev)) continue;
 				let next = {
@@ -505,12 +498,6 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		},
 		getPauseResumeTraceLoggingEnabled() {
 			return getPauseResumeTraceEnabled();
-		},
-		setPinHintTraceLoggingEnabled(enabled: boolean) {
-			__setPinHintTraceEnabledForTestFromRun(enabled);
-		},
-		getPinHintTraceLoggingEnabled() {
-			return getPinHintTraceEnabled();
 		},
 		...runManager.actions,
 		...graphEdit.actions,

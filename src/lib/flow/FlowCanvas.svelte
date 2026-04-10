@@ -861,22 +861,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		$selectedNode?.data?.kind === 'component'
 			? String(($selectedNode.data.meta as any)?.componentLatestRevisionId ?? '').trim()
 			: '';
-	$: selectedFreezeMode = (() => {
-		const freeze = (($selectedNode?.data as any)?.meta?.freeze ?? null) as any;
-		if (!freeze || freeze.enabled !== true) return null;
-		const mode = String(freeze.mode ?? '').trim().toLowerCase();
-		return mode === 'per_run' || mode === 'sticky' ? mode : null;
-	})();
-	$: selectedKindPillClass =
-		selectedFreezeMode === 'sticky'
-			? 'pill pill-freeze-sticky'
-			: selectedFreezeMode === 'per_run'
-				? 'pill pill-freeze-per-run'
-				: 'pill';
-	$: selectedKindPillText =
-		selectedFreezeMode === 'sticky'
-			? `${$selectedNode?.data?.kind ?? ''} #`
-			: `${$selectedNode?.data?.kind ?? ''}`;
+	$: selectedKindPillClass = 'pill';
+	$: selectedKindPillText = `${$selectedNode?.data?.kind ?? ''}`;
 		$: hasInputs = Boolean($selectedNode && deriveNodeIoForData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -1530,14 +1516,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	function canonicalPersistentNodeMeta(data: Record<string, unknown>): Record<string, unknown> | undefined {
 		const meta = ((data?.meta ?? {}) as Record<string, unknown>) || {};
-		const freeze = meta.freeze && typeof meta.freeze === 'object' ? meta.freeze : undefined;
-		const freezeLineage =
-			meta.freezeLineage && typeof meta.freezeLineage === 'object' ? meta.freezeLineage : undefined;
-		if (!freeze && !freezeLineage) return undefined;
-		const canonicalMeta: Record<string, unknown> = {};
-		if (freeze) canonicalMeta.freeze = stableCanonicalValue(freeze);
-		if (freezeLineage) canonicalMeta.freezeLineage = stableCanonicalValue(freezeLineage);
-		return canonicalMeta;
+		const checkpointSummary =
+			meta.checkpointSummary && typeof meta.checkpointSummary === 'object'
+				? meta.checkpointSummary
+				: undefined;
+		if (!checkpointSummary) return undefined;
+		return {
+			checkpointSummary: stableCanonicalValue(checkpointSummary)
+		};
 	}
 
 	function canonicalGraphSnapshot(
@@ -8388,20 +8374,6 @@ async function returnFromComponentEditMode() {
 		display: inline-flex;
 		align-items: center;
 		line-height: 1.2;
-	}
-
-	.pill-freeze-per-run {
-		opacity: 1;
-		color: #fff1c2;
-		border-color: #f59e0b;
-		background: rgba(245, 158, 11, 0.2);
-	}
-
-	.pill-freeze-sticky {
-		opacity: 1;
-		color: #cfe3ff;
-		border-color: #3b82f6;
-		background: rgba(59, 130, 246, 0.2);
 	}
 
 	.pinBtn {

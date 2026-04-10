@@ -50,7 +50,7 @@ import {
 	_pairFromLegacy,
 	_assertBindingPairInvariant,
 } from './graphStore.audit';
-import { nodeFreezeMode, effectiveExecParamsForNode } from './graphStore.inspector';
+import { effectiveExecParamsForNode } from './graphStore.inspector';
 import { deriveObservedSchemaObservationFromNodeOutput, computeSchemaDriftSummary } from './graphStore.node-schema';
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import type { CheckpointStaleness } from '$lib/flow/types/checkpoint';
@@ -170,7 +170,6 @@ export function applyRunEventState(state: GraphState, evt: KnownRunEvent, runId:
 }
 
 let pauseResumeTraceEnabled = false;
-let pinHintTraceEnabled = false;
 
 const PAUSE_RESUME_RUN_STATUS_TRACE = new Set<RunStatus>(['pausing', 'paused', 'resuming']);
 const PAUSE_RESUME_FORCE_TRACE_EVENTS = new Set<string>([
@@ -201,14 +200,6 @@ export function __setPauseResumeTraceEnabledForTest(enabled: boolean): void {
 
 export function getPauseResumeTraceEnabled(): boolean {
 	return pauseResumeTraceEnabled;
-}
-
-export function __setPinHintTraceEnabledForTest(enabled: boolean): void {
-	pinHintTraceEnabled = Boolean(enabled);
-}
-
-export function getPinHintTraceEnabled(): boolean {
-	return pinHintTraceEnabled;
 }
 
 function buildPauseResumeTraceDetails(evt: KnownRunEvent): string {
@@ -401,7 +392,7 @@ function debugLogStaleFlips(prev: GraphState, next: GraphState, context: string)
 export function downstreamNodeIds(
 	edges: Edge<PipelineEdgeData>[],
 	nodeId: string,
-	pinnedNodeIds: Set<string> = new Set<string>()
+	checkpointBoundaryNodeIds: Set<string> = new Set<string>()
 ): Set<string> {
 	const out = new Set<string>([nodeId]);
 	const q = [nodeId];
@@ -411,8 +402,8 @@ export function downstreamNodeIds(
 			if (e.source !== cur) continue;
 			const nxt = String(e.target ?? '');
 			if (!nxt || out.has(nxt)) continue;
-			// Pinned nodes are execution/staleness boundaries for upstream changes.
-			if (nxt !== nodeId && pinnedNodeIds.has(nxt)) continue;
+			// Checkpointed nodes are execution/staleness boundaries for upstream changes.
+			if (nxt !== nodeId && checkpointBoundaryNodeIds.has(nxt)) continue;
 			out.add(nxt);
 			q.push(nxt);
 		}
@@ -421,12 +412,12 @@ export function downstreamNodeIds(
 }
 
 export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): GraphState {
-	const pinnedNodeIds = new Set<string>(collectPinnedNodeIds(state.nodes as any));
-	const candidateIds = downstreamNodeIds(state.edges, nodeId, pinnedNodeIds);
+	const checkpointBoundaryNodeIds = new Set<string>(Object.keys(state.checkpointRegistry ?? {}));
+	const candidateIds = downstreamNodeIds(state.edges, nodeId, checkpointBoundaryNodeIds);
 	const nodeBindings = { ...state.nodeBindings };
 	let changed = false;
 	for (const affectedId of candidateIds) {
-		if (affectedId !== nodeId && pinnedNodeIds.has(affectedId)) continue;
+		if (affectedId !== nodeId && checkpointBoundaryNodeIds.has(affectedId)) continue;
 		const prev = _normalizeBinding(nodeBindings[affectedId], affectedId);
 		const hadArtifact = Boolean(prev.current?.artifactId || prev.last?.artifactId);
 		if (!hadArtifact) continue;
@@ -475,283 +466,6 @@ export function clearNodeCacheUiForNodes(
 		next = clearNodeCacheUi(next, nodeId);
 	}
 	return next;
-}
-
-function hasCurrentBoundArtifact(binding: NormalizedNodeBinding | undefined | null): boolean {
-	const execKey = String(binding?.current?.execKey ?? '').trim();
-	const artifactId = String(binding?.current?.artifactId ?? '').trim();
-	return execKey.length > 0 && artifactId.length > 0;
-}
-
-/** @deprecated use memoization/checkpoint system */
-export function validatePinEligibility(
-	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null,
-	binding: NormalizedNodeBinding | undefined | null
-): { ok: true } | { ok: false; error: string } {
-	if (!node) return { ok: false, error: 'Node not found.' };
-	const display = displayStatusFromBinding(binding as any);
-	if (display !== 'succeeded') {
-		return { ok: false, error: 'Pin is only allowed when node status is succeeded.' };
-	}
-	if (!hasCurrentBoundArtifact(binding)) {
-		return {
-			ok: false,
-			error: 'Pin requires a current bound artifact. Run the node successfully first.'
-		};
-	}
-	return { ok: true };
-}
-
-export function __validatePinEligibilityForTest(
-	node: Node<PipelineNodeData & Record<string, unknown>> | undefined | null,
-	binding: NodeBindingInfo | NormalizedNodeBinding | undefined | null
-): { ok: true } | { ok: false; error: string } {
-	const normalized =
-		binding == null ? undefined : _normalizeBinding(binding as NodeBindingInfo, String(node?.id ?? 'test'));
-	return validatePinEligibility(node, normalized);
-}
-
-/** @deprecated use memoization/checkpoint system */
-export function collectPinnedNodeIds(nodes: Node<PipelineNodeData & Record<string, unknown>>[]): string[] {
-	return nodes
-		.filter((node) => nodeFreezeMode(node) !== null)
-		.map((node) => String(node.id ?? '').trim())
-		.filter(Boolean);
-}
-
-/** @deprecated use memoization/checkpoint system */
-export function collectPinnedArtifactsByNode(
-	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
-	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
-): Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }> {
-	const out: Record<
-		string,
-		{ artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }
-	> = {};
-	for (const node of nodes) {
-		if (nodeFreezeMode(node) === null) continue;
-		const nodeId = String(node.id ?? '').trim();
-		if (!nodeId) continue;
-		const binding = _normalizeBinding(nodeBindings?.[nodeId], nodeId);
-		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
-		let artifactId = String(lineage?.artifactId ?? '').trim();
-		let execKey = String(lineage?.execKey ?? '').trim();
-		const freezeLineage =
-			((node.data as any)?.meta?.freezeLineage &&
-			typeof (node.data as any)?.meta?.freezeLineage === 'object'
-				? ((node.data as any).meta.freezeLineage as Record<string, any>)
-				: null) ?? null;
-		if ((!artifactId || !execKey) && freezeLineage) {
-			// Component edit sessions reset nodeBindings; preserve pin hints from snapshotted lineage on the node.
-			artifactId = String(freezeLineage.artifactId ?? '').trim();
-			execKey = String(freezeLineage.execKey ?? '').trim();
-		}
-		if (!artifactId || !execKey) continue;
-		const pinned: { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> } = {
-			artifactId,
-			execKey
-		};
-		if (node.data.kind === 'component') {
-			const rawOutputLineage =
-				((binding as any)?.outputLineage && typeof (binding as any).outputLineage === 'object'
-					? ((binding as any).outputLineage as Record<string, any>)
-					: null) ?? null;
-			const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
-			if (rawOutputLineage) {
-				for (const [rawHandle, rawPair] of Object.entries(rawOutputLineage)) {
-					const handle = String(rawHandle ?? '').trim();
-					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
-					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
-					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
-					if (!outputArtifactId) continue;
-					outputs[handle] = outputExecKey
-						? { artifactId: outputArtifactId, execKey: outputExecKey }
-						: { artifactId: outputArtifactId };
-				}
-			}
-			if (Object.keys(outputs).length === 0 && freezeLineage?.outputs && typeof freezeLineage.outputs === 'object') {
-				for (const [rawHandle, rawPair] of Object.entries(freezeLineage.outputs as Record<string, any>)) {
-					const handle = String(rawHandle ?? '').trim();
-					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
-					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
-					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
-					if (!outputArtifactId) continue;
-					outputs[handle] = outputExecKey
-						? { artifactId: outputArtifactId, execKey: outputExecKey }
-						: { artifactId: outputArtifactId };
-				}
-			}
-			if (Object.keys(outputs).length > 0) pinned.outputs = outputs;
-		}
-		out[nodeId] = pinned;
-	}
-	return out;
-}
-
-function countPinnedOutputLineageHandles(binding: NormalizedNodeBinding): number {
-	const rawOutputLineage =
-		((binding as any)?.outputLineage && typeof (binding as any).outputLineage === 'object'
-			? ((binding as any).outputLineage as Record<string, any>)
-			: null) ?? null;
-	if (!rawOutputLineage) return 0;
-	let count = 0;
-	for (const [rawHandle, rawPair] of Object.entries(rawOutputLineage)) {
-		const handle = String(rawHandle ?? '').trim();
-		if (!handle || !rawPair || typeof rawPair !== 'object') continue;
-		const artifactId = String((rawPair as any)?.artifactId ?? '').trim();
-		if (!artifactId) continue;
-		count += 1;
-	}
-	return count;
-}
-
-/** @deprecated use memoization/checkpoint system */
-function tracePinCollect(
-	deps: RunDeps,
-	state: GraphState,
-	pinnedNodeIds: string[],
-	pinnedArtifacts: Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }>
-): void {
-	if (!pinHintTraceEnabled || pinnedNodeIds.length === 0) return;
-	const nodesById = new Map<string, Node<PipelineNodeData & Record<string, unknown>>>(
-		(state.nodes as Node<PipelineNodeData & Record<string, unknown>>[]).map((node) => [String(node.id ?? '').trim(), node])
-	);
-	for (const nodeId of pinnedNodeIds) {
-		const node = nodesById.get(nodeId);
-		const kind = String((node?.data as any)?.kind ?? '').trim().toLowerCase() || 'unknown';
-		const binding = _normalizeBinding((state.nodeBindings ?? {})[nodeId], nodeId);
-		const lineage = binding.last?.artifactId || binding.last?.execKey ? binding.last : binding.current;
-		const artifactIdPresent = Boolean(String(lineage?.artifactId ?? '').trim());
-		const execKeyPresent = Boolean(String(lineage?.execKey ?? '').trim());
-		const outputsCount = countPinnedOutputLineageHandles(binding);
-		const hasHint = Boolean(pinnedArtifacts[nodeId]);
-		let reasonCode = 'PIN_HINT_VALID';
-		if (!hasHint && !artifactIdPresent) reasonCode = 'PIN_HINT_INVALID_MISSING_ARTIFACT_ID';
-		else if (!hasHint && !execKeyPresent) reasonCode = 'PIN_HINT_INVALID_MISSING_EXEC_KEY';
-		else if (!hasHint) reasonCode = 'PIN_HINT_DROPPED_SANITIZATION';
-		deps.update((s) =>
-			logPush(
-				s,
-				'info',
-				`[trace][pin.collect] ${stableJson({
-					nodeId,
-					kind,
-					isPinned: true,
-					artifactIdPresent,
-					execKeyPresent,
-					outputsCount,
-					hasHint,
-					reasonCode
-				})}`,
-				nodeId
-			)
-		);
-	}
-}
-
-/** @deprecated use memoization/checkpoint system */
-function tracePinRequestBuild(
-	deps: RunDeps,
-	payload: ReturnType<typeof buildRunCreateRequest>,
-	params: {
-		runFrom: string | null;
-		runMode: ActiveRunMode;
-		pinnedNodeIds: string[];
-		pinnedArtifacts: Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }>;
-	}
-): void {
-	if (!pinHintTraceEnabled) return;
-	const inPinnedNodeIds = Array.from(new Set(params.pinnedNodeIds.map((value) => String(value ?? '').trim()).filter(Boolean)));
-	const inPinnedArtifactNodeIds = Object.keys(params.pinnedArtifacts ?? {}).map((value) => String(value ?? '').trim()).filter(Boolean);
-	const hints = (payload as any)?.graph?.__executionHints ?? {};
-	const outPinnedNodeIds = Array.isArray(hints?.pinnedNodeIds) ? (hints.pinnedNodeIds as string[]) : [];
-	const outPinnedArtifactNodeIds =
-		hints?.pinnedArtifacts && typeof hints.pinnedArtifacts === 'object'
-			? Object.keys(hints.pinnedArtifacts as Record<string, unknown>)
-			: [];
-	const droppedNodeIds = inPinnedNodeIds.filter((nodeId) => !outPinnedNodeIds.includes(nodeId));
-	const droppedArtifactNodeIds = inPinnedArtifactNodeIds.filter((nodeId) => !outPinnedArtifactNodeIds.includes(nodeId));
-	const reasonCode =
-		droppedNodeIds.length > 0 || droppedArtifactNodeIds.length > 0
-			? 'PIN_HINT_DROPPED_SANITIZATION'
-			: 'PIN_HINT_VALID';
-	deps.update((s) =>
-		logPush(
-			s,
-			'info',
-			`[trace][pin.request_build] ${stableJson({
-				runFrom: params.runFrom,
-				runMode: params.runMode,
-				pinnedNodeIdsIn: inPinnedNodeIds,
-				pinnedNodeIdsOut: outPinnedNodeIds,
-				pinnedArtifactsInCount: inPinnedArtifactNodeIds.length,
-				pinnedArtifactsOutCount: outPinnedArtifactNodeIds.length,
-				droppedNodeIds,
-				droppedArtifactNodeIds,
-				reasonCode
-			})}`
-		)
-	);
-}
-
-/** @deprecated use memoization/checkpoint system */
-function tracePinSubmit(
-	deps: RunDeps,
-	payload: ReturnType<typeof buildRunCreateRequest>,
-	params: {
-		graphId: string;
-		runFrom: string | null;
-		runMode: ActiveRunMode;
-		plannedNodeSet: Set<string>;
-	}
-): void {
-	if (!pinHintTraceEnabled) return;
-	const hints = (payload as any)?.graph?.__executionHints ?? {};
-	const pinnedNodeIds = Array.isArray(hints?.pinnedNodeIds) ? (hints.pinnedNodeIds as string[]) : [];
-	const pinnedArtifactsNodeIds =
-		hints?.pinnedArtifacts && typeof hints.pinnedArtifacts === 'object'
-			? Object.keys(hints.pinnedArtifacts as Record<string, unknown>)
-			: [];
-	deps.update((s) =>
-		logPush(
-			s,
-			'info',
-			`[trace][pin.submit] ${stableJson({
-				graphId: params.graphId,
-				runFrom: params.runFrom,
-				runMode: params.runMode,
-				plannedNodeSetSize: params.plannedNodeSet.size,
-				pinnedNodeIds,
-				pinnedArtifactsNodeIds,
-				reasonCode: 'PIN_HINT_VALID'
-			})}`
-		)
-	);
-}
-
-/** @deprecated use memoization/checkpoint system */
-export function clearPerRunPinsOnNodes(
-	nodes: Node<PipelineNodeData & Record<string, unknown>>[]
-): Node<PipelineNodeData & Record<string, unknown>>[] {
-	let changed = false;
-	const next = nodes.map((node) => {
-		if (nodeFreezeMode(node) !== 'per_run') return node;
-		const meta = { ...(((node.data as any)?.meta ?? {}) as Record<string, unknown>) };
-		delete (meta as any).freeze;
-		delete (meta as any).freezeLineage;
-		changed = true;
-		return {
-			...node,
-			data: {
-				...(node.data as any),
-				meta: {
-					...meta,
-					updatedAt: new Date().toISOString()
-				}
-			}
-		} as Node<PipelineNodeData & Record<string, unknown>>;
-	});
-	return changed ? next : nodes;
 }
 
 function assertNoOutOfScopeStaleFlips(prev: GraphState, next: GraphState, context: string): void {
@@ -1092,9 +806,6 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					evt.runFrom ?? null,
 					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start')
 				);
-			const evtPinned = Array.isArray((evt as any).pinnedNodeIds)
-				? new Set<string>((evt as any).pinnedNodeIds as string[])
-				: new Set<string>();
 			const nodeBindings = { ...state.nodeBindings };
 			for (const [nodeId, rawBinding] of Object.entries(nodeBindings)) {
 				const prevBinding = _normalizeBinding(rawBinding, nodeId);
@@ -1106,7 +817,6 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				};
 			}
 			for (const nodeId of evtPlanned) {
-				if (evtPinned.has(nodeId)) continue;
 				const prevBinding = _normalizeBinding(nodeBindings[nodeId], nodeId);
 				const hasArtifact = Boolean(
 					prevBinding.current?.artifactId ??
@@ -2611,14 +2321,6 @@ export function __resetRunUiStateForTest(state: GraphState): GraphState {
 	return resetRunUiState(state);
 }
 
-export function __collectPinnedArtifactsByNodeForTest(
-	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
-	nodeBindings: Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
-): Record<string, { artifactId: string; execKey?: string; outputs?: Record<string, { artifactId: string; execKey?: string }> }> {
-	return collectPinnedArtifactsByNode(nodes, nodeBindings);
-}
-
-
 export function resetEdgesExec(edges: Edge<PipelineEdgeData>[]): Edge<PipelineEdgeData>[] {
 	return edges.map((e) => ({ ...e, data: { ...e.data, exec: 'idle' as EdgeExec } }));
 }
@@ -2987,21 +2689,7 @@ export function createRunManager(deps: RunDeps) {
 							.filter(([, binding]) => isBindingStale(binding))
 							.map(([nodeId]) => nodeId)
 					: [];
-			const pinnedNodeIds = collectPinnedNodeIds(s1.nodes);
-			const pinnedArtifacts = collectPinnedArtifactsByNode(
-				s1.nodes,
-				(s1.nodeBindings ?? {}) as Record<string, NodeBindingInfo | NormalizedNodeBinding | undefined>
-			);
-			tracePinCollect(deps, s1, pinnedNodeIds, pinnedArtifacts);
-			const clearPerRunPinsIfAny = () => {
-				deps.update((s) => {
-					const nextNodes = clearPerRunPinsOnNodes(s.nodes);
-					if (nextNodes === s.nodes) return s;
-					const next = withGraphMeta({ ...s, nodes: nextNodes });
-					deps.persist(next);
-					return next;
-				});
-			};
+			const checkpoints = s1.checkpointRegistry;
 			const sseRuntimeStats = {
 				sseTerminalCount: 0,
 				fallbackTerminalCount: 0,
@@ -3353,27 +3041,12 @@ export function createRunManager(deps: RunDeps) {
 					runFrom,
 					effectiveRunMode,
 					dirtyNodeIds,
-					pinnedNodeIds,
-					pinnedArtifacts,
 					cacheMode,
 					adaptiveMode ?? null,
-					s1.checkpointRegistry
+					checkpoints
 				);
 				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
-				tracePinRequestBuild(deps, payload, {
-					runFrom,
-					runMode: effectiveRunMode,
-					pinnedNodeIds,
-					pinnedArtifacts
-				});
-				tracePinSubmit(deps, payload, {
-					graphId: s1.graphId,
-					runFrom,
-					runMode: effectiveRunMode,
-					plannedNodeSet
-				});
 				await runSingleWithStream(payload, plannedNodeSet);
-				clearPerRunPinsIfAny();
 				return { ok: true as const };
 			}
 
@@ -3421,24 +3094,10 @@ export function createRunManager(deps: RunDeps) {
 						null,
 						'from_start',
 						componentDirtyNodeIds,
-						pinnedNodeIds,
-						pinnedArtifacts,
 						cacheMode,
 						adaptiveMode ?? null,
-						s1.checkpointRegistry
+						checkpoints
 					);
-					tracePinRequestBuild(deps, payload, {
-						runFrom: null,
-						runMode: 'from_start',
-						pinnedNodeIds,
-						pinnedArtifacts
-					});
-					tracePinSubmit(deps, payload, {
-						graphId: s1.graphId,
-						runFrom: null,
-						runMode: 'from_start',
-						plannedNodeSet: componentSet
-					});
 					const created = await createRun(payload);
 					const { snap, completionSource } = await waitForTerminalViaSse(created.runId, {
 						fallbackIntervalMs: 3000,
@@ -3490,7 +3149,6 @@ export function createRunManager(deps: RunDeps) {
 					)
 				)
 			);
-			clearPerRunPinsIfAny();
 			const current = deps.getState() as GraphState;
 			deps.persist(current);
 			return { ok: true as const };

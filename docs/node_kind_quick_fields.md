@@ -68,7 +68,7 @@
 ## Model
 ### Ollama (Translation)
 - Always examine: `node_label`, `settings.user_prompt`, `planes.data_inputs`, `planes.data_input_sources`
-- suggested_fields: `node_label`, `user_prompt`, `data_input_sources`
+- suggested_fields: `user_prompt`, `data_input_sources`, `data_inputs`
 - Examine if meaningful: `settings.system_prompt`, `settings.model`, `settings.output_mode`
 - Usually ignore: `runtime.pending_input_count`, `runtime.inflight`, `runtime.ready_work`
 - Description pattern: "`<node_label>` reads `<input_name>` from `<upstream_node_kind>` and `<task from user_prompt>`"

@@ -43,32 +43,6 @@ def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
     return seen
 
 
-def _upstream_until_boundaries(
-    start_id: str,
-    edges: List[Dict[str, Any]],
-    boundary_ids: Set[str],
-) -> Set[str]:
-    """
-    Walk upstream and include ancestors, but stop traversal beyond any boundary node.
-    Boundary nodes are included in the returned set.
-    """
-    rev: Dict[str, List[str]] = {}
-    for e in edges:
-        rev.setdefault(e["target"], []).append(e["source"])
-    seen: Set[str] = set()
-    q = [start_id]
-    while q:
-        cur = q.pop(0)
-        for prev in rev.get(cur, []):
-            if prev in seen:
-                continue
-            seen.add(prev)
-            if prev in boundary_ids:
-                # Include boundary ancestor but do not walk beyond it.
-                continue
-            q.append(prev)
-    return seen
-
 def _expand_dirty_subgraph(dirty_ids: Set[str], edges: List[Dict[str, Any]]) -> Set[str]:
     if not dirty_ids:
         return set()
@@ -85,7 +59,6 @@ def compile_plan(
     run_from: Optional[str],
     run_mode: Optional[str] = None,
     dirty_node_ids: Optional[Set[str]] = None,
-    pinned_node_ids: Optional[Set[str]] = None,
 ) -> RunPlan:
     logger.debug("compile_plan_start")
     nodes = graph.get("nodes", [])
@@ -110,25 +83,15 @@ def compile_plan(
     sub: Set[str] = set()
     execute_nodes: Set[str] = set()
     cache_only_nodes: Set[str] = set()
-    requested_pins = {
-        nid
-        for nid in (pinned_node_ids or set())
-        if isinstance(nid, str) and nid in adj
-    }
     if run_from:
-        run_from_is_pinned = run_from in requested_pins
-        ancestors = _upstream_until_boundaries(run_from, edges, requested_pins)
+        ancestors = _upstream(run_from, edges)
         if mode == "selected_only":
-            # Pinned selected node is treated as a checkpoint; ancestors are not revalidated.
-            sub = {run_from} if run_from_is_pinned else (ancestors | {run_from})
+            sub = ancestors | {run_from}
             execute_nodes = {run_from}
-            cache_only_nodes = sub - execute_nodes
         else:
             # Include ancestors to resolve deterministic inputs, and downstream
             # to preserve "run from here forward" semantics.
-            # If run_from is pinned, treat it as a trusted checkpoint and skip ancestors.
-            base = {run_from} if run_from_is_pinned else (ancestors | {run_from})
-            sub = base | _downstream(run_from, edges)
+            sub = (ancestors | {run_from}) | _downstream(run_from, edges)
             execute_nodes = set(sub)
     else:
         mode = "full"
@@ -143,16 +106,6 @@ def compile_plan(
                 sub.add(r)
                 sub |= _downstream(r, edges)
         execute_nodes = set(sub)
-    # DEPRECATED: legacy pin boundary logic
-    pinned = {
-        nid
-        for nid in requested_pins
-        if isinstance(nid, str) and nid in sub
-    }
-    if pinned:
-        execute_nodes -= pinned
-        cache_only_nodes |= pinned
-
     # Recompute indegree restricted to subgraph
     indeg2 = {nid: 0 for nid in sub}
     for e in edges:

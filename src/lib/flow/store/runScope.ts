@@ -212,15 +212,6 @@ export function buildRunCreateRequest(
 	runFrom: string | null,
 	runMode?: ActiveRunMode,
 	dirtyNodeIds?: string[],
-	pinnedNodeIds?: string[],
-	pinnedArtifacts?: Record<
-		string,
-		{
-			artifactId: string;
-			execKey?: string | null;
-			outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
-		}
-	>,
 	cacheMode?: 'default_on' | 'force_off' | 'force_on',
 	adaptiveMode?: 'off' | 'observe' | 'enforce' | null,
 	checkpoints?: CheckpointRegistry
@@ -232,15 +223,6 @@ export function buildRunCreateRequest(
 		edges: unknown[];
 		__executionHints?: {
 			dirtyNodeIds?: string[];
-			pinnedNodeIds?: string[];
-			pinnedArtifacts?: Record<
-				string,
-				{
-					artifactId: string;
-					execKey?: string | null;
-					outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
-				}
-			>;
 			checkpoints?: CheckpointExecutionHints['checkpoints'];
 		};
 	};
@@ -252,70 +234,6 @@ export function buildRunCreateRequest(
 	const sanitizedDirty = Array.isArray(dirtyNodeIds)
 		? Array.from(new Set(dirtyNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
 		: [];
-	const sanitizedPinned = Array.isArray(pinnedNodeIds)
-		? Array.from(new Set(pinnedNodeIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
-		: [];
-	const sanitizedPinnedArtifacts =
-		pinnedArtifacts && typeof pinnedArtifacts === 'object'
-			? Object.fromEntries(
-					Object.entries(pinnedArtifacts)
-						.map(([nodeId, value]) => {
-							const nid = String(nodeId ?? '').trim();
-							const aid = String((value as any)?.artifactId ?? '').trim();
-							const execKey = String((value as any)?.execKey ?? '').trim();
-							if (!nid || !aid) return null;
-							return [
-								nid,
-								{
-									artifactId: aid,
-									...(execKey ? { execKey } : {}),
-									...(() => {
-										const rawOutputs = (value as any)?.outputs;
-										if (!rawOutputs || typeof rawOutputs !== 'object') return {};
-										const outputs = Object.fromEntries(
-											Object.entries(rawOutputs as Record<string, any>)
-												.map(([rawHandle, rawOutput]) => {
-													const handle = String(rawHandle ?? '').trim();
-													const outArtifactId = String((rawOutput as any)?.artifactId ?? '').trim();
-													const outExecKey = String((rawOutput as any)?.execKey ?? '').trim();
-													if (!handle || !outArtifactId) return null;
-													return [
-														handle,
-														{
-															artifactId: outArtifactId,
-															...(outExecKey ? { execKey: outExecKey } : {})
-														}
-													];
-												})
-												.filter(
-													(entry): entry is [
-														string,
-														{
-															artifactId: string;
-															execKey?: string;
-														}
-													] => entry !== null
-												)
-										);
-										return Object.keys(outputs).length > 0 ? { outputs } : {};
-									})()
-								}
-							];
-						})
-						.filter(
-							(
-								entry
-							): entry is [
-								string,
-								{
-									artifactId: string;
-									execKey?: string;
-									outputs?: Record<string, { artifactId: string; execKey?: string }>;
-								}
-							] => entry !== null
-						)
-			  )
-			: {};
 	const sanitizedCheckpoints: CheckpointExecutionHints['checkpoints'] =
 		checkpoints && typeof checkpoints === 'object'
 			? Object.fromEntries(
@@ -382,20 +300,9 @@ export function buildRunCreateRequest(
 			: {};
 	const executionHints: {
 		dirtyNodeIds?: string[];
-		pinnedNodeIds?: string[];
-		pinnedArtifacts?: Record<
-			string,
-			{
-				artifactId: string;
-				execKey?: string | null;
-				outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
-			}
-		>;
 		checkpoints?: CheckpointExecutionHints['checkpoints'];
 	} = {};
 	if (sanitizedDirty.length > 0) executionHints.dirtyNodeIds = sanitizedDirty;
-	if (sanitizedPinned.length > 0) executionHints.pinnedNodeIds = sanitizedPinned;
-	if (Object.keys(sanitizedPinnedArtifacts).length > 0) executionHints.pinnedArtifacts = sanitizedPinnedArtifacts;
 	if (Object.keys(sanitizedCheckpoints).length > 0) executionHints.checkpoints = sanitizedCheckpoints;
 	const payloadGraph =
 		Object.keys(executionHints).length > 0
@@ -425,15 +332,6 @@ export function buildRunCreateRequest(
 			edges: unknown[];
 			__executionHints?: {
 				dirtyNodeIds?: string[];
-				pinnedNodeIds?: string[];
-				pinnedArtifacts?: Record<
-					string,
-					{
-						artifactId: string;
-						execKey?: string | null;
-						outputs?: Record<string, { artifactId: string; execKey?: string | null }>;
-					}
-				>;
 				checkpoints?: CheckpointExecutionHints['checkpoints'];
 			};
 		};

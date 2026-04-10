@@ -57,14 +57,6 @@ export const NodeMetaSchema = z.object({
     })
     .strip()
     .optional(),
-  // @deprecated Legacy pin system. Use checkpoint registry instead.
-  freeze: z
-    .object({
-      enabled: z.boolean().optional(),
-      mode: z.enum(["per_run", "sticky"]).optional()
-    })
-    .strip()
-    .optional(),
   llmAllocated: z.boolean().optional()
 }).strip();
 

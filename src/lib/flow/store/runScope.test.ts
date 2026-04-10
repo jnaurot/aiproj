@@ -75,86 +75,54 @@ describe('runScope partial-run binding behavior', () => {
 
 	it('includes adaptive override mode when provided', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
-		const req = buildRunCreateRequest(
-			graph,
-			'graph-test',
-			null,
-			'from_start',
-			[],
-			[],
-			{},
-			'default_on',
-			'observe'
-		);
+		const req = buildRunCreateRequest(graph, 'graph-test', null, 'from_start', [], 'default_on', 'observe');
 		expect((req as any).adaptive).toEqual({ mode: 'observe' });
 	});
 
-	it('includes pinned execution hints when provided', () => {
+	it('includes dirty execution hints when provided', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
-		const req = buildRunCreateRequest(
-			graph,
-			'graph-test',
-			null,
-			'from_start',
-			['n1'],
-			['n2', 'n2', ' n3 ']
-		);
+		const req = buildRunCreateRequest(graph, 'graph-test', null, 'from_start', ['n1', 'n1']);
 		expect(req.graph.__executionHints).toEqual({
-			dirtyNodeIds: ['n1'],
-			pinnedNodeIds: ['n2', 'n3']
+			dirtyNodeIds: ['n1']
 		});
 	});
 
-	it('includes pinned artifact hints when provided', () => {
+	it('preserves per-output checkpoint lineage in execution hints', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
 		const req = buildRunCreateRequest(
 			graph,
 			'graph-test',
 			null,
 			'from_start',
-			[],
-			['n2'],
-			{
-				n2: { artifactId: 'a2', execKey: 'k2' },
-				' ': { artifactId: 'bad' },
-				n3: { artifactId: '' as any }
-			}
-		);
-		expect(req.graph.__executionHints).toEqual({
-			pinnedNodeIds: ['n2'],
-			pinnedArtifacts: {
-				n2: { artifactId: 'a2', execKey: 'k2' }
-			}
-		});
-	});
-
-	it('preserves per-output pinned artifact lineage in execution hints', () => {
-		const graph = { version: 1, nodes: [], edges: [] };
-		const req = buildRunCreateRequest(
-			graph,
-			'graph-test',
-			null,
-			'from_start',
-			[],
-			['component_1'],
+			undefined,
+			undefined,
+			undefined,
 			{
 				component_1: {
+					id: '00000000-0000-4000-8000-000000000001',
+					name: 'ck',
+					nodeId: 'component_1',
+					graphId: 'graph-test',
+					runId: 'run-1',
 					artifactId: 'component-root',
 					execKey: 'component-exec',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid',
 					outputs: {
 						summary: { artifactId: 'summary-art', execKey: 'summary-exec' },
 						full: { artifactId: 'full-art', execKey: 'full-exec' },
 						' ': { artifactId: 'ignored' } as any
-					}
+					},
 				}
-			}
+			} as any
 		);
 		expect(req.graph.__executionHints).toEqual({
-			pinnedNodeIds: ['component_1'],
-			pinnedArtifacts: {
+			checkpoints: {
 				component_1: {
 					artifactId: 'component-root',
 					execKey: 'component-exec',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
 					outputs: {
 						summary: { artifactId: 'summary-art', execKey: 'summary-exec' },
 						full: { artifactId: 'full-art', execKey: 'full-exec' }
@@ -164,33 +132,42 @@ describe('runScope partial-run binding behavior', () => {
 		});
 	});
 
-	it('drops invalid component output pinned lineage entries during sanitization', () => {
+	it('drops invalid component output checkpoint lineage entries during sanitization', () => {
 		const graph = { version: 1, nodes: [], edges: [] };
 		const req = buildRunCreateRequest(
 			graph,
 			'graph-test',
 			null,
 			'from_start',
-			[],
-			['component_1'],
+			undefined,
+			undefined,
+			undefined,
 			{
 				component_1: {
+					id: '00000000-0000-4000-8000-000000000001',
+					name: 'ck',
+					nodeId: 'component_1',
+					graphId: 'graph-test',
+					runId: 'run-1',
 					artifactId: 'component-root',
 					execKey: 'component-exec',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid',
 					outputs: {
 						valid: { artifactId: 'valid-art', execKey: 'valid-exec' },
 						missingArtifact: { artifactId: '' as any, execKey: 'x' },
 						' ': { artifactId: 'ignored' } as any
 					}
 				}
-			}
+			} as any
 		);
 		expect(req.graph.__executionHints).toEqual({
-			pinnedNodeIds: ['component_1'],
-			pinnedArtifacts: {
+			checkpoints: {
 				component_1: {
 					artifactId: 'component-root',
 					execKey: 'component-exec',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
 					outputs: {
 						valid: { artifactId: 'valid-art', execKey: 'valid-exec' }
 					}
@@ -206,11 +183,9 @@ describe('runScope partial-run binding behavior', () => {
 			'graph-test',
 			null,
 			'from_start',
-			[],
-			[],
-			{},
 			undefined,
-			null,
+			undefined,
+			undefined,
 			{
 				n1: {
 					id: '00000000-0000-4000-8000-000000000001',
@@ -242,11 +217,9 @@ describe('runScope partial-run binding behavior', () => {
 			'graph-test',
 			null,
 			'from_start',
-			[],
-			[],
-			{},
 			undefined,
-			null,
+			undefined,
+			undefined,
 			{
 				n1: {
 					id: '00000000-0000-4000-8000-000000000001',

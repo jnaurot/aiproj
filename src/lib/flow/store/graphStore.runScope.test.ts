@@ -264,7 +264,7 @@ describe('graphStore partial run scope events', () => {
 		expect(displayStatusFromBinding(next.nodeBindings.llm_a as any)).toBe('succeeded');
 	});
 
-	it('run_started does not pre-stale planned pinned checkpoint nodes', () => {
+	it('run_started pre-stales all planned nodes; checkpoint freshness is resolved later', () => {
 		const runId = 'run-1';
 		const state = makeState();
 		const next = __applyRunEventForTest(
@@ -275,13 +275,12 @@ describe('graphStore partial run scope events', () => {
 				at: '2026-02-25T00:00:00Z',
 				runFrom: 'llm_b',
 				runMode: 'from_selected_onward',
-				plannedNodeIds: ['src', 'xfm', 'llm_b'],
-				pinnedNodeIds: ['xfm']
+				plannedNodeIds: ['src', 'xfm', 'llm_b']
 			} as any,
 			runId
 		);
 		expect(displayStatusFromBinding(next.nodeBindings.src as any)).toBe('stale');
-		expect(displayStatusFromBinding(next.nodeBindings.xfm as any)).toBe('succeeded');
+		expect(displayStatusFromBinding(next.nodeBindings.xfm as any)).toBe('stale');
 		expect(displayStatusFromBinding(next.nodeBindings.llm_b as any)).toBe('stale');
 	});
 

@@ -21,7 +21,6 @@ import {
 	normalizeNodeName,
 	resolveUniqueNodeName
 } from './nodeNameUniqueness';
-import { computePlannedNodeSet } from './runScope';
 import { runInHistoryTransaction, createHistoryManager } from './graphStore.history';
 import {
 	withGraphMeta,
@@ -58,7 +57,6 @@ import {
 import {
 	canonicalComponentSourceHandleForEdge
 } from './graphStore.inspector';
-import { validatePinEligibility } from './graphStore.run';
 import type {
 	GraphState,
 	AuditContext,
@@ -1782,8 +1780,16 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		if (!checkpointName) return { ok: false, error: 'Checkpoint name is required.' };
 
 		const normalizedBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
-		const eligibility = validatePinEligibility(node, normalizedBinding);
-		if (!eligibility.ok) return { ok: false, error: eligibility.error };
+		const displayStatus = String(normalizedBinding?.status ?? '').trim().toLowerCase();
+		if (!displayStatus.startsWith('succeeded')) {
+			return { ok: false, error: 'Checkpoint is only allowed when node status is succeeded.' };
+		}
+		if (
+			!String(normalizedBinding?.current?.artifactId ?? '').trim() ||
+			!String(normalizedBinding?.current?.execKey ?? '').trim()
+		) {
+			return { ok: false, error: 'Checkpoint requires a current bound artifact. Run the node first.' };
+		}
 
 		const lineage =
 			normalizedBinding && (normalizedBinding.last?.artifactId || normalizedBinding.last?.execKey)
@@ -1919,103 +1925,6 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			return next;
 		});
 		return { ok: true, removed };
-	}
-
-	/** @deprecated use checkpoint creation/removal system */
-	function setNodeFreezeMode(nodeId: string, mode: 'per_run' | 'sticky' | null) {
-		let out: { ok: boolean; error?: string } = { ok: true };
-		update((s) => {
-			const targetNode = s.nodes.find((n) => n.id === nodeId) as
-				| Node<PipelineNodeData & Record<string, unknown>>
-				| undefined;
-			if (!targetNode) {
-				out = { ok: false, error: 'Node not found.' };
-				return s;
-			}
-			const normalizedBinding = _normalizeBinding(s.nodeBindings?.[nodeId], nodeId);
-			if (mode !== null) {
-				const eligibility = validatePinEligibility(
-					targetNode,
-					normalizedBinding
-				);
-				if (!eligibility.ok) {
-					out = { ok: false, error: eligibility.error };
-					const inspector =
-						String(s.inspector?.nodeId ?? '') === nodeId
-							? { ...s.inspector, systemNotice: eligibility.error }
-							: s.inspector;
-					return logPush({ ...s, inspector }, 'warn', eligibility.error, nodeId);
-				}
-			}
-			const pinnedLineage = (() => {
-				if (mode === null) return null;
-				const lineage =
-					normalizedBinding && (normalizedBinding.last?.artifactId || normalizedBinding.last?.execKey)
-						? normalizedBinding.last
-						: normalizedBinding?.current;
-				const artifactId = String(lineage?.artifactId ?? '').trim();
-				const execKey = String(lineage?.execKey ?? '').trim();
-				if (!artifactId || !execKey) return null;
-				const outputs: Record<string, { artifactId: string; execKey?: string }> = {};
-				const outputLineage = ((normalizedBinding as any)?.outputLineage ?? {}) as Record<string, any>;
-				for (const [rawHandle, rawPair] of Object.entries(outputLineage)) {
-					const handle = String(rawHandle ?? '').trim();
-					if (!handle || !rawPair || typeof rawPair !== 'object') continue;
-					const outputArtifactId = String((rawPair as any).artifactId ?? '').trim();
-					const outputExecKey = String((rawPair as any).execKey ?? '').trim();
-					if (!outputArtifactId) continue;
-					outputs[handle] = outputExecKey
-						? { artifactId: outputArtifactId, execKey: outputExecKey }
-						: { artifactId: outputArtifactId };
-				}
-				return Object.keys(outputs).length > 0
-					? { artifactId, execKey, outputs }
-					: { artifactId, execKey };
-			})();
-			const nodes = s.nodes.map((n) => {
-				if (n.id !== nodeId) return n;
-				const nextMeta = { ...(((n.data as any)?.meta ?? {}) as Record<string, unknown>) };
-				if (mode === null) {
-					delete (nextMeta as any).freeze;
-					delete (nextMeta as any).freezeLineage;
-				} else {
-					(nextMeta as any).freeze = { enabled: true, mode };
-					if (pinnedLineage) {
-						(nextMeta as any).freezeLineage = pinnedLineage;
-					}
-				}
-				nextMeta.updatedAt = new Date().toISOString();
-				return {
-					...n,
-					data: {
-						...(n.data as any),
-						meta: nextMeta
-					}
-				};
-			});
-			const recomputedActiveRunNodeSet = computePlannedNodeSet(
-				nodes as any,
-				s.edges as any,
-				s.activeRunFrom,
-				s.activeRunMode
-			);
-			const next = withGraphMeta({
-				...s,
-				nodes,
-				activeRunNodeSet: recomputedActiveRunNodeSet
-			});
-			persist(next);
-			return next;
-		});
-		return out;
-	}
-
-	/** @deprecated use checkpoint creation/removal system */
-	function setSelectedNodeFreezeMode(mode: 'per_run' | 'sticky' | null) {
-		const cur = getState();
-		const nodeId = String(cur.selectedNodeId ?? '').trim();
-		if (!nodeId) return { ok: false as const, error: 'No node selected' };
-		return setNodeFreezeMode(nodeId, mode);
 	}
 
 	function updateNodeProcessingPolicy(
@@ -2400,8 +2309,6 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			renameCheckpoint,
 			removeAllStaleCheckpoints,
 			clearAllCheckpoints,
-			setNodeFreezeMode,
-			setSelectedNodeFreezeMode,
 			updateNodeProcessingPolicy,
 			updateNodeInputHandleProcessingPolicy,
 			updateNodePortDeclaration,
