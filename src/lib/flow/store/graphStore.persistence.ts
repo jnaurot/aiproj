@@ -75,16 +75,21 @@ const COMPONENT_DRAFT_GRAPH_KEY = '__graphDraft';
 
 function readComponentDraftGraph(
 	value: unknown
-): { nodes: unknown[]; edges: unknown[] } | null {
+): { nodes: unknown[]; edges: unknown[]; checkpointRegistry: Record<string, unknown> } | null {
 	if (!value || typeof value !== 'object') return null;
 	const graph = (value as Record<string, unknown>)[COMPONENT_DRAFT_GRAPH_KEY];
 	if (!graph || typeof graph !== 'object') return null;
 	const nodes = Array.isArray((graph as any).nodes) ? ((graph as any).nodes as unknown[]) : null;
 	const edges = Array.isArray((graph as any).edges) ? ((graph as any).edges as unknown[]) : null;
 	if (!nodes || !edges) return null;
+	const checkpointRegistry =
+		(graph as any).checkpointRegistry && typeof (graph as any).checkpointRegistry === 'object'
+			? structuredClone((graph as any).checkpointRegistry as Record<string, unknown>)
+			: {};
 	return {
 		nodes: structuredClone(nodes),
-		edges: structuredClone(edges)
+		edges: structuredClone(edges),
+		checkpointRegistry
 	};
 }
 
@@ -93,14 +98,18 @@ function readComponentDraftGraph(
 export function buildPersistableGraphStrict(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
-	graphId?: string
+	graphId?: string,
+	checkpointRegistry?: Record<string, unknown>
 ): { ok: true; graph: PipelineGraphDTO } | { ok: false; error: string } {
 	const normalized = normalizeGraphForComponentMigration(nodes, edges);
 	const canonicalized = canonicalizeComponentEdgeSourceHandles(normalized.nodes, normalized.edges, 'strict');
 	if (!canonicalized.ok) return { ok: false, error: canonicalized.error };
 	const rechecked = pruneAndRecontractEdgesStrict(normalized.nodes, canonicalized.edges);
 	if (!rechecked.ok) return { ok: false, error: rechecked.error };
-	return { ok: true, graph: stripToDTO(normalized.nodes, rechecked.edges, graphId) };
+	return {
+		ok: true,
+		graph: stripToDTO(normalized.nodes, rechecked.edges, graphId, (checkpointRegistry as any) ?? {})
+	};
 }
 
 function nodeLabelForSaveCompare(node: unknown): string {
@@ -680,7 +689,10 @@ type PersistenceDeps = {
 	update: (fn: (s: GraphState) => GraphState, ctx?: AuditContext) => void;
 	getState: () => GraphState;
 	persist: (state: GraphState) => void;
-	applyGraphDocument: (graph: { nodes: unknown[]; edges: unknown[] }, graphIdOverride?: string | null) => { ok: boolean; reason?: string };
+	applyGraphDocument: (
+		graph: { nodes: unknown[]; edges: unknown[]; checkpointRegistry?: Record<string, unknown> },
+		graphIdOverride?: string | null
+	) => { ok: boolean; reason?: string };
 	updateNodeConfig: (nodeId: string, config: any, opts?: any) => { ok: boolean; error?: string };
 };
 
@@ -925,14 +937,25 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				diagnostics: preflight.diagnostics
 			};
 		}
-		const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
+		const strictGraph = buildPersistableGraphStrict(
+			current.nodes as any,
+			current.edges as any,
+			graphId,
+			current.checkpointRegistry ?? {}
+		);
 		if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 		const graph = strictGraph.graph;
-		const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+		const canvasGraph = stripToDTO(
+			current.nodes as any,
+			current.edges as any,
+			graphId,
+			current.checkpointRegistry ?? {}
+		);
 		const strictCanvasGraph = buildPersistableGraphStrict(
 			canvasGraph.nodes as any,
 			canvasGraph.edges as any,
-			graphId
+			graphId,
+			current.checkpointRegistry ?? {}
 		);
 		if (!strictCanvasGraph.ok) {
 			return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
@@ -1006,14 +1029,25 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				diagnostics: preflight.diagnostics
 			};
 		}
-		const strictGraph = buildPersistableGraphStrict(current.nodes as any, current.edges as any, graphId);
+		const strictGraph = buildPersistableGraphStrict(
+			current.nodes as any,
+			current.edges as any,
+			graphId,
+			current.checkpointRegistry ?? {}
+		);
 		if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 		const graph = strictGraph.graph;
-		const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, graphId);
+		const canvasGraph = stripToDTO(
+			current.nodes as any,
+			current.edges as any,
+			graphId,
+			current.checkpointRegistry ?? {}
+		);
 		const strictCanvasGraph = buildPersistableGraphStrict(
 			canvasGraph.nodes as any,
 			canvasGraph.edges as any,
-			graphId
+			graphId,
+			current.checkpointRegistry ?? {}
 		);
 		if (!strictCanvasGraph.ok) {
 			return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
@@ -1088,15 +1122,22 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 		const strictGraph = buildPersistableGraphStrict(
 			current.nodes as any,
 			current.edges as any,
-			current.graphId
+			current.graphId,
+			current.checkpointRegistry ?? {}
 		);
 		if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 		const graph = strictGraph.graph;
-		const canvasGraph = stripToDTO(current.nodes as any, current.edges as any, current.graphId);
+		const canvasGraph = stripToDTO(
+			current.nodes as any,
+			current.edges as any,
+			current.graphId,
+			current.checkpointRegistry ?? {}
+		);
 		const strictCanvasGraph = buildPersistableGraphStrict(
 			canvasGraph.nodes as any,
 			canvasGraph.edges as any,
-			current.graphId
+			current.graphId,
+			current.checkpointRegistry ?? {}
 		);
 		if (!strictCanvasGraph.ok) {
 			return { ok: false, reason: 'invalid_graph' as const, error: strictCanvasGraph.error };
@@ -1167,7 +1208,20 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				}
 			};
 		});
-		const strictGraph = buildPersistableGraphStrict(cleanNodes as any, s.edges as any);
+		const internalNodeIds = new Set(
+			(cleanNodes as any[]).map((node) => String((node as any)?.id ?? '').trim()).filter(Boolean)
+		);
+		const internalCheckpointRegistry = Object.fromEntries(
+			Object.entries((s.checkpointRegistry ?? {}) as Record<string, unknown>).filter(([nodeId]) =>
+				internalNodeIds.has(String(nodeId ?? '').trim())
+			)
+		) as Record<string, unknown>;
+		const strictGraph = buildPersistableGraphStrict(
+			cleanNodes as any,
+			s.edges as any,
+			undefined,
+			internalCheckpointRegistry
+		);
 		if (!strictGraph.ok) return { ok: false, reason: 'invalid_graph' as const, error: strictGraph.error };
 
 		try {
@@ -1179,7 +1233,10 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				schemaVersion: Number((existingDetail as any)?.schemaVersion ?? 1) || 1,
 				graph: {
 					nodes: strictGraph.graph.nodes,
-					edges: strictGraph.graph.edges
+					edges: strictGraph.graph.edges,
+					checkpointRegistry: structuredClone(
+						(strictGraph.graph as any).checkpointRegistry ?? internalCheckpointRegistry
+					)
 				},
 				api: ((existingDetail?.definition?.api ?? { inputs: [], outputs: [] }) as ComponentApiContract),
 				configSchema: structuredClone(
@@ -1446,11 +1503,26 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 			) as {
 				nodes?: unknown[];
 				edges?: unknown[];
+				checkpointRegistry?: Record<string, unknown>;
+			};
+			const revisionCheckpointRegistry =
+				(detail?.definition?.graph as any)?.checkpointRegistry &&
+				typeof (detail?.definition?.graph as any)?.checkpointRegistry === 'object'
+					? structuredClone((detail?.definition?.graph as any).checkpointRegistry)
+					: {};
+			const draftCheckpointRegistry =
+				cachedDraftGraph?.checkpointRegistry && typeof cachedDraftGraph.checkpointRegistry === 'object'
+					? structuredClone(cachedDraftGraph.checkpointRegistry)
+					: {};
+			const mergedCheckpointRegistry = {
+				...revisionCheckpointRegistry,
+				...draftCheckpointRegistry
 			};
 			const applied = applyGraphDocument(
 				{
 					nodes: Array.isArray(graph?.nodes) ? graph.nodes : [],
-					edges: Array.isArray(graph?.edges) ? graph.edges : []
+					edges: Array.isArray(graph?.edges) ? graph.edges : [],
+					checkpointRegistry: mergedCheckpointRegistry
 				},
 				null
 			);
@@ -1504,6 +1576,14 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 		const parentSession = session.parentSession ? structuredClone(session.parentSession) : null;
 		const cacheKey = `${String(session.componentId ?? '').trim()}@${String(session.revisionId ?? '').trim()}`;
 		update((s) => {
+			const internalNodeIds = new Set(
+				(s.nodes ?? []).map((node) => String((node as any)?.id ?? '').trim()).filter(Boolean)
+			);
+			const internalCheckpoints = Object.fromEntries(
+				Object.entries((s.checkpointRegistry ?? {}) as Record<string, unknown>).filter(([nodeId]) =>
+					internalNodeIds.has(String(nodeId ?? '').trim())
+				)
+			) as Record<string, unknown>;
 			const nextEditingContext: EditorContext = parentSession ? 'component' : 'graph';
 			const existingDraftCacheEntry =
 				cacheKey && s.componentContractDraftCache && typeof s.componentContractDraftCache === 'object'
@@ -1514,7 +1594,8 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				...(session.contractDraftParams ?? {}),
 				[COMPONENT_DRAFT_GRAPH_KEY]: {
 					nodes: structuredClone(s.nodes),
-					edges: structuredClone(s.edges)
+					edges: structuredClone(s.edges),
+					checkpointRegistry: structuredClone(internalCheckpoints)
 				}
 			};
 			const next: GraphState = {
@@ -1546,6 +1627,7 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					structuredClone(snapshot.nodeBindings) as any
 				),
 				activeRunId: snapshot.activeRunId,
+				checkpointRegistry: structuredClone(snapshot.checkpointRegistry ?? {}),
 				editingContext: nextEditingContext,
 				componentEditSession: parentSession,
 				componentContractDraftCache: cacheKey

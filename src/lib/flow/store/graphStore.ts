@@ -231,7 +231,11 @@ const initialState: GraphState = {
 	activeRunId: null,
 	editingContext: 'graph',
 	componentEditSession: null,
-	componentContractDraftCache: loadComponentDraftCache() as Record<string, any>
+	componentContractDraftCache: loadComponentDraftCache() as Record<string, any>,
+	checkpointRegistry:
+		(loaded as any)?.checkpointRegistry && typeof (loaded as any).checkpointRegistry === 'object'
+			? structuredClone((loaded as any).checkpointRegistry)
+			: {}
 };
 
 export const graphStore = (() => {
@@ -247,14 +251,14 @@ export const graphStore = (() => {
 			// graphEdit is guaranteed to be assigned before undo/redo can be triggered
 			return graphEdit.actions.applyGraphDocument(graph, graphId).ok;
 		},
-		snapshotFromState: (s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId),
+		snapshotFromState: (s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId, s.checkpointRegistry ?? {}),
 	});
 
 	// ── audited update ───────────────────────────────────────────────────
 	const update = history.wrapUpdate(
 		rawUpdate,
 		auditStateTransition,
-		(s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId),
+		(s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId, s.checkpointRegistry ?? {}),
 	);
 function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
 		update((cur) => {
@@ -439,7 +443,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 
 	function persist(state: GraphState) {
 		if (state.editingContext !== 'component') {
-			saveGraphToLocalStorage(stripToDTO(state.nodes, state.edges, state.graphId));
+			saveGraphToLocalStorage(
+				stripToDTO(state.nodes, state.edges, state.graphId, state.checkpointRegistry ?? {})
+			);
 		}
 		saveComponentDraftCache((state.componentContractDraftCache ?? {}) as Record<string, unknown>);
 	}

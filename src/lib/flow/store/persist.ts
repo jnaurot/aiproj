@@ -12,7 +12,8 @@ function hasLocalStorage(): boolean {
 export const emptyGraph: PipelineGraphDTO = {
   version: 1,
   nodes: [],
-  edges: []
+  edges: [],
+  checkpointRegistry: {}
 };
 
 export function saveGraphToLocalStorage(graph: PipelineGraphDTO) {
@@ -53,7 +54,11 @@ export function loadGraphFromLocalStorage(
     const dto: PipelineGraphDTO = {
       version: 1,
       nodes: graphCandidate.nodes,
-      edges: graphCandidate.edges
+      edges: graphCandidate.edges,
+      checkpointRegistry:
+        graphCandidate.checkpointRegistry && typeof graphCandidate.checkpointRegistry === "object"
+          ? (graphCandidate.checkpointRegistry as PipelineGraphDTO["checkpointRegistry"])
+          : {}
     };
 
     // optional fields

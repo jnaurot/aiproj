@@ -2,6 +2,7 @@
 // import type { Node, Edge, XYPosition } from "@xyflow/svelte";
 import type { Node, Edge } from "@xyflow/svelte";
 import type { PipelineNodeData, PipelineEdgeData } from "$lib/flow/types";
+import type { CheckpointRegistry } from "$lib/flow/types/checkpoint";
 import type {
 	ComponentTypedPrimitive as CanonicalComponentTypedPrimitive,
 	ComponentTypedField as CanonicalComponentTypedField,
@@ -24,6 +25,7 @@ export type PipelineGraphDTO = {
   version: 1;
   nodes: Array<Node<PipelineNodeData & Record<string, unknown>>>; // allow extra keys
   edges: Array<Edge<PipelineEdgeData & Record<string, unknown>>>; // allow extra keys
+  checkpointRegistry?: CheckpointRegistry;
   viewport?: ViewportDTO;
   meta?: {
     createdAt?: string;

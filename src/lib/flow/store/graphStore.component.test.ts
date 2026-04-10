@@ -1586,6 +1586,142 @@ describe('graphStore component integration', () => {
 		}
 	});
 
+	it('persists internal checkpoint registry through component draft return/reopen and keeps it scoped', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const checkpointRecord = {
+			id: '8c9f15b5-bd8b-4f73-8f6e-66c7f5bc6f79',
+			name: 'ck-internal',
+			nodeId: 'n_internal_source',
+			graphId: 'cmp_graph',
+			runId: 'run_ck',
+			artifactId: 'art_ck',
+			execKey: 'exec_ck',
+			fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			createdAt: '2026-04-10T00:00:00.000Z',
+			staleness: 'unknown'
+		};
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_ck/revisions/crev_ck') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_ck',
+						revisionId: 'crev_ck',
+						parentRevisionId: null,
+						createdAt: '2026-04-10T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_internal_source',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'Source',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: [],
+								checkpointRegistry: {
+									n_internal_source: checkpointRecord
+								}
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_ck', 'crev_ck', componentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+			expect((get(graphStore).checkpointRegistry as any)?.n_internal_source?.artifactId).toBe('art_ck');
+
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+			const afterReturn = get(graphStore);
+			expect((afterReturn.checkpointRegistry as any)?.n_internal_source).toBeUndefined();
+			expect(
+				(afterReturn.componentContractDraftCache['cmp_ck@crev_ck'] as any)?.__graphDraft?.checkpointRegistry
+					?.n_internal_source?.artifactId
+			).toBe('art_ck');
+
+			const reopened = await graphStore.openComponentRevisionForEditing('cmp_ck', 'crev_ck', componentNodeId);
+			expect((reopened as any)?.ok).toBe(true);
+			expect((get(graphStore).checkpointRegistry as any)?.n_internal_source?.artifactId).toBe('art_ck');
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
+	it('loads legacy component revision graph without checkpointRegistry as empty', async () => {
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_ck_legacy/revisions/crev_ck_legacy') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_ck_legacy',
+						revisionId: 'crev_ck_legacy',
+						parentRevisionId: null,
+						createdAt: '2026-04-10T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [],
+								edges: []
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			const opened = await graphStore.openComponentRevisionForEditing(
+				'cmp_ck_legacy',
+				'crev_ck_legacy',
+				componentNodeId
+			);
+			expect((opened as any)?.ok).toBe(true);
+			expect(get(graphStore).checkpointRegistry ?? {}).toEqual({});
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+			graphStore.returnFromComponentEditSession();
+		}
+	});
+
 	it('blocks graph save actions while editing a component revision', async () => {
 		graphStore.hardResetGraph();
 		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });

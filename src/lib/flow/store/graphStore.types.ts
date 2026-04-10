@@ -230,6 +230,7 @@ export type ComponentEditSessionSnapshot = {
 	graphId: string;
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[];
+	checkpointRegistry: CheckpointRegistry;
 	selectedNodeId: string | null;
 	inspector: InspectorState;
 	logs: RunLog[];
@@ -413,7 +414,7 @@ export type GraphState = {
 	editingContext: EditorContext;
 	componentEditSession: ComponentEditSession | null;
 	componentContractDraftCache: Record<string, Record<string, any>>;
-	checkpointRegistry?: CheckpointRegistry;
+	checkpointRegistry: CheckpointRegistry;
 };
 
 // Pulled out of GraphState to keep it readable.

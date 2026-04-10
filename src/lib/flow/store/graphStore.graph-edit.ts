@@ -9,6 +9,7 @@ import type {
 	PipelineGraphDTO,
 	PayloadType
 } from '$lib/flow/types';
+import type { CheckpointRegistry } from '$lib/flow/types/checkpoint';
 import { defaultNodeData } from '$lib/flow/schema/defaults';
 import { defaultSourceMetaByKind, defaultSourceParamsByKind } from '$lib/flow/schema/sourceDefaults';
 import { defaultLlmParamsByKind } from '$lib/flow/schema/llmDefaults';
@@ -108,7 +109,8 @@ export function buildHardResetState(freshGraphId: string): GraphState {
 		activeRunId: null,
 		editingContext: 'graph',
 		componentEditSession: null,
-		componentContractDraftCache: {}
+		componentContractDraftCache: {},
+		checkpointRegistry: {}
 	};
 }
 
@@ -117,6 +119,7 @@ export function captureComponentEditSnapshot(state: GraphState): ComponentEditSe
 		graphId: state.graphId,
 		nodes: structuredClone(state.nodes),
 		edges: structuredClone(state.edges),
+		checkpointRegistry: structuredClone(state.checkpointRegistry ?? {}),
 		selectedNodeId: state.selectedNodeId,
 		inspector: structuredClone(state.inspector),
 		logs: structuredClone(state.logs),
@@ -140,7 +143,8 @@ export function __hardResetGraphForTest(_state: GraphState, freshGraphId = 'grap
 export function stripToDTO(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
-	graphId?: string
+	graphId?: string,
+	checkpointRegistry?: CheckpointRegistry
 ): PipelineGraphDTO {
 	const persistedNodes = nodes.map((node) => {
 		const data = (node as any)?.data;
@@ -154,7 +158,8 @@ export function stripToDTO(
 	const dto: PipelineGraphDTO = {
 		version: 1,
 		nodes: persistedNodes as any,
-		edges: recomputeEdgeContractsBestEffort(nodes, edges)
+		edges: recomputeEdgeContractsBestEffort(nodes, edges),
+		checkpointRegistry: structuredClone(checkpointRegistry ?? {})
 	};
 	if (graphId) {
 		dto.meta = { ...(dto.meta ?? {}), graphId } as any;
@@ -165,9 +170,10 @@ export function stripToDTO(
 export function __stripToDTOForTest(
 	nodes: Node<PipelineNodeData>[],
 	edges: Edge<PipelineEdgeData>[],
-	graphId?: string
+	graphId?: string,
+	checkpointRegistry?: CheckpointRegistry
 ): PipelineGraphDTO {
-	return stripToDTO(nodes, edges, graphId);
+	return stripToDTO(nodes, edges, graphId, checkpointRegistry);
 }
 
 export function edgeStructuralSignature(edge: Edge<PipelineEdgeData>): string {
@@ -664,11 +670,15 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 	const { update, set, getState, history, persist, applyLocalStaleInvalidation, updateNodeConfig } = deps;
 
 	function applyGraphDocument(
-		graph: { nodes: unknown[]; edges: unknown[] },
+		graph: { nodes: unknown[]; edges: unknown[]; checkpointRegistry?: CheckpointRegistry },
 		graphIdOverride?: string | null
 	): { ok: boolean; reason?: string } {
 		const nextNodes = Array.isArray(graph?.nodes) ? (graph.nodes as Node<PipelineNodeData>[]) : null;
 		const nextEdges = Array.isArray(graph?.edges) ? (graph.edges as Edge<PipelineEdgeData>[]) : null;
+		const nextCheckpointRegistry =
+			graph?.checkpointRegistry && typeof graph.checkpointRegistry === 'object'
+				? structuredClone(graph.checkpointRegistry)
+				: {};
 		if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' };
 		const normalized = normalizeGraphForComponentMigration(nextNodes, nextEdges);
 		const canonicalized = canonicalizeComponentEdgeSourceHandles(normalized.nodes, normalized.edges, 'strict');
@@ -695,7 +705,8 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				nodeBindings: ensureNormalizedBindingsForNodes(normalized.nodes as any, {}),
 				activeRunId: null,
 				editingContext: 'graph',
-				componentEditSession: null
+				componentEditSession: null,
+				checkpointRegistry: nextCheckpointRegistry
 			});
 			persist(nextState);
 			return nextState;
@@ -705,7 +716,8 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			history.resetToSnapshot(stripToDTO(
 				st.nodes as any,
 				st.edges as any,
-				st.graphId
+				st.graphId,
+				st.checkpointRegistry ?? {}
 			));
 		}
 		return { ok: true };
@@ -2106,10 +2118,13 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		const next = buildHardResetState(freshGraphId);
 		persist(next);
 		set(next);
-		history.resetToSnapshot(stripToDTO(next.nodes as any, next.edges as any, next.graphId));
+		history.resetToSnapshot(stripToDTO(next.nodes as any, next.edges as any, next.graphId, next.checkpointRegistry ?? {}));
 	}
 
-	function loadGraphDocument(graph: { nodes: unknown[]; edges: unknown[] }, graphIdOverride?: string | null) {
+	function loadGraphDocument(
+		graph: { nodes: unknown[]; edges: unknown[]; checkpointRegistry?: CheckpointRegistry },
+		graphIdOverride?: string | null
+	) {
 		const applied = applyGraphDocument(graph, graphIdOverride);
 		if (!applied.ok) return { ok: false, reason: 'invalid_payload' as const };
 		return { ok: true };
