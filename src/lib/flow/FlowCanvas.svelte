@@ -873,13 +873,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		selectedFreezeMode === 'sticky'
 			? `${$selectedNode?.data?.kind ?? ''} #`
 			: `${$selectedNode?.data?.kind ?? ''}`;
-	$: selectedPinPillClass =
-		selectedFreezeMode === 'sticky'
-			? 'pill pinBtn pinSticky active'
-			: selectedFreezeMode === 'per_run'
-				? 'pill pinBtn active'
-				: 'pill pinBtn';
-	$: selectedPinPillText = selectedFreezeMode === 'sticky' ? 'pin #' : 'pin';
 		$: hasInputs = Boolean($selectedNode && deriveNodeIoForData($selectedNode.data).in != null);
 	$: inputResolutions = selectedId ? graphStore.resolveNodeInputs(selectedId) : [];
 	$: if (inspectorMode === 'inputs' && !hasInputs) inspectorMode = 'edit';
@@ -3057,33 +3050,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		void graphStore.resumeActiveRun();
 	}
 
-	function pinSelectedPerRun() {
-		const result = graphStore.setSelectedNodeFreezeMode('per_run');
-		if (!result?.ok && result?.error) window.alert(String(result.error));
-	}
-
-	function pinSelectedSticky() {
-		const result = graphStore.setSelectedNodeFreezeMode('sticky');
-		if (!result?.ok && result?.error) window.alert(String(result.error));
-	}
-
-	function clearSelectedPin() {
-		graphStore.setSelectedNodeFreezeMode(null);
-	}
-
-	function cycleSelectedPinMode() {
-		if (selectedFreezeMode === 'per_run') {
-			pinSelectedSticky();
-			return;
-		}
-		if (selectedFreezeMode === 'sticky') {
-			clearSelectedPin();
-			return;
-		}
-		pinSelectedPerRun();
-	}
-
-	async function returnFromComponentEditMode() {
+async function returnFromComponentEditMode() {
 		const sessionBeforeReturn = get(graphStore).componentEditSession;
 		const entryNodeId = String(sessionBeforeReturn?.entryNodeId ?? '').trim();
 		const editedComponentId = String(sessionBeforeReturn?.componentId ?? '').trim();
@@ -5399,14 +5366,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 								<span class={`pill st-${displayNodeStatus ?? 'idle'}`}>
 									{displayNodeStatus ?? 'idle'}
 								</span>
-								<button
-									type="button"
-									class={selectedPinPillClass}
-									title="Cycle pin mode: unpinned → run-only → sticky → unpinned"
-									on:click={cycleSelectedPinMode}
-								>
-									{selectedPinPillText}
-								</button>
 								{#if selectedComponentHasUpdate}
 									<span class="pill pill-update" title={`Latest available revision: ${selectedComponentLatestRevisionId}`}>
 										update {selectedComponentLatestRevisionId}

@@ -895,6 +895,32 @@ function applyControlPlaneEdgeState(
 	};
 }
 
+type MemoDecision = 'reuse' | 'compute' | 'skip_non_memoizable';
+
+function parseMemoDecisionFromTraceLog(message: string): { decision: MemoDecision; memoKey?: string } | null {
+	const trimmed = String(message ?? '').trim();
+	if (!trimmed.startsWith('[trace][memo.execute_decision]')) return null;
+	const jsonStart = trimmed.indexOf('{');
+	if (jsonStart < 0) return null;
+	let payload: Record<string, unknown> | null = null;
+	try {
+		const parsed = JSON.parse(trimmed.slice(jsonStart));
+		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+			payload = parsed as Record<string, unknown>;
+		}
+	} catch {
+		payload = null;
+	}
+	if (!payload) return null;
+	const decision = String(payload.decision ?? '').trim() as MemoDecision;
+	if (decision !== 'reuse' && decision !== 'compute' && decision !== 'skip_non_memoizable') return null;
+	const memoKeyRaw = String((payload.memoKey ?? payload.memo_key ?? '') ?? '').trim();
+	return {
+		decision,
+		memoKey: memoKeyRaw || undefined
+	};
+}
+
 export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
 	const evtGraphId = (evt as any)?.graphId;
 	if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== state.graphId) {
@@ -1069,6 +1095,14 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				? new Set<string>((evt as any).pinnedNodeIds as string[])
 				: new Set<string>();
 			const nodeBindings = { ...state.nodeBindings };
+			for (const [nodeId, rawBinding] of Object.entries(nodeBindings)) {
+				const prevBinding = _normalizeBinding(rawBinding, nodeId);
+				if (prevBinding.memoState == null) continue;
+				nodeBindings[nodeId] = {
+					...prevBinding,
+					memoState: undefined
+				};
+			}
 			for (const nodeId of evtPlanned) {
 				if (evtPinned.has(nodeId)) continue;
 				const prevBinding = _normalizeBinding(nodeBindings[nodeId], nodeId);
@@ -2117,20 +2151,40 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 		case 'log': {
 			const message = String(evt.message ?? '');
 			const edgeId = String((evt as any)?.edgeId ?? '').trim() || undefined;
+			const memoDecision = parseMemoDecisionFromTraceLog(message);
+			let memoStatePatched = state;
+			if (memoDecision && evt.nodeId) {
+				const nodeId = String(evt.nodeId ?? '').trim();
+				const prevBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
+				memoStatePatched = {
+					...state,
+					nodeBindings: {
+						...state.nodeBindings,
+						[nodeId]: {
+							...prevBinding,
+							memoState: {
+								decision: memoDecision.decision,
+								memoKey: memoDecision.memoKey,
+								resolvedAt: new Date().toISOString()
+							}
+						}
+					}
+				};
+			}
 			const softFailMatch = message.match(/\[scheduler\]\s+soft-fail skip node=([^\s]+).*items=(\d+)/i);
 			if (softFailMatch) {
 				const nodeId = String(evt.nodeId ?? softFailMatch[1] ?? '').trim();
 				const itemsRejected = Math.max(1, Number(softFailMatch[2] ?? 1));
 				const previous =
-					(state.queueRuntime?.softFailByNode &&
-					typeof state.queueRuntime.softFailByNode === 'object'
-						? state.queueRuntime.softFailByNode
+					(memoStatePatched.queueRuntime?.softFailByNode &&
+					typeof memoStatePatched.queueRuntime.softFailByNode === 'object'
+						? memoStatePatched.queueRuntime.softFailByNode
 						: {}) ?? {};
 				const prevNode = previous[nodeId] ?? { count: 0, itemsRejected: 0 };
 				const nextState = {
-					...state,
+					...memoStatePatched,
 					queueRuntime: {
-						...(state.queueRuntime ?? {}),
+						...(memoStatePatched.queueRuntime ?? {}),
 						softFailByNode: {
 							...previous,
 							[nodeId]: {
@@ -2143,7 +2197,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				};
 				return logPush(nextState, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
 			}
-			return logPush(state, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
+			return logPush(memoStatePatched, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
 		}
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;

@@ -95,6 +95,11 @@ export type NodeBindingInfo = {
 	current?: { execKey?: string | null; artifactId?: string | null } | null;
 	last?: { execKey?: string | null; artifactId?: string | null } | null;
 	outputLineage?: Record<string, { execKey?: string | null; artifactId?: string | null } | null> | null;
+	memoState?: {
+		decision: 'reuse' | 'compute' | 'skip_non_memoizable';
+		memoKey?: string;
+		resolvedAt?: string;
+	} | null;
 	lastArtifactId?: string | null;     // legacy
 	lastRunId?: string | null;
 	lastExecKey?: string | null;        // legacy

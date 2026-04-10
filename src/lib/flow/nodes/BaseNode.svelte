@@ -16,6 +16,7 @@ import {
 import NodeDocTooltip from '$lib/flow/components/NodeDocTooltip.svelte';
 import { createNodeDocTooltipState, type NodeDocTooltipState } from '$lib/flow/components/nodeDocTooltipState';
 import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/flow/components/nodeDocLlmContext';
+import MemoIndicator from './MemoIndicator.svelte';
 	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import {
 		reconcileLifecycleForActiveRun,
@@ -42,6 +43,9 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 
 	// Status is derived from bindings; node.data.status is not authoritative.
 	$: binding = $graphStore.nodeBindings?.[id];
+	$: memoState = ((binding as any)?.memoState ?? undefined) as
+		| { decision: 'reuse' | 'compute' | 'skip_non_memoizable'; memoKey?: string; resolvedAt?: string }
+		| undefined;
 	$: statusProjection = statusProjectionFromBinding(binding as any);
 	$: runStatus = String(($graphStore as any)?.runStatus ?? 'idle');
 	$: schedulerRows = Array.isArray(($graphStore as any)?.queueRuntime?.schedulerSnapshot?.perNode)
@@ -259,7 +263,10 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 	<slot />
 
 	<div class="footer">
-		<span class="status">{lifecycleLabel}{freshnessHint}</span>
+		<div class="footerLeft">
+			<span class="status">{lifecycleLabel}{freshnessHint}</span>
+			<MemoIndicator {memoState} />
+		</div>
 		<div class="footerRight">
 			<span class="modeBadge mono" title={`mode=${executionBadge.mode}`}>
 				{executionBadge.label} {executionBadge.detail}
@@ -363,6 +370,13 @@ import { buildNodeDocLlmContext, buildNodeDocLlmContextSignature } from '$lib/fl
 		align-items: baseline;
 		justify-content: space-between;
 		gap: 8px;
+	}
+
+	.footerLeft {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
 	}
 
 	.footerRight {
