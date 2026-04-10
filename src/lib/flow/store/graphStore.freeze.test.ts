@@ -104,7 +104,7 @@ describe('graphStore freeze/pin rules', () => {
 		expect(String(result.error ?? '').toLowerCase()).toContain('succeeded');
 	});
 
-	it('params change auto-clears existing pin metadata and emits notice', () => {
+	it('legacy pin metadata is migrated away on load before edits', () => {
 		graphStore.hardResetGraph();
 		graphStore.loadGraphDocument({
 			nodes: [
@@ -129,7 +129,7 @@ describe('graphStore freeze/pin rules', () => {
 		});
 		graphStore.selectNode('n1');
 		const before = get(graphStore);
-		expect(((before.nodes.find((n) => n.id === 'n1')?.data as any)?.meta?.freeze?.enabled) ?? false).toBe(true);
+		expect(((before.nodes.find((n) => n.id === 'n1')?.data as any)?.meta?.freeze?.enabled) ?? false).toBe(false);
 		const updated = graphStore.updateNodeConfig('n1', {
 			params: { model: 'glm-4.7-flash:latest', temperature: 0.2 }
 		});
@@ -137,7 +137,7 @@ describe('graphStore freeze/pin rules', () => {
 		const after = get(graphStore);
 		const freeze = ((after.nodes.find((n) => n.id === 'n1')?.data as any)?.meta?.freeze ?? null) as any;
 		expect(freeze).toBeNull();
-		expect(String((after.inspector as any)?.systemNotice ?? '')).toContain('[Pin cleared]');
+		expect(String((after.inspector as any)?.systemNotice ?? '')).not.toContain('[Pin cleared]');
 	});
 
 });

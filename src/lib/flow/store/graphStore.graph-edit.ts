@@ -406,6 +406,94 @@ export function normalizeGraphForComponentMigration(
 	};
 }
 
+function mintCheckpointId(): string {
+	try {
+		return crypto.randomUUID();
+	} catch {
+		return `ck_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+	}
+}
+
+function normalizeMigratedOutputs(
+	raw: unknown
+): Record<string, { artifactId: string; execKey?: string }> | undefined {
+	if (!raw || typeof raw !== 'object') return undefined;
+	const out: Record<string, { artifactId: string; execKey?: string }> = {};
+	for (const [rawHandle, rawPair] of Object.entries(raw as Record<string, unknown>)) {
+		const handle = String(rawHandle ?? '').trim();
+		if (!handle || !rawPair || typeof rawPair !== 'object') continue;
+		const artifactId = String((rawPair as any).artifactId ?? '').trim();
+		const execKey = String((rawPair as any).execKey ?? '').trim();
+		if (!artifactId) continue;
+		out[handle] = execKey ? { artifactId, execKey } : { artifactId };
+	}
+	return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function migrateFreezePinsToCheckpoints(
+	nodes: Node<PipelineNodeData>[],
+	existingRegistry: CheckpointRegistry,
+	graphId: string
+): { nodes: Node<PipelineNodeData>[]; checkpointRegistry: CheckpointRegistry } {
+	const registry: CheckpointRegistry = structuredClone(existingRegistry ?? {});
+	const migratedNodes = nodes.map((node) => {
+		const nodeData = (node as any)?.data;
+		if (!nodeData || typeof nodeData !== 'object') return node;
+		const meta = (nodeData as any).meta;
+		if (!meta || typeof meta !== 'object') return node;
+
+		const freeze = (meta as any).freeze;
+		const freezeLineage = (meta as any).freezeLineage;
+		const hasLegacyFields =
+			Object.prototype.hasOwnProperty.call(meta, 'freeze') ||
+			Object.prototype.hasOwnProperty.call(meta, 'freezeLineage');
+
+		if (
+			freeze &&
+			typeof freeze === 'object' &&
+			(freeze as any).enabled === true &&
+			freezeLineage &&
+			typeof freezeLineage === 'object' &&
+			!registry[node.id]
+		) {
+			const artifactId = String((freezeLineage as any).artifactId ?? '').trim();
+			const execKey = String((freezeLineage as any).execKey ?? '').trim();
+			if (artifactId && execKey) {
+				const mode = String((freeze as any).mode ?? 'sticky').trim() || 'sticky';
+				const createdAtRaw = String((meta as any).updatedAt ?? '').trim();
+				const createdAt = createdAtRaw || new Date().toISOString();
+				registry[node.id] = {
+					id: mintCheckpointId(),
+					name: `Migrated pin (${mode})`,
+					description: 'Automatically migrated from legacy pin system.',
+					nodeId: node.id,
+					graphId,
+					runId: 'legacy_migration',
+					artifactId,
+					execKey,
+					fingerprintAtCreation: '0'.repeat(64),
+					createdAt,
+					staleness: 'unknown',
+					outputs: normalizeMigratedOutputs((freezeLineage as any).outputs)
+				};
+			}
+		}
+
+		if (!hasLegacyFields) return node;
+		const nextMeta: Record<string, unknown> = { ...(meta as Record<string, unknown>) };
+		delete (nextMeta as any).freeze;
+		delete (nextMeta as any).freezeLineage;
+		return {
+			...node,
+			data: {
+				...(node.data as any),
+				meta: nextMeta
+			}
+		} as Node<PipelineNodeData>;
+	});
+	return { nodes: migratedNodes, checkpointRegistry: registry };
+}
+
 export function setEdgeExec(
 	edges: Edge<PipelineEdgeData>[],
 	edgeId: string,
@@ -681,15 +769,21 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				: {};
 		if (!nextNodes || !nextEdges) return { ok: false, reason: 'invalid_payload' };
 		const normalized = normalizeGraphForComponentMigration(nextNodes, nextEdges);
-		const canonicalized = canonicalizeComponentEdgeSourceHandles(normalized.nodes, normalized.edges, 'strict');
+		const targetGraphId = String(graphIdOverride || getState().graphId);
+		const migrated = migrateFreezePinsToCheckpoints(
+			normalized.nodes,
+			nextCheckpointRegistry,
+			targetGraphId
+		);
+		const canonicalized = canonicalizeComponentEdgeSourceHandles(migrated.nodes, normalized.edges, 'strict');
 		if (!canonicalized.ok) return { ok: false, reason: canonicalized.error };
-		const rechecked = pruneAndRecontractEdgesStrict(normalized.nodes, canonicalized.edges);
+		const rechecked = pruneAndRecontractEdgesStrict(migrated.nodes, canonicalized.edges);
 		if (!rechecked.ok) return { ok: false, reason: rechecked.error };
 		update((s) => {
 			const nextState = withGraphMeta({
 				...s,
 				graphId: String(graphIdOverride || s.graphId),
-				nodes: normalized.nodes,
+				nodes: migrated.nodes,
 				edges: rechecked.edges,
 				selectedNodeId: null,
 				inspector: { ...INITIAL_INSPECTOR, uiByNodeId: s.inspector.uiByNodeId },
@@ -702,11 +796,11 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				activeRunFrom: null,
 				activeRunNodeSet: new Set<string>(),
 				nodeOutputs: {},
-				nodeBindings: ensureNormalizedBindingsForNodes(normalized.nodes as any, {}),
+				nodeBindings: ensureNormalizedBindingsForNodes(migrated.nodes as any, {}),
 				activeRunId: null,
 				editingContext: 'graph',
 				componentEditSession: null,
-				checkpointRegistry: nextCheckpointRegistry
+				checkpointRegistry: migrated.checkpointRegistry
 			});
 			persist(nextState);
 			return nextState;

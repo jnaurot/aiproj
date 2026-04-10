@@ -3,7 +3,8 @@ import type { PipelineGraphDTO } from "$lib/flow/types";
 
 const KEY = "flow:graph:v1";
 const DRAFT_CACHE_KEY = "flow:componentDraftCache:v1";
-const SCHEMA_VERSION = 1;
+// Schema v2: includes legacy freeze->checkpoint migration on graph load.
+const SCHEMA_VERSION = 2;
 
 function hasLocalStorage(): boolean {
   return typeof window !== "undefined" && typeof window.localStorage !== "undefined";

@@ -77,3 +77,112 @@ describe('graphStore checkpoint registry persistence', () => {
 		}
 	});
 });
+
+describe('graphStore legacy pin migration to checkpoint registry', () => {
+	it('migrates legacy freeze pin to checkpoint and strips legacy fields on load', () => {
+		graphStore.hardResetGraph();
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'n_legacy',
+						type: 'model',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'model',
+							label: 'Legacy',
+							params: {},
+							status: 'idle',
+							meta: {
+								updatedAt: '2026-04-10T00:00:00.000Z',
+								freeze: { enabled: true, mode: 'sticky' },
+								freezeLineage: { artifactId: 'art-legacy', execKey: 'exec-legacy' }
+							}
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_migrate'
+		);
+		expect(loaded.ok).toBe(true);
+		const state = get(graphStore);
+		const migrated = (state.checkpointRegistry as any)?.n_legacy;
+		expect(migrated).toBeTruthy();
+		expect(migrated?.artifactId).toBe('art-legacy');
+		expect(migrated?.execKey).toBe('exec-legacy');
+		expect(migrated?.graphId).toBe('graph_migrate');
+		expect(migrated?.staleness).toBe('unknown');
+		const node = state.nodes.find((n) => n.id === 'n_legacy');
+		expect((node?.data as any)?.meta?.freeze).toBeUndefined();
+		expect((node?.data as any)?.meta?.freezeLineage).toBeUndefined();
+	});
+
+	it('skips migration when checkpoint already exists and still strips legacy fields', () => {
+		graphStore.hardResetGraph();
+		const existing = sampleCheckpointRegistry() as any;
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'n1',
+						type: 'model',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'model',
+							label: 'Legacy',
+							params: {},
+							status: 'idle',
+							meta: {
+								freeze: { enabled: true, mode: 'per_run' },
+								freezeLineage: { artifactId: 'art-new', execKey: 'exec-new' }
+							}
+						}
+					}
+				],
+				edges: [],
+				checkpointRegistry: existing
+			},
+			'graph_skip'
+		);
+		expect(loaded.ok).toBe(true);
+		const state = get(graphStore);
+		expect((state.checkpointRegistry as any)?.n1?.artifactId).toBe('art-1');
+		expect((state.checkpointRegistry as any)?.n1?.execKey).toBe('exec-1');
+		const node = state.nodes.find((n) => n.id === 'n1');
+		expect((node?.data as any)?.meta?.freeze).toBeUndefined();
+		expect((node?.data as any)?.meta?.freezeLineage).toBeUndefined();
+	});
+
+	it('strips legacy fields without creating checkpoint when lineage is missing', () => {
+		graphStore.hardResetGraph();
+		const loaded = graphStore.loadGraphDocument(
+			{
+				nodes: [
+					{
+						id: 'n_missing',
+						type: 'model',
+						position: { x: 0, y: 0 },
+						data: {
+							kind: 'model',
+							label: 'Legacy Missing',
+							params: {},
+							status: 'idle',
+							meta: {
+								freeze: { enabled: true, mode: 'sticky' }
+							}
+						}
+					}
+				],
+				edges: []
+			},
+			'graph_missing_lineage'
+		);
+		expect(loaded.ok).toBe(true);
+		const state = get(graphStore);
+		expect((state.checkpointRegistry as any)?.n_missing).toBeUndefined();
+		const node = state.nodes.find((n) => n.id === 'n_missing');
+		expect((node?.data as any)?.meta?.freeze).toBeUndefined();
+		expect((node?.data as any)?.meta?.freezeLineage).toBeUndefined();
+	});
+});
