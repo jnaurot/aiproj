@@ -13,6 +13,9 @@ example*.*
 .DS_Store
 Thumbs.db
 
+.claude
+.claude/*
+
 # Env
 .env
 .env.*
