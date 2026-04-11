@@ -4165,7 +4165,13 @@ async def run_graph(
                 },
                 node_id=checkpoint_node_id,
             )
-            if staleness != "valid":
+            # Accept valid and stale checkpoints.  "stale" means the fingerprint
+            # changed (upstream was edited) but the artifact still exists — that
+            # is exactly the force-override case the user expects.  "unknown"
+            # (non-memoizable node) is also accepted: the user explicitly saved
+            # the artifact and wants it frozen.  Only drop when the artifact is
+            # confirmed missing in the store.
+            if staleness == "artifact_missing":
                 continue
             pinned_hint_ids.add(checkpoint_node_id)
             pinned_artifact_hints[checkpoint_node_id] = {
@@ -4202,6 +4208,7 @@ async def run_graph(
             run_from,
             run_mode=run_mode,
             dirty_node_ids=dirty_hint_ids,
+            checkpoint_node_ids=pinned_hint_ids,
         )
         if component_expansion:
             expanded_nodes_by_id = node_map(execution_graph)

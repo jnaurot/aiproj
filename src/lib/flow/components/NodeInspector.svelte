@@ -1430,6 +1430,45 @@
 	function openSourceFullEditor(): void {
 		sourceGuidedMode = false;
 	}
+
+	// ── Checkpoint ───────────────────────────────────────────────────────────
+	$: currentNodeBinding = selectedNode
+		? (($graphStore?.nodeBindings ?? {})[selectedNode.id] ?? null)
+		: null;
+	$: currentNodeCheckpoint = selectedNode
+		? ((($graphStore as any)?.checkpointRegistry ?? {})[selectedNode.id] ?? null)
+		: null;
+	$: canSaveCheckpoint = (() => {
+		const binding = currentNodeBinding as any;
+		if (!binding) return false;
+		const status = String(binding?.status ?? '').trim().toLowerCase();
+		if (!status.startsWith('succeeded')) return false;
+		const artifactId = String(binding?.current?.artifactId ?? '').trim();
+		const memoKey = String(binding?.memoState?.memoKey ?? '').trim();
+		return Boolean(artifactId && memoKey && memoKey.length === 64);
+	})();
+
+	let checkpointNameDraft = '';
+	let checkpointSaveError = '';
+
+	function saveCheckpoint(): void {
+		if (!selectedNode?.id) return;
+		const name =
+			checkpointNameDraft.trim() ||
+			`${String((selectedNode.data as any)?.label ?? selectedNode.id)} checkpoint`;
+		const result = graphStore.createCheckpoint(selectedNode.id, name);
+		if (result.ok) {
+			checkpointNameDraft = '';
+			checkpointSaveError = '';
+		} else {
+			checkpointSaveError = String((result as any).error ?? 'Failed to save checkpoint.');
+		}
+	}
+
+	function removeNodeCheckpoint(): void {
+		if (!selectedNode?.id) return;
+		graphStore.removeCheckpoint(selectedNode.id);
+	}
 </script>
 
 {#if selectedNode}
@@ -1448,6 +1487,44 @@
 			editingContext="component"
 			showComponentMetaSection={false}
 		/>
+	{/if}
+	{#if canSaveCheckpoint || currentNodeCheckpoint}
+		<div class="checkpointCard">
+			<div class="checkpointHead">
+				<span>Checkpoint</span>
+				{#if currentNodeCheckpoint}
+					<span class={`checkpointBadge checkpointBadge-${String((currentNodeCheckpoint as any).staleness ?? 'unknown')}`}>
+						{(currentNodeCheckpoint as any).staleness ?? 'unknown'}
+					</span>
+				{/if}
+			</div>
+			{#if currentNodeCheckpoint}
+				<div class="checkpointRow">
+					<span class="checkpointName">{(currentNodeCheckpoint as any).name ?? '(unnamed)'}</span>
+					<button type="button" class="small checkpointRemove" on:click={removeNodeCheckpoint}>Remove</button>
+				</div>
+				<div class="guidedAssistDesc">
+					Saved {formatUserLocalTime((currentNodeCheckpoint as any).createdAt ?? '')} · artifact {String((currentNodeCheckpoint as any).artifactId ?? '').slice(0, 12)}
+				</div>
+			{/if}
+			{#if canSaveCheckpoint}
+				<div class="checkpointSaveRow">
+					<input
+						class="checkpointNameInput"
+						type="text"
+						placeholder="{String((selectedNode?.data as any)?.label ?? selectedNode?.id ?? 'node')} checkpoint"
+						bind:value={checkpointNameDraft}
+						on:keydown={(e) => { if (e.key === 'Enter') saveCheckpoint(); }}
+					/>
+					<button type="button" class="small" on:click={saveCheckpoint}>
+						{currentNodeCheckpoint ? 'Replace' : 'Save'}
+					</button>
+				</div>
+				{#if checkpointSaveError}
+					<div class="checkpointError">{checkpointSaveError}</div>
+				{/if}
+			{/if}
+		</div>
 	{/if}
 	{#if sourceObservability}
 		<div class="guidedAssistCard">
@@ -2985,5 +3062,91 @@
 		font-weight: 600;
 		text-transform: none;
 		color: var(--ni-text);
+	}
+
+	/* ── Checkpoint card ─────────────────────────────────────────────────── */
+	.checkpointCard {
+		margin-bottom: 8px;
+		border: 1px solid var(--ni-border);
+		border-radius: 10px;
+		padding: 8px;
+		background: var(--ni-card);
+		display: grid;
+		gap: 6px;
+	}
+
+	.checkpointHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 12px;
+		font-weight: 700;
+	}
+
+	.checkpointBadge {
+		font-size: 10px;
+		padding: 2px 7px;
+		border-radius: 999px;
+		font-weight: 600;
+	}
+
+	.checkpointBadge-valid {
+		background: rgba(34, 197, 94, 0.15);
+		color: #86efac;
+	}
+
+	.checkpointBadge-stale {
+		background: rgba(245, 158, 11, 0.15);
+		color: #fcd34d;
+	}
+
+	.checkpointBadge-artifact_missing {
+		background: rgba(239, 68, 68, 0.15);
+		color: #fca5a5;
+	}
+
+	.checkpointBadge-unknown {
+		background: rgba(148, 163, 184, 0.15);
+		color: #9aa3b2;
+	}
+
+	.checkpointRow {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.checkpointName {
+		font-size: 12px;
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.checkpointRemove {
+		flex-shrink: 0;
+	}
+
+	.checkpointSaveRow {
+		display: flex;
+		gap: 6px;
+	}
+
+	.checkpointNameInput {
+		flex: 1;
+		min-width: 0;
+		font-size: 12px;
+		padding: 4px 8px;
+		border-radius: 6px;
+		border: 1px solid var(--ni-control-border);
+		background: var(--ni-control-bg);
+		color: var(--ni-control-text);
+	}
+
+	.checkpointError {
+		font-size: 11px;
+		color: var(--ni-error-text);
 	}
 </style>

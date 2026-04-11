@@ -64,7 +64,10 @@
       "Bash(wc -l /c/Users/Owner/Desktop/aiproj/src/lib/flow/schema/schemaPlane.test.ts /c/Users/Owner/Desktop/aiproj/src/lib/flow/schema/schemaPropagator.test.ts /c/Users/Owner/Desktop/aiproj/src/lib/flow/schema/schemaFunctions/*.test.ts /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore.schemaPlane.test.ts)",
       "Bash(find /c/Users/Owner/Desktop/aiproj/src -name \"schemaPlane.ts\" -not -path \"*test*\" -type f -exec wc -l {} \\\\;)",
       "Bash(grep -rn \"unresolved schema compatibility\\\\|typed_schema_missing\\\\|invalid_payload\" src/lib/flow/store/*.test.ts)",
-      "Bash(dir \"C:\\\\Users\\\\Owner\\\\Desktop\\\\aiproj\\\\src\" /b)"
+      "Bash(dir \"C:\\\\Users\\\\Owner\\\\Desktop\\\\aiproj\\\\src\" /b)",
+      "Bash(python -m pytest backend/tests/runner/test_compile_plan_dirty.py -q)",
+      "Bash(python -m pytest tests/runner/test_compile_plan_dirty.py -q)",
+      "Bash(grep -l \"blockedByNode\\\\|nodeBlockedStatus\\\\|branchCascade\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore*.ts)"
     ]
   }
 }

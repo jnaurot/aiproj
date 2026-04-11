@@ -59,6 +59,7 @@ def compile_plan(
     run_from: Optional[str],
     run_mode: Optional[str] = None,
     dirty_node_ids: Optional[Set[str]] = None,
+    checkpoint_node_ids: Optional[Set[str]] = None,
 ) -> RunPlan:
     logger.debug("compile_plan_start")
     nodes = graph.get("nodes", [])
@@ -134,6 +135,13 @@ def compile_plan(
     for e in edges:
         if e["target"] in incoming and e.get("id"):
             incoming[e["target"]].append(e["id"])
+
+    # Nodes with a live checkpoint hint are frozen: they must resolve from the
+    # saved artifact and must not re-execute.  Move them out of execute_nodes
+    # into cache_only_nodes so the execution loop can honour the pin.
+    pinned = {nid for nid in (checkpoint_node_ids or set()) if nid in sub}
+    execute_nodes -= pinned
+    cache_only_nodes |= pinned
 
     return RunPlan(
         order=order,
