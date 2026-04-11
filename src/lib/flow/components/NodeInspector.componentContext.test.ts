@@ -18,4 +18,14 @@ describe('NodeInspector component editor context wiring', () => {
 		expect(text.includes('showComponentMetaSection={false}')).toBe(true);
 		expect(text.includes('Component Contract (Authoring)')).toBe(true);
 	});
+
+	it('renders ConfigurationOracle for transform inspector mode', () => {
+		const file = resolve(process.cwd(), 'src/lib/flow/components/NodeInspector.svelte');
+		const text = readFileSync(file, 'utf8');
+		expect(text.includes("import ConfigurationOracle from '$lib/flow/components/ui/ConfigurationOracle.svelte';")).toBe(
+			true
+		);
+		expect(text.includes('<ConfigurationOracle')).toBe(true);
+		expect(text.includes('schemaConfigurationHints')).toBe(true);
+	});
 });

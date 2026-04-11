@@ -1,0 +1,165 @@
+import type { GraphState } from './graphStore.types';
+import type { SchemaError, SchemaPlaneOutput, SchemaPlaneResult, SchemaPlaneState } from '$lib/flow/types/schemaPlane';
+import { propagateSchemas } from '$lib/flow/schema/schemaPropagator';
+
+export function emptySchemaPlaneState(): SchemaPlaneState {
+	return {
+		nodeSchemas: {},
+		edgeSchemas: {}
+	};
+}
+
+export function recomputeSchemaPlane(state: GraphState): SchemaPlaneState {
+	return propagateSchemas(state.nodes as any, state.edges as any, {
+		resolveComponentGraph: (componentNodeId: string) => {
+			const node = (state.nodes ?? []).find((candidate) => String(candidate?.id ?? '') === componentNodeId);
+			if (!node) return null;
+			const params = ((node.data as any)?.params ?? {}) as Record<string, unknown>;
+			const directDraft = (params?.__graphDraft ?? null) as Record<string, unknown> | null;
+			if (directDraft && Array.isArray((directDraft as any).nodes) && Array.isArray((directDraft as any).edges)) {
+				return {
+					nodes: ((directDraft as any).nodes ?? []) as any[],
+					edges: ((directDraft as any).edges ?? []) as any[]
+				};
+			}
+			const ref = ((params?.componentRef ?? {}) as Record<string, unknown>) ?? {};
+			const componentId = String(ref?.componentId ?? '').trim();
+			const revisionId = String(ref?.revisionId ?? '').trim();
+			if (!componentId || !revisionId) return null;
+			const cacheKey = `${componentId}@${revisionId}`;
+			const cacheEntry = ((state.componentContractDraftCache ?? {}) as Record<string, unknown>)[cacheKey];
+			if (!cacheEntry || typeof cacheEntry !== 'object') return null;
+			const draftGraph = (cacheEntry as Record<string, unknown>)['__graphDraft'];
+			if (!draftGraph || typeof draftGraph !== 'object') return null;
+			const nodes = Array.isArray((draftGraph as any).nodes) ? ((draftGraph as any).nodes as any[]) : null;
+			const edges = Array.isArray((draftGraph as any).edges) ? ((draftGraph as any).edges as any[]) : null;
+			if (!nodes || !edges) return null;
+			return { nodes, edges };
+		}
+	});
+}
+
+type Deps = {
+	getState: () => GraphState;
+};
+
+export function createSchemaPlaneManager(deps: Deps) {
+	const getNodeSchemaResult = (nodeId: string): SchemaPlaneResult | null => {
+		const state = deps.getState();
+		return state.schemaPlane?.nodeSchemas?.[nodeId] ?? null;
+	};
+
+	const getEdgeSchema = (edgeId: string): SchemaPlaneOutput | null => {
+		const state = deps.getState();
+		return state.schemaPlane?.edgeSchemas?.[edgeId] ?? null;
+	};
+
+	const getSchemaErrors = (): Array<{ nodeId: string; error: SchemaError }> => {
+		const state = deps.getState();
+		const out: Array<{ nodeId: string; error: SchemaError }> = [];
+		for (const [nodeId, result] of Object.entries(state.schemaPlane?.nodeSchemas ?? {})) {
+			if (result && result.ok === false) out.push({ nodeId, error: result.error });
+		}
+		return out;
+	};
+
+	const hasSchemaErrors = (): boolean => getSchemaErrors().length > 0;
+
+	const getEdgeValidationState = (
+		edgeId: string
+	): { state: 'valid' | 'error' | 'warning' | 'neutral'; message?: string; code?: string } => {
+		const state = deps.getState();
+		const edge = (state.edges ?? []).find((candidate) => String(candidate?.id ?? '') === edgeId);
+		if (!edge) return { state: 'neutral' };
+		const sourceResult = state.schemaPlane?.nodeSchemas?.[String(edge.source ?? '')];
+		if (sourceResult && sourceResult.ok === false) {
+			return {
+				state: 'error',
+				message: sourceResult.error.message,
+				code: sourceResult.error.code
+			};
+		}
+		const targetResult = state.schemaPlane?.nodeSchemas?.[String(edge.target ?? '')];
+		if (targetResult && targetResult.ok === false) {
+			const targetHandle = String(edge.targetHandle ?? 'in').trim();
+			const handles = Array.isArray(targetResult.error.handles) ? targetResult.error.handles : [];
+			if (handles.length === 0 || handles.includes(targetHandle)) {
+				return {
+					state: 'error',
+					message: targetResult.error.message,
+					code: targetResult.error.code
+				};
+			}
+		}
+		const edgeSchema = state.schemaPlane?.edgeSchemas?.[edgeId];
+		if (!edgeSchema) return { state: 'neutral' };
+		if (edgeSchema.mode === 'opaque') {
+			return {
+				state: 'warning',
+				message: 'Schema unverified: upstream output is opaque. Run source to infer.',
+				code: 'OPAQUE_DEPENDENCY'
+			};
+		}
+		return { state: 'valid' };
+	};
+
+	const getConfigurationHints = (nodeId: string): Record<string, unknown> => {
+		const state = deps.getState();
+		const node = (state.nodes ?? []).find((candidate) => String(candidate?.id ?? '') === nodeId);
+		if (!node) return {};
+		const incomingEdges = (state.edges ?? [])
+			.filter((edge) => String(edge.target ?? '') === nodeId)
+			.sort((a, b) => String(a.targetHandle ?? '').localeCompare(String(b.targetHandle ?? '')));
+		const incomingSchemas = incomingEdges
+			.map((edge) => state.schemaPlane?.edgeSchemas?.[String(edge.id ?? '')] ?? null)
+			.filter((schema): schema is SchemaPlaneOutput => Boolean(schema));
+		const firstTable = incomingSchemas.find((schema) => schema.mode === 'table');
+		const firstTensor = incomingSchemas.find((schema) => schema.mode === 'tensor');
+		const first = incomingSchemas[0] ?? null;
+		const columns = (firstTable?.columns ?? []).map((column) => String(column.name ?? '')).filter(Boolean);
+		const suggestions: Record<string, unknown> = {};
+		const kind = String((node.data as any)?.kind ?? '').trim().toLowerCase();
+		const transformKind = String((node.data as any)?.transformKind ?? '').trim().toLowerCase();
+		if (transformKind === 'spectrogram') {
+			const sampleRate = Number(first?.properties?.sample_rate ?? NaN);
+			if (Number.isFinite(sampleRate)) suggestions['params.sample_rate'] = sampleRate;
+		}
+		if (transformKind === 'join' && incomingSchemas.length >= 2) {
+			const left = new Set((incomingSchemas[0].columns ?? []).map((column) => String(column.name ?? '')));
+			const right = new Set((incomingSchemas[1].columns ?? []).map((column) => String(column.name ?? '')));
+			suggestions['join.availableKeys'] = [...left].filter((name) => right.has(name));
+		}
+		if (transformKind === 'aggregate') {
+			const numeric = (firstTable?.columns ?? [])
+				.filter((column) => column.type === 'number')
+				.map((column) => String(column.name ?? ''))
+				.filter(Boolean);
+			suggestions['aggregate.numericColumns'] = numeric;
+		}
+		if (kind === 'training_job' || transformKind === 'training_job') {
+			const shape = firstTensor?.shape ?? [];
+			const lastDim = shape.length > 0 ? shape[shape.length - 1] : null;
+			if (typeof lastDim === 'number') suggestions['params.architecture_config.input_dim'] = lastDim;
+			const classSet = first?.properties?.class_set;
+			if (Array.isArray(classSet) && classSet.length > 0) suggestions['params.num_classes'] = classSet.length;
+		}
+		return {
+			suggestions,
+			availableColumns: columns,
+			upstreamShape: firstTensor?.shape ?? first?.shape ?? null,
+			upstreamDtype: firstTensor?.dtype ?? first?.dtype ?? first?.properties?.dtype ?? null,
+			upstreamClassSet: first?.properties?.class_set ?? null,
+			sampleRate: first?.properties?.sample_rate ?? null,
+			cardinality: first?.properties?.cardinality ?? null
+		};
+	};
+
+	return {
+		getNodeSchemaResult,
+		getEdgeSchema,
+		getEdgeValidationState,
+		getSchemaErrors,
+		hasSchemaErrors,
+		getConfigurationHints
+	};
+}

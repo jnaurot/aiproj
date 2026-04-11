@@ -22,6 +22,7 @@ import type {
 import type { BindingPair } from './graphStore.bindings';
 import { NODE_STATUS_SUCCEEDED } from './graphStore.types';
 import { displayStatusFromBinding, computeGraphFreshness } from './runScope';
+import { recomputeSchemaPlane } from './graphStore.schemaPlane';
 
 // ---------------------------------------------------------------------------
 // Module-level state (moved from graphStore.ts)
@@ -457,6 +458,11 @@ export function auditStateTransition(prev: GraphState, next: GraphState, ctx: Au
 export function withGraphMeta(state: GraphState): GraphState {
 	const normalizedBindings = ensureNormalizedBindingsForNodes(state.nodes, state.nodeBindings ?? {});
 	const normalizedOutputs = pruneNodeOutputsForNodes(state.nodes, state.nodeOutputs ?? {});
+	const schemaPlane = recomputeSchemaPlane({
+		...state,
+		nodeBindings: normalizedBindings,
+		nodeOutputs: normalizedOutputs
+	});
 	const { freshness, staleNodeCount } = computeGraphFreshness(normalizedBindings ?? {});
 	let lastRunStatus = state.lastRunStatus;
 	if (state.runStatus === 'succeeded') lastRunStatus = 'succeeded';
@@ -469,7 +475,8 @@ export function withGraphMeta(state: GraphState): GraphState {
 		staleNodeCount,
 		lastRunStatus,
 		nodeBindings: normalizedBindings,
-		nodeOutputs: normalizedOutputs
+		nodeOutputs: normalizedOutputs,
+		schemaPlane
 	};
 }
 

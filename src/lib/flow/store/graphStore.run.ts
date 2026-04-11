@@ -54,6 +54,7 @@ import { effectiveExecParamsForNode } from './graphStore.inspector';
 import { deriveObservedSchemaObservationFromNodeOutput, computeSchemaDriftSummary } from './graphStore.node-schema';
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import type { CheckpointStaleness } from '$lib/flow/types/checkpoint';
+import type { SchemaPlaneResult } from '$lib/flow/types/schemaPlane';
 
 
 export function applyLlmHolderToNodes(
@@ -2386,6 +2387,14 @@ export type RunDeps = {
 	hydrateFromRunSnapshot: (state: GraphState, snap: RunSnapshotLike) => GraphState;
 };
 
+type SchemaGuardAssessment =
+	| { kind: 'none' }
+	| { kind: 'outside_run_path'; count: number }
+	| {
+			kind: 'in_run_path';
+			errors: Array<{ nodeId: string; code?: string; message: string }>;
+	  };
+
 export function createRunManager(deps: RunDeps) {
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
 	let resumeFallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2429,6 +2438,29 @@ export function createRunManager(deps: RunDeps) {
 			}
 		}
 		return out;
+	}
+
+	function assessSchemaGuard(
+		state: GraphState,
+		runFrom: string | null,
+		runMode: ActiveRunMode
+	): SchemaGuardAssessment {
+		const nodeSchemas = state.schemaPlane?.nodeSchemas ?? {};
+		const allErrors = Object.entries(nodeSchemas)
+			.filter((e): e is [string, Extract<SchemaPlaneResult, { ok: false }>] => {
+				const r = e[1];
+				return !!r && r.ok === false;
+			})
+			.map(([nodeId, result]) => ({
+				nodeId,
+				code: result.error.code,
+				message: result.error.message
+			}));
+		if (allErrors.length <= 0) return { kind: 'none' };
+		const plannedSet = computePlannedNodeSet(state.nodes, state.edges, runFrom, runMode);
+		const inPath = allErrors.filter((item) => plannedSet.has(item.nodeId));
+		if (inPath.length <= 0) return { kind: 'outside_run_path', count: allErrors.length };
+		return { kind: 'in_run_path', errors: inPath };
 	}
 
 	function clearResumeFallbackPollTimer(): void {
@@ -2634,7 +2666,7 @@ export function createRunManager(deps: RunDeps) {
 		runMode?: ActiveRunMode,
 		cacheMode?: 'default_on' | 'force_off' | 'force_on',
 		adaptiveMode?: 'off' | 'observe' | 'enforce' | null,
-		opts?: { allowUnsavedCheckpointChanges?: boolean }
+		opts?: { allowUnsavedCheckpointChanges?: boolean; allowSchemaErrors?: boolean }
 	) {
 			// prevent concurrent runs
 			const s0 = deps.getState() as GraphState;
@@ -2643,6 +2675,58 @@ export function createRunManager(deps: RunDeps) {
 			}
 
 			const allowUnsavedCheckpointChanges = Boolean(opts?.allowUnsavedCheckpointChanges ?? false);
+			const allowSchemaErrors = Boolean(opts?.allowSchemaErrors ?? false);
+			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
+
+			const schemaGuard = assessSchemaGuard(s0, runFrom, effectiveRunMode);
+			if (schemaGuard.kind === 'outside_run_path') {
+				deps.update((s) =>
+					withGraphMeta(
+						logPush(
+							{ ...s },
+							'warn',
+							`Schema warning: ${schemaGuard.count} schema error${schemaGuard.count === 1 ? '' : 's'} exist outside the active run path.`
+						)
+					)
+				);
+			}
+			if (schemaGuard.kind === 'in_run_path' && !allowSchemaErrors && s0.schemaWarningDismissCount < 3) {
+				const message = `Schema validation found ${schemaGuard.errors.length} issue${schemaGuard.errors.length === 1 ? '' : 's'} in the active run path.`;
+				deps.update((s) =>
+					withGraphMeta(
+						logPush(
+							{
+								...s,
+								runBlockedReason: {
+									type: 'schema_errors_in_run_path',
+									nodeIds: schemaGuard.errors.map((item) => item.nodeId),
+									message,
+									errors: schemaGuard.errors
+								}
+							},
+							'warn',
+							message
+						)
+					)
+				);
+				return {
+					ok: false as const,
+					reason: 'schema_errors_in_run_path' as const,
+					nodeIds: schemaGuard.errors.map((item) => item.nodeId),
+					errors: schemaGuard.errors,
+					message
+				};
+			}
+			if (schemaGuard.kind === 'in_run_path' && allowSchemaErrors) {
+				deps.update((s) =>
+					withGraphMeta({
+						...s,
+						runBlockedReason: null,
+						schemaWarningDismissCount: Math.min(3, Number(s.schemaWarningDismissCount ?? 0) + 1)
+					})
+				);
+			}
+
 			if (!allowUnsavedCheckpointChanges) {
 				const blockedComponentNodeIds = collectComponentNodesWithUnsavedCheckpointChanges(s0);
 				if (blockedComponentNodeIds.length > 0) {
@@ -2682,7 +2766,6 @@ export function createRunManager(deps: RunDeps) {
 
 			// snapshot graph DTO
 			const s1 = deps.getState() as GraphState;
-			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
 			const dirtyNodeIds =
 				effectiveRunMode === 'from_start'
 					? Object.entries(s1.nodeBindings ?? {})

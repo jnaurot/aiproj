@@ -164,6 +164,8 @@ import {
 	loadNodeDocExplanationMode,
 	loadNodeDocTrainingMode,
 } from './graphStore.persistence';
+import { createSchemaPlaneManager, emptySchemaPlaneState } from './graphStore.schemaPlane';
+import { registerAllBuiltinSchemaFunctions } from '$lib/flow/schema/schemaRegistry';
 export { __computeSaveConsistencyMismatchForTest } from './graphStore.persistence';
 export { resolveNodeInputsFromState } from './graphStore.persistence';
 
@@ -176,6 +178,7 @@ export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiSt
 export const __setPauseResumeTraceEnabledForTest = __setPauseResumeTraceEnabledForTestFromRun;
 export const __markStaleFromNodeForTest = __markStaleFromNodeForTestFromRun;
 
+registerAllBuiltinSchemaFunctions();
 const loaded = loadGraphFromLocalStorage(emptyGraph);
 
 const loadedNodes = Array.isArray((loaded as any)?.nodes)
@@ -220,6 +223,8 @@ const initialState: GraphState = {
 	activeRunFrom: null,
 	activeRunNodeSet: new Set<string>(),
 	runBlockedReason: null,
+	viewMode: 'execution',
+	schemaWarningDismissCount: 0,
 	nodeOutputs: {},
 	nodeBindings: ensureNormalizedBindingsForNodes(loadedNormalized.nodes, {}),
 	activeRunId: null,
@@ -229,7 +234,8 @@ const initialState: GraphState = {
 	checkpointRegistry:
 		(loaded as any)?.checkpointRegistry && typeof (loaded as any).checkpointRegistry === 'object'
 			? structuredClone((loaded as any).checkpointRegistry)
-			: {}
+			: {},
+	schemaPlane: emptySchemaPlaneState()
 };
 
 export const graphStore = (() => {
@@ -249,11 +255,15 @@ export const graphStore = (() => {
 	});
 
 	// ── audited update ───────────────────────────────────────────────────
-	const update = history.wrapUpdate(
+	const updateWithAudit = history.wrapUpdate(
 		rawUpdate,
 		auditStateTransition,
 		(s) => stripToDTO(s.nodes as any, s.edges as any, s.graphId, s.checkpointRegistry ?? {}),
 	);
+	const update = (
+		fn: (s: GraphState) => GraphState,
+		ctx?: AuditContext
+	) => updateWithAudit((s) => withGraphMeta(fn(s)), ctx);
 function applyLocalStaleInvalidation(nodeId: string, rootReason: string = 'PARAMS_CHANGED'): void {
 		update((cur) => {
 			const checkpointBoundaryNodeIds = new Set<string>(Object.keys(cur.checkpointRegistry ?? {}));
@@ -488,6 +498,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		applyGraphDocument: graphEdit.actions.applyGraphDocument,
 		updateNodeConfig: updateNodeConfigImpl,
 	});
+	const schemaPlane = createSchemaPlaneManager({
+		getState: () => get({ subscribe } as any) as GraphState
+	});
 
 	return {
 		subscribe,
@@ -502,6 +515,23 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		...runManager.actions,
 		...graphEdit.actions,
 		...persistence.actions,
+		getNodeSchemaResult: schemaPlane.getNodeSchemaResult,
+		getEdgeSchemaResult: schemaPlane.getEdgeSchema,
+		getEdgeSchemaValidationState: schemaPlane.getEdgeValidationState,
+		getSchemaErrors: schemaPlane.getSchemaErrors,
+		hasSchemaErrors: schemaPlane.hasSchemaErrors,
+		getSchemaConfigurationHints: schemaPlane.getConfigurationHints,
+		setViewMode(mode: 'execution' | 'schema') {
+			update((s) => withGraphMeta({ ...s, viewMode: mode }));
+		},
+		toggleSchemaView() {
+			update((s) =>
+				withGraphMeta({
+					...s,
+					viewMode: s.viewMode === 'schema' ? 'execution' : 'schema'
+				})
+			);
+		},
 	};
 })();
 

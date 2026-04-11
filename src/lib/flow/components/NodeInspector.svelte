@@ -14,6 +14,7 @@
 	import ToolEditor from '$lib/flow/components/editors/ToolEditor/ToolEditor.svelte';
 	import ComponentEditor from '$lib/flow/components/editors/ComponentEditor/ComponentEditor.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import ConfigurationOracle from '$lib/flow/components/ui/ConfigurationOracle.svelte';
 	import { getArtifactMetaUrl, getArtifactPreviewUrl } from '$lib/flow/client/runs';
 	import { parseInputSchemaView, type InputSchemaView } from '$lib/flow/components/editors/TransformEditor/inputSchema';
 	import { buildTransformSchemaProps } from '$lib/flow/components/editors/TransformEditor/schemaPropagation';
@@ -418,6 +419,10 @@
 	}
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
+	$: schemaConfigurationHints = selectedNode
+		? (((graphStore as any).getSchemaConfigurationHints?.(selectedNode.id) ??
+				{}) as Record<string, unknown>)
+		: {};
 	$: schemaDriftSummary = (() => {
 		const expectedEnvelope = (selectedNode?.data as any)?.schema?.expectedSchema;
 		const observedEnvelope = (selectedNode?.data as any)?.schema?.observedSchema;
@@ -1703,6 +1708,20 @@
 					</div>
 				{/if}
 			</div>
+			<ConfigurationOracle
+				availableColumns={Array.isArray(schemaConfigurationHints.availableColumns)
+					? (schemaConfigurationHints.availableColumns as string[])
+					: []}
+				upstreamShape={Array.isArray(schemaConfigurationHints.upstreamShape)
+					? (schemaConfigurationHints.upstreamShape as Array<number | string>)
+					: null}
+				dtype={typeof schemaConfigurationHints.upstreamDtype === 'string'
+					? (schemaConfigurationHints.upstreamDtype as string)
+					: null}
+				sampleRate={typeof schemaConfigurationHints.sampleRate === 'number'
+					? (schemaConfigurationHints.sampleRate as number)
+					: null}
+			/>
 			<div class="guidedAssistCard">
 				<div class="guidedAssistHead">{transformMeta?.label ?? String(transformKind)}</div>
 				<div class="guidedAssistDesc">{transformMeta?.description ?? ''}</div>

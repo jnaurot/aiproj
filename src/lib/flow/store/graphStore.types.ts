@@ -27,6 +27,7 @@ import type { BindingPair } from './graphStore.bindings';
 import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/schema/nodeDocs';
 import type { SchemaDiagnosticCode } from '$lib/flow/schema/diagnosticsContract';
 import type { CheckpointRegistry, CheckpointStaleness } from '$lib/flow/types/checkpoint';
+import type { SchemaPlaneResult, SchemaPlaneState } from '$lib/flow/types/schemaPlane';
 
 // ---------------------------------------------------------------------------
 // Primitive aliases
@@ -67,7 +68,15 @@ export type RunBlockedReason =
 			type: 'unsaved_checkpoint_changes';
 			componentNodeIds: string[];
 			message: string;
+	  }
+	| {
+			type: 'schema_errors_in_run_path';
+			nodeIds: string[];
+			message: string;
+			errors?: Array<{ nodeId: string; code?: string; message: string }>;
 	  };
+
+export type GraphViewMode = 'execution' | 'schema';
 
 // ---------------------------------------------------------------------------
 // Node execution / binding
@@ -417,6 +426,9 @@ export type GraphState = {
 	activeRunMode: ActiveRunMode;
 	activeRunFrom: string | null;
 	activeRunNodeSet: Set<string>;
+	runBlockedReason: RunBlockedReason | null;
+	viewMode: GraphViewMode;
+	schemaWarningDismissCount: number;
 	nodeOutputs: Record<string, NodeOutputInfo>;
 	nodeBindings: Record<string, NormalizedNodeBinding>;
 	activeRunId: string | null;
@@ -425,6 +437,7 @@ export type GraphState = {
 	componentEditSession: ComponentEditSession | null;
 	componentContractDraftCache: Record<string, Record<string, any>>;
 	checkpointRegistry: CheckpointRegistry;
+	schemaPlane: SchemaPlaneState;
 };
 
 // Pulled out of GraphState to keep it readable.

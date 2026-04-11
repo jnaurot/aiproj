@@ -7,6 +7,8 @@ export * from "./llm";
 export * from "./tool";
 export * from "./component";
 export * from "./checkpoint";
+export * from "./schemaPlane";
+export * from "./schemaRegistry";
 export * from "./debug";
 export * from "./nodeDocs";
 

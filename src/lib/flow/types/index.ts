@@ -9,3 +9,4 @@ export * from "./graph";
 export * from "./run";
 export * from "./nodeDocs";
 export * from "./checkpoint";
+export * from "./schemaPlane";

@@ -75,6 +75,7 @@ import {
 	NODE_STATUS_SUCCEEDED,
 	INITIAL_INSPECTOR
 } from './graphStore.types';
+import { emptySchemaPlaneState } from './graphStore.schemaPlane';
 import type { SourceKind, LlmKind, TransformKind } from '$lib/flow/types/paramsMap';
 
 // ── PART A: Top-level pure function exports ──────────────────────────────────
@@ -90,6 +91,16 @@ export function mintGraphId(): string {
 export function buildHardResetState(freshGraphId: string): GraphState {
 	return {
 		graphId: freshGraphId,
+		nodeDocExplanationMode: 'default',
+		nodeDocTrainingMode: 'off',
+		nodeDocTooltipEnabled: true,
+		nodeDocTooltipOpenDelayMs: 500,
+		nodeDocPlanesExpansionEnabled: true,
+		nodeDocPlanesExpansionDelayMs: 1200,
+		nodeDocExplainModel: 'glm-4.7-flash:latest',
+		nodeDocExplainTemperature: 0.2,
+		nodeDocExplainTopP: 1.0,
+		nodeDocExplainMaxTokens: 512,
 		nodes: [],
 		edges: [],
 		selectedNodeId: null,
@@ -102,13 +113,17 @@ export function buildHardResetState(freshGraphId: string): GraphState {
 		activeRunMode: 'from_start',
 		activeRunFrom: null,
 		activeRunNodeSet: new Set<string>(),
+		runBlockedReason: null,
+		viewMode: 'execution',
+		schemaWarningDismissCount: 0,
 		nodeOutputs: {},
 		nodeBindings: {},
 		activeRunId: null,
 		editingContext: 'graph',
 		componentEditSession: null,
 		componentContractDraftCache: {},
-		checkpointRegistry: {}
+		checkpointRegistry: {},
+		schemaPlane: emptySchemaPlaneState()
 	};
 }
 
@@ -128,6 +143,7 @@ export function captureComponentEditSnapshot(state: GraphState): ComponentEditSe
 		activeRunMode: state.activeRunMode,
 		activeRunFrom: state.activeRunFrom,
 		activeRunNodeSet: new Set(Array.from(state.activeRunNodeSet ?? [])),
+		runBlockedReason: state.runBlockedReason ? structuredClone(state.runBlockedReason) : null,
 		nodeOutputs: structuredClone(state.nodeOutputs),
 		nodeBindings: structuredClone(state.nodeBindings),
 		activeRunId: state.activeRunId

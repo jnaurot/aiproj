@@ -28,6 +28,7 @@
 	} from '$lib/flow/components/panels/CheckpointRegistryPanel.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
+	import SchemaPlaneOverlay from '$lib/flow/components/ui/SchemaPlaneOverlay.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import ToolbarMenu from './components/ToolbarMenu.svelte';
@@ -244,12 +245,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	$: displayEdges = edges.map((e) => {
 		const diag = ($edgeSchemaDiagnostics as Record<string, any> | undefined)?.[String(e.id ?? '')] ?? null;
-		const schemaClass =
-			diag?.severity === 'error'
+		const schemaValidation = (graphStore as any).getEdgeSchemaValidationState?.(String(e.id ?? '')) ?? null;
+		const schemaClass = (
+			schemaValidation?.state === 'error' || diag?.severity === 'error'
 				? 'edge-schema-error'
-				: diag?.severity === 'warning'
+				: schemaValidation?.state === 'warning' || diag?.severity === 'warning'
 					? 'edge-schema-warning'
-					: '';
+					: ''
+		).trim();
 		const linkKindClass =
 			String(((e.data as any)?.linkKind ?? (e.data as any)?.link_kind ?? 'data_link')).trim().toLowerCase() ===
 			'control_link'
@@ -279,9 +282,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		} else if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
 			visualClass = 'edge-state-settled';
 		}
-		const title = diag
-			? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
-			: undefined;
+		const title = schemaValidation?.message
+			? String(schemaValidation.message)
+			: diag
+				? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
+				: undefined;
 		return {
 			...e,
 			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
@@ -1416,6 +1421,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: projectMenuItems = buildProjectMenuItems($graphStore.editingContext) satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
 	$: runToolbarControls = pauseResumeToolbarVisibility($graphStore.runStatus as any);
+	$: schemaErrorCount = (graphStore as any).getSchemaErrors?.().length ?? 0;
 	$: primarySaveCommandLabel = isComponentEditContext ? 'Save Component Revision' : 'Save Graph';
 	$: saveAsComponentCommandLabel = isComponentEditContext ? 'Save as New Component' : 'Save as Component';
 	$: commandItems = [
@@ -1454,6 +1460,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		},
 		{ id: 'cmd_run', label: 'Run', run: () => void runFromStart() },
 		{ id: 'cmd_run_selected', label: 'Run from selected', disabled: !$selectedNode, run: () => void runFromSelected() },
+		{
+			id: 'cmd_toggle_schema_view',
+			label: $graphStore.viewMode === 'schema' ? 'Switch to Execution View' : 'Switch to Schema View',
+			run: () => (graphStore as any).toggleSchemaView?.()
+		},
 		{ id: 'cmd_add_source', label: 'Add Source', run: () => void addNode('source') },
 		{ id: 'cmd_add_transform', label: 'Add Transform', run: () => void addNode('transform') },
 		{ id: 'cmd_add_model', label: 'Add Model', run: () => void addNode('model') },
@@ -3063,14 +3074,37 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		adaptiveMode: 'off' | 'observe' | 'enforce' | null
 	): Promise<void> {
 		const result = await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode);
-		if (result?.ok !== false || String(result?.reason ?? '') !== 'unsaved_checkpoint_changes') return;
-		const message = `${String(result?.message ?? 'Unsaved component checkpoint changes detected.')}\n\nRun without these unsaved checkpoint changes?`;
-		const proceed = window.confirm(message);
-		if (!proceed) return;
-		(graphStore as any).clearRunBlockedReason?.();
-		await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode, {
-			allowUnsavedCheckpointChanges: true
-		});
+		if (result?.ok !== false) return;
+		const reason = String(result?.reason ?? '');
+		if (reason === 'unsaved_checkpoint_changes') {
+			const message = `${String(result?.message ?? 'Unsaved component checkpoint changes detected.')}\n\nRun without these unsaved checkpoint changes?`;
+			const proceed = window.confirm(message);
+			if (!proceed) return;
+			(graphStore as any).clearRunBlockedReason?.();
+			await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode, {
+				allowUnsavedCheckpointChanges: true
+			});
+			return;
+		}
+		if (reason === 'schema_errors_in_run_path') {
+			const errors = Array.isArray(result?.errors)
+				? (result.errors as Array<{ nodeId?: string; message?: string }>)
+				: [];
+			const details = errors
+				.slice(0, 5)
+				.map((item) => `- ${String(item.nodeId ?? 'node')}: ${String(item.message ?? '')}`)
+				.join('\n');
+			const message = `${String(result?.message ?? 'Schema issues were found in the run path.')}\n\n${details}\n\nProceed anyway?`;
+			const proceed = window.confirm(message);
+			if (!proceed) {
+				(graphStore as any).setViewMode?.('schema');
+				return;
+			}
+			(graphStore as any).clearRunBlockedReason?.();
+			await (graphStore as any).runRemote(runFrom, mode, globalCacheMode, adaptiveMode, {
+				allowSchemaErrors: true
+			});
+		}
 	}
 
 	function pauseRun() {
@@ -4682,12 +4716,22 @@ async function returnFromComponentEditMode() {
 				>
 					Redo
 				</button>
+				<button
+					class={`runSecondary ${$graphStore.viewMode === 'schema' ? 'is-active' : ''}`}
+					on:click={() => (graphStore as any).toggleSchemaView?.()}
+					title={$graphStore.viewMode === 'schema' ? 'Switch to execution view' : 'Switch to schema view'}
+				>
+					{$graphStore.viewMode === 'schema' ? 'Execution View' : 'Schema View'}
+				</button>
 			</div>
 
 			<div class="toolbarZone statusIndicators">
 				<span class={graphHeaderStatusClass}
 					>{statusScopeLabel}: {graphHeaderStatus}{scopedUnsavedChanges ? ' + Unsaved changes' : ''}</span
 				>
+				<span class="schemaStatus">
+					{$graphStore.hasSchemaErrors?.() ? `${schemaErrorCount} schema issue${schemaErrorCount === 1 ? '' : 's'}` : 'Schema valid'}
+				</span>
 				{#if isComponentEditContext}
 					<button class="runSecondary" on:click={returnFromComponentEditMode}>
 						Return to graph
@@ -5214,6 +5258,11 @@ async function returnFromComponentEditMode() {
 			<Background />
 			<Controls />
 		</SvelteFlow>
+		<SchemaPlaneOverlay
+			enabled={$graphStore.viewMode === 'schema'}
+			errorCount={schemaErrorCount}
+			warningCount={0}
+		/>
 
 		<div
 			bind:this={portTypeLegendEl}
@@ -7267,6 +7316,13 @@ async function returnFromComponentEditMode() {
 		justify-content: flex-start;
 	}
 
+	.schemaStatus {
+		opacity: 0.8;
+		font-size: 12px;
+		white-space: nowrap;
+		color: var(--color-text-muted, #9aa4bf);
+	}
+
 	.addActions {
 		margin-left: auto;
 	}
@@ -7368,6 +7424,11 @@ async function returnFromComponentEditMode() {
 	button.primary {
 		border-color: #4b8cff;
 		background: #14305f;
+	}
+
+	.runSecondary.is-active {
+		border-color: #4b8cff;
+		background: #1a2745;
 	}
 
 	.runBtn {
