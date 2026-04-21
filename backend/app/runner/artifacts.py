@@ -9,7 +9,7 @@ import uuid
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Set, Tuple
 
 from pydantic import BaseModel
 
@@ -47,8 +47,8 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def _retention_mode() -> str:
-    mode = str(os.getenv("ARTIFACT_RETENTION_MODE", "by_run") or "by_run").strip().lower()
-    return mode if mode in {"off", "by_run"} else "by_run"
+    mode = str(os.getenv("ARTIFACT_RETENTION_MODE", "by_node") or "by_node").strip().lower()
+    return mode if mode in {"off", "by_run", "by_node"} else "by_node"
 
 
 def _retention_keep_recent_runs() -> int:
@@ -57,6 +57,15 @@ def _retention_keep_recent_runs() -> int:
         return max(0, int(raw))
     except Exception:
         return 5
+
+
+def _retention_keep_node_versions() -> int:
+    """Number of distinct artifact versions to keep per (graph_id, node_id) in by_node mode."""
+    raw = str(os.getenv("ARTIFACT_KEEP_NODE_VERSIONS", "2") or "2").strip()
+    try:
+        return max(1, int(raw))
+    except Exception:
+        return 2
 
 
 def _retention_include_failed() -> bool:
@@ -232,6 +241,9 @@ class ArtifactStore(Protocol):
         limit: int = 50,
         offset: int = 0,
     ) -> List[Dict[str, Any]]: ...
+    async def put_checkpoint_pins(self, graph_id: str, pins: List[Tuple[str, str]]) -> None: ...
+    async def get_checkpoint_pinned_artifact_ids(self) -> Set[str]: ...
+    async def record_artifact_usage(self, run_id: str, artifact_id: str) -> None: ...
 
 
 # ----------------------------
@@ -260,6 +272,12 @@ class MemoryArtifactStore:
             "blob_hit": 0,
             "blob_miss": 0,
         }
+        self._checkpoint_pins: Dict[str, Dict[str, str]] = {}  # graph_id -> {node_id: artifact_id}
+        # Tracks which artifact_ids each run consumed (including cache hits that
+        # don't create a new artifact).  Used by retention sweep to protect shared
+        # artifacts that are still referenced by surviving runs even when the run
+        # that *wrote* them is being pruned.
+        self._run_artifact_refs: Dict[str, Set[str]] = {}
 
     def _prune_node_artifacts(self, *, graph_id: str, node_id: str, keep_last: int = 5) -> List[str]:
         if not graph_id or not node_id:
@@ -272,6 +290,13 @@ class MemoryArtifactStore:
         rows.sort(key=lambda x: x[1].created_at, reverse=True)
         keep = max(0, int(keep_last))
         to_delete = [aid for aid, _ in rows[keep:]]
+        if not to_delete:
+            return []
+        # Protect checkpoint-pinned artifacts from per-node pruning.
+        pinned_artifact_ids = set()
+        for node_map in self._checkpoint_pins.values():
+            pinned_artifact_ids.update(node_map.values())
+        to_delete = [aid for aid in to_delete if aid not in pinned_artifact_ids]
         if not to_delete:
             return []
         delete_set = set(to_delete)
@@ -375,6 +400,20 @@ class MemoryArtifactStore:
             )
         return artifact.artifact_id
 
+    async def record_artifact_usage(self, run_id: str, artifact_id: str) -> None:
+        """Record that *run_id* used *artifact_id* (even when the artifact was
+        created by an earlier run and this run only consumed it via a cache hit).
+        This information is used by the retention sweep to protect artifacts that
+        are still needed by surviving runs from being deleted simply because the
+        run that originally *wrote* the artifact is old enough to be pruned."""
+        rid = str(run_id or "").strip()
+        aid = str(artifact_id or "").strip()
+        if not rid or not aid:
+            return
+        if rid not in self._run_artifact_refs:
+            self._run_artifact_refs[rid] = set()
+        self._run_artifact_refs[rid].add(aid)
+
     async def record_run(self, run_id: str, status: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
         is_terminal = _is_terminal_status(status)
@@ -399,7 +438,11 @@ class MemoryArtifactStore:
             if is_terminal:
                 rec["completed_at"] = now
         if is_terminal:
-            await self._apply_run_retention(trigger_run_id=run_id)
+            mode = _retention_mode()
+            if mode == "by_run":
+                await self._apply_run_retention(trigger_run_id=run_id)
+            elif mode == "by_node":
+                await self._apply_node_retention(trigger_run_id=run_id)
 
     async def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         return self._runs.get(run_id)
@@ -437,32 +480,130 @@ class MemoryArtifactStore:
         prune_ids = [str(row.get("run_id") or "") for row in candidates if str(row.get("run_id") or "") not in keep_ids]
         if not prune_ids:
             return
+        # Build the set of artifact IDs that must survive pruning:
+        # (a) checkpoint-pinned artifacts, and
+        # (b) artifacts referenced (via cache hit) by any run we are keeping —
+        #     even if those artifacts were *written* by a run we are pruning.
+        # NOTE: by_run retention has known limitations with partial "run-from-selected"
+        # runs.  Use ARTIFACT_RETENTION_MODE=by_node to avoid false evictions.
+        pinned_artifact_ids = await self.get_checkpoint_pinned_artifact_ids()
+        for rid in keep_ids:
+            pinned_artifact_ids |= self._run_artifact_refs.get(rid, set())
         logger.info(
-            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s",
+            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s pinned_artifacts=%s",
             keep_recent,
             trigger_run_id,
             len(candidates),
             len(prune_ids),
+            len(pinned_artifact_ids),
         )
         pruned_run_ids: List[str] = []
         removed_artifacts = 0
+        pinned_protected = 0
         for rid in prune_ids:
-            out = await self.delete_run(rid, mode="hard", gc="unreferenced")
-            if bool(out.get("runDeleted")):
-                pruned_run_ids.append(rid)
-                removed_artifacts += int(out.get("artifactsRemoved") or 0)
+            # Find artifacts belonging to this run that are NOT checkpoint-pinned.
+            run_artifact_ids = [
+                aid for aid, art in self._meta.items()
+                if str(art.run_id or "").strip() == rid
+            ]
+            pinned_in_run = [aid for aid in run_artifact_ids if aid in pinned_artifact_ids]
+            if pinned_in_run:
+                # Only delete non-pinned artifacts; keep the run record alive
+                # so pinned artifacts remain accessible.
+                to_delete = [aid for aid in run_artifact_ids if aid not in pinned_artifact_ids]
+                for aid in to_delete:
+                    self._meta.pop(aid, None)
+                    self._blob.pop(aid, None)
+                    self._meta_cache.pop(aid, None)
+                    self._blob_cache.pop(aid, None)
+                for input_id, consumers in list(self._consumers.items()):
+                    self._consumers[input_id] = [
+                        c for c in consumers
+                        if c.get("outputArtifactId") not in set(to_delete)
+                    ]
+                    if not self._consumers[input_id]:
+                        self._consumers.pop(input_id, None)
+                removed = len(to_delete)
+                pinned_protected += len(pinned_in_run)
                 logger.info(
-                    "artifact_retention_run_pruned run_id=%s artifacts_removed=%s blobs_deleted=%s",
+                    "artifact_retention_run_partial_prune run_id=%s artifacts_removed=%s pinned_protected=%s",
                     rid,
-                    int(out.get("artifactsRemoved") or 0),
-                    int(out.get("blobsDeleted") or 0),
+                    removed,
+                    len(pinned_in_run),
                 )
+            else:
+                out = await self.delete_run(rid, mode="hard", gc="unreferenced")
+                if bool(out.get("runDeleted")):
+                    pruned_run_ids.append(rid)
+                    removed_artifacts += int(out.get("artifactsRemoved") or 0)
+                    logger.info(
+                        "artifact_retention_run_pruned run_id=%s artifacts_removed=%s blobs_deleted=%s",
+                        rid,
+                        int(out.get("artifactsRemoved") or 0),
+                        int(out.get("blobsDeleted") or 0),
+                    )
         logger.info(
-            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s artifacts_removed=%s",
+            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s artifacts_removed=%s pinned_protected=%s",
             keep_recent,
             trigger_run_id,
             len(pruned_run_ids),
             removed_artifacts,
+            pinned_protected,
+        )
+
+    async def _apply_node_retention(self, *, trigger_run_id: str) -> None:
+        """Retention by node: keep the N most-recent distinct artifacts per
+        (graph_id, node_id).  Checkpoint-pinned artifacts are never deleted.
+        Artifacts without a graph_id or node_id (non-runtime artifacts) are
+        left untouched."""
+        keep_versions = _retention_keep_node_versions()
+        pinned_artifact_ids = await self.get_checkpoint_pinned_artifact_ids()
+
+        # Group artifacts by (graph_id, node_id).
+        groups: Dict[Tuple[str, str], List[Tuple[str, str]]] = {}
+        for aid, art in list(self._meta.items()):
+            gid = str(art.graph_id or "").strip()
+            nid = str(art.node_id or "").strip()
+            if not gid or not nid:
+                continue
+            key = (gid, nid)
+            groups.setdefault(key, []).append((str(art.created_at or ""), aid))
+
+        to_delete: List[str] = []
+        pinned_protected = 0
+        for entries in groups.values():
+            entries.sort(key=lambda x: x[0], reverse=True)  # newest first
+            for i, (_, aid) in enumerate(entries):
+                if i < keep_versions:
+                    continue  # within the keep window
+                if aid in pinned_artifact_ids:
+                    pinned_protected += 1
+                    continue  # checkpoint-pinned — never delete
+                to_delete.append(aid)
+
+        if not to_delete:
+            return
+
+        to_delete_set = set(to_delete)
+        for aid in to_delete:
+            self._meta.pop(aid, None)
+            self._blob.pop(aid, None)
+            self._meta_cache.pop(aid, None)
+            self._blob_cache.pop(aid, None)
+        for input_id, consumers in list(self._consumers.items()):
+            self._consumers[input_id] = [
+                c for c in consumers
+                if c.get("outputArtifactId") not in to_delete_set
+            ]
+            if not self._consumers[input_id]:
+                self._consumers.pop(input_id, None)
+        logger.info(
+            "artifact_node_retention_sweep store=memory trigger_run_id=%s keep_versions=%s "
+            "artifacts_pruned=%s pinned_protected=%s",
+            trigger_run_id,
+            keep_versions,
+            len(to_delete),
+            pinned_protected,
         )
 
     async def upsert_run_pause_snapshot(self, run_id: str, snapshot: Dict[str, Any]) -> None:
@@ -519,6 +660,7 @@ class MemoryArtifactStore:
         run_deleted = (self._runs.pop(run_id, None) is not None) or bool(artifact_ids)
         self._run_pause_snapshots.pop(str(run_id), None)
         self._experiments.pop(run_id, None)
+        self._run_artifact_refs.pop(run_id, None)
         return {
             "runDeleted": run_deleted,
             "mode": "hard",
@@ -666,6 +808,20 @@ class MemoryArtifactStore:
             return None
         rows.sort(key=lambda x: x[1].created_at, reverse=True)
         return str(rows[0][0])
+
+    async def put_checkpoint_pins(self, graph_id: str, pins: List[Tuple[str, str]]) -> None:
+        """Replace all checkpoint pins for *graph_id* with *pins* ``[(artifact_id, node_id), ...]``."""
+        gid = str(graph_id or "").strip()
+        if not gid:
+            return
+        self._checkpoint_pins[gid] = {str(nid): str(aid) for aid, nid in pins if aid and nid}
+
+    async def get_checkpoint_pinned_artifact_ids(self) -> Set[str]:
+        """Return the set of artifact IDs that are currently checkpoint-pinned (across all graphs)."""
+        result: Set[str] = set()
+        for node_map in self._checkpoint_pins.values():
+            result.update(node_map.values())
+        return result
 
     async def upsert_run_experiment(self, summary: Dict[str, Any]) -> None:
         if not isinstance(summary, dict):
@@ -920,6 +1076,29 @@ class _SqliteArtifactIndex:
                 """
             )
             cur.execute("CREATE INDEX IF NOT EXISTS idx_run_experiments_graph_created ON run_experiments(graph_id, created_at DESC)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS checkpoint_pins (
+                    graph_id TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (graph_id, node_id)
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_checkpoint_pins_artifact ON checkpoint_pins(artifact_id)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS run_artifact_refs (
+                    run_id TEXT NOT NULL,
+                    artifact_id TEXT NOT NULL,
+                    PRIMARY KEY (run_id, artifact_id)
+                )
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_run_artifact_refs_run ON run_artifact_refs(run_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_run_artifact_refs_artifact ON run_artifact_refs(artifact_id)")
             self._conn.commit()
 
     def exists(self, artifact_id: str) -> bool:
@@ -1025,6 +1204,11 @@ class _SqliteArtifactIndex:
             (graph_id, node_id),
         ).fetchall()
         to_delete = rows[keep:]
+        if not to_delete:
+            return []
+        # Protect checkpoint-pinned artifacts from per-node pruning.
+        pinned_artifact_ids = self.get_checkpoint_pinned_artifact_ids(cur=cur)
+        to_delete = [(aid, ch) for aid, ch in to_delete if aid not in pinned_artifact_ids]
         if not to_delete:
             return []
         ids = [r[0] for r in to_delete]
@@ -1146,7 +1330,11 @@ class _SqliteArtifactIndex:
                 (run_id, now, now, now if is_terminal else None, status),
             )
             if is_terminal:
-                self._apply_run_retention_locked(cur=cur, trigger_run_id=run_id)
+                mode = _retention_mode()
+                if mode == "by_run":
+                    self._apply_run_retention_locked(cur=cur, trigger_run_id=run_id)
+                elif mode == "by_node":
+                    self._apply_node_retention_locked(cur=cur, trigger_run_id=run_id)
             self._conn.commit()
 
     def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
@@ -1399,6 +1587,22 @@ class _SqliteArtifactIndex:
             )
         return out
 
+    def record_artifact_usage(self, run_id: str, artifact_id: str) -> None:
+        """Persist a (run_id, artifact_id) reference so the retention sweep can
+        protect this artifact as long as *run_id* is in the keep window — even
+        when *artifact_id* was originally written by an older, pruned run."""
+        rid = str(run_id or "").strip()
+        aid = str(artifact_id or "").strip()
+        if not rid or not aid:
+            return
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute(
+                "INSERT OR IGNORE INTO run_artifact_refs (run_id, artifact_id) VALUES (?, ?)",
+                (rid, aid),
+            )
+            self._conn.commit()
+
     def record_consumers(
         self,
         *,
@@ -1462,6 +1666,48 @@ class _SqliteArtifactIndex:
             for r in rows
         ]
 
+    def put_checkpoint_pins(self, graph_id: str, pins: List[Tuple[str, str]]) -> None:
+        """Replace all checkpoint pins for *graph_id* with *pins*.
+
+        Each entry is ``(artifact_id, node_id)``.  The primary key is
+        ``(graph_id, node_id)`` — one pin per node per graph — so this
+        effectively upserts the current set.
+        """
+        gid = str(graph_id or "").strip()
+        if not gid:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cur = self._conn.cursor()
+            cur.execute("DELETE FROM checkpoint_pins WHERE graph_id=?", (gid,))
+            for artifact_id, node_id in pins:
+                aid = str(artifact_id or "").strip()
+                nid = str(node_id or "").strip()
+                if not aid or not nid:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO checkpoint_pins (graph_id, artifact_id, node_id, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (gid, aid, nid, now),
+                )
+            self._conn.commit()
+
+    def get_checkpoint_pinned_artifact_ids(self, cur: Optional[sqlite3.Cursor] = None) -> Set[str]:
+        """Return the set of artifact IDs that are currently checkpoint-pinned (across all graphs).
+
+        If *cur* is provided, the call assumes the caller already holds the lock
+        and the table can be queried through the given cursor (no extra locking).
+        """
+        if cur is not None:
+            rows = cur.execute("SELECT DISTINCT artifact_id FROM checkpoint_pins").fetchall()
+        else:
+            with self._lock:
+                cur = self._conn.cursor()
+                rows = cur.execute("SELECT DISTINCT artifact_id FROM checkpoint_pins").fetchall()
+        return {str(r[0]) for r in rows if r[0]}
+
     def _delete_run_locked(self, *, cur: sqlite3.Cursor, run_id: str) -> Dict[str, Any]:
         rows = cur.execute(
             "SELECT artifact_id, content_hash FROM artifacts WHERE run_id=?",
@@ -1482,12 +1728,79 @@ class _SqliteArtifactIndex:
         deleted_run_rows = int(cur.rowcount or 0)
         cur.execute("DELETE FROM run_experiments WHERE run_id=?", (run_id,))
         cur.execute("DELETE FROM run_pause_snapshots WHERE run_id=?", (run_id,))
+        cur.execute("DELETE FROM run_artifact_refs WHERE run_id=?", (run_id,))
         return {
             "runDeleted": bool(deleted_run_rows) or bool(artifacts_removed),
             "artifactsRemoved": artifacts_removed,
             "artifactIdsRemoved": artifact_ids,
             "candidateHashes": candidate_hashes,
         }
+
+    def _apply_node_retention_locked(self, *, cur: sqlite3.Cursor, trigger_run_id: str) -> None:
+        """Retention by node: keep the N most-recent distinct artifacts per
+        (graph_id, node_id).  Checkpoint-pinned artifacts are never deleted.
+        Uses a window function to rank artifacts per node, which requires
+        SQLite >= 3.25 (2018-09-15)."""
+        keep_versions = _retention_keep_node_versions()
+        pinned_artifact_ids = self.get_checkpoint_pinned_artifact_ids(cur=cur)
+
+        # Rank artifacts within each (graph_id, node_id) group by created_at DESC.
+        # Rows with rn > keep_versions are candidates for deletion.
+        rows = cur.execute(
+            """
+            SELECT artifact_id
+            FROM (
+                SELECT artifact_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY graph_id, node_id
+                           ORDER BY created_at DESC
+                       ) AS rn
+                FROM artifacts
+                WHERE graph_id IS NOT NULL AND TRIM(graph_id) != ''
+                  AND node_id  IS NOT NULL AND TRIM(node_id)  != ''
+            ) ranked
+            WHERE rn > ?
+            """,
+            (keep_versions,),
+        ).fetchall()
+
+        to_delete = [
+            str(r[0]) for r in rows
+            if r[0] and str(r[0]) not in pinned_artifact_ids
+        ]
+        pinned_protected = len([r for r in rows if r[0] and str(r[0]) in pinned_artifact_ids])
+
+        if not to_delete:
+            logger.debug(
+                "artifact_node_retention_sweep store=sqlite trigger_run_id=%s keep_versions=%s "
+                "nothing_to_prune pinned_protected=%s",
+                trigger_run_id, keep_versions, pinned_protected,
+            )
+            return
+
+        batch_size = 500
+        total_deleted = 0
+        for i in range(0, len(to_delete), batch_size):
+            batch = to_delete[i : i + batch_size]
+            ph = ",".join(["?"] * len(batch))
+            cur.execute(
+                f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({ph})",
+                tuple(batch),
+            )
+            cur.execute(
+                f"DELETE FROM artifacts WHERE artifact_id IN ({ph})",
+                tuple(batch),
+            )
+            total_deleted += len(batch)
+
+        logger.info(
+            "artifact_node_retention_sweep store=sqlite trigger_run_id=%s keep_versions=%s "
+            "artifacts_pruned=%s pinned_protected=%s",
+            trigger_run_id,
+            keep_versions,
+            total_deleted,
+            pinned_protected,
+        )
 
     def _apply_run_retention_locked(self, *, cur: sqlite3.Cursor, trigger_run_id: str) -> None:
         if _retention_mode() != "by_run":
@@ -1520,25 +1833,72 @@ class _SqliteArtifactIndex:
         prune_ids = [rid for rid, _, _ in candidates if rid not in keep_ids]
         if not prune_ids:
             return
+        # Build the set of artifact IDs that must survive pruning:
+        # (a) checkpoint-pinned artifacts, and
+        # (b) artifacts referenced (via cache hit) by any run we are keeping —
+        #     even if those artifacts were *written* by a run we are pruning.
+        # NOTE: by_run retention has known limitations with partial "run-from-selected"
+        # runs.  Use ARTIFACT_RETENTION_MODE=by_node to avoid false evictions.
+        pinned_artifact_ids = self.get_checkpoint_pinned_artifact_ids(cur=cur)
+        if keep_ids:
+            placeholders = ",".join(["?"] * len(keep_ids))
+            ref_rows = cur.execute(
+                f"SELECT DISTINCT artifact_id FROM run_artifact_refs WHERE run_id IN ({placeholders})",
+                tuple(keep_ids),
+            ).fetchall()
+            for row in ref_rows:
+                if row[0]:
+                    pinned_artifact_ids.add(str(row[0]))
         logger.info(
-            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s",
+            "artifact_retention_sweep_started mode=by_run keep_recent_runs=%s trigger_run_id=%s terminal_candidates=%s prune_candidates=%s pinned_artifacts=%s",
             keep_recent,
             trigger_run_id,
             len(candidates),
             len(prune_ids),
+            len(pinned_artifact_ids),
         )
+        pinned_protected = 0
         for rid in prune_ids:
-            deleted = self._delete_run_locked(cur=cur, run_id=rid)
-            logger.info(
-                "artifact_retention_run_pruned run_id=%s artifacts_removed=%s",
-                rid,
-                int(deleted.get("artifactsRemoved") or 0),
-            )
+            # Check if any artifacts in this run are checkpoint-pinned.
+            art_rows = cur.execute(
+                "SELECT artifact_id FROM artifacts WHERE run_id=?",
+                (rid,),
+            ).fetchall()
+            run_art_ids = {str(r[0]) for r in art_rows if r[0]}
+            pinned_in_run = run_art_ids & pinned_artifact_ids
+            if pinned_in_run:
+                # Only delete non-pinned artifacts; keep the run record alive.
+                to_delete = run_art_ids - pinned_artifact_ids
+                if to_delete:
+                    placeholders = ",".join(["?"] * len(to_delete))
+                    cur.execute(
+                        f"DELETE FROM artifact_consumers WHERE output_artifact_id IN ({placeholders})",
+                        tuple(to_delete),
+                    )
+                    cur.execute(
+                        f"DELETE FROM artifacts WHERE artifact_id IN ({placeholders})",
+                        tuple(to_delete),
+                    )
+                pinned_protected += len(pinned_in_run)
+                logger.info(
+                    "artifact_retention_run_partial_prune run_id=%s artifacts_removed=%s pinned_protected=%s",
+                    rid,
+                    len(to_delete),
+                    len(pinned_in_run),
+                )
+            else:
+                deleted = self._delete_run_locked(cur=cur, run_id=rid)
+                logger.info(
+                    "artifact_retention_run_pruned run_id=%s artifacts_removed=%s",
+                    rid,
+                    int(deleted.get("artifactsRemoved") or 0),
+                )
         logger.info(
-            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s",
+            "artifact_retention_sweep_finished mode=by_run keep_recent_runs=%s trigger_run_id=%s pruned_runs=%s pinned_protected=%s",
             keep_recent,
             trigger_run_id,
             len(prune_ids),
+            pinned_protected,
         )
 
     def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
@@ -1931,6 +2291,15 @@ class DiskArtifactStore:
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
         return self._index.list_run_experiments(graph_id=graph_id, limit=limit, offset=offset)
+
+    async def put_checkpoint_pins(self, graph_id: str, pins: List[Tuple[str, str]]) -> None:
+        self._index.put_checkpoint_pins(graph_id, pins)
+
+    async def get_checkpoint_pinned_artifact_ids(self) -> Set[str]:
+        return self._index.get_checkpoint_pinned_artifact_ids()
+
+    async def record_artifact_usage(self, run_id: str, artifact_id: str) -> None:
+        self._index.record_artifact_usage(run_id, artifact_id)
 
     async def delete_run(self, run_id: str, mode: str = "soft", gc: str = "none") -> Dict[str, Any]:
         out = self._index.delete_run(run_id, mode=mode, gc=gc)

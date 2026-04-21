@@ -5,6 +5,10 @@
 		nodeId: string;
 		nodeName: string;
 		checkpoint: CheckpointRecord;
+		depth?: number;
+		isPromoted?: boolean;
+		componentPath?: string;
+		removable?: boolean;
 	};
 
 	export let rows: CheckpointPanelRow[] = [];
@@ -29,6 +33,8 @@
 		if (!trimmed || !onRename) return;
 		onRename(nodeId, trimmed);
 	}
+
+	let lastComponentPath = '';
 </script>
 
 <section class="checkpoint-panel" aria-label="Checkpoint Registry">
@@ -56,22 +62,42 @@
 			</thead>
 			<tbody>
 				{#each rows as row (row.nodeId)}
-					<tr>
-						<td>{row.nodeName}</td>
+					{#if row.isPromoted && row.componentPath && row.componentPath !== lastComponentPath}
+						<tr class="component-group-header">
+							<td colspan="5">{row.componentPath}</td>
+						</tr>
+						{@const lastComponentPath = row.componentPath}
+					{/if}
+					<tr class={row.isPromoted ? 'promoted-row' : ''}>
+						<td style="padding-left: {8 + (row.depth ?? 0) * 16}px;">
+							{#if row.isPromoted}
+								<span class="promoted-label" title="Internal node of {row.componentPath ?? 'component'}">{row.nodeName}</span>
+							{:else}
+								{row.nodeName}
+							{/if}
+						</td>
 						<td>
-							<input
-								aria-label={`Checkpoint name ${row.nodeId}`}
-								value={row.checkpoint.name}
-								on:change={(event) =>
-									handleRename(row.nodeId, (event.currentTarget as HTMLInputElement)?.value)}
-							/>
+							{#if row.removable !== false}
+								<input
+									aria-label={`Checkpoint name ${row.nodeId}`}
+									value={row.checkpoint.name}
+									on:change={(event) =>
+										handleRename(row.nodeId, (event.currentTarget as HTMLInputElement)?.value)}
+								/>
+							{:else}
+								<span class="readonly-name">{row.checkpoint.name}</span>
+							{/if}
 						</td>
 						<td>{row.checkpoint.createdAt}</td>
 						<td>
 							<span class={`badge ${badgeClass(row.checkpoint.staleness)}`}>{row.checkpoint.staleness}</span>
 						</td>
 						<td>
-							<button type="button" on:click={() => onRemove?.(row.nodeId)}>Remove</button>
+							{#if row.removable !== false}
+								<button type="button" on:click={() => onRemove?.(row.nodeId)}>Remove</button>
+							{:else}
+								<span class="readonly-hint" title="Edit inside the component to modify this checkpoint">internal</span>
+							{/if}
 						</td>
 					</tr>
 				{/each}
@@ -119,5 +145,29 @@
 	.badge-unknown {
 		background: rgba(148, 163, 184, 0.25);
 	}
+	.component-group-header td {
+		font-weight: 600;
+		font-size: 11px;
+		color: rgba(148, 163, 184, 0.8);
+		border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+		padding: 6px 6px 3px 6px;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+	}
+	.promoted-row {
+		opacity: 0.92;
+	}
+	.promoted-label {
+		color: rgba(148, 163, 184, 0.9);
+	}
+	.readonly-name {
+		color: rgba(148, 163, 184, 0.7);
+		font-style: italic;
+		font-size: 12px;
+	}
+	.readonly-hint {
+		font-size: 10px;
+		color: rgba(148, 163, 184, 0.6);
+		font-style: italic;
+	}
 </style>
-

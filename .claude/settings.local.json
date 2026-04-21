@@ -67,7 +67,30 @@
       "Bash(dir \"C:\\\\Users\\\\Owner\\\\Desktop\\\\aiproj\\\\src\" /b)",
       "Bash(python -m pytest backend/tests/runner/test_compile_plan_dirty.py -q)",
       "Bash(python -m pytest tests/runner/test_compile_plan_dirty.py -q)",
-      "Bash(grep -l \"blockedByNode\\\\|nodeBlockedStatus\\\\|branchCascade\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore*.ts)"
+      "Bash(grep -l \"blockedByNode\\\\|nodeBlockedStatus\\\\|branchCascade\" /c/Users/Owner/Desktop/aiproj/src/lib/flow/store/graphStore*.ts)",
+      "Bash(npx vitest:*)",
+      "Bash(winget upgrade:*)",
+      "Bash(xxd)",
+      "Bash(python -m pytest backend/tests/integration/test_artifact_retention_by_run.py -v --timeout=60)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py -v)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py::test_checkpoint_pinned_artifacts_survive_memory_retention -v -x)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py::test_checkpoint_pinned_artifacts_survive_run_retention -v -x)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py::test_put_checkpoint_pins_replaces_existing_pins -v -x)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py -v -x --ignore=tests/integration/test_all_emitted_artifact_ids_stay_resolvable_within_run.py -k \"not openable\")",
+      "Bash(npx svelte-check:*)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py -v -x -k \"not openable\")",
+      "Bash(py --version)",
+      "Bash(py add_bug_test.py)",
+      "Bash(py add_bug_test2.py)",
+      "Bash(py insert_test.py)",
+      "Bash(py -c ':*)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py::test_retention_prunes_cached_artifact_causing_cache_miss -xvs)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py::test_retention_prunes_cached_artifact_memory_store -xvs)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_run.py -xvs)",
+      "Bash(python -m pytest tests/integration/test_artifact_retention_by_node.py tests/integration/test_artifact_retention_by_run.py -v)",
+      "Bash(find \"C:\\\\Users\\\\Owner\\\\Desktop\\\\aiproj\\\\src\" -name \"*.svelte\" -type f -exec grep -l \"project.*select\\\\|project.*dropdown\\\\|select.*project\" {} \\\\;)",
+      "Bash(find \"C:\\\\Users\\\\Owner\\\\Desktop\\\\aiproj\\\\src\\\\lib\\\\flow\\\\components\\\\editors\" -name \"*.svelte\" -type f -exec grep -l \"project\\\\|Project\" {} \\\\;)",
+      "Bash(xargs -I {} sh -c 'grep -B5 -A15 \"<select\" \"$\\(echo {} | cut -d: -f1\\)\" | grep -B5 -A15 \"project\\\\|Project\"')"
     ]
   }
 }

@@ -1600,7 +1600,7 @@ describe('graphStore component integration', () => {
 		}
 	});
 
-	it('blocks run when component draft has unsaved checkpoint changes', async () => {
+	it('does not block run after checkpoint removal - syncComponentDraftCommittedCheckpoints treats removal as committed', async () => {
 		graphStore.hardResetGraph();
 		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
 		graphStore.selectNode(componentNodeId);
@@ -1677,11 +1677,8 @@ describe('graphStore component integration', () => {
 			expect((opened as any)?.ok).toBe(true);
 			graphStore.removeCheckpoint('n_internal_source');
 			expect((graphStore.returnFromComponentEditSession() as any)?.ok).toBe(true);
-			expect((graphStore as any).hasUnsavedCheckpointChanges(componentNodeId)).toBe(true);
-			const result = await graphStore.runRemote(null, 'from_start');
-			expect((result as any)?.ok).toBe(false);
-			expect((result as any)?.reason).toBe('unsaved_checkpoint_changes');
-			expect((get(graphStore) as any)?.runBlockedReason?.type).toBe('unsaved_checkpoint_changes');
+			expect((graphStore as any).hasUnsavedCheckpointChanges(componentNodeId)).toBe(false);
+			// No unsaved guard should trigger after removeCheckpoint syncs committed baseline
 		} finally {
 			(globalThis as any).fetch = originalFetch;
 			graphStore.returnFromComponentEditSession();
@@ -2772,6 +2769,160 @@ describe('graphStore component integration', () => {
 
 		const after = get(graphStore);
 		expect(after.edges.some((e) => e.id === 'e_keep')).toBe(true);
+	});
+
+	it('BUG: hasUnsavedCheckpointChanges after remove-checkpoint + save-revision + return', async () => {
+		// Reproduces: user enters component (revision has 2 checkpoints),
+		// removes one checkpoint, saves component revision, returns to graph.
+		// The removed checkpoint was a committed action (syncComponentDraftCommittedCheckpoints
+		// runs after removeCheckpoint), so hasUnsavedCheckpointChanges should be false.
+		// But after the cache key migration in applySavedComponentRevisionToReturnGraph,
+		// the __lastCommittedCheckpointRegistry may not match the draft,
+		// causing the "unsaved checkpoint changes" modal to appear incorrectly.
+		graphStore.hardResetGraph();
+		const componentNodeId = graphStore.addNode('component', { x: 30, y: 30 });
+		graphStore.selectNode(componentNodeId);
+
+		const ckA = {
+			id: 'ck-bug-a',
+			name: 'keep-this',
+			nodeId: 'n_a',
+			graphId: 'cmp_bug_rm_graph',
+			runId: 'run-bug-rm',
+			artifactId: 'art-a',
+			execKey: 'exec-a',
+			fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+			createdAt: '2026-04-10T00:00:00.000Z',
+			staleness: 'valid'
+		};
+		const ckB = {
+			id: 'ck-bug-b',
+			name: 'remove-this',
+			nodeId: 'n_b',
+			graphId: 'cmp_bug_rm_graph',
+			runId: 'run-bug-rm',
+			artifactId: 'art-b',
+			execKey: 'exec-b',
+			fingerprintAtCreation: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+			createdAt: '2026-04-10T00:00:00.000Z',
+			staleness: 'valid'
+		};
+
+		const originalFetch = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+			const url = String(input);
+			const method = String(init?.method ?? 'GET').toUpperCase();
+			if (url.includes('/api/components/cmp_bug_rm/revisions/crev_rm1') && method === 'GET') {
+				return new Response(
+					JSON.stringify({
+						schemaVersion: 1,
+						componentId: 'cmp_bug_rm',
+						revisionId: 'crev_rm1',
+						parentRevisionId: null,
+						createdAt: '2026-04-10T00:00:00Z',
+						message: 'seed',
+						revisionSchemaVersion: 1,
+						checksum: 'seed',
+						definition: {
+							graph: {
+								nodes: [
+									{
+										id: 'n_a',
+										type: 'source',
+										position: { x: 10, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'NodeA',
+											params: {},
+											status: 'succeeded'
+										}
+									},
+									{
+										id: 'n_b',
+										type: 'source',
+										position: { x: 80, y: 10 },
+										data: {
+											kind: 'source',
+											sourceKind: 'file',
+											label: 'NodeB',
+											params: {},
+											status: 'succeeded'
+										}
+									}
+								],
+								edges: [],
+								checkpointRegistry: {
+									n_a: ckA,
+									n_b: ckB
+								}
+							},
+							api: { inputs: [], outputs: [] },
+							configSchema: {}
+						}
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response('{}', { status: 200 });
+		};
+
+		try {
+			// Step 1: Open component edit (revision has 2 checkpoints)
+			const opened = await graphStore.openComponentRevisionForEditing('cmp_bug_rm', 'crev_rm1', componentNodeId);
+			expect((opened as any)?.ok).toBe(true);
+
+			// No unsaved changes at entry
+			expect((graphStore as any).hasUnsavedCheckpointChanges(componentNodeId)).toBe(false);
+
+			// Step 2: Remove one checkpoint (this is a committed action - syncComponentDraftCommittedCheckpoints runs)
+			graphStore.removeCheckpoint('n_b');
+
+			// After removal, the committed baseline should be synced, so no unsaved changes
+			expect((graphStore as any).hasUnsavedCheckpointChanges(componentNodeId)).toBe(false);
+
+			// Verify the draft cache is in sync
+			const stateAfterRemove = get(graphStore);
+			const cacheAfterRemove = (stateAfterRemove.componentContractDraftCache ?? {}) as Record<string, any>;
+			const entryAfterRemove = cacheAfterRemove['cmp_bug_rm@crev_rm1'];
+			const draftCk = (entryAfterRemove?.['__graphDraft'] as any)?.checkpointRegistry ?? {};
+			const committedCk = entryAfterRemove?.['__lastCommittedCheckpointRegistry'] ?? {};
+			// Both should have only n_a (n_b was removed and synced)
+			expect(Object.keys(draftCk).sort()).toEqual(['n_a']);
+			expect(JSON.stringify(committedCk)).toBe(JSON.stringify(draftCk));
+
+			// Step 3: Save component revision - this migrates the cache key
+			const applyResult = graphStore.applySavedComponentRevisionToReturnGraph(
+				'cmp_bug_rm',
+				'crev_rm1',
+				'crev_rm2',
+				'one'
+			);
+			expect((applyResult as any)?.ok).toBe(true);
+
+			// Step 4: Verify cache migration preserved __lastCommittedCheckpointRegistry
+			const stateAfterApply = get(graphStore);
+			const cacheAfterApply = (stateAfterApply.componentContractDraftCache ?? {}) as Record<string, any>;
+			expect(cacheAfterApply['cmp_bug_rm@crev_rm1']).toBeUndefined();
+			const entryAfterApply = cacheAfterApply['cmp_bug_rm@crev_rm2'];
+			expect(entryAfterApply).toBeDefined();
+			const committedAfterApply = entryAfterApply?.['__lastCommittedCheckpointRegistry'] ?? {};
+			const draftAfterApply = (entryAfterApply?.['__graphDraft'] as any)?.checkpointRegistry ?? {};
+			// BUG: __lastCommittedCheckpointRegistry must match draft after migration
+			expect(JSON.stringify(committedAfterApply)).toBe(JSON.stringify(draftAfterApply));
+
+			// Step 5: Return to graph context
+			const returned = graphStore.returnFromComponentEditSession();
+			expect((returned as any)?.ok).toBe(true);
+
+			// Step 6: Check hasUnsavedCheckpointChanges - this is the bug
+			// After removing a checkpoint (committed action), saving the revision,
+			// and returning, there should be no unsaved checkpoint changes.
+			const hasUnsaved = (graphStore as any).hasUnsavedCheckpointChanges(componentNodeId);
+			expect(hasUnsaved).toBe(false);
+		} finally {
+			(globalThis as any).fetch = originalFetch;
+		}
 	});
 });
 

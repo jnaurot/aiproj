@@ -771,6 +771,41 @@ type GraphEditDeps = {
 export function createGraphEditManager(deps: GraphEditDeps) {
 	const { update, set, getState, history, persist, applyLocalStaleInvalidation, updateNodeConfig } = deps;
 
+	const COMPONENT_DRAFT_GRAPH_KEY = '__graphDraft';
+	const COMPONENT_DRAFT_LAST_COMMITTED_CHECKPOINTS_KEY = '__lastCommittedCheckpointRegistry';
+
+	/** When in component edit context, sync the committed checkpoint baseline
+	 *  so that checkpoint create/remove actions are treated as committed state
+	 *  rather than "unsaved changes" that would block a parent graph run. */
+	function syncComponentDraftCommittedCheckpoints(): void {
+		const state = getState();
+		const session = state.componentEditSession;
+		if (!session || state.editingContext !== 'component') return;
+		const cacheKey = `${String(session.componentId ?? '').trim()}@${String(session.revisionId ?? '').trim()}`;
+		if (!cacheKey) return;
+		// Use the current store checkpointRegistry (which includes the just-created/removed
+		// checkpoint) rather than the stale draft cache, since inside component edit the
+		// active registry IS the component's registry.
+		const currentCheckpoints = structuredClone(state.checkpointRegistry ?? {});
+		update((s) => {
+			const nextCache = { ...(s.componentContractDraftCache ?? {}) };
+			const existingEntry = (nextCache[cacheKey] as Record<string, unknown>) ?? {};
+			// Also update the draft graph's checkpointRegistry to stay in sync.
+			const existingGraphDraft = (existingEntry as Record<string, unknown>)[COMPONENT_DRAFT_GRAPH_KEY];
+			const nextDraftGraph = existingGraphDraft && typeof existingGraphDraft === 'object'
+				? { ...(existingGraphDraft as Record<string, unknown>), checkpointRegistry: currentCheckpoints }
+				: { nodes: [], edges: [], checkpointRegistry: currentCheckpoints };
+			nextCache[cacheKey] = {
+				...existingEntry,
+				[COMPONENT_DRAFT_GRAPH_KEY]: nextDraftGraph,
+				[COMPONENT_DRAFT_LAST_COMMITTED_CHECKPOINTS_KEY]: currentCheckpoints
+			};
+			const next = withGraphMeta({ ...s, componentContractDraftCache: nextCache });
+			persist(next);
+			return next;
+		});
+	}
+
 	function applyGraphDocument(
 		graph: { nodes: unknown[]; edges: unknown[]; checkpointRegistry?: CheckpointRegistry },
 		graphIdOverride?: string | null
@@ -1874,6 +1909,8 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		return { ok: true, checkpoint };
 	}
 
+	syncComponentDraftCommittedCheckpoints();
+
 	function removeCheckpoint(nodeId: string): { ok: true } {
 		update((s) => {
 			const checkpointRegistry = { ...(s.checkpointRegistry ?? {}) };
@@ -1885,6 +1922,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			persist(next);
 			return next;
 		});
+		syncComponentDraftCommittedCheckpoints();
 		return { ok: true };
 	}
 

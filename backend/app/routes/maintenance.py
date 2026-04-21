@@ -104,6 +104,7 @@ def _wipe_disk_backends(rt) -> dict:
         cur.execute("DELETE FROM runs")
         cur.execute("DELETE FROM snapshots")
         cur.execute("DELETE FROM run_experiments")
+        cur.execute("DELETE FROM checkpoint_pins")
         idx_conn.commit()
         details["artifactRowsCleared"] = True
     else:
@@ -145,7 +146,7 @@ def _wipe_memory_backends(rt) -> dict:
     cache = getattr(rt, "cache", None)
     events = getattr(rt, "event_store", None)
 
-    for attr in ("_meta", "_blob", "_runs", "_consumers", "_snapshots", "_experiments"):
+    for attr in ("_meta", "_blob", "_runs", "_consumers", "_snapshots", "_experiments", "_checkpoint_pins"):
         ref = getattr(store, attr, None)
         if isinstance(ref, dict):
             ref.clear()

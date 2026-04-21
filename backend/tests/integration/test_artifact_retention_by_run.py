@@ -243,3 +243,226 @@ async def test_all_emitted_artifact_ids_stay_resolvable_within_run(monkeypatch, 
 	assert len(artifact_ids) >= 8
 	for artifact_id in artifact_ids:
 		assert await artifact_store.exists(artifact_id), f"artifact missing after run completion: {artifact_id}"
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_pinned_artifacts_survive_run_retention(monkeypatch, tmp_path):
+	"""Checkpoint-pinned artifacts must not be deleted by run-scoped retention."""
+	monkeypatch.setenv("ARTIFACT_RETENTION_MODE", "by_run")
+	monkeypatch.setenv("ARTIFACT_KEEP_RECENT_RUNS", "2")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_FAILED", "1")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_CANCELED", "1")
+
+	store = DiskArtifactStore(tmp_path / "artifacts-checkpoint-retention")
+	graph_id = "graph-checkpoint"
+
+	# Run 1: produces the checkpoint artifact.
+	await store.record_run("run-1", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-checkpoint-src", run_id="run-1", graph_id=graph_id, node_id="node-source"),
+		b'{"checkpoint":true}',
+	)
+	await store.write(
+		_mk_artifact(artifact_id="aid-other-src", run_id="run-1", graph_id=graph_id, node_id="node-other"),
+		b'{"other":true}',
+	)
+	await store.update_run_status("run-1", "succeeded")
+
+	# Run 2: newer run that would push run-1 out of retention window.
+	await store.record_run("run-2", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run2-src", run_id="run-2", graph_id=graph_id, node_id="node-source"),
+		b'{"run2":true}',
+	)
+	await store.update_run_status("run-2", "succeeded")
+
+	# Pin the checkpoint artifact so retention should protect it.
+	await store.put_checkpoint_pins(graph_id, [("aid-checkpoint-src", "node-source")])
+
+	# Verify both artifacts exist before retention sweep.
+	assert await store.exists("aid-checkpoint-src")
+	assert await store.exists("aid-other-src")
+	assert await store.exists("aid-run2-src")
+
+	# Run 3: triggers retention sweep. keep_recent=2 means only run-2 and
+	# run-3 are kept; run-1 would normally be pruned entirely.
+	await store.record_run("run-3", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run3-src", run_id="run-3", graph_id=graph_id, node_id="node-source"),
+		b'{"run3":true}',
+	)
+	await store.update_run_status("run-3", "succeeded")
+
+	# The checkpoint artifact from run-1 must survive retention.
+	assert await store.exists("aid-checkpoint-src"), "checkpoint-pinned artifact was pruned by retention"
+	# The other artifact from run-1 should be pruned (not pinned).
+	assert not await store.exists("aid-other-src"), "non-pinned artifact from old run should have been pruned"
+	# Artifacts from recent runs remain.
+	assert await store.exists("aid-run2-src")
+	assert await store.exists("aid-run3-src")
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_pinned_artifacts_survive_memory_retention(monkeypatch):
+	"""Same as disk test, but for MemoryArtifactStore."""
+	monkeypatch.setenv("ARTIFACT_RETENTION_MODE", "by_run")
+	monkeypatch.setenv("ARTIFACT_KEEP_RECENT_RUNS", "2")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_FAILED", "1")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_CANCELED", "1")
+
+	store = MemoryArtifactStore()
+	graph_id = "graph-checkpoint-mem"
+
+	await store.record_run("run-1", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-checkpoint-src", run_id="run-1", graph_id=graph_id, node_id="node-source"),
+		b'{"checkpoint":true}',
+	)
+	await store.write(
+		_mk_artifact(artifact_id="aid-other-src", run_id="run-1", graph_id=graph_id, node_id="node-other"),
+		b'{"other":true}',
+	)
+	await store.update_run_status("run-1", "succeeded")
+
+	await store.record_run("run-2", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run2-src", run_id="run-2", graph_id=graph_id, node_id="node-source"),
+		b'{"run2":true}',
+	)
+	await store.update_run_status("run-2", "succeeded")
+
+	await store.put_checkpoint_pins(graph_id, [("aid-checkpoint-src", "node-source")])
+
+	assert await store.exists("aid-checkpoint-src")
+	assert await store.exists("aid-other-src")
+	assert await store.exists("aid-run2-src")
+
+	await store.record_run("run-3", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run3-src", run_id="run-3", graph_id=graph_id, node_id="node-source"),
+		b'{"run3":true}',
+	)
+	await store.update_run_status("run-3", "succeeded")
+
+	assert await store.exists("aid-checkpoint-src"), "checkpoint-pinned artifact was pruned by retention"
+	assert not await store.exists("aid-other-src"), "non-pinned artifact from old run should have been pruned"
+	assert await store.exists("aid-run2-src")
+	assert await store.exists("aid-run3-src")
+
+
+@pytest.mark.asyncio
+async def test_put_checkpoint_pins_replaces_existing_pins(monkeypatch, tmp_path):
+	"""put_checkpoint_pins replaces all pins for a graph_id, not appends."""
+	monkeypatch.setenv("ARTIFACT_RETENTION_MODE", "off")
+	store = MemoryArtifactStore()
+
+	await store.put_checkpoint_pins("g1", [("aid-1", "node-1"), ("aid-2", "node-2")])
+	pins_1 = await store.get_checkpoint_pinned_artifact_ids()
+	assert "aid-1" in pins_1
+	assert "aid-2" in pins_1
+
+	# Replace: node-1 stays, node-2 is removed, node-3 is added.
+	await store.put_checkpoint_pins("g1", [("aid-1", "node-1"), ("aid-3", "node-3")])
+	pins_2 = await store.get_checkpoint_pinned_artifact_ids()
+	assert "aid-1" in pins_2
+	assert "aid-3" in pins_2
+	assert "aid-2" not in pins_2
+
+
+@pytest.mark.asyncio
+async def test_retention_prunes_cached_artifact_causing_cache_miss(monkeypatch, tmp_path):
+	"""by_run mode: when a node produces a genuinely new artifact each run
+	(different exec_key), the oldest artifact is pruned once it falls outside
+	the retention window.  This is expected — the artifact has been superseded.
+	Use by_node mode to avoid this issue with partial / selective runs.
+	"""
+	monkeypatch.setenv("ARTIFACT_RETENTION_MODE", "by_run")
+	monkeypatch.setenv("ARTIFACT_KEEP_RECENT_RUNS", "2")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_FAILED", "1")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_CANCELED", "1")
+
+	store = DiskArtifactStore(tmp_path / "artifacts-cache-miss")
+	graph_id = "graph-cache-miss"
+
+	# Run 1: produces a cacheable artifact for a transform node.
+	# exec_key = artifact_id (the cache identity convention).
+	await store.record_run("run-cache-1", "running")
+	cache_artifact = _mk_artifact(
+		artifact_id="exec-transform-node-a-v1",
+		run_id="run-cache-1",
+		graph_id=graph_id,
+		node_id="node-a",
+	)
+	await store.write(cache_artifact, b'{"result": "cached"}')
+	await store.update_run_status("run-cache-1", "succeeded")
+
+	# Verify: the cacheable artifact exists before retention.
+	assert await store.exists("exec-transform-node-a-v1"), "cacheable artifact should exist before retention"
+
+	# Run 2: newer run (within retention window).
+	await store.record_run("run-cache-2", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run2", run_id="run-cache-2", graph_id=graph_id, node_id="node-a"),
+		b'{"result": "run2"}',
+	)
+	await store.update_run_status("run-cache-2", "succeeded")
+
+	# Run 3: pushes run-1 out of the keep_recent=2 window.
+	await store.record_run("run-cache-3", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run3", run_id="run-cache-3", graph_id=graph_id, node_id="node-a"),
+		b'{"result": "run3"}',
+	)
+	await store.update_run_status("run-cache-3", "succeeded")
+
+	# Expected by_run mode behaviour: run-1 is outside the keep_recent=2 window
+	# and its artifact (exec-transform-node-a-v1) has been superseded by newer
+	# artifacts for the same node.  by_run retention correctly removes it.
+	# Note: by_node mode is immune to this because it keeps the N most-recent
+	# artifacts per node regardless of which run produced them.
+	assert not await store.exists("exec-transform-node-a-v1"), (
+		"by_run mode should prune superseded artifacts from runs outside the retention window"
+	)
+
+
+@pytest.mark.asyncio
+async def test_retention_prunes_cached_artifact_memory_store(monkeypatch):
+	"""Same as the disk test but for MemoryArtifactStore: by_run mode removes
+	superseded artifacts from runs outside the retention window."""
+	monkeypatch.setenv("ARTIFACT_RETENTION_MODE", "by_run")
+	monkeypatch.setenv("ARTIFACT_KEEP_RECENT_RUNS", "2")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_FAILED", "1")
+	monkeypatch.setenv("ARTIFACT_RETENTION_INCLUDE_CANCELED", "1")
+
+	store = MemoryArtifactStore()
+	graph_id = "graph-cache-miss-mem"
+
+	await store.record_run("run-cache-1", "running")
+	cache_artifact = _mk_artifact(
+		artifact_id="exec-transform-node-a-v1",
+		run_id="run-cache-1",
+		graph_id=graph_id,
+		node_id="node-a",
+	)
+	await store.write(cache_artifact, b'{"result": "cached"}')
+	await store.update_run_status("run-cache-1", "succeeded")
+
+	assert await store.exists("exec-transform-node-a-v1")
+
+	await store.record_run("run-cache-2", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run2", run_id="run-cache-2", graph_id=graph_id, node_id="node-a"),
+		b'{"result": "run2"}',
+	)
+	await store.update_run_status("run-cache-2", "succeeded")
+
+	await store.record_run("run-cache-3", "running")
+	await store.write(
+		_mk_artifact(artifact_id="aid-run3", run_id="run-cache-3", graph_id=graph_id, node_id="node-a"),
+		b'{"result": "run3"}',
+	)
+	await store.update_run_status("run-cache-3", "succeeded")
+
+	assert not await store.exists("exec-transform-node-a-v1"), (
+		"by_run mode should prune superseded artifacts from runs outside the retention window"
+	)

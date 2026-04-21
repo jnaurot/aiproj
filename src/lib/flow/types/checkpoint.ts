@@ -50,6 +50,35 @@ export type CheckpointRecord = {
 export type CheckpointRegistry = Record<string, CheckpointRecord>;
 
 /**
+ * Metadata for a checkpoint promoted from a component's internal registry
+ * into a parent graph's checkpoint registry. Promoted entries use a
+ * `cmp:componentNodeId:innerNodeId` key in the parent registry.
+ */
+export type CheckpointPromotionSource = {
+	componentNodeId: string;
+	componentId: string;
+	revisionId: string;
+	innerNodeId: string;
+};
+
+/** Parse a `cmp:componentNodeId:innerNodeId` key into its parts. */
+export function parsePromotedCheckpointKey(
+	key: string
+): { componentNodeId: string; innerNodeId: string } | null {
+	const raw = String(key ?? '').trim();
+	if (!raw.startsWith('cmp:')) return null;
+	const rest = raw.slice(4);
+	const sep = rest.indexOf(':');
+	if (sep <= 0) return null;
+	return { componentNodeId: rest.slice(0, sep), innerNodeId: rest.slice(sep + 1) };
+}
+
+/** Build a `cmp:componentNodeId:innerNodeId` key from its parts. */
+export function buildPromotedCheckpointKey(componentNodeId: string, innerNodeId: string): string {
+	return `cmp:${componentNodeId}:${innerNodeId}`;
+}
+
+/**
  * Payload shape sent in run request replacing legacy pin hints.
  */
 export type CheckpointExecutionHints = {

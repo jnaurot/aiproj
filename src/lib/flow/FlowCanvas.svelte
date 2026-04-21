@@ -26,6 +26,7 @@
 	import CheckpointRegistryPanel, {
 		type CheckpointPanelRow
 	} from '$lib/flow/components/panels/CheckpointRegistryPanel.svelte';
+	import { buildCheckpointPanelRows } from '$lib/flow/components/panels/buildCheckpointPanelRows';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
 	import SchemaPlaneOverlay from '$lib/flow/components/ui/SchemaPlaneOverlay.svelte';
@@ -569,6 +570,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let importFileInput: HTMLInputElement | null = null;
 	let componentEditEntrySnapshotKey: string | null = null;
 	let componentEditEntryContractSnapshotKey: string | null = null;
+	let componentEditEntryCheckpointSnapshotKey: string | null = null;
 	let componentEditEntrySessionKey: string | null = null;
 	let lastCenteredComponentSessionKey = '';
 	let currentComponentSessionKey = '';
@@ -902,9 +904,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: currentComponentContractSnapshotKey = isComponentEditContext
 		? JSON.stringify($graphStore.componentEditSession?.contractDraftParams ?? {})
 		: '';
+	$: currentCheckpointSnapshotKey = JSON.stringify(($graphStore as any)?.checkpointRegistry ?? {});
 	$: if (!isComponentEditContext) {
 		componentEditEntrySnapshotKey = null;
 		componentEditEntryContractSnapshotKey = null;
+		componentEditEntryCheckpointSnapshotKey = null;
 		componentEditEntrySessionKey = null;
 		lastCenteredComponentSessionKey = '';
 	} else if (
@@ -913,6 +917,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	) {
 		componentEditEntrySnapshotKey = currentGraphSnapshotKey;
 		componentEditEntryContractSnapshotKey = currentComponentContractSnapshotKey;
+		componentEditEntryCheckpointSnapshotKey = currentCheckpointSnapshotKey;
 		componentEditEntrySessionKey = currentComponentSessionKey;
 	}
 	$: if (
@@ -928,7 +933,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		(Boolean($graphStore.inspector.dirty) ||
 			(componentEditEntrySnapshotKey != null && componentEditEntrySnapshotKey !== currentGraphSnapshotKey) ||
 			(componentEditEntryContractSnapshotKey != null &&
-				componentEditEntryContractSnapshotKey !== currentComponentContractSnapshotKey));
+				componentEditEntryContractSnapshotKey !== currentComponentContractSnapshotKey) ||
+			(componentEditEntryCheckpointSnapshotKey != null &&
+				componentEditEntryCheckpointSnapshotKey !== currentCheckpointSnapshotKey));
 	$: runLogFilterPredicate = buildRunLogFilterPredicate(runLogFilter);
 	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
 		const nodeName = String(nodeLabelById.get(String(entry.nodeId ?? '')) ?? '');
@@ -1045,20 +1052,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		0
 	);
 	$: runMonitorGlobalStalled = Boolean(($graphStore.queueRuntime?.schedulerSnapshot as any)?.stalled ?? false);
-	$: checkpointPanelRows = Object.entries(($graphStore.checkpointRegistry ?? {}) as Record<string, any>)
-		.map(([nodeId, checkpoint]) => {
-			const nodeName =
-				String(
-					($graphStore.nodes ?? []).find((node) => String((node as any)?.id ?? '') === nodeId)?.data?.label ??
-						nodeId
-				).trim() || nodeId;
-			return {
-				nodeId,
-				nodeName,
-				checkpoint
-			} as CheckpointPanelRow;
-		})
-		.sort((a, b) => String(b.checkpoint?.createdAt ?? '').localeCompare(String(a.checkpoint?.createdAt ?? '')));
+	$: checkpointPanelRows = buildCheckpointPanelRows(
+		($graphStore.checkpointRegistry ?? {}) as Record<string, any>,
+		($graphStore.nodes ?? []) as any,
+		($graphStore.componentContractDraftCache ?? {}) as Record<string, any>,
+		$graphStore.componentEditSession
+	);
 
 	function removeCheckpointFromPanel(nodeId: string): void {
 		graphStore.removeCheckpoint(String(nodeId ?? '').trim());
@@ -3583,6 +3582,7 @@ async function returnFromComponentEditMode() {
 			}
 			componentEditEntrySnapshotKey = currentGraphSnapshotKey;
 			componentEditEntryContractSnapshotKey = currentComponentContractSnapshotKey;
+			componentEditEntryCheckpointSnapshotKey = currentCheckpointSnapshotKey;
 			return true;
 		} catch (error) {
 			const failure = summarizeComponentPublishFailure(error, componentId, baseRevisionId);
@@ -4836,8 +4836,10 @@ async function returnFromComponentEditMode() {
 									<label class="mono" for="node-doc-planes-expansion-delay-ms">Plane expansion</label>
 									<TogglePill
 										bind:value={planeExpansionEnabled}
-										on:click={() => {
-											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', planeExpansionEnabled ? '0' : '1');
+										on:toggle={async (event) => {
+											const enabled = Boolean((event as CustomEvent<{ value?: boolean }>)?.detail?.value);
+											setRuntimeEnvDraftValue('NODE_DOC_PLANES_EXPANSION_ENABLED', enabled ? '1' : '0');
+											void applyRuntimeEnvVar('NODE_DOC_PLANES_EXPANSION_ENABLED');
 										}}
 									/>
 									<input
@@ -5914,7 +5916,7 @@ async function returnFromComponentEditMode() {
 														<span>processed</span>
 														<span>pending</span>
 														<span>depth</span>
-														<span>blocked</span>
+														<span>reason</span>
 													</div>
 													{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
 														<button
@@ -5924,14 +5926,7 @@ async function returnFromComponentEditMode() {
 															on:click={() => focusNodeFromMonitor(row.nodeId)}
 															title={`Focus ${row.label}`}
 														>
-															<span class="runMonitorNodeName">
-																{row.label}
-																{#if row.isLlmHolder}
-																	<span class="mono"> (llm-holder)</span>
-																{:else if row.isLlmWaiting}
-																	<span class="mono"> (llm-wait)</span>
-																{/if}
-															</span>
+															<span class="runMonitorNodeName">{row.label}</span>
 															<span>
 																{row.lifecycle}
 																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
@@ -5946,7 +5941,7 @@ async function returnFromComponentEditMode() {
 															</span>
 															<span>{row.pendingInputCount}</span>
 															<span>{row.inboundDepth}</span>
-															<span>{row.blockedReasonCode ?? '-'}</span>
+															<span class={row.displayReason ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}>{row.displayReason}</span>
 														</button>
 													{/each}
 												</div>
@@ -8103,6 +8098,18 @@ async function returnFromComponentEditMode() {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.runMonitorReason {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-size: 10px;
+	}
+
+	.runMonitorReasonActive {
+		color: #f2cc60;
 	}
 
 	.runMonitorEdgeId,

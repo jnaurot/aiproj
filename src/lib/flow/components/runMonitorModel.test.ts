@@ -86,6 +86,8 @@ describe('runMonitorModel', () => {
 		expect(modelRow?.lifecycle).toBe('running');
 		expect(modelRow?.execution).toBe('running');
 		expect(modelRow?.consumeMode).toBe('once');
+		// running + llm-holder: reason shows llm-hold, not "-"
+		expect(modelRow?.displayReason).toBe('llm-hold');
 		expect(letterRow?.isBlocked).toBe(true);
 		expect(letterRow?.blockedReasonCode).toBe('WAITING_REQUIRED_PARAM');
 		expect(letterRow?.isWaiting).toBe(true);
@@ -93,6 +95,8 @@ describe('runMonitorModel', () => {
 		expect(letterRow?.inboundDepth).toBe(4);
 		expect(letterRow?.freshness).toBe('stale');
 		expect(letterRow?.terminalReasonCode).toBe(null);
+		// blocked reason takes precedence over llm-wait
+		expect(letterRow?.displayReason).toBe('WAITING_REQUIRED_PARAM');
 	});
 
 	it('builds edge rows with queue metric details and labels', () => {
@@ -269,6 +273,7 @@ describe('runMonitorModel', () => {
 		});
 		expect(rows[0]?.blockedReasonCode).toBe('CONTROL_GATE_BLOCKED');
 		expect(rows[0]?.blockedPlane).toBe('control');
+		expect(rows[0]?.displayReason).toBe('CONTROL_GATE_BLOCKED');
 	});
 
 	it('surfaces control-plane terminal reason for live monitor rows', () => {

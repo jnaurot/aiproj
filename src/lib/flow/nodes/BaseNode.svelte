@@ -162,6 +162,10 @@ import MemoIndicator from './MemoIndicator.svelte';
 	$: effectiveTargetHandles = resolveNodeHandles(data, 'in', mergedTargetHandles, inputType);
 	$: effectiveSourceHandles = resolveNodeHandles(data, 'out', mergedSourceHandles, outputType);
 	const updateNodeInternals = useUpdateNodeInternals();
+	// const viewport = useViewport();
+	// // Keep the selection outline visually fixed at ~3 screen-pixels regardless of
+	// // canvas zoom.  Without this the outline shrinks to nothing when zoomed out.
+	// $: selectedOutlineWidth = selected ? `${3 / Math.max(0.05, ($viewport?.zoom ?? 1))}px` : '0';
 	let lastLayoutSignature = '';
 	$: {
 		const nextLayoutSignature = `${String(id)}::in=${effectiveTargetHandles.map((h) => h.id).join('|')}::out=${effectiveSourceHandles.map((h) => h.id).join('|')}`;
@@ -300,7 +304,7 @@ import MemoIndicator from './MemoIndicator.svelte';
 	}
 
 	.node.selected {
-		outline: 2px solid #4b8cff;
+		outline: 3px solid #4b8cff;
 	}
 
 	.title {

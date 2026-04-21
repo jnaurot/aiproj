@@ -1473,21 +1473,6 @@
 
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
-	{#if isComponentEditContext && componentSessionContractParams && !isComponent}
-		<div class="guidedAssistCard">
-			<div class="guidedAssistHead">Component Contract (Authoring)</div>
-			<div class="guidedAssistDesc">
-				Editing published contract for this component revision while inside internals.
-			</div>
-		</div>
-		<ComponentEditor
-			{selectedNode}
-			params={componentSessionContractParams}
-			onDraft={onComponentSessionContractDraft}
-			editingContext="component"
-			showComponentMetaSection={false}
-		/>
-	{/if}
 	{#if canSaveCheckpoint || currentNodeCheckpoint}
 		<div class="checkpointCard">
 			<div class="checkpointHead">
@@ -1525,6 +1510,21 @@
 				{/if}
 			{/if}
 		</div>
+	{/if}
+	{#if isComponentEditContext && componentSessionContractParams && !isComponent}
+		<div class="guidedAssistCard">
+			<div class="guidedAssistHead">Component Contract (Authoring)</div>
+			<div class="guidedAssistDesc">
+				Editing published contract for this component revision while inside internals.
+			</div>
+		</div>
+		<ComponentEditor
+			{selectedNode}
+			params={componentSessionContractParams}
+			onDraft={onComponentSessionContractDraft}
+			editingContext="component"
+			showComponentMetaSection={false}
+		/>
 	{/if}
 	{#if sourceObservability}
 		<div class="guidedAssistCard">

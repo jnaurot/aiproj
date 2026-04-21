@@ -811,6 +811,11 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			for (const [nodeId, rawBinding] of Object.entries(nodeBindings)) {
 				const prevBinding = _normalizeBinding(rawBinding, nodeId);
 				if (prevBinding.memoState == null && prevBinding.checkpointable !== true) continue;
+				// Only reset memo/checkpoint state for nodes that are actually being
+				// re-executed in this run.  Non-planned nodes (e.g. siblings that were
+				// resolved via cache in an earlier run) must keep their memoState so
+				// that the inspector can still offer the "Save checkpoint" action.
+				if (!evtPlanned.has(nodeId)) continue;
 				nodeBindings[nodeId] = {
 					...prevBinding,
 					memoState: undefined,

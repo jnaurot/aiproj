@@ -87,6 +87,9 @@ export type RunMonitorNodeRow = {
 	isWaiting: boolean;
 	isLlmHolder: boolean;
 	isLlmWaiting: boolean;
+	/** Human-visible reason why this node is not making progress. Empty string
+	 *  when the node is running or done — never the literal string "-". */
+	displayReason: string;
 };
 
 export type RunMonitorEdgeRow = {
@@ -381,6 +384,26 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const rejectedCount = Math.max(0, Number(nodeCounter?.rejected ?? 0));
 		const isLlmWaiting =
 			llmWaitingNodeIds.has(nodeId) || (llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId);
+		const isLlmHolder = llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId;
+
+		// Priority: blocked reason > llm-wait > llm-hold > stale (when idle/waiting) > ""
+		// Never emit the literal "-" — an empty string means "nothing to explain".
+		const effectiveBlockedCode = blockedReasonCode || schedulerRow?.lastBlockedReasonCode || '';
+		let displayReason = '';
+		if (effectiveBlockedCode) {
+			displayReason = effectiveBlockedCode;
+		} else if (isLlmWaiting) {
+			displayReason = 'llm-wait';
+		} else if (isLlmHolder) {
+			displayReason = 'llm-hold';
+		} else if (
+			projection.freshness === 'stale' &&
+			lifecycle !== 'running' &&
+			lifecycle !== 'succeeded' &&
+			lifecycle !== 'failed'
+		) {
+			displayReason = 'stale';
+		}
 
 		return {
 			nodeId,
@@ -404,8 +427,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			terminalReasonCode: terminalReasonCode || null,
 			isBlocked: Boolean(blockedReasonCode),
 			isWaiting: pendingInputCount > 0 && inflight === 0,
-			isLlmHolder: llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId,
-			isLlmWaiting
+			isLlmHolder,
+			isLlmWaiting,
+			displayReason
 		};
 	});
 }

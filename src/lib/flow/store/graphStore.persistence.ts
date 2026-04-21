@@ -64,6 +64,7 @@ import type {
 	NormalizedNodeBinding,
 } from './graphStore.types';
 import { INITIAL_INSPECTOR } from './graphStore.types';
+import { buildPromotedCheckpointKey, parsePromotedCheckpointKey, type CheckpointRecord } from '$lib/flow/types/checkpoint';
 
 // Suppress unused import warning — _buildHardResetState kept for potential future use
 void (_buildHardResetState as unknown);
@@ -1531,8 +1532,19 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 				return { ok: false, reason: 'invalid_payload' as const, error: String(applied.reason ?? 'invalid_payload') };
 			}
 			update((s) => {
+				// Strip promoted cmp: entries that belong to the component being opened —
+				// they'll be represented natively inside the component edit session.
+				const entryPrefix = entryId ? `cmp:${entryId}:` : '';
+				const filteredCheckpointRegistry = entryPrefix
+					? Object.fromEntries(
+							Object.entries((s.checkpointRegistry ?? {}) as Record<string, unknown>).filter(
+								([key]) => !key.startsWith(entryPrefix)
+							)
+						)
+					: (s.checkpointRegistry ?? {});
 				const next = {
 					...s,
+					checkpointRegistry: filteredCheckpointRegistry,
 					editingContext: 'component' as const,
 					componentEditSession: {
 						componentId: cid,
@@ -1619,6 +1631,16 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					internalNodeIds.has(String(nodeId ?? '').trim())
 				)
 			) as Record<string, unknown>;
+			const entryNodeId = String(session.entryNodeId ?? '').trim();
+			const promotedCheckpoints: Record<string, CheckpointRecord> = {};
+			for (const [innerNodeId, rawCheckpoint] of Object.entries(internalCheckpoints)) {
+				const checkpoint = rawCheckpoint as CheckpointRecord;
+				const promotedKey = entryNodeId ? buildPromotedCheckpointKey(entryNodeId, innerNodeId) : innerNodeId;
+				promotedCheckpoints[promotedKey] = {
+					...checkpoint,
+					nodeId: promotedKey
+				};
+			}
 			const nextEditingContext: EditorContext = parentSession ? 'component' : 'graph';
 			const existingDraftCacheEntry =
 				cacheKey && s.componentContractDraftCache && typeof s.componentContractDraftCache === 'object'
@@ -1691,7 +1713,10 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 					structuredClone(snapshot.nodeBindings) as any
 				),
 				activeRunId: snapshot.activeRunId,
-				checkpointRegistry: structuredClone(snapshot.checkpointRegistry ?? {}),
+				checkpointRegistry: {
+						...structuredClone(snapshot.checkpointRegistry ?? {}),
+						...promotedCheckpoints
+					},
 				editingContext: nextEditingContext,
 				componentEditSession: parentSession,
 				componentContractDraftCache: cacheKey
@@ -1727,7 +1752,8 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 							...(((session.contractDraftParams ?? {}) as Record<string, any>).componentRef ?? {}),
 							componentId: String(session.componentId ?? '').trim(),
 							revisionId: rid
-						}
+						},
+
 					})
 				},
 				logs: [
@@ -1929,6 +1955,20 @@ export function createPersistenceManager(deps: PersistenceDeps) {
 						logs: nextSnapshotLogs
 					}
 				},
+				componentContractDraftCache: (() => {
+					const prevCache = (s.componentContractDraftCache ?? {}) as Record<string, unknown>;
+					const oldKey = `${cid}@${fromRid}`;
+					const newKey = `${cid}@${toRid}`;
+					const oldEntry = oldKey in prevCache ? (prevCache[oldKey] as Record<string, unknown>) : null;
+					// Migrate the old cache entry (including __lastCommittedCheckpointRegistry)
+					// to the new key so the committed baseline is not lost when the revision changes.
+					if (oldEntry && !(newKey in prevCache)) {
+						const nextCache = { ...prevCache, [newKey]: oldEntry };
+						delete (nextCache as Record<string, unknown>)[oldKey];
+						return nextCache;
+					}
+					return prevCache;
+				})(),
 				logs: [
 					...(Array.isArray(s.logs) ? s.logs : []),
 					{

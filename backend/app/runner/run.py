@@ -4203,6 +4203,16 @@ async def run_graph(
                 ),
             },
         )
+        # Pin checkpoint artifacts so retention pruning protects them.
+        _pin_fn = getattr(context.artifact_store, "put_checkpoint_pins", None)
+        if callable(_pin_fn) and pinned_artifact_hints:
+            _pins = [
+                (str(v.get("artifactId") or "").strip(), nid)
+                for nid, v in pinned_artifact_hints.items()
+                if str(v.get("artifactId") or "").strip()
+            ]
+            if _pins:
+                await _pin_fn(context.graph_id, _pins)
         plan = compile_plan(
             execution_graph,
             run_from,
@@ -5112,6 +5122,13 @@ async def run_graph(
                         exec_key=str(bound_exec_key or pinned_exec_key or ""),
                         artifact_id=str(bound_artifact_id or pinned_artifact_id or ""),
                     )
+                    # Record usage of checkpoint artifacts so they survive
+                    # retention sweeps while this run is in the keep window.
+                    _checkpoint_artifact_ids = {str(p.get("artifactId") or "").strip() for p in output_pairs}
+                    _checkpoint_artifact_ids.add(str(pinned_artifact_id or "").strip())
+                    for _caid in _checkpoint_artifact_ids:
+                        if _caid:
+                            await context.artifact_store.record_artifact_usage(run_id, _caid)
                     for pair in output_pairs:
                         handle_name = str(pair.get("handle") or "").strip() or "out"
                         artifact_id = str(pair.get("artifactId") or "").strip()
@@ -5514,6 +5531,10 @@ async def run_graph(
                         exec_key=str(exec_key or ""),
                         artifact_id=str(cached_artifact_id or ""),
                     )
+                    # Record that this run consumed the cached artifact so the
+                    # retention sweep won't delete it while this run is in the
+                    # keep window — even if the run that wrote it is pruned.
+                    await context.artifact_store.record_artifact_usage(run_id, cached_artifact_id)
                     await _record_consumers(
                         context=context,
                         input_artifact_ids=upstream_ids,
