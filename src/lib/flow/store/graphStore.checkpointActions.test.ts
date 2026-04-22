@@ -136,6 +136,34 @@ function makeCachedSnapshotWithoutMemoNonHexExecKey(graphId: string, nodeId: str
 	};
 }
 
+function makeIdleCachedSnapshotWithMemo(graphId: string, nodeId: string, runId: string) {
+	return {
+		graphId,
+		status: 'succeeded',
+		runId,
+		runMode: 'from_start',
+		plannedNodeIds: [nodeId],
+		nodeBindings: {
+			[nodeId]: {
+				status: 'idle',
+				isUpToDate: true,
+				cacheValid: true,
+				currentRunId: runId,
+				lastRunId: runId,
+				current: { execKey: 'exec-idle', artifactId: 'art-idle' },
+				last: { execKey: 'exec-idle', artifactId: 'art-idle' },
+				outputLineage: {
+					out: { execKey: 'exec-idle', artifactId: 'art-idle' }
+				},
+				memoState: {
+					decision: 'reuse',
+					memoKey: 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+				}
+			}
+		}
+	};
+}
+
 describe('graphStore checkpoint actions', () => {
 	beforeEach(() => {
 		createRunMock.mockReset();
@@ -145,12 +173,44 @@ describe('graphStore checkpoint actions', () => {
 		graphStore.clearHistory();
 	});
 
-	it('createCheckpoint requires succeeded node binding', () => {
+	it('createCheckpoint requires a bound artifact lineage', () => {
 		installSingleNodeGraph('n1');
 		const result = graphStore.createCheckpoint('n1', 'checkpoint 1');
 		expect(result.ok).toBe(false);
 		if (!result.ok) {
-			expect(result.error.toLowerCase()).toContain('status is succeeded');
+			expect(result.error.toLowerCase()).toContain('artifact');
+		}
+	});
+
+	it('createCheckpoint allows idle node when cached lineage + memo fingerprint are valid', async () => {
+		const nodeId = 'n1';
+		installSingleNodeGraph(nodeId);
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-idle-cached-valid';
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+		getRunMock.mockResolvedValue(makeIdleCachedSnapshotWithMemo(graphId, nodeId, runId));
+		streamRunEventsMock.mockImplementation((rid: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() =>
+				onEvent({
+					type: 'run_finished',
+					runId: rid,
+					at: '2026-04-10T00:00:00Z',
+					status: 'succeeded'
+				} as KnownRunEvent)
+			);
+			return { close: vi.fn() };
+		});
+
+		await graphStore.runRemote(null, 'from_start');
+		const binding = (get(graphStore).nodeBindings as any)?.[nodeId];
+		expect(String(binding?.status ?? '')).toBe('idle');
+		const result = graphStore.createCheckpoint(nodeId, 'checkpoint idle');
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.checkpoint.artifactId).toBe('art-idle');
+			expect(result.checkpoint.fingerprintAtCreation).toBe(
+				'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
+			);
 		}
 	});
 

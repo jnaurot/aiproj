@@ -1832,14 +1832,17 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 
 		const normalizedBinding = _normalizeBinding(state.nodeBindings?.[nodeId], nodeId);
 		const displayStatus = String(normalizedBinding?.status ?? '').trim().toLowerCase();
-		if (!displayStatus.startsWith('succeeded')) {
-			return { ok: false, error: 'Checkpoint is only allowed when node status is succeeded.' };
-		}
 		if (
-			!String(normalizedBinding?.current?.artifactId ?? '').trim() ||
-			!String(normalizedBinding?.current?.execKey ?? '').trim()
+			displayStatus === 'running' ||
+			displayStatus === 'active' ||
+			displayStatus === 'busy' ||
+			displayStatus === 'blocked' ||
+			displayStatus === 'paused'
 		) {
-			return { ok: false, error: 'Checkpoint requires a current bound artifact. Run the node first.' };
+			return { ok: false, error: 'Checkpoint is unavailable while node is executing.' };
+		}
+		if (normalizedBinding?.isUpToDate === false || displayStatus === 'stale') {
+			return { ok: false, error: 'Checkpoint requires a current (non-stale) artifact binding.' };
 		}
 
 		const lineage =

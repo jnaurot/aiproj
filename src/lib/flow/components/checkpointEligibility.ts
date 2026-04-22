@@ -11,10 +11,10 @@ export type CheckpointEligibility = {
 export function computeCheckpointEligibility(binding: NodeBindingInfo | null | undefined): CheckpointEligibility {
 	const source = (binding ?? {}) as NodeBindingInfo;
 	const status = String(source?.status ?? '').trim().toLowerCase();
-	if (!status.startsWith('succeeded')) {
+	if (status === 'running' || status === 'active' || status === 'busy' || status === 'blocked' || status === 'paused') {
 		return {
 			canSave: false,
-			reason: 'Checkpoint save is available after this node succeeds.',
+			reason: 'Checkpoint save is unavailable while this node is executing.',
 			artifactId: '',
 			execKey: '',
 			memoKey: ''
@@ -27,6 +27,16 @@ export function computeCheckpointEligibility(binding: NodeBindingInfo | null | u
 	const artifactId = String(lineage?.artifactId ?? '').trim();
 	const execKey = String(lineage?.execKey ?? '').trim();
 	const memoKey = String(source?.memoState?.memoKey ?? '').trim();
+
+	if (source?.isUpToDate === false || status === 'stale') {
+		return {
+			canSave: false,
+			reason: 'Checkpoint save requires a current (non-stale) artifact binding.',
+			artifactId,
+			execKey,
+			memoKey
+		};
+	}
 
 	if (!artifactId) {
 		return {
