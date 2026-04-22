@@ -1812,6 +1812,9 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			);
 		}
 		case 'llm_lease': {
+			if (state.activeRunId && evt.runId && String(evt.runId ?? '').trim() !== String(state.activeRunId)) {
+				return state;
+			}
 			const stateRaw = String((evt as any)?.state ?? '').trim().toLowerCase();
 			const leaseState = stateRaw === 'waiting' || stateRaw === 'acquired' || stateRaw === 'released' ? stateRaw : 'released';
 			const nodeId = String((evt as any)?.nodeId ?? '').trim();
@@ -1831,8 +1834,9 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			if (leaseState === 'acquired' && nodeId) {
 				activeNodeIds.add(nodeId);
 			} else if (leaseState === 'released') {
+				// Release events only invalidate the released node. holderNodeId can
+				// refer to another still-active holder during concurrent execution.
 				if (nodeId) activeNodeIds.delete(nodeId);
-				if (holderNodeId) activeNodeIds.delete(String(holderNodeId ?? '').trim());
 			}
 			if (state.runStatus !== 'running') {
 				activeNodeIds.clear();
