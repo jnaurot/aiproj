@@ -117,6 +117,74 @@ async def test_run_from_selected_resolves_ancestors_from_cache(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_node_output_emits_exec_key_for_compute_and_cache_hit(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+    graph = _graph()
+
+    events_1 = []
+    await run_mod.run_graph(
+        run_id="run-output-exec-key-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-output-exec-key-baseline", on_emit=lambda e: events_1.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-output-exec-key",
+    )
+    outputs_1 = [e for e in events_1 if e.get("type") == "node_output"]
+    assert outputs_1
+    for evt in outputs_1:
+        exec_key = str(evt.get("execKey") or "").strip()
+        artifact_id = str(evt.get("artifactId") or "").strip()
+        assert exec_key, f"missing node_output.execKey for node {evt.get('nodeId')}"
+        assert artifact_id
+        assert exec_key == artifact_id
+
+    events_2 = []
+    await run_mod.run_graph(
+        run_id="run-output-exec-key-cache-hit",
+        graph=graph,
+        run_from="tool_mid",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-output-exec-key-cache-hit", on_emit=lambda e: events_2.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-output-exec-key",
+    )
+    outputs_2 = [e for e in events_2 if e.get("type") == "node_output"]
+    assert outputs_2
+    for evt in outputs_2:
+        exec_key = str(evt.get("execKey") or "").strip()
+        artifact_id = str(evt.get("artifactId") or "").strip()
+        assert exec_key, f"missing node_output.execKey for node {evt.get('nodeId')}"
+        assert artifact_id
+        assert exec_key == artifact_id
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_emits_started_before_finished_for_reuse(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
 

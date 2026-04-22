@@ -134,6 +134,7 @@ export type KnownRunEvent =
       at: string;
       nodeId: string;
       artifactId: string;
+      execKey?: string;
       mimeType?: string;
       payloadType?: string;
       preview?: string;

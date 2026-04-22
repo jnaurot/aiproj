@@ -612,6 +612,7 @@ function applyControlPlaneEdgeState(
 }
 
 type MemoDecision = 'reuse' | 'compute' | 'skip_non_memoizable';
+const LEGACY_NODE_OUTPUT_EXEC_KEY_FALLBACK = true;
 
 function parseMemoDecisionFromTraceLog(message: string): { decision: MemoDecision; memoKey?: string } | null {
 	const trimmed = String(message ?? '').trim();
@@ -653,9 +654,21 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				isUpToDate: prevBinding.isUpToDate
 			};
 			const currentPair = _pairFromLegacy(prevBinding, 'current');
-			const boundExecKey = currentPair.execKey ?? _pairFromLegacy(prevBinding, 'last').execKey ?? evt.artifactId;
-			nextForNode = _withPair(nextForNode, 'current', { execKey: boundExecKey, artifactId: evt.artifactId });
-			nextForNode = _withPair(nextForNode, 'last', { execKey: boundExecKey, artifactId: evt.artifactId });
+			const lastPair = _pairFromLegacy(prevBinding, 'last');
+			const emittedExecKey = String((evt as any).execKey ?? '').trim() || null;
+			const boundExecKey =
+				emittedExecKey ??
+				currentPair.execKey ??
+				lastPair.execKey ??
+				(LEGACY_NODE_OUTPUT_EXEC_KEY_FALLBACK ? evt.artifactId : null);
+			nextForNode = _withPair(nextForNode, 'current', {
+				execKey: boundExecKey,
+				artifactId: boundExecKey ? evt.artifactId : null
+			});
+			nextForNode = _withPair(nextForNode, 'last', {
+				execKey: boundExecKey,
+				artifactId: boundExecKey ? evt.artifactId : null
+			});
 			_assertBindingPairInvariant(nextForNode, evt.nodeId, 'node_output');
 			const nodeBindings = {
 				...state.nodeBindings,
