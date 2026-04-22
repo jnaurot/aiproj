@@ -4177,6 +4177,7 @@ async def run_graph(
             pinned_artifact_hints[checkpoint_node_id] = {
                 "artifactId": str(hint_payload.get("artifactId") or "").strip(),
                 "execKey": str(hint_payload.get("execKey") or "").strip(),
+                "fingerprintAtCreation": str(hint_payload.get("fingerprintAtCreation") or "").strip().lower(),
                 **(
                     {"outputs": dict(hint_payload.get("outputs"))}
                     if isinstance(hint_payload.get("outputs"), dict)
@@ -4397,6 +4398,7 @@ async def run_graph(
             trusted_payload: Dict[str, Any] = {
                 "artifactId": artifact_id,
                 "execKey": exec_key,
+                "fingerprintAtCreation": str(payload_obj.get("fingerprintAtCreation") or "").strip().lower(),
             }
             raw_outputs = payload_obj.get("outputs")
             if isinstance(raw_outputs, dict):
@@ -4994,6 +4996,7 @@ async def run_graph(
                     await _emit_node_started_once()
                     pinned_artifact_id = str(trusted_pin.get("artifactId") or "").strip()
                     pinned_exec_key = str(trusted_pin.get("execKey") or "").strip() or f"pinned:{node_id}"
+                    pinned_fingerprint = str(trusted_pin.get("fingerprintAtCreation") or "").strip().lower()
                     pinned_outputs_raw = trusted_pin.get("outputs") if isinstance(trusted_pin.get("outputs"), dict) else {}
                     pinned_outputs_by_handle: Dict[str, Dict[str, str]] = {}
                     for raw_handle, raw_payload in pinned_outputs_raw.items():
@@ -5032,6 +5035,18 @@ async def run_graph(
                         })
                         return {"ok": False, "cached": False}
                     await _emit_pin_execute_decision("reuse", "CHECKPOINT_TRUSTED_ARTIFACT_PRESENT")
+                    await _emit_memo_trace(
+                        {
+                            "runId": run_id,
+                            "nodeId": node_id,
+                            "nodeKind": str(((execution_nodes_by_id.get(node_id) or {}).get("data") or {}).get("kind") or ""),
+                            "decision": "reuse",
+                            "reasonCode": "CHECKPOINT_TRUSTED_ARTIFACT",
+                            "memoKey": pinned_fingerprint if re.fullmatch(r"[0-9a-f]{64}", pinned_fingerprint or "") else None,
+                            "artifactId": pinned_artifact_id,
+                        },
+                        node_id=node_id,
+                    )
 
                     await _emit_cache_decision(
                         node_id=node_id,
@@ -5525,6 +5540,10 @@ async def run_graph(
                         snapshot=binding_snapshot,
                         phase="cache_hit_bind",
                     )
+                    # Keep lifecycle semantics consistent with compute execution:
+                    # a successful cache reuse is still a node execution for
+                    # runtime state-machine purposes (idle -> running -> succeeded).
+                    await _emit_node_started_once()
                     context.bindings.bind(node_id=node_id, artifact_id=cached_artifact_id, status="cached")
                     _set_authoritative_binding(
                         node_id,

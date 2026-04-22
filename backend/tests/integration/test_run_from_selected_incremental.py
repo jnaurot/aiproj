@@ -117,6 +117,68 @@ async def test_run_from_selected_resolves_ancestors_from_cache(monkeypatch, tmp_
 
 
 @pytest.mark.asyncio
+async def test_cache_hit_emits_started_before_finished_for_reuse(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    cache = SqliteExecutionCache(str(artifact_root / "meta" / "artifacts.sqlite"))
+    graph = _graph()
+
+    # Prime cache/artifacts.
+    await run_mod.run_graph(
+        run_id="run-cache-hit-order-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-cache-hit-order-baseline"),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-cache-hit-order",
+    )
+
+    # Trigger cache-hit reuse path.
+    events_2 = []
+    await run_mod.run_graph(
+        run_id="run-cache-hit-order-reuse",
+        graph=graph,
+        run_from="tool_mid",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-cache-hit-order-reuse", on_emit=lambda e: events_2.append(dict(e))),
+        artifact_store=store,
+        cache=cache,
+        graph_id="graph-cache-hit-order",
+    )
+
+    for node_id in ("source_1", "tool_mid", "tool_end"):
+        node_events = [e for e in events_2 if e.get("nodeId") == node_id]
+        started_idx = next((i for i, e in enumerate(node_events) if e.get("type") == "node_started"), -1)
+        finished_idx = next((i for i, e in enumerate(node_events) if e.get("type") == "node_finished"), -1)
+        assert started_idx >= 0, f"expected node_started for cache-hit node {node_id}"
+        assert finished_idx >= 0, f"expected node_finished for cache-hit node {node_id}"
+        assert started_idx < finished_idx, f"expected node_started before node_finished for {node_id}"
+        assert node_events[finished_idx].get("status") == "succeeded"
+
+
+@pytest.mark.asyncio
 async def test_run_selected_only_executes_selected_and_uses_cached_ancestors(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     calls = {"source": 0, "tool": 0}
@@ -352,6 +414,19 @@ async def test_checkpoint_hint_valid_marks_cache_only_and_reuses(monkeypatch, tm
     outcomes = run_finished[-1].get("checkpoint_outcomes") or {}
     assert outcomes.get("source_1") == "valid"
     assert outcomes.get("tool_mid") in {"valid", "stale"}
+    # Regression: trusted checkpoint reuse must emit memo.execute_decision so frontend
+    # memoState is repopulated after run_started clears planned-node memo state.
+    memo_logs = [
+        e
+        for e in events
+        if e.get("type") == "log"
+        and e.get("nodeId") == "tool_mid"
+        and "[trace][memo.execute_decision]" in str(e.get("message") or "")
+    ]
+    assert memo_logs, "expected memo.execute_decision trace for checkpoint reuse"
+    latest_memo_msg = str(memo_logs[-1].get("message") or "")
+    assert "\"decision\": \"reuse\"" in latest_memo_msg
+    assert f"\"memoKey\": \"{checkpoint_fp}\"" in latest_memo_msg
 
 
 @pytest.mark.asyncio
