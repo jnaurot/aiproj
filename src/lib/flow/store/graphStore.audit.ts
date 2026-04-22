@@ -140,7 +140,7 @@ export function __normalizeBindingForTest(
 	binding: NodeBindingInfo | undefined,
 	nodeId = 'test'
 ): NormalizedNodeBinding {
-	return _normalizeBinding(binding, nodeId);
+	return __normalizeBindingForLegacyMigrationForTest(binding, nodeId);
 }
 
 export function __normalizeBindingForLegacyMigrationForTest(
@@ -159,6 +159,13 @@ export function __normalizeBindingForLegacyMigrationForTest(
 	if (hasCurrentFields) b.current = _pairFromLegacyForMigration(b, 'current');
 	if (hasLastFields) b.last = _pairFromLegacyForMigration(b, 'last');
 	return _normalizeBinding(b, nodeId);
+}
+
+export function __normalizeBindingStrictForTest(
+	binding: NodeBindingInfo | undefined,
+	nodeId = 'test'
+): NormalizedNodeBinding {
+	return _normalizeBinding(binding, nodeId);
 }
 
 export function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string): NormalizedNodeBinding {

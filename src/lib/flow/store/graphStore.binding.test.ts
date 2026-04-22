@@ -4,6 +4,7 @@ import {
 	__assertBindingPairForTest,
 	__hydrateFromRunSnapshotForTest,
 	__normalizeBindingForLegacyMigrationForTest,
+	__normalizeBindingStrictForTest,
 	__normalizeBindingForTest,
 	type GraphState
 } from './graphStore';
@@ -28,7 +29,7 @@ describe('graphStore binding normalization', () => {
 
 	it('strict normalization rejects legacy partial current pair', () => {
 		expect(() =>
-			__normalizeBindingForTest(
+			__normalizeBindingStrictForTest(
 				{
 					currentExecKey: 'legacy-exec-only'
 				} as any,
