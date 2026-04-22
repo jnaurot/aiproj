@@ -46,6 +46,7 @@
 		type ExpectedInputHandleSummary
 	} from '$lib/flow/components/nodeInspectorSchema';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
+	import { computeCheckpointEligibility } from '$lib/flow/components/checkpointEligibility';
 
 	import { selectedNode as selectedNodeStore } from '$lib/flow/store/graphStore';
 
@@ -1438,21 +1439,20 @@
 	$: currentNodeCheckpoint = selectedNode
 		? ((($graphStore as any)?.checkpointRegistry ?? {})[selectedNode.id] ?? null)
 		: null;
-	$: canSaveCheckpoint = (() => {
-		const binding = currentNodeBinding as any;
-		if (!binding) return false;
-		const status = String(binding?.status ?? '').trim().toLowerCase();
-		if (!status.startsWith('succeeded')) return false;
-		const lineage =
-			(binding?.current &&
-			typeof binding.current === 'object' &&
-			String((binding.current as any)?.artifactId ?? '').trim().length > 0)
-				? binding.current
-				: binding?.last;
-		const artifactId = String(lineage?.artifactId ?? '').trim();
-		const memoKey = String(binding?.memoState?.memoKey ?? '').trim();
-		const fingerprint = /^[0-9a-f]{64}$/i.test(memoKey) ? memoKey : '';
-		return Boolean(artifactId && fingerprint);
+	$: checkpointEligibility = computeCheckpointEligibility(currentNodeBinding as any);
+	$: canSaveCheckpoint = checkpointEligibility.canSave;
+	$: checkpointSaveReason = checkpointEligibility.reason;
+	$: checkpointDiagnostics = {
+		artifactId: String(checkpointEligibility.artifactId ?? ''),
+		execKey: String(checkpointEligibility.execKey ?? ''),
+		memoKey: String(checkpointEligibility.memoKey ?? '')
+	};
+	const checkpointDiagDevMode = (() => {
+		try {
+			return Boolean((import.meta as any)?.env?.DEV);
+		} catch {
+			return false;
+		}
 	})();
 
 	let checkpointNameDraft = '';
@@ -1480,7 +1480,7 @@
 
 {#if selectedNode}
 	<div class="nodeInspectorTheme">
-	{#if canSaveCheckpoint || currentNodeCheckpoint}
+	{#if canSaveCheckpoint || currentNodeCheckpoint || checkpointSaveReason}
 		<div class="checkpointCard">
 			<div class="checkpointHead">
 				<span>Checkpoint</span>
@@ -1514,6 +1514,13 @@
 				</div>
 				{#if checkpointSaveError}
 					<div class="checkpointError">{checkpointSaveError}</div>
+				{/if}
+			{:else if !currentNodeCheckpoint && checkpointSaveReason}
+				<div class="guidedAssistDesc checkpointHint">{checkpointSaveReason}</div>
+				{#if checkpointDiagDevMode}
+					<div class="checkpointDiag">
+						artifact: {checkpointDiagnostics.artifactId || '-'} · exec: {checkpointDiagnostics.execKey || '-'} · memo: {checkpointDiagnostics.memoKey || '-'}
+					</div>
 				{/if}
 			{/if}
 		</div>
@@ -3155,5 +3162,16 @@
 	.checkpointError {
 		font-size: 11px;
 		color: var(--ni-error-text);
+	}
+
+	.checkpointHint {
+		margin-top: 6px;
+	}
+
+	.checkpointDiag {
+		margin-top: 6px;
+		font-size: 11px;
+		color: var(--ni-muted-text);
+		word-break: break-all;
 	}
 </style>
