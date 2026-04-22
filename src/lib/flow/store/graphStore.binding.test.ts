@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	__assertBindingPairForTest,
 	__hydrateFromRunSnapshotForTest,
+	__normalizeBindingForLegacyMigrationForTest,
 	__normalizeBindingForTest,
 	type GraphState
 } from './graphStore';
@@ -23,6 +24,30 @@ describe('graphStore binding normalization', () => {
 		expect(() =>
 			__assertBindingPairForTest({ current: { execKey: 'ek', artifactId: null } }, 'n_bad', 'test')
 		).toThrow(/INVALID_BINDING_PAIR/);
+	});
+
+	it('strict normalization rejects legacy partial current pair', () => {
+		expect(() =>
+			__normalizeBindingForTest(
+				{
+					currentExecKey: 'legacy-exec-only'
+				} as any,
+				'n_legacy_partial'
+			)
+		).toThrow(/INVALID_BINDING_PAIR/);
+	});
+
+	it('legacy migration normalization can coerce partial pair once', () => {
+		const migrated = __normalizeBindingForLegacyMigrationForTest(
+			{
+				currentExecKey: 'legacy-exec-only'
+			} as any,
+			'n_legacy_partial'
+		);
+		expect(migrated.current).toEqual({
+			execKey: 'legacy-exec-only',
+			artifactId: 'legacy-exec-only'
+		});
 	});
 
 	it('prunes orphaned bindings and outputs when graph nodes no longer exist', () => {

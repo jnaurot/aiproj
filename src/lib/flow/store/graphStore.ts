@@ -144,6 +144,7 @@ import {
 	_assertBindingPairInvariant,
 	__assertBindingPairForTest as __assertBindingPairForTestFromAudit,
 	__normalizeBindingForTest as __normalizeBindingForTestFromAudit,
+	__normalizeBindingForLegacyMigrationForTest as __normalizeBindingForLegacyMigrationForTestFromAudit,
 } from './graphStore.audit';
 import {
 	isNodeStateFromActiveRunAndFresh,
@@ -172,6 +173,7 @@ export { resolveNodeInputsFromState } from './graphStore.persistence';
 // re-export test hooks that moved to graphStore.audit
 export const __assertBindingPairForTest = __assertBindingPairForTestFromAudit;
 export const __normalizeBindingForTest = __normalizeBindingForTestFromAudit;
+export const __normalizeBindingForLegacyMigrationForTest = __normalizeBindingForLegacyMigrationForTestFromAudit;
 
 // re-export test hooks that moved to graphStore.run
 export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiStateForTest } from './graphStore.run';

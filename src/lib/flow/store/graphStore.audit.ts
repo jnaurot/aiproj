@@ -62,6 +62,26 @@ export function _pairFromLegacy(binding: NodeBindingInfo | undefined, which: 'cu
 		const execKey = (b.current?.execKey ?? b.currentExecKey) ?? null;
 		const artifactId = (b.current?.artifactId ?? b.currentArtifactId) ?? null;
 		return {
+			execKey: hasStructured ? execKey : execKey,
+			artifactId: hasStructured ? artifactId : artifactId
+		};
+	}
+	const hasStructured = Boolean(b.last && typeof b.last === 'object');
+	const execKey = (b.last?.execKey ?? b.lastExecKey) ?? null;
+	const artifactId = (b.last?.artifactId ?? b.lastArtifactId) ?? null;
+	return {
+		execKey: hasStructured ? execKey : execKey,
+		artifactId: hasStructured ? artifactId : artifactId
+	};
+}
+
+function _pairFromLegacyForMigration(binding: NodeBindingInfo | undefined, which: 'current' | 'last') {
+	const b = binding ?? {};
+	if (which === 'current') {
+		const hasStructured = Boolean(b.current && typeof b.current === 'object');
+		const execKey = (b.current?.execKey ?? b.currentExecKey) ?? null;
+		const artifactId = (b.current?.artifactId ?? b.currentArtifactId) ?? null;
+		return {
 			execKey: hasStructured ? execKey : (execKey ?? artifactId),
 			artifactId: hasStructured ? artifactId : (artifactId ?? execKey)
 		};
@@ -121,6 +141,24 @@ export function __normalizeBindingForTest(
 	nodeId = 'test'
 ): NormalizedNodeBinding {
 	return _normalizeBinding(binding, nodeId);
+}
+
+export function __normalizeBindingForLegacyMigrationForTest(
+	binding: NodeBindingInfo | undefined,
+	nodeId = 'test'
+): NormalizedNodeBinding {
+	const b = { ...(binding ?? {}) };
+	const hasCurrentFields =
+		Object.prototype.hasOwnProperty.call(b, 'current') ||
+		Object.prototype.hasOwnProperty.call(b, 'currentExecKey') ||
+		Object.prototype.hasOwnProperty.call(b, 'currentArtifactId');
+	const hasLastFields =
+		Object.prototype.hasOwnProperty.call(b, 'last') ||
+		Object.prototype.hasOwnProperty.call(b, 'lastExecKey') ||
+		Object.prototype.hasOwnProperty.call(b, 'lastArtifactId');
+	if (hasCurrentFields) b.current = _pairFromLegacyForMigration(b, 'current');
+	if (hasLastFields) b.last = _pairFromLegacyForMigration(b, 'last');
+	return _normalizeBinding(b, nodeId);
 }
 
 export function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?: string): NormalizedNodeBinding {
