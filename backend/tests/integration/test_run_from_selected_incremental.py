@@ -185,6 +185,64 @@ async def test_node_output_emits_exec_key_for_compute_and_cache_hit(monkeypatch,
 
 
 @pytest.mark.asyncio
+async def test_run_graph_runtime_does_not_depend_on_execution_cache_index(monkeypatch, tmp_path):
+    run_mod = importlib.import_module("app.runner.run")
+
+    class _RaisingCache:
+        async def get_artifact_id(self, execution_key: str):
+            raise AssertionError("run_graph should not call execution cache index lookup")
+
+        async def store_artifact_id(self, execution_key: str, artifact_id: str):
+            raise AssertionError("run_graph should not call execution cache index store")
+
+    async def _fake_exec_source(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"text": "hello"},
+        )
+
+    async def _fake_exec_tool(run_id, node, context, upstream_artifact_ids=None):
+        return NodeOutput(
+            status="succeeded",
+            metadata=None,
+            execution_time_ms=1.0,
+            data={"kind": "json", "payload": {"ok": True, "node": node["id"]}, "meta": {"status": "ok"}},
+        )
+
+    monkeypatch.setattr(run_mod, "exec_source", _fake_exec_source)
+    monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
+
+    artifact_root = tmp_path / "artifacts"
+    store = DiskArtifactStore(artifact_root)
+    graph = _graph()
+    raising_cache = _RaisingCache()
+
+    await run_mod.run_graph(
+        run_id="run-no-cache-index-baseline",
+        graph=graph,
+        run_from=None,
+        bus=RunEventBus("run-no-cache-index-baseline"),
+        artifact_store=store,
+        cache=raising_cache,
+        graph_id="graph-no-cache-index",
+    )
+
+    # Cache-hit run should also avoid execution-cache index calls.
+    await run_mod.run_graph(
+        run_id="run-no-cache-index-hit",
+        graph=graph,
+        run_from="tool_mid",
+        run_mode="from_selected_onward",
+        bus=RunEventBus("run-no-cache-index-hit"),
+        artifact_store=store,
+        cache=raising_cache,
+        graph_id="graph-no-cache-index",
+    )
+
+
+@pytest.mark.asyncio
 async def test_cache_hit_emits_started_before_finished_for_reuse(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
 

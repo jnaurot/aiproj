@@ -28,7 +28,6 @@ from .events import RunEventBus
 from .validator import GraphValidator, collect_transitive_descendants
 from .metadata import GraphContext, NodeOutput
 from .artifacts import Artifact, MemoryArtifactStore, RunBindings
-from .cache import ExecutionCache
 from .queues import QueueLimits, QueueRegistry, next_nonempty_key
 from .node_state import build_exec_key, build_node_state_hash, build_source_fingerprint
 from .resumability import classify_node_resumability
@@ -3537,7 +3536,6 @@ async def run_graph(
             }
         )
 
-    cache = cache or ExecutionCache()
     cache_stats = {"hit": 0, "miss": 0, "hit_contract_mismatch": 0}
     cache_summary_emitted = False
     run_telemetry_emitted = False
@@ -7505,9 +7503,6 @@ async def run_graph(
                                 handle=str(handle or ""),
                             )
 
-                        # cache index
-                        await cache.store_artifact_id(exec_key, committed_artifact_id)
-
                         logger.debug(
                             "[artifact] transform node=%s bytes=%s id=%s...",
                             node_id,
@@ -8386,10 +8381,6 @@ async def run_graph(
                                 ),
                             }
                         )
-
-                    # Update cache index
-                    if use_cache_for_node:
-                        await cache.store_artifact_id(exec_key, committed_artifact_id)
 
                     # Verification print
                     logger.debug(
