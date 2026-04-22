@@ -4,6 +4,7 @@ import contextvars
 import hashlib
 import inspect
 import json
+import os
 import re
 import traceback
 import logging
@@ -2816,6 +2817,49 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
     return max(minimum, val)
 
 
+def _read_positive_int_env(name: str, minimum: int = 1) -> Optional[int]:
+    raw = str(get_env(name, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = int(raw)
+    except Exception:
+        return None
+    if parsed < minimum:
+        return None
+    return parsed
+
+
+def _resolve_max_model_cap() -> Tuple[int, str, List[str]]:
+    notes: List[str] = []
+    precedence = [
+        ("RUNNER_MAX_MODEL", "RUNNER_MAX_MODEL"),
+        ("RUNNER_MAX_LLM", "RUNNER_MAX_LLM"),
+        ("RUN_MAX_LLM", "RUN_MAX_LLM"),
+        ("TUNNER_MAX_MODEL", "TUNNER_MAX_MODEL"),
+    ]
+    for env_name, source_name in precedence:
+        raw = str(get_env(env_name, "") or "").strip()
+        if not raw:
+            continue
+        try:
+            parsed = int(raw)
+        except Exception:
+            notes.append(f"ignored invalid {env_name}={raw!r}")
+            continue
+        if parsed < 1:
+            notes.append(f"ignored non-positive {env_name}={raw!r}")
+            continue
+        if source_name in {"RUNNER_MAX_LLM", "RUN_MAX_LLM", "TUNNER_MAX_MODEL"}:
+            notes.append(f"using compatibility alias {source_name}; prefer RUNNER_MAX_MODEL")
+        return parsed, source_name, notes
+    return 2, "default", notes
+
+
+def __resolve_max_model_cap_for_test() -> Tuple[int, str, List[str]]:
+    return _resolve_max_model_cap()
+
+
 def _env_int_allow_zero(name: str, default: int) -> int:
     raw = str(get_env(name, "") or "").strip()
     if not raw:
@@ -3551,9 +3595,20 @@ async def run_graph(
     max_source = _env_int("RUNNER_MAX_SOURCE", 2, minimum=1)
     max_transform = _env_int("RUNNER_MAX_TRANSFORM", 2, minimum=1)
     # Default model concurrency is intentionally conservative (2) for this host profile.
-    # Override with RUNNER_MAX_MODEL (or legacy RUNNER_MAX_LLM) to increase later.
-    max_model = _env_int("RUNNER_MAX_MODEL", _env_int("RUNNER_MAX_LLM", 2, minimum=1), minimum=1)
+    # Compatibility aliases are accepted for migration windows.
+    max_model, max_model_source, max_model_notes = _resolve_max_model_cap()
+    for note in max_model_notes:
+        logger.warning("MODEL_CAP_ENV_NOTE %s", note)
     max_llm = max_model
+    model_provider_default_cap = str(get_env("RUNNER_MAX_MODEL_PROVIDER", "") or "").strip()
+    model_provider_specific_caps = sorted(
+        [
+            str(key).strip()
+            for key in os.environ.keys()
+            if str(key).startswith("RUNNER_MAX_MODEL_PROVIDER_")
+            and str(key).strip() != "RUNNER_MAX_MODEL_PROVIDER_"
+        ]
+    )
     max_tool = _env_int("RUNNER_MAX_TOOL", 2, minimum=1)
     control_plane_mode = _normalize_control_plane_mode(get_env("CONTROL_PLANE_V1", "enforce"))
     adaptive_mode_source = (
@@ -10434,7 +10489,10 @@ async def run_graph(
                 "level": "info",
                 "message": (
                     f"[scheduler] queue start nodes={len(sub)} ready={len(ready)} "
-                    f"caps(g={max_inflight},s={max_source},t={max_transform},m={max_model},l={max_llm},tool={max_tool})"
+                    f"caps(g={max_inflight},s={max_source},t={max_transform},m={max_model},l={max_llm},tool={max_tool}) "
+                    f"model_cap_source={max_model_source} "
+                    f"provider_default_cap={model_provider_default_cap or '(unset)'} "
+                    f"provider_specific_caps={len(model_provider_specific_caps)}"
                 ),
             }
         )
