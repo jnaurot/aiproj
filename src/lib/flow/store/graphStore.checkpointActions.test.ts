@@ -181,7 +181,7 @@ describe('graphStore checkpoint actions', () => {
 		}
 	});
 
-	it('createCheckpoint allows cached artifact lineage when memoState is missing', async () => {
+	it('createCheckpoint rejects cached artifact lineage when memoState is missing', async () => {
 		const nodeId = 'n1';
 		installSingleNodeGraph(nodeId);
 		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
@@ -202,12 +202,9 @@ describe('graphStore checkpoint actions', () => {
 
 		await graphStore.runRemote(null, 'from_start');
 		const result = graphStore.createCheckpoint(nodeId, 'checkpoint cached');
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.checkpoint.artifactId).toBe('art-cached');
-			expect(result.checkpoint.fingerprintAtCreation).toBe(
-				'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-			);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain('fingerprint');
 		}
 	});
 
@@ -318,10 +315,8 @@ describe('graphStore checkpoint actions', () => {
 	//   node_finished (status="succeeded", cached=true)
 	//   *** _emit_memo_trace is NEVER called — the path returns early at line 5199 ***
 	//
-	// Consequence: memoState.memoKey is undefined after the run.  The only remaining
-	// fingerprint candidate is lineage.execKey = pinned_exec_key.
-	// If pinned_exec_key = "pinned:<nodeId>" (backend fallback when stored execKey is
-	// empty), BOTH fingerprint checks fail → canSaveCheckpoint = false.
+	// Consequence: memoState.memoKey is undefined after the run, so Save Checkpoint
+	// is blocked regardless of lineage.execKey value.
 
 	it('checkpoint-reuse run with pinned: fallback execKey leaves memoState undefined and blocks Save Checkpoint', async () => {
 		// This is the exact failing scenario for Model_Spanish_Summary:
@@ -414,10 +409,9 @@ describe('graphStore checkpoint actions', () => {
 		}
 	});
 
-	it('checkpoint-reuse run with valid 64-hex stored execKey enables Save Checkpoint via lineage fallback', async () => {
-		// When the checkpoint WAS stored with a valid execKey, the backend uses that
-		// value as pinned_exec_key.  Even without a memo trace the lineage fallback
-		// passes the 64-hex check → Save Checkpoint is available.
+	it('checkpoint-reuse run with valid 64-hex stored execKey still blocks Save Checkpoint without memo trace', async () => {
+		// Even with a valid cached lineage execKey, fingerprint authority is memoKey-only.
+		// Without memo trace repopulation, Save Checkpoint must remain unavailable.
 		const nodeId = 'n1';
 		installSingleNodeGraph(nodeId);
 		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
@@ -448,14 +442,14 @@ describe('graphStore checkpoint actions', () => {
 		// memoState is still undefined — no memo trace fired for checkpoint reuse.
 		expect(binding?.memoState).toBeUndefined();
 
-		// But lineage.execKey is valid 64-hex → Save Checkpoint is available.
+		// Lineage.execKey may be valid 64-hex, but it is not authoritative for checkpoint fingerprinting.
 		const lineageExecKey = binding?.current?.execKey ?? binding?.currentExecKey ?? '';
 		expect(/^[0-9a-f]{64}$/i.test(lineageExecKey)).toBe(true);
 
 		const result = graphStore.createCheckpoint(nodeId, 'valid checkpoint');
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.checkpoint.fingerprintAtCreation).toBe(VALID_EXEC_KEY);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain('fingerprint');
 		}
 	});
 

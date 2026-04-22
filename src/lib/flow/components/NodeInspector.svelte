@@ -1451,12 +1451,7 @@
 				: binding?.last;
 		const artifactId = String(lineage?.artifactId ?? '').trim();
 		const memoKey = String(binding?.memoState?.memoKey ?? '').trim();
-		const lineageMemoFallback = String(lineage?.execKey ?? '').trim();
-		const fingerprint = /^[0-9a-f]{64}$/i.test(memoKey)
-			? memoKey
-			: /^[0-9a-f]{64}$/i.test(lineageMemoFallback)
-				? lineageMemoFallback
-				: '';
+		const fingerprint = /^[0-9a-f]{64}$/i.test(memoKey) ? memoKey : '';
 		return Boolean(artifactId && fingerprint);
 	})();
 
