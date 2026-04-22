@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { GraphState } from './graphStore';
 import {
 	__applyRunEventForTest,
+	__hydrateFromRunSnapshotForTest,
 	__markStaleFromNodeForTest,
 	__normalizeBindingForTest
 } from './graphStore';
@@ -262,5 +263,118 @@ describe('graphStore memo state projection', () => {
 		const next = __markStaleFromNodeForTest(state, 'n1');
 		expect(next.nodeBindings.n1?.memoState?.decision).toBe('reuse');
 		expect(next.nodeBindings.n1?.memoState?.memoKey).toBe('abc123');
+	});
+
+	it('run_started does not stale-mark a node whose binding already reflects THIS run (fast all-cache race)', () => {
+		// Scenario: the initial getRun snapshot arrives and is applied BEFORE the event
+		// stream delivers run_started.  The binding already shows succeeded_up_to_date
+		// with currentRunId === the new run's ID.  The run_started handler must NOT
+		// clobber it with 'stale', which would cause a transient loss of canSaveCheckpoint.
+		const runId = 'run-fast';
+		const execKey = 'a'.repeat(64); // 64-hex SHA-256
+
+		// Simulate the state AFTER the initial getRun snapshot was applied:
+		// - runStatus was set to 'succeeded' (run already done)
+		// - nodeBindings reflect the completed state with currentRunId = runId
+		const state: GraphState = {
+			...makeState(),
+			graphId: 'graph-fast',
+			activeRunId: runId,
+			runStatus: 'succeeded' as any,
+			nodes: [
+				{ id: 'n1', data: { kind: 'model', label: 'Model 1' } },
+				{ id: 'n2', data: { kind: 'model', label: 'Model 2' } }
+			] as any,
+			activeRunNodeSet: new Set(['n1', 'n2']),
+			nodeBindings: {
+				n1: nb(
+					{
+						status: 'succeeded_up_to_date',
+						isUpToDate: true,
+						cacheValid: true,
+						currentRunId: runId,
+						currentArtifactId: execKey,
+						currentExecKey: execKey
+					},
+					'n1'
+				),
+				n2: nb(
+					{
+						status: 'succeeded_up_to_date',
+						isUpToDate: true,
+						cacheValid: true,
+						currentRunId: runId,
+						currentArtifactId: execKey,
+						currentExecKey: execKey
+					},
+					'n2'
+				)
+			}
+		};
+
+		// Now run_started arrives late (after the snapshot was already applied).
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-04-10T00:01:00Z',
+				runMode: 'from_start',
+				plannedNodeIds: ['n1', 'n2']
+			} as any,
+			runId
+		);
+
+		// Both nodes already have the current run's result — they must NOT be set to stale.
+		expect(next.nodeBindings.n1?.status).toBe('succeeded_up_to_date');
+		expect(next.nodeBindings.n2?.status).toBe('succeeded_up_to_date');
+		// currentRunId must be preserved (not nulled out by the stale transition)
+		expect(next.nodeBindings.n1?.currentRunId).toBe(runId);
+		expect(next.nodeBindings.n2?.currentRunId).toBe(runId);
+	});
+
+	it('run_started still marks stale for nodes that do NOT yet reflect the current run', () => {
+		// Contrast: if the binding has currentRunId from a PREVIOUS run (not this run),
+		// run_started should still mark it stale as usual.
+		const runId = 'run-new';
+		const prevExecKey = 'b'.repeat(64);
+
+		const state: GraphState = {
+			...makeState(),
+			graphId: 'graph-stale',
+			activeRunId: runId,
+			runStatus: 'running' as any,
+			nodes: [{ id: 'n1', data: { kind: 'model', label: 'Model 1' } }] as any,
+			activeRunNodeSet: new Set(['n1']),
+			nodeBindings: {
+				n1: nb(
+					{
+						status: 'succeeded_up_to_date',
+						isUpToDate: true,
+						cacheValid: true,
+						currentRunId: 'run-old',   // belongs to PREVIOUS run
+						currentArtifactId: prevExecKey,
+						currentExecKey: prevExecKey
+					},
+					'n1'
+				)
+			}
+		};
+
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-04-10T00:01:00Z',
+				runMode: 'from_start',
+				plannedNodeIds: ['n1']
+			} as any,
+			runId
+		);
+
+		// Node belongs to previous run — must be set to stale/RUN_PENDING.
+		expect(next.nodeBindings.n1?.status).toBe('stale');
+		expect((next.nodeBindings.n1 as any)?.staleReason).toBe('RUN_PENDING');
 	});
 });

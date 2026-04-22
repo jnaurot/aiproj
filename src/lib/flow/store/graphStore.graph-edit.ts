@@ -1851,7 +1851,13 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		if (!artifactId || !execKey) return { ok: false, error: 'No artifact available.' };
 
 		const memoKey = String(normalizedBinding?.memoState?.memoKey ?? '').trim();
-		if (!memoKey || memoKey.length !== 64) {
+		const lineageMemoFallback = String(lineage?.execKey ?? '').trim();
+		const fingerprintAtCreation = /^[0-9a-f]{64}$/i.test(memoKey)
+			? memoKey
+			: /^[0-9a-f]{64}$/i.test(lineageMemoFallback)
+				? lineageMemoFallback
+				: '';
+		if (!fingerprintAtCreation) {
 			return { ok: false, error: 'No fingerprint available. Run the node first.' };
 		}
 
@@ -1880,7 +1886,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			runId: String(state.lastRunId ?? '').trim(),
 			artifactId,
 			execKey,
-			fingerprintAtCreation: memoKey,
+			fingerprintAtCreation,
 			createdAt: new Date().toISOString(),
 			staleness: 'valid',
 			...(Object.keys(outputs).length > 0 ? { outputs } : {})

@@ -822,6 +822,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					checkpointable: false
 				};
 			}
+			const evtRunId = String((evt as any).runId ?? runId ?? '').trim();
 			for (const nodeId of evtPlanned) {
 				const prevBinding = _normalizeBinding(nodeBindings[nodeId], nodeId);
 				const hasArtifact = Boolean(
@@ -832,6 +833,16 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				);
 				if (!hasArtifact) continue;
 				if (isNodeStateFromActiveRunAndFresh(state, prevBinding)) continue;
+				// If the binding already reflects the completion of THIS exact run (i.e. the
+				// initial getRun snapshot arrived and was applied before the event stream
+				// delivered run_started), skip the stale transition.  The node's final state
+				// is already correct; clobbering it with 'stale' would cause a transient
+				// disappearance of the "Save checkpoint" action and an unnecessary UI flash.
+				if (
+					evtRunId &&
+					String(prevBinding.currentRunId ?? '').trim() === evtRunId &&
+					String(prevBinding.status ?? '').toLowerCase().startsWith('succeeded')
+				) continue;
 				nodeBindings[nodeId] = {
 					...prevBinding,
 					status: 'stale',

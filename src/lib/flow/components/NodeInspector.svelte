@@ -1443,9 +1443,21 @@
 		if (!binding) return false;
 		const status = String(binding?.status ?? '').trim().toLowerCase();
 		if (!status.startsWith('succeeded')) return false;
-		const artifactId = String(binding?.current?.artifactId ?? '').trim();
+		const lineage =
+			(binding?.current &&
+			typeof binding.current === 'object' &&
+			String((binding.current as any)?.artifactId ?? '').trim().length > 0)
+				? binding.current
+				: binding?.last;
+		const artifactId = String(lineage?.artifactId ?? '').trim();
 		const memoKey = String(binding?.memoState?.memoKey ?? '').trim();
-		return Boolean(artifactId && memoKey && memoKey.length === 64);
+		const lineageMemoFallback = String(lineage?.execKey ?? '').trim();
+		const fingerprint = /^[0-9a-f]{64}$/i.test(memoKey)
+			? memoKey
+			: /^[0-9a-f]{64}$/i.test(lineageMemoFallback)
+				? lineageMemoFallback
+				: '';
+		return Boolean(artifactId && fingerprint);
 	})();
 
 	let checkpointNameDraft = '';
