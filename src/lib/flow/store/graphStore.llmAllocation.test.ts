@@ -294,4 +294,100 @@ describe('graphStore llm allocation UI state', () => {
 		);
 		expect(String((afterFinish as any)?.nodeBindings?.a?.status ?? '')).toBe('succeeded_up_to_date');
 	});
+
+	it('release for node A must not clear active holder B during concurrent leases', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			nodeBindings: {
+				a: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: null, artifactId: null },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				},
+				b: {
+					status: 'running',
+					isUpToDate: false,
+					cacheValid: false,
+					currentRunId: 'run-llm',
+					current: { execKey: null, artifactId: null },
+					last: { execKey: null, artifactId: null },
+					staleReason: null
+				}
+			} as any,
+			queueRuntime: {
+				appliedControlSeq: 0,
+				llmLease: {
+					state: 'acquired',
+					nodeId: 'b',
+					holderNodeId: 'b',
+					activeNodeIds: ['a', 'b'],
+					waitQueueLength: 0,
+					waitingNodeIds: [],
+					updatedAt: '2026-04-22T00:00:00Z'
+				}
+			} as any
+		};
+
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'llm_lease',
+				runId: 'run-llm',
+				at: '2026-04-22T00:00:01Z',
+				state: 'released',
+				nodeId: 'a',
+				holderNodeId: 'b',
+				waitQueueLength: 0,
+				waitingNodeIds: []
+			} as any,
+			'run-llm'
+		);
+
+		const active = new Set((next as any)?.queueRuntime?.llmLease?.activeNodeIds ?? []);
+		expect(active.has('a')).toBe(false);
+		expect(active.has('b')).toBe(true);
+		expect(allocated(next)).toContain('b');
+		expect(String((next as any)?.nodeBindings?.b?.status ?? '')).toBe('running');
+	});
+
+	it('ignores llm_lease events from non-active run ids', () => {
+		const state: GraphState = {
+			...makeState('running'),
+			activeRunId: 'run-active',
+			queueRuntime: {
+				appliedControlSeq: 0,
+				llmLease: {
+					state: 'acquired',
+					nodeId: 'a',
+					holderNodeId: 'a',
+					activeNodeIds: ['a'],
+					waitQueueLength: 0,
+					waitingNodeIds: [],
+					updatedAt: '2026-04-22T00:00:00Z'
+				}
+			} as any
+		};
+
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'llm_lease',
+				runId: 'run-old',
+				at: '2026-04-22T00:00:01Z',
+				state: 'released',
+				nodeId: 'a',
+				holderNodeId: null,
+				waitQueueLength: 0,
+				waitingNodeIds: []
+			} as any,
+			'run-active'
+		);
+
+		expect(new Set((next as any)?.queueRuntime?.llmLease?.activeNodeIds ?? [])).toEqual(new Set(['a']));
+		expect(allocated(next)).toEqual(['a']);
+	});
 });
