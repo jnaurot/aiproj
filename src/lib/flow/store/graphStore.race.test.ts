@@ -13,7 +13,20 @@ import { displayStatusFromBinding } from './runScope';
 function makeState(runId = 'run-race'): GraphState {
 	return {
 		graphId: 'graph-race',
-		nodes: [{ id: 'n_source' }, { id: 'n_transform' }, { id: 'n_sink' }] as any,
+		nodes: [
+			{
+				id: 'n_source',
+				data: { kind: 'source', sourceKind: 'file', status: 'idle', label: 'Source', params: {} }
+			},
+			{
+				id: 'n_transform',
+				data: { kind: 'transform', transformKind: 'filter', status: 'idle', label: 'Transform', params: {} }
+			},
+			{
+				id: 'n_sink',
+				data: { kind: 'model', llmKind: 'chat', status: 'idle', label: 'Sink', params: {} }
+			}
+		] as any,
 		edges: [
 			{ id: 'e1', source: 'n_source', target: 'n_transform', data: { exec: 'idle' } },
 			{ id: 'e2', source: 'n_transform', target: 'n_sink', data: { exec: 'idle' } }
