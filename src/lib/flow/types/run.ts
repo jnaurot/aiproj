@@ -263,6 +263,30 @@ export type KnownRunEvent =
       firstAt?: string;
     }
   | {
+      type: "diagnostic_raised";
+      runId: string;
+      at: string;
+      key: string;
+      edgeId: string;
+      nodeId?: string;
+      source: "contract_engine" | "schema_plane";
+      severity: "info" | "warning" | "error";
+      code: string;
+      message: string;
+      details?: Record<string, unknown>;
+    }
+  | {
+      type: "diagnostic_cleared";
+      runId: string;
+      at: string;
+      key: string;
+      edgeId: string;
+      nodeId?: string;
+      source?: "contract_engine" | "schema_plane";
+      code?: string;
+      details?: Record<string, unknown>;
+    }
+  | {
       type: "node_blocked";
       schema_version?: number;
       runId: string;

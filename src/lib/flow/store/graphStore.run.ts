@@ -1627,6 +1627,61 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				nodeId
 			);
 		}
+		case 'diagnostic_raised': {
+			const key = String((evt as any)?.key ?? '').trim();
+			const edgeId = String((evt as any)?.edgeId ?? '').trim();
+			const sourceRaw = String((evt as any)?.source ?? '').trim().toLowerCase();
+			const source = sourceRaw === 'contract_engine' ? 'contract_engine' : 'schema_plane';
+			const severityRaw = String((evt as any)?.severity ?? '').trim().toLowerCase();
+			const level: 'warn' | 'info' = severityRaw === 'error' || severityRaw === 'warning' ? 'warn' : 'info';
+			if (!key || !edgeId) return state;
+			const previous =
+				(state.queueRuntime?.schemaDiagnosticSignals &&
+				typeof state.queueRuntime.schemaDiagnosticSignals === 'object'
+					? state.queueRuntime.schemaDiagnosticSignals
+					: {}) ?? {};
+			const existing = previous[key];
+			const nextSignal = {
+				key,
+				edgeId,
+				nodeId: String((evt as any)?.nodeId ?? '').trim() || undefined,
+				code: String((evt as any)?.code ?? 'UNKNOWN'),
+				level,
+				source,
+				message: String((evt as any)?.message ?? ''),
+				updatedAt: String((evt as any)?.at ?? '')
+			};
+			if (existing && stableJson(existing) === stableJson(nextSignal)) return state;
+			return {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					schemaDiagnosticSignals: {
+						...previous,
+						[key]: nextSignal
+					}
+				}
+			};
+		}
+		case 'diagnostic_cleared': {
+			const key = String((evt as any)?.key ?? '').trim();
+			if (!key) return state;
+			const previous =
+				(state.queueRuntime?.schemaDiagnosticSignals &&
+				typeof state.queueRuntime.schemaDiagnosticSignals === 'object'
+					? state.queueRuntime.schemaDiagnosticSignals
+					: {}) ?? {};
+			if (!previous[key]) return state;
+			const nextSignals = { ...previous };
+			delete nextSignals[key];
+			return {
+				...state,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					schemaDiagnosticSignals: nextSignals
+				}
+			};
+		}
 		case 'node_blocked': {
 			const nodeId = String((evt as any)?.nodeId ?? '').trim();
 			if (!nodeId) return state;
