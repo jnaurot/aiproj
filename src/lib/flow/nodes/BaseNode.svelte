@@ -24,6 +24,7 @@ import MemoIndicator from './MemoIndicator.svelte';
 		toDisplayNodeStatus
 	} from '$lib/flow/store/statusModel';
 	import { portHintText, resolveNodeHandles, type NodeHandleDef } from './portHandles';
+	import HandleSchemaBadge from '$lib/flow/components/ui/HandleSchemaBadge.svelte';
 	import {
 		buildNodeExecutionBadge,
 		normalizeConsumeMode,
@@ -131,6 +132,37 @@ import MemoIndicator from './MemoIndicator.svelte';
 		tooltipState.destroy();
 	});
 
+	// ---------------------------------------------------------------------------
+	// Schema View — per-handle error/warning badges
+	// Scan edges that TARGET this node and record the highest severity per handle.
+	// Source handles are not badged (they output what they always output).
+	// ---------------------------------------------------------------------------
+	$: viewMode = ($graphStore as any)?.viewMode ?? 'execution';
+	$: handleSchemaSeverities = (() => {
+		if (viewMode !== 'schema') return new Map<string, 'error' | 'warning'>();
+		const result = new Map<string, 'error' | 'warning'>();
+		for (const edge of $graphStore?.edges ?? []) {
+			if (String((edge as any)?.target ?? '') !== String(id)) continue;
+			const edgeId = String((edge as any)?.id ?? '').trim();
+			if (!edgeId) continue;
+			const snapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(edgeId) ?? null;
+			const severity: 'error' | 'warning' | null =
+				snapshot?.effectiveSeverity === 'error'
+					? 'error'
+					: snapshot?.effectiveSeverity === 'warning'
+						? 'warning'
+						: null;
+			if (!severity) continue;
+			const handleId = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
+			const current = result.get(handleId);
+			// error wins over warning
+			if (!current || (current === 'warning' && severity === 'error')) {
+				result.set(handleId, severity);
+			}
+		}
+		return result;
+	})();
+
 	// IO contracts are derived from node kind/params.
 	$: derivedIo = data ? deriveNodeIoForData(data) : { in: null, out: null };
 	$: inputType = derivedIo.in ?? null;
@@ -219,6 +251,11 @@ import MemoIndicator from './MemoIndicator.svelte';
 		title={portHintText('in', h)}
 		data-port-hint={portHintText('in', h)}
 		style={`top:${handleTop(i, effectiveTargetHandles.length)};`}
+	/>
+	<HandleSchemaBadge
+		severity={handleSchemaSeverities.get(h.id) ?? null}
+		{viewMode}
+		style={`top:calc(${handleTop(i, effectiveTargetHandles.length)} - 8px); left:-14px;`}
 	/>
 {/each}
 
