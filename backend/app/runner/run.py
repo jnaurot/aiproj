@@ -10302,6 +10302,17 @@ async def run_graph(
                         "type": "control_signal",
                         "runId": run_id,
                         "at": iso_now(),
+                        "signal": "item_dequeued",
+                        "nodeId": node_id,
+                        "edgeId": str(incoming_info.get("edgeId") or ""),
+                        "handle": handle,
+                    }
+                )
+                await _emit(
+                    {
+                        "type": "control_signal",
+                        "runId": run_id,
+                        "at": iso_now(),
                         "signal": "input_ready",
                         "nodeId": node_id,
                         "edgeId": str(incoming_info.get("edgeId") or ""),

@@ -8,6 +8,7 @@ CONTROL_SIGNAL_TYPES = frozenset(
 	{
 		"UPSTREAM_OPENED",
 		"ITEM_ENQUEUED",
+		"ITEM_DEQUEUED",
 		"INPUT_DRAINED",
 		"UPSTREAM_CLOSED",
 		"INPUT_READY",
@@ -31,6 +32,7 @@ EDGE_CONTROL_SIGNAL_TYPES = frozenset(
 	{
 		"UPSTREAM_OPENED",
 		"ITEM_ENQUEUED",
+		"ITEM_DEQUEUED",
 		"INPUT_DRAINED",
 		"UPSTREAM_CLOSED",
 		"INPUT_READY",
@@ -110,6 +112,8 @@ def reduce_edge_control_state(
 	elif signal == "ITEM_ENQUEUED":
 		next_state["open"] = True
 		next_state["depth"] = max(0, int(next_state.get("depth") or 0) + 1)
+	elif signal == "ITEM_DEQUEUED":
+		next_state["depth"] = max(0, int(next_state.get("depth") or 0) - 1)
 	elif signal == "INPUT_DRAINED":
 		next_state["depth"] = 0
 	elif signal == "UPSTREAM_CLOSED":
