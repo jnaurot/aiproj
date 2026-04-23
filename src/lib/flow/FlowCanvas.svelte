@@ -259,6 +259,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					? 'edge-schema-warning'
 					: ''
 		).trim();
+		// const schemaClass = ""
 		const linkKindClass =
 			String(((e.data as any)?.linkKind ?? (e.data as any)?.link_kind ?? 'data_link')).trim().toLowerCase() ===
 			'control_link'

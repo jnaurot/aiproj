@@ -51,7 +51,12 @@ import {
 	_assertBindingPairInvariant,
 } from './graphStore.audit';
 import { effectiveExecParamsForNode } from './graphStore.inspector';
-import { deriveObservedSchemaObservationFromNodeOutput, computeSchemaDriftSummary } from './graphStore.node-schema';
+import {
+	computeEdgeSchemaConstraintsInternal,
+	computeEdgeSchemaDiagnosticsInternal,
+	computeSchemaDriftSummary,
+	deriveObservedSchemaObservationFromNodeOutput
+} from './graphStore.node-schema';
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import type { CheckpointStaleness } from '$lib/flow/types/checkpoint';
 import type { SchemaPlaneResult } from '$lib/flow/types/schemaPlane';
@@ -642,6 +647,90 @@ function parseMemoDecisionFromTraceLog(message: string): { decision: MemoDecisio
 	};
 }
 
+type RunSchemaWarningLog = {
+	edgeId: string;
+	nodeId?: string;
+	message: string;
+};
+
+function collectSchemaWarningsForRun(
+	state: GraphState,
+	plannedNodeIds: Set<string>
+): RunSchemaWarningLog[] {
+	const warnings: RunSchemaWarningLog[] = [];
+	const dedupe = new Set<string>();
+	const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
+	const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
+	const hasPlanned = plannedNodeIds.size > 0;
+	for (const edge of state.edges ?? []) {
+		const edgeId = String(edge?.id ?? '').trim();
+		if (!edgeId) continue;
+		const sourceNodeId = String(edge?.source ?? '').trim();
+		const targetNodeId = String(edge?.target ?? '').trim();
+		const inScope =
+			!hasPlanned ||
+			plannedNodeIds.has(sourceNodeId) ||
+			plannedNodeIds.has(targetNodeId);
+		if (!inScope) continue;
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim();
+		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim();
+		const constraint = constraints[edgeId];
+		const mode = String((constraint as any)?.mode ?? (edge?.data as any)?.mode ?? 'work')
+			.trim()
+			.toLowerCase();
+		const diag = diagnostics[edgeId];
+		if (diag && String(diag.severity ?? '').toLowerCase() === 'warning') {
+			const suggestion =
+				Array.isArray(diag.suggestions) && diag.suggestions.length > 0
+					? ` suggestions="${diag.suggestions.slice(0, 2).join(' | ')}"`
+					: '';
+			const detail = String(diag.message ?? '').trim();
+			const warningKey = `diag:${edgeId}:${String(diag.code ?? '')}:${detail}`;
+			if (!dedupe.has(warningKey)) {
+				dedupe.add(warningKey);
+				warnings.push({
+					edgeId,
+					nodeId: targetNodeId || sourceNodeId || undefined,
+					message:
+						`[SCHEMA_WARN] edge=${edgeId} code=${String(diag.code ?? 'UNKNOWN')} mode=${mode} ` +
+						`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} detail="${detail}"${suggestion}`
+				});
+			}
+		}
+	}
+	return warnings;
+}
+
+function collectOpaqueWarningsAfterSourceOutput(state: GraphState, sourceNodeIdRaw: string): RunSchemaWarningLog[] {
+	const warnings: RunSchemaWarningLog[] = [];
+	const dedupe = new Set<string>();
+	const sourceNodeId = String(sourceNodeIdRaw ?? '').trim();
+	if (!sourceNodeId) return warnings;
+	for (const edge of state.edges ?? []) {
+		const edgeId = String(edge?.id ?? '').trim();
+		if (!edgeId) continue;
+		if (String(edge?.source ?? '').trim() !== sourceNodeId) continue;
+		const targetNodeId = String(edge?.target ?? '').trim();
+		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim();
+		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim();
+		const edgeSchema = state.schemaPlane?.edgeSchemas?.[edgeId];
+		if (String((edgeSchema as any)?.mode ?? '').trim().toLowerCase() !== 'opaque') continue;
+		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
+		const warningKey = `post_output_opaque:${edgeId}`;
+		if (dedupe.has(warningKey)) continue;
+		dedupe.add(warningKey);
+		warnings.push({
+			edgeId,
+			nodeId: targetNodeId || sourceNodeId || undefined,
+			message:
+				`[SCHEMA_WARN] edge=${edgeId} code=OPAQUE_DEPENDENCY mode=${mode} ` +
+				`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} ` +
+				`detail="Schema remains opaque after source output; verify source schema inference or declared expected schema."`
+		});
+	}
+	return warnings;
+}
+
 export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
 	const evtGraphId = (evt as any)?.graphId;
 	if (typeof evtGraphId === 'string' && evtGraphId && evtGraphId !== state.graphId) {
@@ -750,10 +839,23 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				nodeOutputs,
 				nodeBindings
 			});
-			if (driftLogMessage) {
-				return logPush(baseNext, 'warn', driftLogMessage, evt.nodeId);
+			let nextState = baseNext;
+			for (const warning of collectOpaqueWarningsAfterSourceOutput(baseNext, evt.nodeId)) {
+				nextState = withGraphMeta(
+					logPush(
+						nextState,
+						'warn',
+						warning.message,
+						warning.nodeId ?? undefined,
+						undefined,
+						warning.edgeId ?? undefined
+					)
+				);
 			}
-			return baseNext;
+			if (driftLogMessage) {
+				return logPush(nextState, 'warn', driftLogMessage, evt.nodeId);
+			}
+			return nextState;
 		}
 		case 'cache_decision': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
@@ -888,44 +990,57 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			}
 			const nodeOutputs = clearNodeCacheUiForNodes(state.nodeOutputs, evtPlanned);
 			const nodes = applyLlmHolderToNodes(state.nodes, null);
-			return withGraphMeta(
-				logPush(
-					{
-						...state,
-						nodes,
-						activeRunId: evt.runId ?? state.activeRunId,
-						activeRunMode: evtMode,
-						activeRunFrom: evt.runFrom ?? state.activeRunFrom,
-						activeRunNodeSet: evtPlanned,
-						nodeBindings,
-						nodeOutputs,
-						queueRuntime: {
-							...(state.queueRuntime ?? {}),
-							metrics: {},
-							nodeMetrics: {},
-							runtimeItemMetrics: {},
-							runScoped: undefined,
-							schedulerSnapshot: undefined,
-							llmLease: undefined,
-							adaptiveDecisions: [],
-							currentRunSummary: {
-								runId: String(evt.runId ?? runId),
-								maxPendingQueueDepth: 0,
-								hadStalledSnapshot: false,
-								blockedEvents: 0
-							},
-							blockedByNode: {},
-							softFailByNode: {}
-							,
-							controlPlaneEdgeState: {},
-							controlPlaneNodeState: {},
-							appliedControlSeq: 0
-						}
+			const baseState = {
+				...state,
+				nodes,
+				activeRunId: evt.runId ?? state.activeRunId,
+				activeRunMode: evtMode,
+				activeRunFrom: evt.runFrom ?? state.activeRunFrom,
+				activeRunNodeSet: evtPlanned,
+				nodeBindings,
+				nodeOutputs,
+				queueRuntime: {
+					...(state.queueRuntime ?? {}),
+					metrics: {},
+					nodeMetrics: {},
+					runtimeItemMetrics: {},
+					runScoped: undefined,
+					schedulerSnapshot: undefined,
+					llmLease: undefined,
+					adaptiveDecisions: [],
+					currentRunSummary: {
+						runId: String(evt.runId ?? runId),
+						maxPendingQueueDepth: 0,
+						hadStalledSnapshot: false,
+						blockedEvents: 0
 					},
+					blockedByNode: {},
+					softFailByNode: {},
+					controlPlaneEdgeState: {},
+					controlPlaneNodeState: {},
+					appliedControlSeq: 0
+				}
+			};
+			let nextState = withGraphMeta(
+				logPush(
+					baseState,
 					'info',
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
 				)
 			);
+			for (const warning of collectSchemaWarningsForRun(nextState, evtPlanned)) {
+				nextState = withGraphMeta(
+					logPush(
+						nextState,
+						'warn',
+						warning.message,
+						warning.nodeId ?? undefined,
+						undefined,
+						warning.edgeId ?? undefined
+					)
+				);
+			}
+			return nextState;
 		}
 		case 'run_pause_requested': {
 			return withGraphMeta(logPush({ ...state, runStatus: 'pausing' }, 'info', 'Pause requested'));
