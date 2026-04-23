@@ -142,6 +142,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
 	import { resolveEdgeVisualClass } from '$lib/flow/edgeVisualState';
+	import { buildSchemaTooltip, resolveSchemaClassFromSnapshot } from '$lib/flow/edgeSchemaAuthority';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
@@ -252,20 +253,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: displayEdges = ((_lc, _fl) => edges.map((e) => {
 		const diag = ($edgeSchemaDiagnostics as Record<string, any> | undefined)?.[String(e.id ?? '')] ?? null;
 		const schemaValidation = (graphStore as any).getEdgeSchemaValidationState?.(String(e.id ?? '')) ?? null;
-		const schemaClass = (
-			schemaValidation?.state === 'error' || diag?.severity === 'error'
-				? 'edge-schema-error'
-				: schemaValidation?.state === 'warning' || diag?.severity === 'warning'
-					? 'edge-schema-warning'
-					: ''
-		).trim();
-		// const schemaClass = ""
 		const linkKindClass =
 			String(((e.data as any)?.linkKind ?? (e.data as any)?.link_kind ?? 'data_link')).trim().toLowerCase() ===
 			'control_link'
 				? 'edge-link-control'
 				: '';
 		const edgeId = String(e.id ?? '').trim();
+		const schemaSnapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(edgeId) ?? null;
+		const schemaClass = resolveSchemaClassFromSnapshot(schemaSnapshot);
 		const edgeExec = String((e.data as any)?.exec ?? 'idle').trim().toLowerCase();
 		const edgeMode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
 		const sourceNodeId = String((e as any)?.source ?? '').trim();
@@ -286,11 +281,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			blocked: monitorFlags.blocked,
 			full: monitorFlags.full
 		});
-		const title = schemaValidation?.message
-			? String(schemaValidation.message)
-			: diag
-				? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
-				: undefined;
+		const diagText = diag
+			? `${String(diag.message ?? '')}${Array.isArray(diag.suggestions) && diag.suggestions.length > 0 ? `\n${diag.suggestions.join('\n')}` : ''}`
+			: '';
+		const title = buildSchemaTooltip(
+			schemaSnapshot,
+			diagText || undefined,
+			schemaValidation?.message ? String(schemaValidation.message) : undefined
+		);
 		return {
 			...e,
 			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
