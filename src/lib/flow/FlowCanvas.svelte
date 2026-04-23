@@ -3099,7 +3099,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				: [];
 			const details = errors
 				.slice(0, 5)
-				.map((item) => `- ${String(item.nodeId ?? 'node')}: ${String(item.message ?? '')}`)
+				.map((item) => {
+					const nodeId = String(item.nodeId ?? 'node').trim();
+					const nodeName = String(nodeLabelById.get(nodeId) ?? '').trim();
+					const displayNode = nodeName.length > 0 ? `${nodeName} (${nodeId})` : nodeId;
+					return `- ${displayNode}: ${String(item.message ?? '')}`;
+				})
 				.join('\n');
 			const message = `${String(result?.message ?? 'Schema issues were found in the run path.')}\n\n${details}\n\nProceed anyway?`;
 			const proceed = window.confirm(message);
@@ -4737,9 +4742,6 @@ async function returnFromComponentEditMode() {
 				<span class={graphHeaderStatusClass}
 					>{statusScopeLabel}: {graphHeaderStatus}{scopedUnsavedChanges ? ' + Unsaved changes' : ''}</span
 				>
-				<span class="schemaStatus">
-					{$graphStore.hasSchemaErrors?.() ? `${schemaErrorCount} schema issue${schemaErrorCount === 1 ? '' : 's'}` : 'Schema valid'}
-				</span>
 				{#if isComponentEditContext}
 					<button class="runSecondary" on:click={returnFromComponentEditMode}>
 						Return to graph
@@ -5272,6 +5274,7 @@ async function returnFromComponentEditMode() {
 			enabled={$graphStore.viewMode === 'schema'}
 			errorCount={schemaErrorCount}
 			warningCount={0}
+			onToggle={() => graphStore.toggleSchemaView()}
 		/>
 
 		<div
