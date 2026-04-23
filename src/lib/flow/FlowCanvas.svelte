@@ -141,7 +141,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTransitionRow,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
-	import { resolveEdgeVisualClass } from '$lib/flow/edgeVisualState';
+	import { resolveEdgeVisualClass, computeEdgeVisualClass } from '$lib/flow/edgeVisualState';
 	import { buildSchemaTooltip, resolveSchemaClassFromSnapshot } from '$lib/flow/edgeSchemaAuthority';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
@@ -250,7 +250,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	// dependencies of this block.  If they're only accessed inside the .map()
 	// callback, Svelte's static analysis may not mark them as invalidation
 	// triggers, causing stale edge colors after a run completes.
-	$: displayEdges = ((_lc, _fl) => edges.map((e) => {
+	$: displayEdges = ((_lc, _fl, _vm) => edges.map((e) => {
 		const diag = ($edgeSchemaDiagnostics as Record<string, any> | undefined)?.[String(e.id ?? '')] ?? null;
 		const schemaValidation = (graphStore as any).getEdgeSchemaValidationState?.(String(e.id ?? '')) ?? null;
 		const linkKindClass =
@@ -279,7 +279,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			blocked: false,
 			full: false
 		};
-		const visualClass = resolveEdgeVisualClass({
+		const visualClass = computeEdgeVisualClass({
+			viewMode: $graphStore.viewMode,
+			schemaClass,
 			edgeMode,
 			edgeExec,
 			sourceLifecycle,
@@ -301,7 +303,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
 			title
 		};
-	}))(runMonitorNodeLifecycleById, runMonitorEdgeFlagsById);
+	}))(runMonitorNodeLifecycleById, runMonitorEdgeFlagsById, $graphStore.viewMode);
 
 	function applyCanvasSelection(
 		seedNodes: Node<PipelineNodeData>[],

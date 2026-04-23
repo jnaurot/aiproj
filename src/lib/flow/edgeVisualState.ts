@@ -8,6 +8,13 @@ export type EdgeVisualStateInput = {
 	full: boolean;
 };
 
+export type GraphViewMode = 'execution' | 'schema';
+
+export type EdgeVisualInput = EdgeVisualStateInput & {
+	viewMode: GraphViewMode;
+	schemaClass: '' | 'edge-schema-warning' | 'edge-schema-error';
+};
+
 export function resolveEdgeVisualClass(input: EdgeVisualStateInput):
 	| 'edge-state-nonwork'
 	| 'edge-state-running'
@@ -39,4 +46,20 @@ export function resolveEdgeVisualClass(input: EdgeVisualStateInput):
 		return 'edge-state-waiting';
 	}
 	return 'edge-state-inactive';
+}
+
+/**
+ * Schema-view-aware edge visual class resolver.
+ *
+ * In schema view all execution signals are suppressed; edge colour is
+ * derived solely from the contract validation result (schemaClass).
+ * In execution view this delegates to resolveEdgeVisualClass.
+ */
+export function computeEdgeVisualClass(input: EdgeVisualInput): string {
+	if (input.viewMode === 'schema') {
+		if (input.schemaClass === 'edge-schema-error') return 'edge-state-blocked';
+		if (input.schemaClass === 'edge-schema-warning') return 'edge-state-waiting';
+		return 'edge-state-inactive';
+	}
+	return resolveEdgeVisualClass(input);
 }
