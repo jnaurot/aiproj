@@ -132,8 +132,7 @@ export function projectNodeStatus(
 	const currentArtifactId = source.current?.artifactId ?? source.currentArtifactId;
 	const lastArtifactId = source.last?.artifactId ?? source.lastArtifactId;
 	const hasArtifact = Boolean(currentArtifactId || lastArtifactId);
-	const stale = source.isUpToDate === false || runtime === 'stale' || hasExecDrift(source);
-
+	const stale = runtime === 'stale' || hasExecDrift(source);
 	let lifecycle: NodeLifecycleStatus = 'idle';
 	let execution: NodeExecutionStatus = 'inactive';
 
@@ -162,15 +161,14 @@ export function projectNodeStatus(
 		lifecycle = 'completed';
 		execution = 'inactive';
 	} else if (runtime === 'idle' && hasArtifact) {
-		// Idle + artifact can represent either retained historical lineage (e.g. reset)
-		// or a genuinely current completed result.
-		if (source.isUpToDate === false) {
-			lifecycle = 'idle';
-			execution = 'inactive';
-		} else {
+		// Upgrade to 'completed' only when a *current* artifact is bound.
+		// After a reset, last.artifactId retains historical lineage but current is
+		// zeroed — the node has not been re-executed and should stay 'idle'.
+		if (currentArtifactId) {
 			lifecycle = 'completed';
 			execution = 'finished';
 		}
+		// else: idle + last-only → lifecycle stays 'idle', execution stays 'inactive'
 	} else if (!runtime && hasArtifact) {
 		lifecycle = 'completed';
 		execution = 'finished';

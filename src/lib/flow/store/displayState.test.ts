@@ -23,9 +23,11 @@ describe('projectNodeDisplayState', () => {
 		expect(projectNodeDisplayState({ status: 'skipped' }, 'skipped')).toBe('skipped');
 	});
 
-	it('maps stale from explicit stale and isUpToDate false', () => {
+	it('maps stale from explicit stale runtime status', () => {
 		expect(projectNodeDisplayState({ status: 'stale' }, 'stale')).toBe('stale');
-		expect(projectNodeDisplayState({ status: 'succeeded_up_to_date', isUpToDate: false })).toBe('stale');
+		// isUpToDate: false alone no longer drives staleness under the three-state model.
+		// Only runtime === 'stale' or exec-key drift triggers stale.
+		expect(projectNodeDisplayState({ status: 'succeeded_up_to_date', isUpToDate: false })).toBe('succeeded');
 	});
 
 	it('maps succeeded states from runtime or artifact fallback', () => {

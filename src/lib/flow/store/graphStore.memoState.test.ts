@@ -93,6 +93,12 @@ describe('graphStore memo state projection', () => {
 		// After the run_started event n1 must have its memoState reset (it is
 		// about to be re-executed) while n2's memoState must be preserved so
 		// the inspector can still offer the "Save checkpoint" action for n2.
+		//
+		// The state here reflects what exists AFTER resetRunUiState() has been
+		// called (which always zeroes current.execKey / current.artifactId before
+		// a run starts).  memoState is preserved by resetRunUiState via spread.
+		// Only nodes whose current.execKey is already set (fast all-cache race,
+		// where the snapshot arrived before run_started) bypass the clear.
 		const runId = 'run-2';
 		const state = {
 			...makeState(),
@@ -105,22 +111,22 @@ describe('graphStore memo state projection', () => {
 			nodeBindings: {
 				n1: nb(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						cacheValid: true,
-						currentArtifactId: 'art-1',
-						currentExecKey: 'exec-1',
+						status: 'idle',          // resetRunUiState sets idle + zeros current
+						isUpToDate: false,
+						cacheValid: false,
+						current: { execKey: null, artifactId: null },
+						last: { execKey: 'exec-1', artifactId: 'art-1' },
 						memoState: { decision: 'reuse', memoKey: 'abc123', resolvedAt: '2026-04-10T00:00:00.000Z' }
 					},
 					'n1'
 				),
 				n2: nb(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						cacheValid: true,
-						currentArtifactId: 'art-2',
-						currentExecKey: 'exec-2',
+						status: 'idle',
+						isUpToDate: false,
+						cacheValid: false,
+						current: { execKey: null, artifactId: null },
+						last: { execKey: 'exec-2', artifactId: 'art-2' },
 						memoState: { decision: 'reuse', memoKey: 'def456', resolvedAt: '2026-04-10T00:00:00.000Z' }
 					},
 					'n2'
@@ -149,6 +155,7 @@ describe('graphStore memo state projection', () => {
 
 	it('clears memoState for all planned nodes on a full run_started', () => {
 		// When ALL nodes are planned every memoState should be reset.
+		// State represents post-resetRunUiState: current is zeroed, last retains lineage.
 		const runId = 'run-full';
 		const state = {
 			...makeState(),
@@ -159,22 +166,22 @@ describe('graphStore memo state projection', () => {
 			nodeBindings: {
 				n1: nb(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						cacheValid: true,
-						currentArtifactId: 'art-1',
-						currentExecKey: 'exec-1',
+						status: 'idle',
+						isUpToDate: false,
+						cacheValid: false,
+						current: { execKey: null, artifactId: null },
+						last: { execKey: 'exec-1', artifactId: 'art-1' },
 						memoState: { decision: 'reuse', memoKey: 'abc123', resolvedAt: '2026-04-10T00:00:00.000Z' }
 					},
 					'n1'
 				),
 				n2: nb(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						cacheValid: true,
-						currentArtifactId: 'art-2',
-						currentExecKey: 'exec-2',
+						status: 'idle',
+						isUpToDate: false,
+						cacheValid: false,
+						current: { execKey: null, artifactId: null },
+						last: { execKey: 'exec-2', artifactId: 'art-2' },
 						memoState: { decision: 'reuse', memoKey: 'def456', resolvedAt: '2026-04-10T00:00:00.000Z' }
 					},
 					'n2'
@@ -334,8 +341,10 @@ describe('graphStore memo state projection', () => {
 	});
 
 	it('run_started still marks stale for nodes that do NOT yet reflect the current run', () => {
-		// Contrast: if the binding has currentRunId from a PREVIOUS run (not this run),
-		// run_started should still mark it stale as usual.
+		// After resetRunUiState, current.execKey is always null.  When run_started
+		// fires and a node has last.artifactId (retained lineage) but current.execKey
+		// is null, it means the snapshot has NOT yet reflected the new run — the node
+		// must still be stale-marked to clear the UI before fresh events arrive.
 		const runId = 'run-new';
 		const prevExecKey = 'b'.repeat(64);
 
@@ -349,12 +358,12 @@ describe('graphStore memo state projection', () => {
 			nodeBindings: {
 				n1: nb(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						cacheValid: true,
-						currentRunId: 'run-old',   // belongs to PREVIOUS run
-						currentArtifactId: prevExecKey,
-						currentExecKey: prevExecKey
+						status: 'idle',
+						isUpToDate: false,
+						cacheValid: false,
+						// current is zeroed by resetRunUiState; last retains old lineage.
+						current: { execKey: null, artifactId: null },
+						last: { execKey: prevExecKey, artifactId: prevExecKey }
 					},
 					'n1'
 				)
@@ -373,7 +382,8 @@ describe('graphStore memo state projection', () => {
 			runId
 		);
 
-		// Node belongs to previous run — must be set to stale/RUN_PENDING.
+		// Node has no current.execKey — the snapshot hasn't reflected this run yet.
+		// Must be set to stale/RUN_PENDING so the UI shows the correct pending state.
 		expect(next.nodeBindings.n1?.status).toBe('stale');
 		expect((next.nodeBindings.n1 as any)?.staleReason).toBe('RUN_PENDING');
 	});

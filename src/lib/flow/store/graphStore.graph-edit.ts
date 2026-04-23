@@ -1841,7 +1841,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		) {
 			return { ok: false, error: 'Checkpoint is unavailable while node is executing.' };
 		}
-		if (normalizedBinding?.isUpToDate === false || displayStatus === 'stale') {
+		if (displayStatus === 'stale') {
 			return { ok: false, error: 'Checkpoint requires a current (non-stale) artifact binding.' };
 		}
 

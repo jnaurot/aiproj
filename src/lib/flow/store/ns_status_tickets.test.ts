@@ -23,9 +23,19 @@ describe('NS-01 Canonical Status Domain Model', () => {
 	});
 
 	it('test_status_domain_model_allows_independent_freshness_badge', () => {
+		// Under the three-state model isUpToDate: false is not a stale signal.
+		// Staleness is driven by runtime === 'stale' or exec-key drift only.
 		const projection = projectNodeStatus({ status: 'succeeded_up_to_date', isUpToDate: false });
 		expect(projection.lifecycle).toBe('completed');
-		expect(projection.freshness).toBe('stale');
+		expect(projection.freshness).toBe('fresh');
+		// Exec-key drift does drive stale independently of lifecycle.
+		const drifted = projectNodeStatus({
+			status: 'succeeded_up_to_date',
+			current: { execKey: 'new', artifactId: 'a2' },
+			last: { execKey: 'old', artifactId: 'a1' }
+		});
+		expect(drifted.lifecycle).toBe('completed');
+		expect(drifted.freshness).toBe('stale');
 	});
 });
 
@@ -165,9 +175,11 @@ describe('NS-07 UI Simplification + NS-09 perf guardrails', () => {
 	});
 
 	it('test_freshness_badge_rendered_independently', () => {
+		// isUpToDate: false is no longer a stale signal; freshness is derived from
+		// runtime status and exec-key drift alone.
 		const projection = projectNodeStatus({ status: 'succeeded_up_to_date', isUpToDate: false });
 		expect(projection.lifecycle).toBe('completed');
-		expect(projection.freshness).toBe('stale');
+		expect(projection.freshness).toBe('fresh');
 	});
 
 	it('test_monitor_status_filters_use_canonical_lifecycle', () => {

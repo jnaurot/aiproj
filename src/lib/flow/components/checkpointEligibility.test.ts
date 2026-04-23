@@ -66,9 +66,10 @@ describe('checkpoint eligibility', () => {
 	});
 
 	it('rejects stale lineage even with artifact + memo key present', () => {
+		// Under the three-state model staleness is driven by runtime === 'stale'
+		// or exec-key drift, not by isUpToDate: false.
 		const result = computeCheckpointEligibility({
-			status: 'idle',
-			isUpToDate: false,
+			status: 'stale',
 			current: {
 				artifactId: 'art-1',
 				execKey: 'exec-1'

@@ -28,7 +28,7 @@ export function computeCheckpointEligibility(binding: NodeBindingInfo | null | u
 	const execKey = String(lineage?.execKey ?? '').trim();
 	const memoKey = String(source?.memoState?.memoKey ?? '').trim();
 
-	if (source?.isUpToDate === false || status === 'stale') {
+	if (status === 'stale') {
 		return {
 			canSave: false,
 			reason: 'Checkpoint save requires a current (non-stale) artifact binding.',

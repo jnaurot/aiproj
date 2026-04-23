@@ -694,7 +694,10 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 							? ((evt as any).primingArtifact as Record<string, unknown>)
 							: undefined,
 					cached: evt.cached ?? false,
-					cacheDecision: nextCacheDecision
+					cacheDecision: nextCacheDecision,
+					// Carry forward the checkpoint-pin flag set by cache_decision so it
+					// is not lost when node_output fires immediately after.
+					pinnedByCheckpoint: state.nodeOutputs?.[evt.nodeId]?.pinnedByCheckpoint || undefined
 				}
 			};
 			let driftLogMessage: string | null = null;
@@ -782,12 +785,20 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				[evt.nodeId]: nextBinding
 			};
 			const prev = state.nodeOutputs?.[evt.nodeId];
+			const isCacheHit = evt.decision === 'cache_hit';
+			// A checkpoint pin is a cache hit whose artifact came from a user-pinned
+			// checkpoint rather than the memo cache.  The visual distinction (📌 vs 🔄)
+			// is derived here: if a checkpoint exists for this node when the cache hit
+			// fires, it was the checkpoint that the backend used (checkpoint hints are
+			// always preferred over memo cache when provided).
+			const pinnedByCheckpoint = isCacheHit && Boolean(state.checkpointRegistry?.[evt.nodeId]);
 			const nextForNode: NodeOutputInfo = {
 				mimeType: prev?.mimeType,
 				payloadType: prev?.payloadType,
 				preview: prev?.preview,
-				cached: evt.decision === 'cache_hit',
+				cached: isCacheHit,
 				cacheDecision: evt.decision,
+				pinnedByCheckpoint: pinnedByCheckpoint || undefined,
 				expectedContractFingerprint:
 					evt.decision === 'cache_hit_contract_mismatch'
 						? String((evt as any).expectedContractFingerprint ?? '')
@@ -829,6 +840,11 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				// resolved via cache in an earlier run) must keep their memoState so
 				// that the inspector can still offer the "Save checkpoint" action.
 				if (!evtPlanned.has(nodeId)) continue;
+				// If getRun() returned a completed snapshot before run_started fired via
+				// SSE (fast all-cache race), the binding already reflects the finished run.
+				// Clearing memoState would destroy the "Save checkpoint" fingerprint that
+				// the snapshot just populated.
+				if (prevBinding.current?.execKey && String(prevBinding.status ?? '').toLowerCase().startsWith('succeeded')) continue;
 				nodeBindings[nodeId] = {
 					...prevBinding,
 					memoState: undefined,
@@ -851,11 +867,12 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				// delivered run_started), skip the stale transition.  The node's final state
 				// is already correct; clobbering it with 'stale' would cause a transient
 				// disappearance of the "Save checkpoint" action and an unnecessary UI flash.
-				if (
-					evtRunId &&
-					String(prevBinding.currentRunId ?? '').trim() === evtRunId &&
-					String(prevBinding.status ?? '').toLowerCase().startsWith('succeeded')
-				) continue;
+				//
+				// We detect this via current.execKey: resetRunUiState zeroes it before the
+				// run starts, so a non-null execKey here means the snapshot already hydrated
+				// the completed-run state.  The previous guard used currentRunId, which the
+				// backend always returns as null — making it ineffective.
+				if (prevBinding.current?.execKey && String(prevBinding.status ?? '').toLowerCase().startsWith('succeeded')) continue;
 				nodeBindings[nodeId] = {
 					...prevBinding,
 					status: 'stale',

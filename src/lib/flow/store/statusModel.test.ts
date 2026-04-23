@@ -30,10 +30,11 @@ describe('statusModel node projection', () => {
 		expect(fresh.freshness).toBe('fresh');
 		expect(fresh.display).toBe('succeeded');
 
-		const stale = projectNodeStatus({ status: 'succeeded_up_to_date', isUpToDate: false });
-		expect(stale.lifecycle).toBe('completed');
-		expect(stale.freshness).toBe('stale');
-		expect(stale.display).toBe('stale');
+		// isUpToDate: false is no longer a stale signal under the three-state model.
+		const notStale = projectNodeStatus({ status: 'succeeded_up_to_date', isUpToDate: false });
+		expect(notStale.lifecycle).toBe('completed');
+		expect(notStale.freshness).toBe('fresh');
+		expect(notStale.display).toBe('succeeded');
 	});
 
 	it('maps skipped runtime to skipped lifecycle/display', () => {

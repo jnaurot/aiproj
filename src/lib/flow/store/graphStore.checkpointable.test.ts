@@ -5,6 +5,10 @@ import type { KnownRunEvent } from '$lib/flow/types/run';
 
 describe('graphStore checkpointable binding flags', () => {
 	it('run_started clears checkpointable and memoState', () => {
+		// State reflects post-resetRunUiState: current is zeroed, last retains lineage,
+		// but memoState is preserved by the spread (resetRunUiState uses ...binding).
+		// current.execKey is null, so the race-condition guard does not fire and
+		// memoState + checkpointable are properly cleared.
 		const runId = 'run-1';
 		const base = __hardResetGraphForTest({} as any, 'graph-checkpointable');
 		const state = {
@@ -15,9 +19,9 @@ describe('graphStore checkpointable binding flags', () => {
 			nodeBindings: {
 				n1: __normalizeBindingForTest(
 					{
-						status: 'succeeded_up_to_date',
-						isUpToDate: true,
-						current: { execKey: 'exec-1', artifactId: 'art-1' },
+						status: 'idle',
+						isUpToDate: false,
+						current: { execKey: null, artifactId: null },
 						last: { execKey: 'exec-1', artifactId: 'art-1' },
 						checkpointable: true,
 						memoState: {

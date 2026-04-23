@@ -671,4 +671,220 @@ describe('graphStore checkpoint actions', () => {
 		expect(cleared.removed).toBe(1);
 		expect(get(graphStore).checkpointRegistry).toEqual({});
 	});
+
+	// ── Fast all-cache race condition regression ──────────────────────────────
+	//
+	// When a run completes very quickly (all cache hits, ~282ms), getRun() returns
+	// the completed snapshot BEFORE run_started fires via SSE.  The old guard used
+	// prevBinding.currentRunId === evtRunId, but the backend always returns
+	// currentRunId: null in snapshots, so the guard never fired.
+	//
+	// The correct guard is prevBinding.current?.execKey being non-null: resetRunUiState
+	// zeroes it before the run starts, so a non-null value at run_started time means
+	// the snapshot already hydrated the final completed state.  Both the memoState
+	// clear (Loop 1) and the stale-mark (Loop 2) must skip such nodes.
+
+	it('fast all-cache race: snapshot arriving before run_started preserves memoState and keeps Save Checkpoint available', async () => {
+		const nodeId = 'n1';
+		installSingleNodeGraph(nodeId);
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-fast-cache-race';
+		const EXEC_KEY = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+		const ARTIFACT_ID = 'art-fast-cache';
+		const MEMO_KEY = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+
+		// getRun returns a fully completed snapshot — run already finished
+		// before the SSE stream had a chance to deliver run_started.
+		// Crucially: currentRunId is null (as the backend always returns).
+		getRunMock.mockResolvedValue({
+			graphId,
+			status: 'succeeded',
+			runId,
+			runMode: 'from_start',
+			plannedNodeIds: [nodeId],
+			nodeBindings: {
+				[nodeId]: {
+					status: 'succeeded_up_to_date',
+					isUpToDate: true,
+					cacheValid: true,
+					currentRunId: null, // backend always returns null
+					lastRunId: runId,
+					current: { execKey: EXEC_KEY, artifactId: ARTIFACT_ID },
+					last: { execKey: EXEC_KEY, artifactId: ARTIFACT_ID },
+					memoState: {
+						decision: 'compute',
+						memoKey: MEMO_KEY
+					}
+				}
+			}
+		});
+
+		streamRunEventsMock.mockImplementation((rid: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() => {
+				// run_started fires AFTER the snapshot was already applied
+				onEvent({
+					type: 'run_started',
+					runId: rid,
+					at: '2026-04-10T00:00:00Z',
+					runMode: 'from_start',
+					plannedNodeIds: [nodeId]
+				} as KnownRunEvent);
+				onEvent({
+					type: 'run_finished',
+					runId: rid,
+					at: '2026-04-10T00:00:00.300Z',
+					status: 'succeeded'
+				} as KnownRunEvent);
+			});
+			return { close: vi.fn() };
+		});
+
+		await graphStore.runRemote(null, 'from_start');
+
+		const binding = (get(graphStore).nodeBindings as any)?.[nodeId];
+
+		// Status must stay succeeded — run_started must not stale-mark a node
+		// whose snapshot already reflected the completed run.
+		expect(String(binding?.status ?? '')).toMatch(/^succeeded/);
+
+		// memoState must survive — run_started must not clear it when the node
+		// is already hydrated from the snapshot.
+		expect(binding?.memoState?.memoKey).toBe(MEMO_KEY);
+
+		// Save Checkpoint must be available.
+		const result = graphStore.createCheckpoint(nodeId, 'race condition checkpoint');
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.checkpoint.fingerprintAtCreation).toBe(MEMO_KEY);
+			expect(result.checkpoint.artifactId).toBe(ARTIFACT_ID);
+		}
+	});
+
+	it('fast all-cache race: normal SSE flow (snapshot empty, events drive state) still ends succeeded', async () => {
+		// Control test: when the snapshot returns empty and SSE drives all state,
+		// run_started correctly skips stale-marking since current.execKey is null,
+		// and subsequent events bring the node to succeeded.
+		const nodeId = 'n1';
+		installSingleNodeGraph(nodeId);
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-normal-sse-flow';
+		const EXEC_KEY = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+		const ARTIFACT_ID = 'art-normal-sse';
+
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+		// Empty snapshot — all state driven by SSE events.
+		getRunMock.mockResolvedValue({ graphId, status: 'running', runId, nodeBindings: {} });
+
+		streamRunEventsMock.mockImplementation((rid: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() => {
+				onEvent({ type: 'run_started', runId: rid, at: '2026-04-10T00:00:00Z', runMode: 'from_start', plannedNodeIds: [nodeId] } as KnownRunEvent);
+				onEvent({ type: 'cache_decision', runId: rid, at: '2026-04-10T00:00:00.010Z', nodeId, decision: 'cache_hit', execKey: EXEC_KEY, artifactId: ARTIFACT_ID } as KnownRunEvent);
+				onEvent({ type: 'node_output', runId: rid, at: '2026-04-10T00:00:00.020Z', nodeId, artifactId: ARTIFACT_ID, handle: 'out', cached: true } as KnownRunEvent);
+				onEvent({ type: 'node_finished', runId: rid, at: '2026-04-10T00:00:00.030Z', nodeId, status: 'succeeded', cached: true, execution_time_ms: 5 } as KnownRunEvent);
+				onEvent({ type: 'run_finished', runId: rid, at: '2026-04-10T00:00:00.040Z', status: 'succeeded' } as KnownRunEvent);
+			});
+			return { close: vi.fn() };
+		});
+
+		await graphStore.runRemote(null, 'from_start');
+
+		const binding = (get(graphStore).nodeBindings as any)?.[nodeId];
+		// Node should end up succeeded via normal SSE event sequence.
+		expect(String(binding?.status ?? '')).toMatch(/^succeeded/);
+		expect(binding?.current?.artifactId ?? binding?.currentArtifactId).toBe(ARTIFACT_ID);
+	});
+
+	// ── Checkpoint pin visual regression ────────────────────────────────────
+	//
+	// When a checkpoint artifact is used as a cache hit, the output's
+	// pinnedByCheckpoint flag must be set so the UI can show 📌 instead of 🔄.
+
+	it('cache_decision sets pinnedByCheckpoint when checkpoint registry entry exists', async () => {
+		const nodeId = 'n1';
+		const runId = 'run-checkpoint-pin-visual';
+		const EXEC_KEY = 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+		const ARTIFACT_ID = 'art-checkpoint-pin';
+		const MEMO_KEY = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+
+		// Load graph with checkpoint already in registry (simulates a graph that
+		// was saved with an existing checkpoint for node n1).
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: nodeId,
+					type: 'source',
+					position: { x: 0, y: 0 },
+					data: { kind: 'source', label: 'Source', sourceKind: 'text', params: {} }
+				}
+			],
+			edges: [],
+			checkpointRegistry: {
+				[nodeId]: {
+					id: '00000000-0000-4000-8000-000000000999',
+					name: 'pinned',
+					nodeId,
+					graphId: 'g-pin-visual',
+					runId: 'run-prev',
+					artifactId: ARTIFACT_ID,
+					execKey: EXEC_KEY,
+					fingerprintAtCreation: MEMO_KEY,
+					createdAt: '2026-04-10T00:00:00.000Z',
+					staleness: 'valid'
+				}
+			} as any
+		});
+
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+		getRunMock.mockResolvedValue({ graphId, status: 'succeeded', runId, nodeBindings: {} });
+
+		streamRunEventsMock.mockImplementation((rid: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() => {
+				onEvent({ type: 'run_started', runId: rid, at: '2026-04-10T00:00:00Z', runMode: 'from_start', plannedNodeIds: [nodeId] } as KnownRunEvent);
+				onEvent({ type: 'cache_decision', runId: rid, at: '2026-04-10T00:00:00.010Z', nodeId, decision: 'cache_hit', execKey: EXEC_KEY, artifactId: ARTIFACT_ID } as KnownRunEvent);
+				onEvent({ type: 'node_output', runId: rid, at: '2026-04-10T00:00:00.020Z', nodeId, artifactId: ARTIFACT_ID, handle: 'out', cached: true } as KnownRunEvent);
+				onEvent({ type: 'node_finished', runId: rid, at: '2026-04-10T00:00:00.030Z', nodeId, status: 'succeeded', cached: true, execution_time_ms: 5 } as KnownRunEvent);
+				onEvent({ type: 'run_finished', runId: rid, at: '2026-04-10T00:00:00.040Z', status: 'succeeded' } as KnownRunEvent);
+			});
+			return { close: vi.fn() };
+		});
+
+		await graphStore.runRemote(null, 'from_start');
+
+		const output = (get(graphStore).nodeOutputs as any)?.[nodeId];
+		expect(output?.cached).toBe(true);
+		expect(output?.pinnedByCheckpoint).toBe(true);
+	});
+
+	it('cache_decision does NOT set pinnedByCheckpoint for regular cache hits', async () => {
+		const nodeId = 'n1';
+		installSingleNodeGraph(nodeId);
+		const graphId = String((get(graphStore as any)?.graphId ?? '').trim());
+		const runId = 'run-regular-cache-hit';
+		const EXEC_KEY = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+		const ARTIFACT_ID = 'art-regular-cache';
+
+		// No checkpoint in registry.
+		createRunMock.mockResolvedValueOnce({ runId, graphId });
+		getRunMock.mockResolvedValue({ graphId, status: 'succeeded', runId, nodeBindings: {} });
+
+		streamRunEventsMock.mockImplementation((rid: string, onEvent: (evt: KnownRunEvent) => void) => {
+			queueMicrotask(() => {
+				onEvent({ type: 'run_started', runId: rid, at: '2026-04-10T00:00:00Z', runMode: 'from_start', plannedNodeIds: [nodeId] } as KnownRunEvent);
+				onEvent({ type: 'cache_decision', runId: rid, at: '2026-04-10T00:00:00.010Z', nodeId, decision: 'cache_hit', execKey: EXEC_KEY, artifactId: ARTIFACT_ID } as KnownRunEvent);
+				onEvent({ type: 'node_output', runId: rid, at: '2026-04-10T00:00:00.020Z', nodeId, artifactId: ARTIFACT_ID, handle: 'out', cached: true } as KnownRunEvent);
+				onEvent({ type: 'node_finished', runId: rid, at: '2026-04-10T00:00:00.030Z', nodeId, status: 'succeeded', cached: true, execution_time_ms: 5 } as KnownRunEvent);
+				onEvent({ type: 'run_finished', runId: rid, at: '2026-04-10T00:00:00.040Z', status: 'succeeded' } as KnownRunEvent);
+			});
+			return { close: vi.fn() };
+		});
+
+		await graphStore.runRemote(null, 'from_start');
+
+		const output = (get(graphStore).nodeOutputs as any)?.[nodeId];
+		expect(output?.cached).toBe(true);
+		expect(output?.pinnedByCheckpoint ?? false).toBe(false);
+	});
 });

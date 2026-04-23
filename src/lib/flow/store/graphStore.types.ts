@@ -100,6 +100,7 @@ export type NodeOutputInfo = {
 	primingArtifact?: Record<string, unknown>;
 	cached?: boolean;
 	cacheDecision?: 'cache_hit' | 'cache_miss' | 'cache_hit_contract_mismatch';
+	pinnedByCheckpoint?: boolean;
 	expectedContractFingerprint?: string;
 	actualContractFingerprint?: string;
 	mismatchKind?: string;
