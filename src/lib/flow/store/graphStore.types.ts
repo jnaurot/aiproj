@@ -591,6 +591,11 @@ export type QueueRuntime = {
 			updatedAt?: string;
 		}
 	>;
+	diagnosticCounters?: {
+		diagnostic_authority_conflict_total: number;
+		schema_warn_emitted_total: number;
+		schema_info_emitted_total: number;
+	};
 	blockedByNode?: Record<
 		string,
 		{

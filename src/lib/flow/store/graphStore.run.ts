@@ -653,6 +653,7 @@ type RunSchemaWarningLog = {
 	level: 'warn' | 'info';
 	source: 'contract_engine' | 'schema_plane';
 	code: string;
+	conflict?: boolean;
 	edgeId: string;
 	nodeId?: string;
 	message: string;
@@ -723,6 +724,7 @@ function collectSchemaSignalsForEdges(
 				level: 'info',
 				source: 'schema_plane',
 				code: 'OPAQUE_DEPENDENCY',
+				conflict: contractSeverity === 'clean',
 				edgeId,
 				nodeId: targetNodeId || sourceNodeId || undefined,
 				message:
@@ -750,6 +752,23 @@ function reconcileSchemaSignals(
 	const wantedMap = new Map<string, RunSchemaWarningLog>();
 	for (const entry of wanted) wantedMap.set(entry.key, entry);
 	let nextState = state;
+	const prevCounters = (state.queueRuntime?.diagnosticCounters ?? {
+		diagnostic_authority_conflict_total: 0,
+		schema_warn_emitted_total: 0,
+		schema_info_emitted_total: 0
+	}) as {
+		diagnostic_authority_conflict_total: number;
+		schema_warn_emitted_total: number;
+		schema_info_emitted_total: number;
+	};
+	let nextCounters = {
+		diagnostic_authority_conflict_total: Math.max(
+			0,
+			Number(prevCounters.diagnostic_authority_conflict_total ?? 0)
+		),
+		schema_warn_emitted_total: Math.max(0, Number(prevCounters.schema_warn_emitted_total ?? 0)),
+		schema_info_emitted_total: Math.max(0, Number(prevCounters.schema_info_emitted_total ?? 0))
+	};
 	for (const [key, signal] of Object.entries(previous)) {
 		const edgeId = String((signal as any)?.edgeId ?? '').trim();
 		if (!edgeId || !consideredEdgeIds.has(edgeId)) continue;
@@ -778,6 +797,14 @@ function reconcileSchemaSignals(
 			undefined,
 			entry.edgeId
 		);
+		if (entry.level === 'warn') {
+			nextCounters.schema_warn_emitted_total += 1;
+		} else {
+			nextCounters.schema_info_emitted_total += 1;
+		}
+		if (entry.conflict) {
+			nextCounters.diagnostic_authority_conflict_total += 1;
+		}
 		nextSignals[key] = {
 			key,
 			edgeId: entry.edgeId,
@@ -793,7 +820,8 @@ function reconcileSchemaSignals(
 		...nextState,
 		queueRuntime: {
 			...(nextState.queueRuntime ?? {}),
-			schemaDiagnosticSignals: nextSignals
+			schemaDiagnosticSignals: nextSignals,
+			diagnosticCounters: nextCounters
 		}
 	};
 }

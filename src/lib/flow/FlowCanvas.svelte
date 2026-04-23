@@ -260,7 +260,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				: '';
 		const edgeId = String(e.id ?? '').trim();
 		const schemaSnapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(edgeId) ?? null;
-		const schemaClass = resolveSchemaClassFromSnapshot(schemaSnapshot);
+		const legacySchemaClass = (
+			schemaValidation?.state === 'error' || diag?.severity === 'error'
+				? 'edge-schema-error'
+				: schemaValidation?.state === 'warning' || diag?.severity === 'warning'
+					? 'edge-schema-warning'
+					: ''
+		).trim() as '' | 'edge-schema-warning' | 'edge-schema-error';
+		const schemaClass = resolveSchemaClassFromSnapshot(schemaSnapshot, legacySchemaClass);
 		const edgeExec = String((e.data as any)?.exec ?? 'idle').trim().toLowerCase();
 		const edgeMode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
 		const sourceNodeId = String((e as any)?.source ?? '').trim();

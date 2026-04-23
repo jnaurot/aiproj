@@ -74,6 +74,7 @@ describe('graphStore schema warning run logs', () => {
 		);
 		const messages = (next.logs ?? []).map((entry) => String(entry?.message ?? ''));
 		expect(messages.some((line) => line.includes('[SCHEMA_WARN_RAISED]') && line.includes('edge=e_warn'))).toBe(true);
+		expect((next.queueRuntime?.diagnosticCounters as any)?.schema_warn_emitted_total).toBeGreaterThanOrEqual(1);
 		expect(
 			messages.some(
 				(line) =>
@@ -136,6 +137,8 @@ describe('graphStore schema warning run logs', () => {
 			)
 		).toBe(true);
 		expect(messages.some((line) => line.includes('[SCHEMA_WARN]') && line.includes('edge=e_opaque'))).toBe(false);
+		expect((afterOutput.queueRuntime?.diagnosticCounters as any)?.schema_info_emitted_total).toBeGreaterThanOrEqual(1);
+		expect((afterOutput.queueRuntime?.diagnosticCounters as any)?.diagnostic_authority_conflict_total).toBeGreaterThanOrEqual(1);
 	});
 
 	it('emits raised once and cleared once for contract warnings across run starts', () => {

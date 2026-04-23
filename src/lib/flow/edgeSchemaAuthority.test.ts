@@ -44,5 +44,18 @@ describe('edge schema authority presentation', () => {
 		expect(String(text ?? '')).toContain('Schema: warning (contract)');
 		expect(String(text ?? '')).toContain('Schema-plane note: warning');
 	});
-});
 
+	it('supports feature-flag parity for authority selection', () => {
+		const snapshot = {
+			edgeId: 'e4',
+			contractSeverity: 'clean',
+			schemaPlaneState: 'warning',
+			runtimeState: 'settled',
+			effectiveSeverity: 'clean'
+		} as const;
+		const onClass = resolveSchemaClassFromSnapshot(snapshot as any, 'edge-schema-warning', true);
+		const offClass = resolveSchemaClassFromSnapshot(snapshot as any, 'edge-schema-warning', false);
+		expect(onClass).toBe('');
+		expect(offClass).toBe('edge-schema-warning');
+	});
+});

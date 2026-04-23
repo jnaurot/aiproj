@@ -1,6 +1,22 @@
 import type { EdgeDiagnosticSnapshot } from '$lib/flow/store/graphStore.types';
 
-export function resolveSchemaClassFromSnapshot(snapshot: EdgeDiagnosticSnapshot | null): '' | 'edge-schema-warning' | 'edge-schema-error' {
+export const USE_CONTRACT_SEVERITY_AUTHORITY = (() => {
+	try {
+		const raw = String((import.meta as any)?.env?.VITE_USE_CONTRACT_SEVERITY_AUTHORITY ?? 'true')
+			.trim()
+			.toLowerCase();
+		return raw !== 'false' && raw !== '0' && raw !== 'off';
+	} catch {
+		return true;
+	}
+})();
+
+export function resolveSchemaClassFromSnapshot(
+	snapshot: EdgeDiagnosticSnapshot | null,
+	legacySchemaClass: '' | 'edge-schema-warning' | 'edge-schema-error' = '',
+	useContractSeverityAuthority: boolean = USE_CONTRACT_SEVERITY_AUTHORITY
+): '' | 'edge-schema-warning' | 'edge-schema-error' {
+	if (!useContractSeverityAuthority) return legacySchemaClass;
 	const severity = String(snapshot?.effectiveSeverity ?? 'clean').trim().toLowerCase();
 	if (severity === 'error') return 'edge-schema-error';
 	if (severity === 'warning') return 'edge-schema-warning';
@@ -19,6 +35,10 @@ export function buildSchemaTooltip(
 	const fallbackDiag = String(fallbackDiagMessage ?? '').trim();
 	const fallbackSchema = String(fallbackSchemaMessage ?? '').trim();
 	const lines: string[] = [];
+	const effective = String(snapshot?.effectiveSeverity ?? (severity || 'clean')).trim().toLowerCase();
+	if (snapshot) {
+		lines.push(`Authority: effective=${effective} contract=${severity || 'clean'} schemaPlane=${schemaPlaneState || 'neutral'}`);
+	}
 	if (severity === 'error' || severity === 'warning') {
 		lines.push(`Schema: ${severity} (contract)`);
 		if (contractMsg) lines.push(contractMsg);
@@ -33,4 +53,3 @@ export function buildSchemaTooltip(
 	}
 	return lines.length > 0 ? lines.join('\n') : undefined;
 }
-
