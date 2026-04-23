@@ -418,6 +418,21 @@ export function downstreamNodeIds(
 	return out;
 }
 
+function getCheckpointPlanningBoundaryNodeIds(
+	checkpointRegistry: GraphState['checkpointRegistry'] | null | undefined
+): Set<string> {
+	const out = new Set<string>();
+	for (const [nodeId, checkpoint] of Object.entries(checkpointRegistry ?? {})) {
+		const normalizedNodeId = String(nodeId ?? '').trim();
+		if (!normalizedNodeId) continue;
+		const artifactId = String((checkpoint as any)?.artifactId ?? '').trim();
+		const execKey = String((checkpoint as any)?.execKey ?? '').trim();
+		if (!artifactId || !execKey) continue;
+		out.add(normalizedNodeId);
+	}
+	return out;
+}
+
 export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): GraphState {
 	const checkpointBoundaryNodeIds = new Set<string>(Object.keys(state.checkpointRegistry ?? {}));
 	const candidateIds = downstreamNodeIds(state.edges, nodeId, checkpointBoundaryNodeIds);
@@ -1024,13 +1039,15 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 		}
 		case 'run_started': {
 			const evtMode = ((evt as any).runMode ?? state.activeRunMode) as ActiveRunMode;
+			const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(state.checkpointRegistry);
 			const evtPlanned = Array.isArray((evt as any).plannedNodeIds)
 				? new Set<string>((evt as any).plannedNodeIds as string[])
 				: computePlannedNodeSet(
 					state.nodes,
 					state.edges,
 					evt.runFrom ?? null,
-					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start')
+					evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start'),
+					checkpointBoundaries
 				);
 			const nodeBindings = { ...state.nodeBindings };
 			for (const [nodeId, rawBinding] of Object.entries(nodeBindings)) {
@@ -2781,7 +2798,14 @@ export function createRunManager(deps: RunDeps) {
 				message: result.error.message
 			}));
 		if (allErrors.length <= 0) return { kind: 'none' };
-		const plannedSet = computePlannedNodeSet(state.nodes, state.edges, runFrom, runMode);
+		const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(state.checkpointRegistry);
+		const plannedSet = computePlannedNodeSet(
+			state.nodes,
+			state.edges,
+			runFrom,
+			runMode,
+			checkpointBoundaries
+		);
 		const inPath = allErrors.filter((item) => plannedSet.has(item.nodeId));
 		if (inPath.length <= 0) return { kind: 'outside_run_path', count: allErrors.length };
 		return { kind: 'in_run_path', errors: inPath };
@@ -3452,7 +3476,14 @@ export function createRunManager(deps: RunDeps) {
 					adaptiveMode ?? null,
 					checkpoints
 				);
-				const plannedNodeSet = computePlannedNodeSet(s1.nodes, s1.edges, runFrom, effectiveRunMode);
+				const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(s1.checkpointRegistry);
+				const plannedNodeSet = computePlannedNodeSet(
+					s1.nodes,
+					s1.edges,
+					runFrom,
+					effectiveRunMode,
+					checkpointBoundaries
+				);
 				await runSingleWithStream(payload, plannedNodeSet);
 				return { ok: true as const };
 			}

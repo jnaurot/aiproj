@@ -122,6 +122,60 @@ describe('graphStore schema-aware pre-run guard', () => {
 		expect((get(graphStore as any) as any).runBlockedReason).toBeNull();
 	});
 
+	it('proceeds when schema errors are upstream of checkpoint boundary for selected run', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-checkpoint-cut');
+		installSuccessfulRunMocks(graphId, 'run-checkpoint-cut');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'up_a',
+					position: { x: 0, y: 0 },
+					data: { kind: 'transform', transformKind: 'filter', status: 'idle', label: 'Up A', params: {} }
+				},
+				{
+					id: 'up_b',
+					position: { x: 100, y: 0 },
+					data: { kind: 'transform', transformKind: 'filter', status: 'idle', label: 'Up B', params: {} }
+				},
+				{
+					id: 'cp',
+					position: { x: 220, y: 0 },
+					data: { kind: 'transform', transformKind: 'filter', status: 'idle', label: 'Checkpointed', params: {} }
+				},
+				{
+					id: 'target',
+					position: { x: 360, y: 0 },
+					data: { kind: 'source', sourceKind: 'file', status: 'idle', label: 'Target', params: {} }
+				}
+			],
+			edges: [
+				{ id: 'e1', source: 'up_a', target: 'up_b', targetHandle: 'in', data: { exec: 'idle' } },
+				{ id: 'e2', source: 'up_b', target: 'up_a', targetHandle: 'in', data: { exec: 'idle' } },
+				{ id: 'e3', source: 'up_a', target: 'cp', targetHandle: 'in', data: { exec: 'idle' } },
+				{ id: 'e4', source: 'cp', target: 'target', targetHandle: 'in', data: { exec: 'idle' } }
+			],
+			checkpointRegistry: {
+				cp: {
+					id: '00000000-0000-4000-8000-000000000201',
+					name: 'ck-cp',
+					nodeId: 'cp',
+					graphId,
+					runId: 'run-ck',
+					artifactId: 'art-cp',
+					execKey: 'exec-cp',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-01T00:00:00.000Z',
+					staleness: 'valid'
+				}
+			}
+		} as any);
+
+		const result = await graphStore.runRemote('target', 'from_selected_onward');
+		expect(result.ok).toBe(true);
+		expect(createRunMock).toHaveBeenCalledTimes(1);
+		expect((get(graphStore as any) as any).runBlockedReason).toBeNull();
+	});
+
 	it('allowSchemaErrors bypasses block and increments dismissal counter', async () => {
 		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-proceed');
 		installSuccessfulRunMocks(graphId, 'run-proceed-errors');

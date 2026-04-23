@@ -175,6 +175,46 @@ describe('graphStore partial run scope events', () => {
 		expect(state.nodeBindings.llm_a.status).toBe('succeeded_up_to_date');
 	});
 
+	it('run_started fallback planning respects checkpoint boundaries', () => {
+		const runId = 'run-fallback-ckpt';
+		let state = makeState();
+		state = {
+			...state,
+			checkpointRegistry: {
+				xfm: {
+					id: '00000000-0000-4000-8000-000000000101',
+					name: 'ck-xfm',
+					nodeId: 'xfm',
+					graphId: 'graph-test',
+					runId: 'run-ck',
+					artifactId: 'art-xfm',
+					execKey: 'exec-xfm',
+					fingerprintAtCreation: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					createdAt: '2026-04-01T00:00:00.000Z',
+					staleness: 'valid'
+				}
+			} as any
+		};
+		const beforeSrc = { ...state.nodeBindings.src };
+
+		const next = __applyRunEventForTest(
+			state,
+			{
+				type: 'run_started',
+				runId,
+				at: '2026-04-01T00:00:01Z',
+				runFrom: 'llm_b',
+				runMode: 'from_selected_onward'
+			} as any,
+			runId
+		);
+
+		expect(Array.from(next.activeRunNodeSet).sort()).toEqual(['llm_b', 'xfm']);
+		expect(next.nodeBindings.src).toEqual(beforeSrc);
+		expect(displayStatusFromBinding(next.nodeBindings.xfm as any)).toBe('stale');
+		expect(displayStatusFromBinding(next.nodeBindings.llm_b as any)).toBe('stale');
+	});
+
 	it('partial run hydration and planned-node events keep sibling output/status unchanged', () => {
 		const runId = 'run-1';
 		let state = makeState();
