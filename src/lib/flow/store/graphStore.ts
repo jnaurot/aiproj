@@ -645,12 +645,25 @@ export function getEdgeDiagnosticSnapshotFromState(
 	} else if (blockedEntry && String(blockedEntry.reasonCode ?? '').trim() === 'NO_READY_WORK') {
 		runtimeState = 'waiting';
 	}
+	// Merge contract severity and schema-plane state into a single effectiveSeverity.
+	// Rules:
+	//   • contract 'error'/'warning' always takes precedence (it's the declared contract check).
+	//   • schemaPlane 'error' (hard propagation failure, e.g. SHAPE_MISMATCH / column not found)
+	//     also surfaces as an error — the edge leads into a broken node.
+	//   • schemaPlane 'warning' (opaque / unverifiable) is informational only and does NOT
+	//     escalate effectiveSeverity; the existing edgeSchemaAuthority tests codify this.
+	const effectiveSeverity: 'clean' | 'warning' | 'error' =
+		contractSeverity === 'error' || schemaPlaneState === 'error'
+			? 'error'
+			: contractSeverity === 'warning'
+				? 'warning'
+				: 'clean';
 	return {
 		edgeId,
 		contractSeverity,
 		schemaPlaneState,
 		runtimeState,
-		effectiveSeverity: contractSeverity,
+		effectiveSeverity,
 		contractMessage: diag?.message ? String(diag.message) : undefined,
 		schemaPlaneMessage: schemaValidation?.message ? String(schemaValidation.message) : undefined
 	};
