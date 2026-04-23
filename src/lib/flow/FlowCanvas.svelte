@@ -244,7 +244,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		lastObservedLogCount = logCount;
 	}
 
-	$: displayEdges = edges.map((e) => {
+	// Read lifecycle/flag maps at the top so Svelte registers them as reactive
+	// dependencies of this block.  If they're only accessed inside the .map()
+	// callback, Svelte's static analysis may not mark them as invalidation
+	// triggers, causing stale edge colors after a run completes.
+	$: displayEdges = ((_lc, _fl) => edges.map((e) => {
 		const diag = ($edgeSchemaDiagnostics as Record<string, any> | undefined)?.[String(e.id ?? '')] ?? null;
 		const schemaValidation = (graphStore as any).getEdgeSchemaValidationState?.(String(e.id ?? '')) ?? null;
 		const schemaClass = (
@@ -276,12 +280,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			visualClass = 'edge-state-nonwork';
 		} else if (edgeExec === 'active') {
 			visualClass = 'edge-state-running';
+		} else if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
+			// Both endpoints done — always settle to green regardless of stale queue metrics.
+			// Monitor flags can outlive a run (metrics are cleared at run_started, not run_finished),
+			// so they must not override a verifiably completed edge.
+			visualClass = 'edge-state-settled';
 		} else if (monitorFlags.blocked || monitorFlags.full) {
 			visualClass = 'edge-state-blocked';
 		} else if (monitorFlags.waiting) {
 			visualClass = 'edge-state-waiting';
-		} else if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
-			visualClass = 'edge-state-settled';
 		}
 		const title = schemaValidation?.message
 			? String(schemaValidation.message)
@@ -293,7 +300,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
 			title
 		};
-	});
+	}))(runMonitorNodeLifecycleById, runMonitorEdgeFlagsById);
 
 	function applyCanvasSelection(
 		seedNodes: Node<PipelineNodeData>[],
