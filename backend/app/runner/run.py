@@ -11452,6 +11452,52 @@ async def run_graph(
         await _emit({"type": "control_signal", "runId": run_id, "at": iso_now(), "signal": "drain"})
 
         total_runtime_ms = int((asyncio.get_running_loop().time() - run_t0) * 1000)
+        final_queue_metrics = queue_registry.metrics()
+        final_edge_metrics = final_queue_metrics.get("edges") if isinstance(final_queue_metrics.get("edges"), dict) else {}
+        queue_invariant_violations: List[Dict[str, Any]] = []
+        for edge_key in sorted(final_edge_metrics.keys()):
+            bucket = final_edge_metrics.get(edge_key) if isinstance(final_edge_metrics.get(edge_key), dict) else {}
+            enqueued = int(bucket.get("enqueued") or 0)
+            dequeued = int(bucket.get("dequeued") or 0)
+            depth = int(bucket.get("depth") or 0)
+            if enqueued - dequeued != depth:
+                queue_invariant_violations.append(
+                    {
+                        "edgeKey": str(edge_key),
+                        "enqueued": enqueued,
+                        "dequeued": dequeued,
+                        "depth": depth,
+                    }
+                )
+        await _emit(
+            {
+                "type": "log",
+                "runId": run_id,
+                "at": iso_now(),
+                "level": "info",
+                "message": (
+                    "[queue-invariant] "
+                    f"edges={len(final_edge_metrics)} "
+                    f"violations={len(queue_invariant_violations)} "
+                    f"global_depth={int(final_queue_metrics.get('globalDepth') or 0)}"
+                ),
+            }
+        )
+        if queue_invariant_violations:
+            await _emit(
+                {
+                    "type": "log",
+                    "runId": run_id,
+                    "at": iso_now(),
+                    "level": "warning",
+                    "reasonCode": "QUEUE_DEPTH_INVARIANT_VIOLATION",
+                    "message": (
+                        "[queue-invariant] mismatch "
+                        f"count={len(queue_invariant_violations)} "
+                        f"sample={json.dumps(queue_invariant_violations[:10], sort_keys=True)}"
+                    ),
+                }
+            )
         await _emit({
             "type": "log",
             "runId": run_id,
