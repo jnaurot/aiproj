@@ -389,6 +389,41 @@ describe('runScope partial-run binding behavior', () => {
 		expect(planned.has('a')).toBe(false);
 	});
 
+	it('from_selected_onward stops upstream traversal at checkpoint boundary', () => {
+		const nodes: any[] = [{ id: 'src' }, { id: 'xfm' }, { id: 'a' }];
+		const edges: any[] = [
+			{ source: 'src', target: 'xfm' },
+			{ source: 'xfm', target: 'a' }
+		];
+		const planned = computePlannedNodeSet(
+			nodes,
+			edges,
+			'a',
+			'from_selected_onward',
+			new Set(['xfm'])
+		);
+		expect([...planned].sort()).toEqual(['a', 'xfm']);
+		expect(planned.has('src')).toBe(false);
+	});
+
+	it('from_selected_onward still includes sibling upstream when downstream depends on it', () => {
+		const nodes: any[] = [{ id: 'src' }, { id: 'xfm' }, { id: 'sib' }, { id: 'a' }];
+		const edges: any[] = [
+			{ source: 'src', target: 'xfm' },
+			{ source: 'xfm', target: 'a' },
+			{ source: 'src', target: 'sib' },
+			{ source: 'sib', target: 'a' }
+		];
+		const planned = computePlannedNodeSet(
+			nodes,
+			edges,
+			'a',
+			'from_selected_onward',
+			new Set(['xfm'])
+		);
+		expect([...planned].sort()).toEqual(['a', 'sib', 'src', 'xfm']);
+	});
+
 	it('selected_only excludes sibling branch but includes ancestors', () => {
 		const nodes: any[] = [{ id: 'src' }, { id: 'xfm' }, { id: 'a' }, { id: 'b' }];
 		const edges: any[] = [

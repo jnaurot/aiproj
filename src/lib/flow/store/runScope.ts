@@ -94,7 +94,8 @@ export function computePlannedNodeSet(
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[],
 	edges: Edge<PipelineEdgeData & Record<string, unknown>>[],
 	runFrom: string | null,
-	runMode: ActiveRunMode
+	runMode: ActiveRunMode,
+	checkpointBoundaryNodeIds?: Set<string> | null
 ): Set<string> {
 	// Full run
 	if (runMode === 'from_start' || runFrom === null) {
@@ -102,18 +103,29 @@ export function computePlannedNodeSet(
 	}
 
 	const { up, down } = buildAdj(edges);
-
-	const ancestors = collect(runFrom, up);
-	const descendants = collect(runFrom, down);
-
-	const planned = new Set<string>(ancestors);
-	planned.add(runFrom);
-
+	const boundaries = checkpointBoundaryNodeIds ?? new Set<string>();
+	const targets = new Set<string>([runFrom]);
 	if (runMode === 'from_selected_onward') {
-		for (const d of descendants) planned.add(d);
+		const descendants = collect(runFrom, down);
+		for (const descendant of descendants) targets.add(descendant);
 	}
 
-	// selected_only: ancestors + selected only
+	// Required closure: each target plus required ancestors, with checkpoint
+	// boundaries cutting further upstream traversal.
+	const planned = new Set<string>();
+	const stack = Array.from(targets);
+	while (stack.length > 0) {
+		const cur = String(stack.pop() ?? '').trim();
+		if (!cur || planned.has(cur)) continue;
+		planned.add(cur);
+		if (boundaries.has(cur)) continue;
+		const parents = up.get(cur);
+		if (!parents) continue;
+		for (const parent of parents) {
+			if (!planned.has(parent)) stack.push(parent);
+		}
+	}
+
 	return planned;
 }
 
