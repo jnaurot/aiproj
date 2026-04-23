@@ -1431,7 +1431,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: projectMenuItems = buildProjectMenuItems($graphStore.editingContext) satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
 	$: runToolbarControls = pauseResumeToolbarVisibility($graphStore.runStatus as any);
-	$: schemaErrorCount = (graphStore as any).getSchemaErrors?.().length ?? 0;
+	// Reactive: re-evaluated whenever $graphStore.schemaPlane changes (via withGraphMeta
+	// on every state mutation).  The previous form called getSchemaErrors() without any
+	// $graphStore dependency, so Svelte never re-ran it after initialization.
+	$: schemaErrorCount = Object.values($graphStore.schemaPlane?.nodeSchemas ?? {}).filter(
+		(r: any) => r && r.ok === false
+	).length;
 	$: primarySaveCommandLabel = isComponentEditContext ? 'Save Component Revision' : 'Save Graph';
 	$: saveAsComponentCommandLabel = isComponentEditContext ? 'Save as New Component' : 'Save as Component';
 	$: commandItems = [
