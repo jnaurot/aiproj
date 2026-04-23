@@ -43,6 +43,30 @@ def _upstream(start_id: str, edges: List[Dict[str, Any]]) -> Set[str]:
     return seen
 
 
+def _required_upstream_with_checkpoint_cuts(
+    target_ids: Set[str],
+    edges: List[Dict[str, Any]],
+    checkpoint_node_ids: Set[str],
+) -> Set[str]:
+    rev: Dict[str, List[str]] = {}
+    for e in edges:
+        rev.setdefault(e["target"], []).append(e["source"])
+    out: Set[str] = set()
+    q = list(target_ids)
+    while q:
+        cur = q.pop(0)
+        if cur in out:
+            continue
+        out.add(cur)
+        # Checkpoint nodes are hard upstream cuts for planning.
+        if cur in checkpoint_node_ids:
+            continue
+        for prev in rev.get(cur, []):
+            if prev not in out:
+                q.append(prev)
+    return out
+
+
 def _expand_dirty_subgraph(dirty_ids: Set[str], edges: List[Dict[str, Any]]) -> Set[str]:
     if not dirty_ids:
         return set()
@@ -84,15 +108,19 @@ def compile_plan(
     sub: Set[str] = set()
     execute_nodes: Set[str] = set()
     cache_only_nodes: Set[str] = set()
+    pinned = {nid for nid in (checkpoint_node_ids or set()) if isinstance(nid, str) and nid in adj}
     if run_from:
-        ancestors = _upstream(run_from, edges)
+        targets: Set[str] = {run_from}
         if mode == "selected_only":
-            sub = ancestors | {run_from}
+            # selected_only still resolves upstream dependencies, but planning
+            # obeys checkpoint hard cuts.
+            sub = _required_upstream_with_checkpoint_cuts(targets, edges, pinned)
             execute_nodes = {run_from}
         else:
-            # Include ancestors to resolve deterministic inputs, and downstream
-            # to preserve "run from here forward" semantics.
-            sub = (ancestors | {run_from}) | _downstream(run_from, edges)
+            # Preserve selected-onward semantics by targeting selected + downstream,
+            # then resolve required upstream dependencies with checkpoint hard cuts.
+            targets |= _downstream(run_from, edges)
+            sub = _required_upstream_with_checkpoint_cuts(targets, edges, pinned)
             execute_nodes = set(sub)
     else:
         mode = "full"
@@ -139,7 +167,7 @@ def compile_plan(
     # Nodes with a live checkpoint hint are frozen: they must resolve from the
     # saved artifact and must not re-execute.  Move them out of execute_nodes
     # into cache_only_nodes so the execution loop can honour the pin.
-    pinned = {nid for nid in (checkpoint_node_ids or set()) if nid in sub}
+    pinned = {nid for nid in pinned if nid in sub}
     execute_nodes -= pinned
     cache_only_nodes |= pinned
 

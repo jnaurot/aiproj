@@ -556,7 +556,7 @@ async def test_checkpoint_hint_valid_marks_cache_only_and_reuses(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_hint_stale_recomputes(monkeypatch, tmp_path):
+async def test_checkpoint_hint_stale_is_hard_cut_and_reuses_without_upstream_recompute(monkeypatch, tmp_path):
     run_mod = importlib.import_module("app.runner.run")
     calls = {"tool_mid": 0}
 
@@ -623,7 +623,15 @@ async def test_checkpoint_hint_stale_recomputes(monkeypatch, tmp_path):
         graph_id="graph-checkpoint-stale",
     )
 
-    assert calls["tool_mid"] == 2
+    # Hard-cut behavior: stale checkpoint still reuses tool_mid and does not
+    # trigger recompute of that node.
+    assert calls["tool_mid"] == 1
+    run_started = [e for e in events if e.get("type") == "run_started"]
+    assert run_started
+    planned_node_ids = set(run_started[-1].get("plannedNodeIds") or [])
+    assert "tool_mid" in planned_node_ids
+    assert "tool_end" in planned_node_ids
+    assert "source_1" not in planned_node_ids
     run_finished = [e for e in events if e.get("type") == "run_finished"]
     assert run_finished
     assert (run_finished[-1].get("checkpoint_outcomes") or {}).get("tool_mid") == "stale"
