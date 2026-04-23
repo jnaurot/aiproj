@@ -782,6 +782,19 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				: (runMonitorAdaptiveModeOverride as 'off' | 'observe' | 'enforce');
 	}
 	$: {
+		const opaquePolicyRaw = String(
+			runtimeEnvVars.find((row) => String(row?.name ?? '').trim() === 'SCHEMA_OPAQUE_UPSTREAM_POLICY')?.value ??
+				'warn'
+		)
+			.trim()
+			.toLowerCase();
+		graphStore.setSchemaOpaqueUpstreamPolicy(
+			opaquePolicyRaw === 'none' || opaquePolicyRaw === 'off' || opaquePolicyRaw === 'ignore'
+				? 'none'
+				: 'warn'
+		);
+	}
+	$: {
 		const gid = String($graphStore.graphId ?? '').trim() || 'default';
 		if (gid !== runMonitorPrefsGraphId) {
 			runMonitorPrefsGraphId = gid;

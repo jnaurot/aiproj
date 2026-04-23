@@ -77,6 +77,7 @@ export type RunBlockedReason =
 	  };
 
 export type GraphViewMode = 'execution' | 'schema';
+export type SchemaOpaqueUpstreamPolicy = 'warn' | 'none';
 
 // ---------------------------------------------------------------------------
 // Node execution / binding
@@ -439,6 +440,7 @@ export type GraphState = {
 	activeRunNodeSet: Set<string>;
 	runBlockedReason: RunBlockedReason | null;
 	viewMode: GraphViewMode;
+	schemaOpaqueUpstreamPolicy: SchemaOpaqueUpstreamPolicy;
 	schemaWarningDismissCount: number;
 	nodeOutputs: Record<string, NodeOutputInfo>;
 	nodeBindings: Record<string, NormalizedNodeBinding>;

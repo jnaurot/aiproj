@@ -51,6 +51,7 @@ describe('graphStore schema plane integration', () => {
 
 	it('edge validation reports warning for opaque upstream schema', () => {
 		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('warn');
 		const source = graphStore.addNode('model', { x: 0, y: 0 });
 		const target = graphStore.addNode('transform', { x: 80, y: 0 });
 		graphStore.addEdge({
@@ -62,6 +63,22 @@ describe('graphStore schema plane integration', () => {
 		} as any);
 		const validation = (graphStore as any).getEdgeSchemaValidationState?.('e_opaque');
 		expect(validation?.state).toBe('warning');
+	});
+
+	it('edge validation suppresses opaque upstream warning when policy is none', () => {
+		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('none');
+		const source = graphStore.addNode('model', { x: 0, y: 0 });
+		const target = graphStore.addNode('transform', { x: 80, y: 0 });
+		graphStore.addEdge({
+			id: 'e_opaque_none',
+			source,
+			target,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		const validation = (graphStore as any).getEdgeSchemaValidationState?.('e_opaque_none');
+		expect(validation?.state).toBe('valid');
 	});
 
 	it('edge validation reports error when schema error exists on edge path', () => {
@@ -87,6 +104,49 @@ describe('graphStore schema plane integration', () => {
 		const validation = (graphStore as any).getEdgeSchemaValidationState?.('e1');
 		expect(validation?.state).toBe('error');
 		expect(String(validation?.code ?? '')).toBe('CYCLE_DETECTED');
+	});
+
+	it('downgrades select missing-column edge diagnostic to warning when upstream is opaque', () => {
+		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('warn');
+		const src = graphStore.addNode('model', { x: 0, y: 0 });
+		const sel = graphStore.addNode('transform', { x: 120, y: 0 });
+		const edgeId = 'e_opaque_select';
+		graphStore.addEdge({
+			id: edgeId,
+			source: src,
+			target: sel,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		(graphStore as any).updateNodeConfig?.(sel, {
+			op: 'select',
+			select: { columns: ['candidate_required_location'] }
+		});
+		const validation = (graphStore as any).getEdgeSchemaValidationState?.(edgeId);
+		expect(validation?.state).toBe('warning');
+		expect(new Set(['OPAQUE_DEPENDENCY', 'SHAPE_MISMATCH_OPAQUE']).has(String(validation?.code ?? ''))).toBe(true);
+	});
+
+	it('suppresses select missing-column opaque warning when policy is none', () => {
+		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('none');
+		const src = graphStore.addNode('model', { x: 0, y: 0 });
+		const sel = graphStore.addNode('transform', { x: 120, y: 0 });
+		const edgeId = 'e_opaque_select_none';
+		graphStore.addEdge({
+			id: edgeId,
+			source: src,
+			target: sel,
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		(graphStore as any).updateNodeConfig?.(sel, {
+			op: 'select',
+			select: { columns: ['candidate_required_location'] }
+		});
+		const validation = (graphStore as any).getEdgeSchemaValidationState?.(edgeId);
+		expect(validation?.state).toBe('valid');
 	});
 
 	it('loadGraphDocument triggers immediate schema recomputation', () => {

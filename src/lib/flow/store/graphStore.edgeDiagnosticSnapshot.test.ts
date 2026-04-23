@@ -6,6 +6,7 @@ import { getEdgeDiagnosticSnapshotFromState, graphStore, type GraphState } from 
 describe('graphStore edge diagnostic snapshot authority', () => {
 	it('uses contract clean as effective severity even when schema plane reports warning', () => {
 		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('warn');
 		const source = graphStore.addNode('model', { x: 0, y: 0 });
 		const target = graphStore.addNode('transform', { x: 120, y: 0 });
 		graphStore.addEdge({
@@ -20,6 +21,26 @@ describe('graphStore edge diagnostic snapshot authority', () => {
 		expect(snap).toBeTruthy();
 		expect(snap?.contractSeverity).toBe('clean');
 		expect(snap?.schemaPlaneState).toBe('warning');
+		expect(snap?.effectiveSeverity).toBe('clean');
+	});
+
+	it('keeps effective severity clean when opaque warnings are suppressed by policy', () => {
+		graphStore.hardResetGraph();
+		(graphStore as any).setSchemaOpaqueUpstreamPolicy?.('none');
+		const source = graphStore.addNode('model', { x: 0, y: 0 });
+		const target = graphStore.addNode('transform', { x: 120, y: 0 });
+		graphStore.addEdge({
+			id: 'e_opaque_clean_none',
+			source,
+			target,
+			targetHandle: 'in',
+			data: { exec: 'idle', mode: 'work' }
+		} as any);
+		const state = get(graphStore) as GraphState;
+		const snap = getEdgeDiagnosticSnapshotFromState(state, 'e_opaque_clean_none');
+		expect(snap).toBeTruthy();
+		expect(snap?.contractSeverity).toBe('clean');
+		expect(new Set(['valid', 'neutral']).has(String(snap?.schemaPlaneState ?? ''))).toBe(true);
 		expect(snap?.effectiveSeverity).toBe('clean');
 	});
 

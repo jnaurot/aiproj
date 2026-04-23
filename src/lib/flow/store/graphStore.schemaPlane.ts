@@ -44,6 +44,19 @@ type Deps = {
 };
 
 export function createSchemaPlaneManager(deps: Deps) {
+	const resolveOpaqueUpstreamPolicy = (state: GraphState): 'warn' | 'none' => {
+		const statePolicy = String((state as any)?.schemaOpaqueUpstreamPolicy ?? '')
+			.trim()
+			.toLowerCase();
+		if (statePolicy === 'none' || statePolicy === 'off' || statePolicy === 'ignore') return 'none';
+		if (statePolicy === 'warn' || statePolicy === 'warning') return 'warn';
+		const envPolicy = String((import.meta as any)?.env?.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn')
+			.trim()
+			.toLowerCase();
+		if (envPolicy === 'none' || envPolicy === 'off' || envPolicy === 'ignore') return 'none';
+		return 'warn';
+	};
+
 	const getNodeSchemaResult = (nodeId: string): SchemaPlaneResult | null => {
 		const state = deps.getState();
 		return state.schemaPlane?.nodeSchemas?.[nodeId] ?? null;
@@ -69,8 +82,10 @@ export function createSchemaPlaneManager(deps: Deps) {
 		edgeId: string
 	): { state: 'valid' | 'error' | 'warning' | 'neutral'; message?: string; code?: string } => {
 		const state = deps.getState();
+		const opaquePolicy = resolveOpaqueUpstreamPolicy(state);
 		const edge = (state.edges ?? []).find((candidate) => String(candidate?.id ?? '') === edgeId);
 		if (!edge) return { state: 'neutral' };
+		const edgeSchema = state.schemaPlane?.edgeSchemas?.[edgeId];
 		const sourceResult = state.schemaPlane?.nodeSchemas?.[String(edge.source ?? '')];
 		if (sourceResult && sourceResult.ok === false) {
 			return {
@@ -84,6 +99,17 @@ export function createSchemaPlaneManager(deps: Deps) {
 			const targetHandle = String(edge.targetHandle ?? 'in').trim();
 			const handles = Array.isArray(targetResult.error.handles) ? targetResult.error.handles : [];
 			if (handles.length === 0 || handles.includes(targetHandle)) {
+				const targetErrorCode = String(targetResult.error.code ?? '').trim();
+				// If upstream is opaque, a missing-column mismatch is uncertain rather than definitive.
+				// Keep it as a warning/info-grade diagnostic at edge level.
+				if (targetErrorCode === 'SHAPE_MISMATCH' && edgeSchema?.mode === 'opaque') {
+					if (opaquePolicy === 'none') return { state: 'valid' };
+					return {
+						state: 'warning',
+						message: `${String(targetResult.error.message ?? 'Required field is missing in input schema')}. Upstream is opaque, so this remains a warning until schema is made explicit.`,
+						code: 'SHAPE_MISMATCH_OPAQUE'
+					};
+				}
 				return {
 					state: 'error',
 					message: targetResult.error.message,
@@ -91,9 +117,9 @@ export function createSchemaPlaneManager(deps: Deps) {
 				};
 			}
 		}
-		const edgeSchema = state.schemaPlane?.edgeSchemas?.[edgeId];
 		if (!edgeSchema) return { state: 'neutral' };
 		if (edgeSchema.mode === 'opaque') {
+			if (opaquePolicy === 'none') return { state: 'valid' };
 			return {
 				state: 'warning',
 				message: 'Schema unverified: upstream output is opaque. Run source to infer.',

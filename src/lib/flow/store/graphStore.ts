@@ -187,6 +187,18 @@ export const __markStaleFromNodeForTest = __markStaleFromNodeForTestFromRun;
 export const __buildPlannerScopeTraceForTest = __buildPlannerScopeTraceForTestFromRun;
 
 registerAllBuiltinSchemaFunctions();
+function normalizeSchemaOpaqueUpstreamPolicy(raw: unknown): 'warn' | 'none' {
+	const value = String(raw ?? '')
+		.trim()
+		.toLowerCase();
+	if (value === 'none' || value === 'off' || value === 'ignore') return 'none';
+	return 'warn';
+}
+
+const defaultSchemaOpaqueUpstreamPolicy = normalizeSchemaOpaqueUpstreamPolicy(
+	(import.meta as any)?.env?.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn'
+);
+
 const loaded = loadGraphFromLocalStorage(emptyGraph);
 
 const loadedNodes = Array.isArray((loaded as any)?.nodes)
@@ -232,6 +244,7 @@ const initialState: GraphState = {
 	activeRunNodeSet: new Set<string>(),
 	runBlockedReason: null,
 	viewMode: 'execution',
+	schemaOpaqueUpstreamPolicy: defaultSchemaOpaqueUpstreamPolicy,
 	schemaWarningDismissCount: 0,
 	nodeOutputs: {},
 	nodeBindings: ensureNormalizedBindingsForNodes(loadedNormalized.nodes, {}),
@@ -544,6 +557,16 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				})
 			);
 		},
+		setSchemaOpaqueUpstreamPolicy(policyRaw: 'warn' | 'none' | string) {
+			const normalized = normalizeSchemaOpaqueUpstreamPolicy(policyRaw);
+			update((s) => {
+				if ((s as any).schemaOpaqueUpstreamPolicy === normalized) return s;
+				return withGraphMeta({
+					...s,
+					schemaOpaqueUpstreamPolicy: normalized
+				});
+			});
+		},
 
 		// ── Schema edge inspector ─────────────────────────────────────────────
 		setSchemaEdgeInspectorEdgeId(edgeId: string | null) {
@@ -630,6 +653,7 @@ export function getEdgeDiagnosticSnapshotFromState(
 				: schemaValidation?.state === 'valid'
 					? 'valid'
 					: 'neutral';
+	const schemaPlaneCode = String(schemaValidation?.code ?? '').trim().toUpperCase();
 	const edgeExec = String((edge.data as any)?.exec ?? 'idle').trim().toLowerCase();
 	const targetNodeId = String(edge.target ?? '').trim();
 	const blockedByNode =
@@ -655,7 +679,8 @@ export function getEdgeDiagnosticSnapshotFromState(
 	const effectiveSeverity: 'clean' | 'warning' | 'error' =
 		contractSeverity === 'error' || schemaPlaneState === 'error'
 			? 'error'
-			: contractSeverity === 'warning'
+			: contractSeverity === 'warning' ||
+				  (schemaPlaneState === 'warning' && schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE')
 				? 'warning'
 				: 'clean';
 	return {
