@@ -11171,6 +11171,11 @@ async def run_graph(
                         edge_id=edge_id,
                         target_handle=target_handle,
                     )
+                    target_handle_policy = _node_processing_policy(nodes.get(nb, {}), input_handle=target_handle)
+                    target_consume_mode = str(target_handle_policy.get("consume_mode") or "once")
+                    # Queue depth is authoritative only for streaming consumers.
+                    # once-mode nodes execute at node boundary and must not accumulate residual edge depth.
+                    queue_for_target = target_consume_mode in {"single_item", "batch"}
                     await _emit(
                         {
                             "type": "control_signal",
@@ -11186,33 +11191,34 @@ async def run_graph(
                         (((edge_obj.get("data") or {}) if isinstance(edge_obj.get("data"), dict) else {}).get("queue") or {}).get("overflow")
                         or "block"
                     ).strip().lower()
-                    for item in work_items:
-                        await queue_registry.enqueue(
-                            edge_id,
-                            target_handle,
-                            item,
-                            overflow=overflow_mode if overflow_mode in {"block", "spill", "error"} else "block",
-                        )
-                        provided_work_edges_by_handle.setdefault(nb, {}).setdefault(target_handle, set()).add(edge_id)
-                        runtime_item_metrics["itemsEnqueued"] = int(runtime_item_metrics.get("itemsEnqueued", 0)) + 1
-                        _inc_runtime_metric(
-                            plane=edge_mode,
-                            node_id=nb,
-                            handle=target_handle,
-                            field="itemsEnqueued",
-                            amount=1,
-                        )
-                        await _emit(
-                            {
-                                "type": "control_signal",
-                                "runId": run_id,
-                                "at": iso_now(),
-                                "signal": "item_enqueued",
-                                "nodeId": nb,
-                                "edgeId": edge_id,
-                                "handle": target_handle,
-                            }
-                        )
+                    if queue_for_target:
+                        for item in work_items:
+                            await queue_registry.enqueue(
+                                edge_id,
+                                target_handle,
+                                item,
+                                overflow=overflow_mode if overflow_mode in {"block", "spill", "error"} else "block",
+                            )
+                            provided_work_edges_by_handle.setdefault(nb, {}).setdefault(target_handle, set()).add(edge_id)
+                            runtime_item_metrics["itemsEnqueued"] = int(runtime_item_metrics.get("itemsEnqueued", 0)) + 1
+                            _inc_runtime_metric(
+                                plane=edge_mode,
+                                node_id=nb,
+                                handle=target_handle,
+                                field="itemsEnqueued",
+                                amount=1,
+                            )
+                            await _emit(
+                                {
+                                    "type": "control_signal",
+                                    "runId": run_id,
+                                    "at": iso_now(),
+                                    "signal": "item_enqueued",
+                                    "nodeId": nb,
+                                    "edgeId": edge_id,
+                                    "handle": target_handle,
+                                }
+                            )
                     released_now = False
                     if not bool(edge_dependency_released.get(edge_id, False)):
                         edge_dependency_released[edge_id] = True
