@@ -449,6 +449,7 @@ export type GraphState = {
 	componentContractDraftCache: Record<string, Record<string, any>>;
 	checkpointRegistry: CheckpointRegistry;
 	schemaPlane: SchemaPlaneState;
+	schemaEdgeInspectorEdgeId: string | null;
 };
 
 // Pulled out of GraphState to keep it readable.

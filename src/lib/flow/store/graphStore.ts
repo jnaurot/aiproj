@@ -243,7 +243,8 @@ const initialState: GraphState = {
 		(loaded as any)?.checkpointRegistry && typeof (loaded as any).checkpointRegistry === 'object'
 			? structuredClone((loaded as any).checkpointRegistry)
 			: {},
-	schemaPlane: emptySchemaPlaneState()
+	schemaPlane: emptySchemaPlaneState(),
+	schemaEdgeInspectorEdgeId: null
 };
 
 export const graphStore = (() => {
@@ -542,6 +543,44 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					viewMode: s.viewMode === 'schema' ? 'execution' : 'schema'
 				})
 			);
+		},
+
+		// ── Schema edge inspector ─────────────────────────────────────────────
+		setSchemaEdgeInspectorEdgeId(edgeId: string | null) {
+			update((s) => ({ ...s, schemaEdgeInspectorEdgeId: edgeId ?? null }));
+		},
+
+		/**
+		 * Update the schema on a node handle and trigger schema re-validation.
+		 * Wrapped in a history transaction so the mutation + schemaPlane recompute
+		 * produce exactly one undo entry.
+		 *
+		 * direction='input'  → updates node.data.schema.expectedInputSchemas[handleId]
+		 * direction='output' → updates node.data.schema.expectedSchema (output schema)
+		 */
+		updateNodeSchema(
+			nodeId: string,
+			handleId: string,
+			direction: 'input' | 'output',
+			schema: Record<string, unknown> | null
+		): { ok: boolean; error?: string } {
+			history.actions.beginHistoryTransaction();
+			let result: { ok: boolean; error?: string } = { ok: true };
+			try {
+				if (direction === 'input') {
+					result = inspector.actions.setNodeExpectedInputSchemaForHandle(nodeId, handleId, schema);
+				} else {
+					result = inspector.actions.setNodeExpectedSchema(nodeId, schema);
+				}
+				// Trigger schema plane re-computation so live validation updates
+				update((s) => ({
+					...s,
+					schemaPlane: recomputeSchemaPlane(s)
+				}));
+			} finally {
+				history.actions.endHistoryTransaction();
+			}
+			return result;
 		},
 	};
 })();

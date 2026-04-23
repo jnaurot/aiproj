@@ -30,6 +30,7 @@
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
 	import SchemaPlaneOverlay from '$lib/flow/components/ui/SchemaPlaneOverlay.svelte';
+	import SchemaEdgeInspectorPanel from '$lib/flow/components/ui/SchemaEdgeInspectorPanel.svelte';
 	import OutputModal from '$lib/flow/components/OutputModal.svelte';
 	import ArtifactViewer from './components/ArtifactViewer.svelte';
 	import ToolbarMenu from './components/ToolbarMenu.svelte';
@@ -1916,6 +1917,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		event.stopPropagation();
 		if ($graphStore.runStatus === 'running') return;
 		graphStore.deleteEdge(edge.id);
+	}
+
+	function onedgeclick({ edge }: { edge: Edge<PipelineEdgeData> }) {
+		if ($graphStore.viewMode !== 'schema') return;
+		// Only open the panel when the edge has a schema issue
+		const snapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(String(edge.id ?? '')) ?? null;
+		if (snapshot?.effectiveSeverity && snapshot.effectiveSeverity !== 'clean') {
+			(graphStore as any).setSchemaEdgeInspectorEdgeId?.(String(edge.id ?? ''));
+		}
 	}
 
 	function promptForUniqueNodeName(kind: NodeKind): string | null {
@@ -5261,6 +5271,7 @@ async function returnFromComponentEditMode() {
 			{onnodeclick}
 			{onnodecontextmenu}
 			{onedgecontextmenu}
+			{onedgeclick}
 			{isValidConnection}
 			{onconnect}
 			onnodedragstop={() => {
@@ -5272,6 +5283,14 @@ async function returnFromComponentEditMode() {
 			<Background />
 			<Controls />
 		</SvelteFlow>
+
+		{#if $graphStore.schemaEdgeInspectorEdgeId}
+			<SchemaEdgeInspectorPanel
+				edgeId={$graphStore.schemaEdgeInspectorEdgeId}
+				onClose={() => (graphStore as any).setSchemaEdgeInspectorEdgeId?.(null)}
+			/>
+		{/if}
+
 		<SchemaPlaneOverlay
 			enabled={$graphStore.viewMode === 'schema'}
 			errorCount={schemaErrorCount}

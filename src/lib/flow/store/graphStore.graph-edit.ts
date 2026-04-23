@@ -123,7 +123,8 @@ export function buildHardResetState(freshGraphId: string): GraphState {
 		componentEditSession: null,
 		componentContractDraftCache: {},
 		checkpointRegistry: {},
-		schemaPlane: emptySchemaPlaneState()
+		schemaPlane: emptySchemaPlaneState(),
+		schemaEdgeInspectorEdgeId: null
 	};
 }
 
