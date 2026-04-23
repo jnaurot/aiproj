@@ -143,7 +143,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
 	import { resolveEdgeVisualClass, computeEdgeVisualClass } from '$lib/flow/edgeVisualState';
-	import { buildSchemaTooltip, resolveSchemaClassFromSnapshot } from '$lib/flow/edgeSchemaAuthority';
+	import { buildSchemaTooltip, resolveSchemaClassForView } from '$lib/flow/edgeSchemaAuthority';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
@@ -268,7 +268,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 					? 'edge-schema-warning'
 					: ''
 		).trim() as '' | 'edge-schema-warning' | 'edge-schema-error';
-		const schemaClass = resolveSchemaClassFromSnapshot(schemaSnapshot, legacySchemaClass);
+		const schemaClass = resolveSchemaClassForView($graphStore.viewMode, schemaSnapshot, legacySchemaClass);
 		const edgeExec = String((e.data as any)?.exec ?? 'idle').trim().toLowerCase();
 		const edgeMode = String((e.data as any)?.mode ?? 'work').trim().toLowerCase();
 		const sourceNodeId = String((e as any)?.source ?? '').trim();
@@ -4744,13 +4744,13 @@ async function returnFromComponentEditMode() {
 				>
 					Redo
 				</button>
-				<button
-					class={`runSecondary ${$graphStore.viewMode === 'schema' ? 'is-active' : ''}`}
-					on:click={() => (graphStore as any).toggleSchemaView?.()}
-					title={$graphStore.viewMode === 'schema' ? 'Switch to execution view' : 'Switch to schema view'}
-				>
-					{$graphStore.viewMode === 'schema' ? 'Execution View' : 'Schema View'}
-				</button>
+					<button
+						class={`runSecondary ${$graphStore.viewMode === 'schema' ? 'is-active' : ''}`}
+						on:click={() => (graphStore as any).toggleSchemaView?.()}
+						title={$graphStore.viewMode === 'schema' ? 'Switch to Execution View' : 'Switch to Schema View'}
+					>
+						{$graphStore.viewMode === 'schema' ? 'Schema View' : 'Execution View'}
+					</button>
 			</div>
 
 			<div class="toolbarZone statusIndicators">

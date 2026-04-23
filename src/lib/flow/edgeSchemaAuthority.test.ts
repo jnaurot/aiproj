@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSchemaTooltip, resolveSchemaClassFromSnapshot } from './edgeSchemaAuthority';
+import { buildSchemaTooltip, resolveSchemaClassForView, resolveSchemaClassFromSnapshot } from './edgeSchemaAuthority';
 
 describe('edge schema authority presentation', () => {
 	it('does not produce warning class when contract is clean and schema plane is warning', () => {
@@ -90,6 +90,30 @@ describe('edge schema authority presentation', () => {
 			schemaPlaneMessage: 'Schema unverified: upstream output is opaque.'
 		});
 		expect(schemaClass).toBe('');
+	});
+
+	it('suppresses schema class in execution view', () => {
+		const schemaClass = resolveSchemaClassForView('execution', {
+			edgeId: 'e7',
+			contractSeverity: 'error',
+			schemaPlaneState: 'error',
+			runtimeState: 'inactive',
+			effectiveSeverity: 'error',
+			contractMessage: 'Contract mismatch'
+		});
+		expect(schemaClass).toBe('');
+	});
+
+	it('keeps schema class in schema view', () => {
+		const schemaClass = resolveSchemaClassForView('schema', {
+			edgeId: 'e8',
+			contractSeverity: 'error',
+			schemaPlaneState: 'error',
+			runtimeState: 'inactive',
+			effectiveSeverity: 'error',
+			contractMessage: 'Contract mismatch'
+		});
+		expect(schemaClass).toBe('edge-schema-error');
 	});
 });
 

@@ -23,6 +23,16 @@ export function resolveSchemaClassFromSnapshot(
 	return '';
 }
 
+export function resolveSchemaClassForView(
+	viewMode: 'execution' | 'schema',
+	snapshot: EdgeDiagnosticSnapshot | null,
+	legacySchemaClass: '' | 'edge-schema-warning' | 'edge-schema-error' = '',
+	useContractSeverityAuthority: boolean = USE_CONTRACT_SEVERITY_AUTHORITY
+): '' | 'edge-schema-warning' | 'edge-schema-error' {
+	if (viewMode !== 'schema') return '';
+	return resolveSchemaClassFromSnapshot(snapshot, legacySchemaClass, useContractSeverityAuthority);
+}
+
 export function buildSchemaTooltip(
 	snapshot: EdgeDiagnosticSnapshot | null,
 	fallbackDiagMessage?: string | null,
