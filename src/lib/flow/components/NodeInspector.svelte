@@ -1449,7 +1449,7 @@
 	};
 	const checkpointDiagDevMode = (() => {
 		try {
-			return Boolean((import.meta as any)?.env?.DEV);
+			return Boolean(import.meta.env.DEV);
 		} catch {
 			return false;
 		}

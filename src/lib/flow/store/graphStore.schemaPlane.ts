@@ -50,7 +50,7 @@ export function createSchemaPlaneManager(deps: Deps) {
 			.toLowerCase();
 		if (statePolicy === 'none' || statePolicy === 'off' || statePolicy === 'ignore') return 'none';
 		if (statePolicy === 'warn' || statePolicy === 'warning') return 'warn';
-		const envPolicy = String((import.meta as any)?.env?.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn')
+		const envPolicy = String(import.meta.env.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn')
 			.trim()
 			.toLowerCase();
 		if (envPolicy === 'none' || envPolicy === 'off' || envPolicy === 'ignore') return 'none';

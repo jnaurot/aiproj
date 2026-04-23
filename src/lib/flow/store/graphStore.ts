@@ -196,7 +196,7 @@ function normalizeSchemaOpaqueUpstreamPolicy(raw: unknown): 'warn' | 'none' {
 }
 
 const defaultSchemaOpaqueUpstreamPolicy = normalizeSchemaOpaqueUpstreamPolicy(
-	(import.meta as any)?.env?.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn'
+	import.meta.env.VITE_SCHEMA_OPAQUE_UPSTREAM_POLICY ?? 'warn'
 );
 
 const loaded = loadGraphFromLocalStorage(emptyGraph);

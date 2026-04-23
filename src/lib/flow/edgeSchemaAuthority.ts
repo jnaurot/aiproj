@@ -2,7 +2,7 @@ import type { EdgeDiagnosticSnapshot } from '$lib/flow/store/graphStore.types';
 
 export const USE_CONTRACT_SEVERITY_AUTHORITY = (() => {
 	try {
-		const raw = String((import.meta as any)?.env?.VITE_USE_CONTRACT_SEVERITY_AUTHORITY ?? 'true')
+		const raw = String(import.meta.env.VITE_USE_CONTRACT_SEVERITY_AUTHORITY ?? 'true')
 			.trim()
 			.toLowerCase();
 		return raw !== 'false' && raw !== '0' && raw !== 'off';
