@@ -4,6 +4,7 @@ import type { GraphState } from './graphStore';
 import {
 	__applyRunEventForTest,
 	__assertBindingPairForTest,
+	__buildPlannerScopeTraceForTest,
 	__hardResetGraphForTest,
 	__hydrateFromRunSnapshotForTest,
 	__markStaleFromNodeForTest,
@@ -80,6 +81,22 @@ function makeArtistBranchState(): GraphState {
 }
 
 describe('graphStore partial run scope events', () => {
+	it('planner scope trace format is stable and includes boundary/source metadata', () => {
+		const line = __buildPlannerScopeTraceForTest({
+			runMode: 'from_selected_onward',
+			runFrom: 'llm_b',
+			plannedNodeCount: 2,
+			checkpointBoundaryCount: 1,
+			plannedNodeIdsProvided: false
+		});
+		expect(line).toContain('[trace][planner.scope]');
+		expect(line).toContain('runMode=from_selected_onward');
+		expect(line).toContain('runFrom=llm_b');
+		expect(line).toContain('planned=2');
+		expect(line).toContain('boundaries=1');
+		expect(line).toContain('source=local');
+	});
+
 	it('normalizes env profile missing run log payload into actionable guidance', () => {
 		const runId = 'run-1';
 		const state = makeState();

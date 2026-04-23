@@ -162,6 +162,7 @@ import {
 	__hydrateFromRunSnapshotForTest,
 	__resetRunUiStateForTest,
 	__markStaleFromNodeForTest as __markStaleFromNodeForTestFromRun,
+	__buildPlannerScopeTraceForTest as __buildPlannerScopeTraceForTestFromRun,
 } from './graphStore.run';
 import {
 	createPersistenceManager,
@@ -183,6 +184,7 @@ export const __normalizeBindingStrictForTest = __normalizeBindingStrictForTestFr
 export { __applyRunEventForTest, __hydrateFromRunSnapshotForTest, __resetRunUiStateForTest } from './graphStore.run';
 export const __setPauseResumeTraceEnabledForTest = __setPauseResumeTraceEnabledForTestFromRun;
 export const __markStaleFromNodeForTest = __markStaleFromNodeForTestFromRun;
+export const __buildPlannerScopeTraceForTest = __buildPlannerScopeTraceForTestFromRun;
 
 registerAllBuiltinSchemaFunctions();
 const loaded = loadGraphFromLocalStorage(emptyGraph);

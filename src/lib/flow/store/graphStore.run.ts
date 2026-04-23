@@ -433,6 +433,21 @@ function getCheckpointPlanningBoundaryNodeIds(
 	return out;
 }
 
+export function __buildPlannerScopeTraceForTest(input: {
+	runMode: ActiveRunMode;
+	runFrom: string | null;
+	plannedNodeCount: number;
+	checkpointBoundaryCount: number;
+	plannedNodeIdsProvided: boolean;
+}): string {
+	const runMode = String(input.runMode ?? 'from_start').trim();
+	const runFrom = String(input.runFrom ?? '').trim() || '-';
+	const plannedNodeCount = Math.max(0, Number(input.plannedNodeCount ?? 0));
+	const checkpointBoundaryCount = Math.max(0, Number(input.checkpointBoundaryCount ?? 0));
+	const plannedSource = input.plannedNodeIdsProvided ? 'event' : 'local';
+	return `[trace][planner.scope] runMode=${runMode} runFrom=${runFrom} planned=${plannedNodeCount} boundaries=${checkpointBoundaryCount} source=${plannedSource}`;
+}
+
 export function __markStaleFromNodeForTest(state: GraphState, nodeId: string): GraphState {
 	const checkpointBoundaryNodeIds = new Set<string>(Object.keys(state.checkpointRegistry ?? {}));
 	const candidateIds = downstreamNodeIds(state.edges, nodeId, checkpointBoundaryNodeIds);
@@ -1040,7 +1055,8 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 		case 'run_started': {
 			const evtMode = ((evt as any).runMode ?? state.activeRunMode) as ActiveRunMode;
 			const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(state.checkpointRegistry);
-			const evtPlanned = Array.isArray((evt as any).plannedNodeIds)
+			const plannedNodeIdsProvided = Array.isArray((evt as any).plannedNodeIds);
+			const evtPlanned = plannedNodeIdsProvided
 				? new Set<string>((evt as any).plannedNodeIds as string[])
 				: computePlannedNodeSet(
 					state.nodes,
@@ -1140,6 +1156,16 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
 				)
 			);
+			if (DEV_MODE) {
+				const plannerTrace = __buildPlannerScopeTraceForTest({
+					runMode: evtMode ?? (evt.runFrom ? 'from_selected_onward' : 'from_start'),
+					runFrom: evt.runFrom ?? null,
+					plannedNodeCount: evtPlanned.size,
+					checkpointBoundaryCount: checkpointBoundaries.size,
+					plannedNodeIdsProvided
+				});
+				nextState = withGraphMeta(logPush(nextState, 'info', plannerTrace));
+			}
 			const plannedEdgeIds = new Set<string>(
 				(nextState.edges ?? [])
 					.filter((edge) => {

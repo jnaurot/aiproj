@@ -154,3 +154,15 @@ This preserves deterministic debugging and reduces unnecessary recompute cost.
 - `src/lib/flow/store/graphStore.run.ts`
 - `src/lib/flow/store/graphStore.runScope.test.ts`
 - Additional touched tests as required by failures.
+
+---
+
+## Implementation Status
+
+Completed on 2026-04-23 with phased commits:
+
+1. `docs: add checkpoint-cut run-scope implementation plan`
+2. `phase1: add checkpoint-cut dependency-closure planner for partial runs`
+3. `phase2: use checkpoint-cut planner for run scope and schema guard`
+4. `phase3: align stale/update guard regressions with checkpoint-cut scope`
+5. `phase4: add planner diagnostics and finalize checkpoint-cut run-scope docs/tests`
