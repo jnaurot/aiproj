@@ -374,6 +374,16 @@ export type NodeSchemaContractSnapshot = {
 	edges: NodeSchemaContractEdge[];
 };
 
+export type EdgeDiagnosticSnapshot = {
+	edgeId: string;
+	contractSeverity: 'clean' | 'warning' | 'error';
+	schemaPlaneState: 'valid' | 'error' | 'warning' | 'neutral';
+	runtimeState: 'inactive' | 'running' | 'waiting' | 'blocked' | 'settled';
+	effectiveSeverity: 'clean' | 'warning' | 'error';
+	contractMessage?: string;
+	schemaPlaneMessage?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Input resolution
 // ---------------------------------------------------------------------------

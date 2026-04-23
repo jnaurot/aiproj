@@ -75,6 +75,7 @@ import type {
 	EdgeSchemaDiagnostic,
 	NodeSchemaContractEdge,
 	NodeSchemaContractSnapshot,
+	EdgeDiagnosticSnapshot,
 	InputResolution,
 	GraphState,
 	QueueRuntime,
@@ -111,6 +112,7 @@ export type {
 	EdgeSchemaDiagnostic,
 	NodeSchemaContractEdge,
 	NodeSchemaContractSnapshot,
+	EdgeDiagnosticSnapshot,
 	InputResolution,
 	GraphState,
 	QueueRuntime,
@@ -166,7 +168,7 @@ import {
 	loadNodeDocExplanationMode,
 	loadNodeDocTrainingMode,
 } from './graphStore.persistence';
-import { createSchemaPlaneManager, emptySchemaPlaneState } from './graphStore.schemaPlane';
+import { createSchemaPlaneManager, emptySchemaPlaneState, recomputeSchemaPlane } from './graphStore.schemaPlane';
 import { registerAllBuiltinSchemaFunctions } from '$lib/flow/schema/schemaRegistry';
 export { __computeSaveConsistencyMismatchForTest } from './graphStore.persistence';
 export { resolveNodeInputsFromState } from './graphStore.persistence';
@@ -522,6 +524,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		getNodeSchemaResult: schemaPlane.getNodeSchemaResult,
 		getEdgeSchemaResult: schemaPlane.getEdgeSchema,
 		getEdgeSchemaValidationState: schemaPlane.getEdgeValidationState,
+		getEdgeDiagnosticSnapshot(edgeId: string) {
+			return getEdgeDiagnosticSnapshotFromState(get({ subscribe } as any) as GraphState, edgeId);
+		},
 		getSchemaErrors: schemaPlane.getSchemaErrors,
 		hasSchemaErrors: schemaPlane.hasSchemaErrors,
 		getSchemaConfigurationHints: schemaPlane.getConfigurationHints,
@@ -550,6 +555,65 @@ export const edgeSchemaConstraints = derived(graphStore, ($s) =>
 export const edgeSchemaDiagnostics = derived(edgeSchemaConstraints, ($constraints) =>
 	computeEdgeSchemaDiagnosticsInternal($constraints as any)
 );
+
+export function getEdgeDiagnosticSnapshotFromState(
+	state: GraphState,
+	edgeIdRaw: string
+): EdgeDiagnosticSnapshot | null {
+	const edgeId = String(edgeIdRaw ?? '').trim();
+	if (!edgeId) return null;
+	const edge = (state.edges ?? []).find((candidate) => String(candidate?.id ?? '') === edgeId);
+	if (!edge) return null;
+	const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
+	const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
+	const diag = diagnostics[edgeId];
+	const contractSeverity: 'clean' | 'warning' | 'error' =
+		diag?.severity === 'error' ? 'error' : diag?.severity === 'warning' ? 'warning' : 'clean';
+	const hasSchemaPlane =
+		Boolean(state.schemaPlane) &&
+		typeof state.schemaPlane === 'object' &&
+		state.schemaPlane.nodeSchemas &&
+		state.schemaPlane.edgeSchemas;
+	const stateWithSchema = hasSchemaPlane
+		? state
+		: ({
+				...state,
+				schemaPlane: recomputeSchemaPlane(state)
+			} as GraphState);
+	const schemaValidation = createSchemaPlaneManager({ getState: () => stateWithSchema }).getEdgeValidationState(edgeId);
+	const schemaPlaneState =
+		schemaValidation?.state === 'error'
+			? 'error'
+			: schemaValidation?.state === 'warning'
+				? 'warning'
+				: schemaValidation?.state === 'valid'
+					? 'valid'
+					: 'neutral';
+	const edgeExec = String((edge.data as any)?.exec ?? 'idle').trim().toLowerCase();
+	const targetNodeId = String(edge.target ?? '').trim();
+	const blockedByNode =
+		(state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
+			? state.queueRuntime.blockedByNode
+			: {}) ?? {};
+	const blockedEntry = targetNodeId ? (blockedByNode as any)[targetNodeId] : null;
+	let runtimeState: EdgeDiagnosticSnapshot['runtimeState'] = 'inactive';
+	if (edgeExec === 'active') runtimeState = 'running';
+	else if (edgeExec === 'done') runtimeState = 'settled';
+	else if (blockedEntry && Array.isArray(blockedEntry.missingEdgeIds) && blockedEntry.missingEdgeIds.includes(edgeId)) {
+		runtimeState = 'blocked';
+	} else if (blockedEntry && String(blockedEntry.reasonCode ?? '').trim() === 'NO_READY_WORK') {
+		runtimeState = 'waiting';
+	}
+	return {
+		edgeId,
+		contractSeverity,
+		schemaPlaneState,
+		runtimeState,
+		effectiveSeverity: contractSeverity,
+		contractMessage: diag?.message ? String(diag.message) : undefined,
+		schemaPlaneMessage: schemaValidation?.message ? String(schemaValidation.message) : undefined
+	};
+}
 
 
 export function getNodeDocResolvedFromState(state: GraphState, nodeId: string): NodeDocResolved | null {
