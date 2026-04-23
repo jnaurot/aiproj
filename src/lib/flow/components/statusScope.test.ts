@@ -27,6 +27,7 @@ describe('buildScopedStatus', () => {
 		});
 		expect(out).toEqual({
 			statusText: 'Succeeded',
+			statusTooltip: 'Succeeded',
 			tone: 'succeeded',
 			unsaved: false
 		});
@@ -40,6 +41,7 @@ describe('buildScopedStatus', () => {
 		});
 		expect(out).toEqual({
 			statusText: 'Failed + Needs rerun (2 stale)',
+			statusTooltip: 'Failed + Needs rerun (2 stale) + Unsaved changes',
 			tone: 'failed',
 			unsaved: true
 		});
@@ -53,6 +55,7 @@ describe('buildScopedStatus', () => {
 		});
 		expect(out).toEqual({
 			statusText: 'Running',
+			statusTooltip: 'Running',
 			tone: 'running',
 			unsaved: false
 		});
@@ -74,8 +77,13 @@ describe('buildScopedStatus', () => {
 			graph: { ...graphBase, runStatus: 'resuming' },
 			component: componentBase
 		});
-		expect(pausing).toEqual({ statusText: 'Pausing', tone: 'running', unsaved: false });
-		expect(paused).toEqual({ statusText: 'Paused', tone: 'running', unsaved: false });
-		expect(resuming).toEqual({ statusText: 'Resuming', tone: 'running', unsaved: false });
+		expect(pausing).toEqual({ statusText: 'Pausing', statusTooltip: 'Pausing', tone: 'running', unsaved: false });
+		expect(paused).toEqual({ statusText: 'Paused', statusTooltip: 'Paused', tone: 'running', unsaved: false });
+		expect(resuming).toEqual({
+			statusText: 'Resuming',
+			statusTooltip: 'Resuming',
+			tone: 'running',
+			unsaved: false
+		});
 	});
 });

@@ -1433,7 +1433,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		graph: graphScopedSnapshot,
 		component: componentScopedSnapshot
 	});
-	$: graphHeaderStatus = scopedHeaderStatus.statusText;
+	$: graphHeaderStatusTooltip = scopedHeaderStatus.statusTooltip;
 	$: graphHeaderStatusTone = scopedHeaderStatus.tone;
 	$: scopedFreshness =
 		$graphStore.editingContext === 'component'
@@ -4767,9 +4767,7 @@ async function returnFromComponentEditMode() {
 			</div>
 
 			<div class="toolbarZone statusIndicators">
-				<span class={graphHeaderStatusClass}
-					>{statusScopeLabel}: {graphHeaderStatus}{scopedUnsavedChanges ? ' + Unsaved changes' : ''}</span
-				>
+				<span class={graphHeaderStatusClass} title={graphHeaderStatusTooltip}>{statusScopeLabel}</span>
 				{#if isComponentEditContext}
 					<button class="runSecondary" on:click={returnFromComponentEditMode}>
 						Return to graph

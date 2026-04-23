@@ -16,6 +16,7 @@ export type ScopedStatusInput = {
 
 export type ScopedStatusOutput = {
 	statusText: string;
+	statusTooltip: string;
 	tone: HeaderStatusTone;
 	unsaved: boolean;
 };
@@ -57,10 +58,12 @@ function formatStatus(snapshot: StatusSnapshot): { text: string; tone: HeaderSta
 export function buildScopedStatus(input: ScopedStatusInput): ScopedStatusOutput {
 	const active = input.editingContext === 'component' ? input.component : input.graph;
 	const formatted = formatStatus(active);
+	const unsaved = Boolean(active.unsaved);
 	return {
 		statusText: formatted.text,
+		statusTooltip: `${formatted.text}${unsaved ? ' + Unsaved changes' : ''}`,
 		tone: formatted.tone,
-		unsaved: Boolean(active.unsaved)
+		unsaved
 	};
 }
 
