@@ -63,36 +63,22 @@ describe('edge click → schemaEdgeInspectorEdgeId wiring', () => {
 // ---------------------------------------------------------------------------
 
 /** Mirrors the onedgeclick handler logic in FlowCanvas.svelte */
-function shouldOpenInspector(
-	viewMode: 'execution' | 'schema',
-	effectiveSeverity: 'clean' | 'warning' | 'error' | null
-): boolean {
+function shouldOpenInspector(viewMode: 'execution' | 'schema'): boolean {
 	if (viewMode !== 'schema') return false;
-	if (!effectiveSeverity || effectiveSeverity === 'clean') return false;
 	return true;
 }
 
 describe('onedgeclick — panel open conditions', () => {
-	it('opens panel in schema view for error edge', () => {
-		expect(shouldOpenInspector('schema', 'error')).toBe(true);
+	it('opens panel in schema view', () => {
+		expect(shouldOpenInspector('schema')).toBe(true);
 	});
 
-	it('opens panel in schema view for warning edge', () => {
-		expect(shouldOpenInspector('schema', 'warning')).toBe(true);
-	});
 
 	it('does NOT open panel in execution view', () => {
-		expect(shouldOpenInspector('execution', 'error')).toBe(false);
-		expect(shouldOpenInspector('execution', 'warning')).toBe(false);
+		expect(shouldOpenInspector('execution')).toBe(false);
 	});
 
-	it('does NOT open panel for clean edge in schema view', () => {
-		expect(shouldOpenInspector('schema', 'clean')).toBe(false);
-	});
 
-	it('does NOT open panel when no snapshot (null severity)', () => {
-		expect(shouldOpenInspector('schema', null)).toBe(false);
-	});
 });
 
 // ---------------------------------------------------------------------------
@@ -190,3 +176,5 @@ describe('regression — non-schema edits unaffected by Phase 3 changes', () => 
 		expect(get(graphStore).schemaEdgeInspectorEdgeId).toBeNull();
 	});
 });
+
+

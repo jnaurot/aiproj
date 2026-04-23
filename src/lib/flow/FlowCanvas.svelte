@@ -1926,11 +1926,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	function onedgeclick({ edge }: { edge: Edge<PipelineEdgeData> }) {
 		if ($graphStore.viewMode !== 'schema') return;
-		// Only open the panel when the edge has a schema issue
-		const snapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(String(edge.id ?? '')) ?? null;
-		if (snapshot?.effectiveSeverity && snapshot.effectiveSeverity !== 'clean') {
-			(graphStore as any).setSchemaEdgeInspectorEdgeId?.(String(edge.id ?? ''));
-		}
+		const edgeId = String(edge?.id ?? '').trim();
+		if (!edgeId) return;
+		(graphStore as any).setSchemaEdgeInspectorEdgeId?.(edgeId);
 	}
 
 	function promptForUniqueNodeName(kind: NodeKind): string | null {
