@@ -24,6 +24,7 @@ export type NodeFinishedStatus =
 export type ControlPlaneSignalType =
 	| "UPSTREAM_OPENED"
 	| "ITEM_ENQUEUED"
+	| "ITEM_DEQUEUED"
 	| "INPUT_DRAINED"
 	| "UPSTREAM_CLOSED"
 	| "INPUT_READY"
@@ -175,6 +176,7 @@ export type KnownRunEvent =
         | "llm_released"
 		| "upstream_opened"
 		| "item_enqueued"
+		| "item_dequeued"
 		| "input_drained"
 		| "upstream_closed"
 		| "input_ready"

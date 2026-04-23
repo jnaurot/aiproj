@@ -38,10 +38,34 @@ describe('graphStore control plane edge state', () => {
 			{
 				type: 'control_signal',
 				runId: 'run_cp_edge',
+				at: '2026-04-02T12:00:01.500Z',
+				signal: 'item_enqueued',
+				edgeId,
+				seq: 13
+			} as any,
+			'run_cp_edge'
+		);
+		state = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'control_signal',
+				runId: 'run_cp_edge',
 				at: '2026-04-02T12:00:02.000Z',
 				signal: 'input_blocked',
 				edgeId,
-				seq: 13
+				seq: 14
+			} as any,
+			'run_cp_edge'
+		);
+		state = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'control_signal',
+				runId: 'run_cp_edge',
+				at: '2026-04-02T12:00:02.500Z',
+				signal: 'item_dequeued',
+				edgeId,
+				seq: 15
 			} as any,
 			'run_cp_edge'
 		);
@@ -53,7 +77,7 @@ describe('graphStore control plane edge state', () => {
 				at: '2026-04-02T12:00:03.000Z',
 				signal: 'input_drained',
 				edgeId,
-				seq: 14
+				seq: 16
 			} as any,
 			'run_cp_edge'
 		);
@@ -65,7 +89,7 @@ describe('graphStore control plane edge state', () => {
 				at: '2026-04-02T12:00:04.000Z',
 				signal: 'input_ready',
 				edgeId,
-				seq: 15
+				seq: 17
 			} as any,
 			'run_cp_edge'
 		);
@@ -77,7 +101,7 @@ describe('graphStore control plane edge state', () => {
 				at: '2026-04-02T12:00:05.000Z',
 				signal: 'upstream_closed',
 				edgeId,
-				seq: 16
+				seq: 18
 			} as any,
 			'run_cp_edge'
 		);
@@ -88,7 +112,7 @@ describe('graphStore control plane edge state', () => {
 		expect(Boolean(edgeState.closed)).toBe(true);
 		expect(Number(edgeState.depth ?? -1)).toBe(0);
 		expect(Boolean(edgeState.blocked)).toBe(false);
-		expect(Number(edgeState.lastSeq ?? 0)).toBe(16);
+		expect(Number(edgeState.lastSeq ?? 0)).toBe(18);
 	});
 
 	it('ignores out-of-order control events by sequence', () => {
@@ -121,5 +145,49 @@ describe('graphStore control plane edge state', () => {
 		const edgeState = (state as any)?.queueRuntime?.controlPlaneEdgeState?.edge_seq;
 		expect(Number(edgeState?.depth ?? 0)).toBe(1);
 		expect(Number(edgeState?.lastSeq ?? 0)).toBe(10);
+	});
+
+	it('decrements depth on item_dequeued and floors at zero', () => {
+		graphStore.hardResetGraph();
+		let state = get(graphStore as any);
+		state = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'control_signal',
+				runId: 'run_cp_dequeue',
+				at: '2026-04-02T12:20:00.000Z',
+				signal: 'item_enqueued',
+				edgeId: 'edge_dequeue',
+				seq: 20
+			} as any,
+			'run_cp_dequeue'
+		);
+		state = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'control_signal',
+				runId: 'run_cp_dequeue',
+				at: '2026-04-02T12:20:01.000Z',
+				signal: 'item_dequeued',
+				edgeId: 'edge_dequeue',
+				seq: 21
+			} as any,
+			'run_cp_dequeue'
+		);
+		state = __applyRunEventForTest(
+			state as any,
+			{
+				type: 'control_signal',
+				runId: 'run_cp_dequeue',
+				at: '2026-04-02T12:20:02.000Z',
+				signal: 'item_dequeued',
+				edgeId: 'edge_dequeue',
+				seq: 22
+			} as any,
+			'run_cp_dequeue'
+		);
+		const edgeState = (state as any)?.queueRuntime?.controlPlaneEdgeState?.edge_dequeue;
+		expect(Number(edgeState?.depth ?? -1)).toBe(0);
+		expect(Number(edgeState?.lastSeq ?? 0)).toBe(22);
 	});
 });

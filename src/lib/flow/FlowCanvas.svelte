@@ -141,6 +141,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTransitionRow,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
+	import { resolveEdgeVisualClass } from '$lib/flow/edgeVisualState';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
@@ -275,21 +276,15 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			blocked: false,
 			full: false
 		};
-		let visualClass = 'edge-state-inactive';
-		if (edgeMode !== 'work') {
-			visualClass = 'edge-state-nonwork';
-		} else if (edgeExec === 'active') {
-			visualClass = 'edge-state-running';
-		} else if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
-			// Both endpoints done — always settle to green regardless of stale queue metrics.
-			// Monitor flags can outlive a run (metrics are cleared at run_started, not run_finished),
-			// so they must not override a verifiably completed edge.
-			visualClass = 'edge-state-settled';
-		} else if (monitorFlags.blocked || monitorFlags.full) {
-			visualClass = 'edge-state-blocked';
-		} else if (monitorFlags.waiting) {
-			visualClass = 'edge-state-waiting';
-		}
+		const visualClass = resolveEdgeVisualClass({
+			edgeMode,
+			edgeExec,
+			sourceLifecycle,
+			targetLifecycle,
+			waiting: monitorFlags.waiting,
+			blocked: monitorFlags.blocked,
+			full: monitorFlags.full
+		});
 		const title = schemaValidation?.message
 			? String(schemaValidation.message)
 			: diag

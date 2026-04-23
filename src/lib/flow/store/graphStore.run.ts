@@ -525,6 +525,7 @@ const CONTROL_SIGNAL_ALLOWED = new Set([
 	'llm_released',
 	'upstream_opened',
 	'item_enqueued',
+	'item_dequeued',
 	'input_drained',
 	'upstream_closed',
 	'input_ready',
@@ -588,6 +589,9 @@ function applyControlPlaneEdgeState(
 	if (signal === 'item_enqueued') {
 		next.open = true;
 		next.depth = Math.max(0, next.depth + 1);
+	}
+	if (signal === 'item_dequeued') {
+		next.depth = Math.max(0, next.depth - 1);
 	}
 	if (signal === 'input_drained') {
 		next.depth = 0;
