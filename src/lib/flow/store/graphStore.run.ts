@@ -60,6 +60,7 @@ import {
 import { NodeSchemaEnvelopeSchema } from '$lib/flow/schema/schemaContract';
 import type { CheckpointStaleness } from '$lib/flow/types/checkpoint';
 import type { SchemaPlaneResult } from '$lib/flow/types/schemaPlane';
+import { createSchemaPlaneManager } from './graphStore.schemaPlane';
 
 
 export function applyLlmHolderToNodes(
@@ -648,30 +649,30 @@ function parseMemoDecisionFromTraceLog(message: string): { decision: MemoDecisio
 }
 
 type RunSchemaWarningLog = {
+	key: string;
+	level: 'warn' | 'info';
+	source: 'contract_engine' | 'schema_plane';
+	code: string;
 	edgeId: string;
 	nodeId?: string;
 	message: string;
 };
 
-function collectSchemaWarningsForRun(
+function collectSchemaSignalsForEdges(
 	state: GraphState,
-	plannedNodeIds: Set<string>
+	edgeIds: Set<string>,
+	includeSchemaPlaneInfo: boolean
 ): RunSchemaWarningLog[] {
 	const warnings: RunSchemaWarningLog[] = [];
-	const dedupe = new Set<string>();
 	const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
 	const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
-	const hasPlanned = plannedNodeIds.size > 0;
+	const schemaValidation = createSchemaPlaneManager({ getState: () => state });
 	for (const edge of state.edges ?? []) {
 		const edgeId = String(edge?.id ?? '').trim();
 		if (!edgeId) continue;
+		if (!edgeIds.has(edgeId)) continue;
 		const sourceNodeId = String(edge?.source ?? '').trim();
 		const targetNodeId = String(edge?.target ?? '').trim();
-		const inScope =
-			!hasPlanned ||
-			plannedNodeIds.has(sourceNodeId) ||
-			plannedNodeIds.has(targetNodeId);
-		if (!inScope) continue;
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim();
 		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim();
 		const constraint = constraints[edgeId];
@@ -679,56 +680,122 @@ function collectSchemaWarningsForRun(
 			.trim()
 			.toLowerCase();
 		const diag = diagnostics[edgeId];
-		if (diag && String(diag.severity ?? '').toLowerCase() === 'warning') {
+		const contractSeverity: 'clean' | 'warning' | 'error' =
+			diag?.severity === 'error' ? 'error' : diag?.severity === 'warning' ? 'warning' : 'clean';
+		const schemaState = schemaValidation.getEdgeValidationState(edgeId);
+		const schemaPlaneState =
+			schemaState?.state === 'error'
+				? 'error'
+				: schemaState?.state === 'warning'
+					? 'warning'
+					: schemaState?.state === 'valid'
+						? 'valid'
+						: 'neutral';
+		if (contractSeverity === 'warning' || contractSeverity === 'error') {
+			const detail = String(diag?.message ?? '').trim();
 			const suggestion =
-				Array.isArray(diag.suggestions) && diag.suggestions.length > 0
+				Array.isArray(diag?.suggestions) && diag.suggestions.length > 0
 					? ` suggestions="${diag.suggestions.slice(0, 2).join(' | ')}"`
 					: '';
-			const detail = String(diag.message ?? '').trim();
-			const warningKey = `diag:${edgeId}:${String(diag.code ?? '')}:${detail}`;
-			if (!dedupe.has(warningKey)) {
-				dedupe.add(warningKey);
-				warnings.push({
-					edgeId,
-					nodeId: targetNodeId || sourceNodeId || undefined,
-					message:
-						`[SCHEMA_WARN] edge=${edgeId} code=${String(diag.code ?? 'UNKNOWN')} mode=${mode} ` +
-						`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} detail="${detail}"${suggestion}`
-				});
-			}
+			const key = `edge:${edgeId}:contract:${contractSeverity}:${String(diag?.code ?? 'UNKNOWN')}`;
+			warnings.push({
+				key,
+				level: 'warn',
+				source: 'contract_engine',
+				code: String(diag?.code ?? 'UNKNOWN'),
+				edgeId,
+				nodeId: targetNodeId || sourceNodeId || undefined,
+				message:
+					`[SCHEMA_WARN] edge=${edgeId} code=${String(diag?.code ?? 'UNKNOWN')} mode=${mode} ` +
+					`contractSeverity=${contractSeverity} schemaPlaneState=${schemaPlaneState} ` +
+					`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} detail="${detail}"${suggestion}`
+			});
+			continue;
+		}
+		if (includeSchemaPlaneInfo && schemaPlaneState === 'warning' && String(schemaState?.code ?? '') === 'OPAQUE_DEPENDENCY') {
+			const detail = String(
+				schemaState?.message ??
+					'Schema remains opaque after source output; verify source schema inference or declared expected schema.'
+			).trim();
+			const key = `edge:${edgeId}:schema_plane:warning:OPAQUE_DEPENDENCY`;
+			warnings.push({
+				key,
+				level: 'info',
+				source: 'schema_plane',
+				code: 'OPAQUE_DEPENDENCY',
+				edgeId,
+				nodeId: targetNodeId || sourceNodeId || undefined,
+				message:
+					`[SCHEMA_INFO] edge=${edgeId} code=OPAQUE_DEPENDENCY mode=${mode} ` +
+					`contractSeverity=${contractSeverity} schemaPlaneState=${schemaPlaneState} ` +
+					`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} detail="${detail}"`
+			});
 		}
 	}
 	return warnings;
 }
 
-function collectOpaqueWarningsAfterSourceOutput(state: GraphState, sourceNodeIdRaw: string): RunSchemaWarningLog[] {
-	const warnings: RunSchemaWarningLog[] = [];
-	const dedupe = new Set<string>();
-	const sourceNodeId = String(sourceNodeIdRaw ?? '').trim();
-	if (!sourceNodeId) return warnings;
-	for (const edge of state.edges ?? []) {
-		const edgeId = String(edge?.id ?? '').trim();
-		if (!edgeId) continue;
-		if (String(edge?.source ?? '').trim() !== sourceNodeId) continue;
-		const targetNodeId = String(edge?.target ?? '').trim();
-		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim();
-		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim();
-		const edgeSchema = state.schemaPlane?.edgeSchemas?.[edgeId];
-		if (String((edgeSchema as any)?.mode ?? '').trim().toLowerCase() !== 'opaque') continue;
-		const mode = String((edge?.data as any)?.mode ?? 'work').trim().toLowerCase();
-		const warningKey = `post_output_opaque:${edgeId}`;
-		if (dedupe.has(warningKey)) continue;
-		dedupe.add(warningKey);
-		warnings.push({
-			edgeId,
-			nodeId: targetNodeId || sourceNodeId || undefined,
-			message:
-				`[SCHEMA_WARN] edge=${edgeId} code=OPAQUE_DEPENDENCY mode=${mode} ` +
-				`from=${sourceNodeId}:${sourceHandle} to=${targetNodeId}:${targetHandle} ` +
-				`detail="Schema remains opaque after source output; verify source schema inference or declared expected schema."`
-		});
+function reconcileSchemaSignals(
+	state: GraphState,
+	wanted: RunSchemaWarningLog[],
+	consideredEdgeIds: Set<string>,
+	at?: string
+): GraphState {
+	const previous =
+		(state.queueRuntime?.schemaDiagnosticSignals &&
+		typeof state.queueRuntime.schemaDiagnosticSignals === 'object'
+			? state.queueRuntime.schemaDiagnosticSignals
+			: {}) ?? {};
+	const nextSignals: Record<string, any> = { ...previous };
+	const wantedMap = new Map<string, RunSchemaWarningLog>();
+	for (const entry of wanted) wantedMap.set(entry.key, entry);
+	let nextState = state;
+	for (const [key, signal] of Object.entries(previous)) {
+		const edgeId = String((signal as any)?.edgeId ?? '').trim();
+		if (!edgeId || !consideredEdgeIds.has(edgeId)) continue;
+		if (wantedMap.has(key)) continue;
+		const level = String((signal as any)?.level ?? 'warn').trim().toLowerCase() === 'info' ? 'info' : 'warn';
+		const tag = level === 'warn' ? 'SCHEMA_WARN_CLEARED' : 'SCHEMA_INFO_CLEARED';
+		nextState = logPush(
+			nextState,
+			'info',
+			`[${tag}] key=${key} edge=${edgeId} code=${String((signal as any)?.code ?? 'UNKNOWN')}`,
+			String((signal as any)?.nodeId ?? '').trim() || undefined,
+			undefined,
+			edgeId
+		);
+		delete nextSignals[key];
 	}
-	return warnings;
+	for (const [key, entry] of wantedMap.entries()) {
+		const existing = nextSignals[key];
+		if (existing) continue;
+		const tag = entry.level === 'warn' ? 'SCHEMA_WARN_RAISED' : 'SCHEMA_INFO_RAISED';
+		nextState = logPush(
+			nextState,
+			entry.level,
+			`[${tag}] key=${key} ${entry.message}`,
+			entry.nodeId,
+			undefined,
+			entry.edgeId
+		);
+		nextSignals[key] = {
+			key,
+			edgeId: entry.edgeId,
+			nodeId: entry.nodeId,
+			code: entry.code,
+			level: entry.level,
+			source: entry.source,
+			message: entry.message,
+			updatedAt: at
+		};
+	}
+	return {
+		...nextState,
+		queueRuntime: {
+			...(nextState.queueRuntime ?? {}),
+			schemaDiagnosticSignals: nextSignals
+		}
+	};
 }
 
 export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId: string): GraphState {
@@ -839,19 +906,19 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				nodeOutputs,
 				nodeBindings
 			});
-			let nextState = baseNext;
-			for (const warning of collectOpaqueWarningsAfterSourceOutput(baseNext, evt.nodeId)) {
-				nextState = withGraphMeta(
-					logPush(
-						nextState,
-						'warn',
-						warning.message,
-						warning.nodeId ?? undefined,
-						undefined,
-						warning.edgeId ?? undefined
-					)
-				);
-			}
+			const outgoingEdgeIds = new Set<string>(
+				(baseNext.edges ?? [])
+					.filter((edge) => String(edge?.source ?? '').trim() === String(evt.nodeId ?? '').trim())
+					.map((edge) => String(edge?.id ?? '').trim())
+					.filter(Boolean)
+			);
+			const postOutputSignals = collectSchemaSignalsForEdges(baseNext, outgoingEdgeIds, true);
+			let nextState = reconcileSchemaSignals(
+				baseNext,
+				postOutputSignals,
+				outgoingEdgeIds,
+				String((evt as any)?.at ?? '')
+			);
 			if (driftLogMessage) {
 				return logPush(nextState, 'warn', driftLogMessage, evt.nodeId);
 			}
@@ -1028,18 +1095,23 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					`Run started ${evt.runFrom ? `(from ${evt.runFrom})` : '(from start)'}`
 				)
 			);
-			for (const warning of collectSchemaWarningsForRun(nextState, evtPlanned)) {
-				nextState = withGraphMeta(
-					logPush(
-						nextState,
-						'warn',
-						warning.message,
-						warning.nodeId ?? undefined,
-						undefined,
-						warning.edgeId ?? undefined
-					)
-				);
-			}
+			const plannedEdgeIds = new Set<string>(
+				(nextState.edges ?? [])
+					.filter((edge) => {
+						const sourceNodeId = String(edge?.source ?? '').trim();
+						const targetNodeId = String(edge?.target ?? '').trim();
+						return evtPlanned.has(sourceNodeId) || evtPlanned.has(targetNodeId);
+					})
+					.map((edge) => String(edge?.id ?? '').trim())
+					.filter(Boolean)
+			);
+			const runStartSignals = collectSchemaSignalsForEdges(nextState, plannedEdgeIds, false);
+			nextState = reconcileSchemaSignals(
+				nextState,
+				runStartSignals,
+				plannedEdgeIds,
+				String((evt as any)?.at ?? '')
+			);
 			return nextState;
 		}
 		case 'run_pause_requested': {

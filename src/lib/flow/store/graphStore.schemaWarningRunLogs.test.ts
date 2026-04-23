@@ -73,7 +73,7 @@ describe('graphStore schema warning run logs', () => {
 			'run_schema_warn_drift'
 		);
 		const messages = (next.logs ?? []).map((entry) => String(entry?.message ?? ''));
-		expect(messages.some((line) => line.includes('[SCHEMA_WARN]') && line.includes('edge=e_warn'))).toBe(true);
+		expect(messages.some((line) => line.includes('[SCHEMA_WARN_RAISED]') && line.includes('edge=e_warn'))).toBe(true);
 		expect(
 			messages.some(
 				(line) =>
@@ -130,10 +130,90 @@ describe('graphStore schema warning run logs', () => {
 		expect(
 			messages.some(
 				(line) =>
-					line.includes('[SCHEMA_WARN]') &&
+					line.includes('[SCHEMA_INFO_RAISED]') &&
 					line.includes('edge=e_opaque') &&
 					line.includes('OPAQUE_DEPENDENCY')
 			)
 		).toBe(true);
+		expect(messages.some((line) => line.includes('[SCHEMA_WARN]') && line.includes('edge=e_opaque'))).toBe(false);
+	});
+
+	it('emits raised once and cleared once for contract warnings across run starts', () => {
+		graphStore.hardResetGraph();
+		const baseline = get(graphStore) as GraphState;
+		const warningState = {
+			...baseline,
+			nodes: [
+				{
+					id: 'src',
+					type: 'default',
+					position: { x: 0, y: 0 },
+					data: { kind: 'source', sourceKind: 'file', label: 'Source', params: { output: { mode: 'text' } }, status: 'idle' }
+				},
+				{
+					id: 'dst',
+					type: 'default',
+					position: { x: 120, y: 0 },
+					data: { kind: 'model', label: 'Model', params: {}, status: 'idle' }
+				}
+			] as any,
+			edges: [
+				{
+					id: 'e_warn_cycle',
+					source: 'src',
+					target: 'dst',
+					sourceHandle: 'out',
+					targetHandle: 'in',
+					data: {
+						exec: 'idle',
+						mode: 'work',
+						contract: {
+							snapshot: {
+								sourceSchemaFingerprint: '{"type":"json"}',
+								targetSchemaFingerprint: '{"type":"json"}',
+								compatible: true,
+								decision: 'native'
+							}
+						}
+					}
+				}
+			] as any
+		} as GraphState;
+		const afterFirstStart = __applyRunEventForTest(
+			warningState,
+			{
+				type: 'run_started',
+				runId: 'run_warn_cycle_1',
+				at: '2026-04-23T00:10:00Z',
+				runMode: 'from_start',
+				plannedNodeIds: ['src', 'dst']
+			} as any,
+			'run_warn_cycle_1'
+		);
+		const firstMessages = (afterFirstStart.logs ?? []).map((entry) => String(entry?.message ?? ''));
+		expect(firstMessages.filter((line) => line.includes('[SCHEMA_WARN_RAISED]')).length).toBe(1);
+		const cleanedState = {
+			...afterFirstStart,
+			edges: (afterFirstStart.edges ?? []).map((edge: any) =>
+				String(edge?.id ?? '') === 'e_warn_cycle'
+					? { ...edge, data: { ...(edge?.data ?? {}), contract: undefined } }
+					: edge
+			)
+		} as GraphState;
+		const afterSecondStart = __applyRunEventForTest(
+			cleanedState,
+			{
+				type: 'run_started',
+				runId: 'run_warn_cycle_2',
+				at: '2026-04-23T00:10:30Z',
+				runMode: 'from_start',
+				plannedNodeIds: ['src', 'dst']
+			} as any,
+			'run_warn_cycle_2'
+		);
+		const secondMessages = (afterSecondStart.logs ?? []).map((entry) => String(entry?.message ?? ''));
+		expect(secondMessages.some((line) => line.includes('[SCHEMA_WARN_CLEARED]') && line.includes('edge=e_warn_cycle'))).toBe(
+			true
+		);
 	});
 });

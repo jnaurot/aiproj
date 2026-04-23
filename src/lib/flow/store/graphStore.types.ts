@@ -578,6 +578,19 @@ export type QueueRuntime = {
 			updatedAt?: string;
 		}
 	>;
+	schemaDiagnosticSignals?: Record<
+		string,
+		{
+			key: string;
+			edgeId: string;
+			nodeId?: string;
+			code: string;
+			level: 'warn' | 'info';
+			source: 'contract_engine' | 'schema_plane';
+			message: string;
+			updatedAt?: string;
+		}
+	>;
 	blockedByNode?: Record<
 		string,
 		{
