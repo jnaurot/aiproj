@@ -63,3 +63,16 @@ export function buildSchemaTooltip(
 	}
 	return lines.length > 0 ? lines.join('\n') : undefined;
 }
+
+export function summarizeSchemaOverlayCounts(
+	snapshots: Array<EdgeDiagnosticSnapshot | null | undefined>
+): { errorCount: number; warningCount: number } {
+	let errorCount = 0;
+	let warningCount = 0;
+	for (const snapshot of snapshots) {
+		const severity = String(snapshot?.effectiveSeverity ?? 'clean').trim().toLowerCase();
+		if (severity === 'error') errorCount += 1;
+		else if (severity === 'warning') warningCount += 1;
+	}
+	return { errorCount, warningCount };
+}

@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildSchemaTooltip, resolveSchemaClassForView, resolveSchemaClassFromSnapshot } from './edgeSchemaAuthority';
+import {
+	buildSchemaTooltip,
+	resolveSchemaClassForView,
+	resolveSchemaClassFromSnapshot,
+	summarizeSchemaOverlayCounts
+} from './edgeSchemaAuthority';
+import { getEdgeDiagnosticSnapshotFromState } from '$lib/flow/store/graphStore';
 
 describe('edge schema authority presentation', () => {
+	it('summarizes overlay counts from effective severity', () => {
+		const counts = summarizeSchemaOverlayCounts([
+			{ edgeId: 'e1', contractSeverity: 'clean', schemaPlaneState: 'valid', runtimeState: 'inactive', effectiveSeverity: 'clean' },
+			{ edgeId: 'e2', contractSeverity: 'warning', schemaPlaneState: 'warning', runtimeState: 'inactive', effectiveSeverity: 'warning' },
+			{ edgeId: 'e3', contractSeverity: 'error', schemaPlaneState: 'error', runtimeState: 'inactive', effectiveSeverity: 'error' },
+			null,
+			undefined
+		]);
+		expect(counts).toEqual({ errorCount: 1, warningCount: 1 });
+	});
+
 	it('does not produce warning class when contract is clean and schema plane is warning', () => {
 		const schemaClass = resolveSchemaClassFromSnapshot({
 			edgeId: 'e1',
@@ -125,36 +142,77 @@ import { get } from 'svelte/store';
 import { graphStore } from '$lib/flow/store/graphStore';
 
 describe('getEdgeDiagnosticSnapshotFromState — effectiveSeverity merges schemaPlane error', () => {
-	it('effectiveSeverity is error when target nodeSchemas has ok:false (SHAPE_MISMATCH)', () => {
+	it('effectiveSeverity is error when target nodeSchemas has ok:false (SHAPE_MISMATCH) with non-opaque upstream', () => {
 		graphStore.hardResetGraph();
-		const src = graphStore.addNode('source', { x: 0, y: 0 });
-		const dst = graphStore.addNode('transform', { x: 200, y: 0 });
-		const edgeId = `e_${src}_${dst}`;
-		graphStore.addEdge({ id: edgeId, source: src, target: dst, sourceHandle: 'out', targetHandle: 'in' });
-
-		// Give the transform node op=select with a column that doesn't exist in
-		// an empty input schema — this makes nodeSchemas[dst].ok === false
-		// (SHAPE_MISMATCH) once the schema plane is recomputed.
-		(graphStore as any).updateNodeConfig?.(dst, {
-			op: 'select',
-			select: { columns: ['nonexistent_column'] }
-		});
-
-		// Force a schema-plane recompute via a param update
-		const state = get(graphStore);
-		const dstNode = state.nodes.find((n) => n.id === dst);
-		// The schema plane may already reflect the error after updateNodeConfig.
-		// Ask for the diagnostic snapshot.
-		const snapshot = (graphStore as any).getEdgeDiagnosticSnapshot?.(edgeId);
-
-		// If the edge exists and the target has a schema error, effectiveSeverity
-		// must be 'error' so the edge is coloured red in Schema View.
-		if (snapshot && state.schemaPlane?.nodeSchemas?.[dst]?.ok === false) {
-			expect(snapshot.effectiveSeverity).toBe('error');
-			expect(snapshot.schemaPlaneState).toBe('error');
-		}
-		// Regardless, the snapshot must not be null when the edge exists.
+		const src = graphStore.addNode('model', { x: 0, y: 0 });
+		const dst = graphStore.addNode('transform', { x: 120, y: 0 });
+		graphStore.addEdge({
+			id: 'e_shape_non_opaque',
+			source: src,
+			target: dst,
+			sourceHandle: 'out',
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		const baseline = get(graphStore);
+		const state = {
+			...baseline,
+			schemaPlane: {
+				nodeSchemas: {
+					[src]: {
+						ok: true,
+						output: { mode: 'table', columns: [{ name: 'known_col', type: 'string', nullable: true, properties: {} }] }
+					},
+					[dst]: {
+						ok: false,
+						error: { code: 'SHAPE_MISMATCH', message: "Column 'nonexistent_column' not found in input schema", handles: ['in'] }
+					}
+				},
+				edgeSchemas: {
+					e_shape_non_opaque: { mode: 'table', columns: [{ name: 'known_col', type: 'string', nullable: true, properties: {} }] }
+				}
+			} as any
+		} as any;
+		const snapshot = getEdgeDiagnosticSnapshotFromState(state, 'e_shape_non_opaque');
 		expect(snapshot).not.toBeNull();
+		if (snapshot) {
+			expect(snapshot.schemaPlaneState).toBe('error');
+			expect(snapshot.effectiveSeverity).toBe('error');
+		}
+	});
+
+	it('effectiveSeverity is warning when SHAPE_MISMATCH is behind opaque upstream', () => {
+		graphStore.hardResetGraph();
+		const src = graphStore.addNode('model', { x: 0, y: 0 });
+		const dst = graphStore.addNode('transform', { x: 120, y: 0 });
+		graphStore.addEdge({
+			id: 'e_shape_opaque',
+			source: src,
+			target: dst,
+			sourceHandle: 'out',
+			targetHandle: 'in',
+			data: { exec: 'idle' }
+		} as any);
+		const baseline = get(graphStore);
+		const state = {
+			...baseline,
+			schemaPlane: {
+				nodeSchemas: {
+					[src]: { ok: true, output: { mode: 'opaque', columns: [] } },
+					[dst]: {
+						ok: false,
+						error: { code: 'SHAPE_MISMATCH', message: "Column 'candidate_required_location' not found in input schema", handles: ['in'] }
+					}
+				},
+				edgeSchemas: { e_shape_opaque: { mode: 'opaque', columns: [] } }
+			} as any
+		} as any;
+		const snapshot = getEdgeDiagnosticSnapshotFromState(state, 'e_shape_opaque');
+		expect(snapshot).not.toBeNull();
+		if (snapshot) {
+			expect(snapshot.schemaPlaneState).toBe('warning');
+			expect(snapshot.effectiveSeverity).toBe('warning');
+		}
 	});
 
 	it('effectiveSeverity is clean when target nodeSchemas is ok', () => {

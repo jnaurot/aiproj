@@ -143,7 +143,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
 	import { resolveEdgeVisualClass, computeEdgeVisualClass } from '$lib/flow/edgeVisualState';
-	import { buildSchemaTooltip, resolveSchemaClassForView } from '$lib/flow/edgeSchemaAuthority';
+	import { buildSchemaTooltip, resolveSchemaClassForView, summarizeSchemaOverlayCounts } from '$lib/flow/edgeSchemaAuthority';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
@@ -1444,12 +1444,14 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	$: projectMenuItems = buildProjectMenuItems($graphStore.editingContext) satisfies ToolbarMenuItem[];
 	$: addMenuItems = buildAddMenuItems(hasPresets) satisfies ToolbarMenuItem[];
 	$: runToolbarControls = pauseResumeToolbarVisibility($graphStore.runStatus as any);
-	// Reactive: re-evaluated whenever $graphStore.schemaPlane changes (via withGraphMeta
-	// on every state mutation).  The previous form called getSchemaErrors() without any
-	// $graphStore dependency, so Svelte never re-ran it after initialization.
-	$: schemaErrorCount = Object.values($graphStore.schemaPlane?.nodeSchemas ?? {}).filter(
-		(r: any) => r && r.ok === false
-	).length;
+	$: schemaOverlayCounts = ((_schemaPlane, _constraints, _edges) => {
+		const snapshots = _edges.map((edge) => {
+			const edgeId = String(edge?.id ?? '').trim();
+			if (!edgeId) return null;
+			return (graphStore as any).getEdgeDiagnosticSnapshot?.(edgeId) ?? null;
+		});
+		return summarizeSchemaOverlayCounts(snapshots);
+	})($graphStore.schemaPlane, $edgeSchemaDiagnostics, edges);
 	$: primarySaveCommandLabel = isComponentEditContext ? 'Save Component Revision' : 'Save Graph';
 	$: saveAsComponentCommandLabel = isComponentEditContext ? 'Save as New Component' : 'Save as Component';
 	$: commandItems = [
@@ -5307,8 +5309,8 @@ async function returnFromComponentEditMode() {
 
 		<SchemaPlaneOverlay
 			enabled={$graphStore.viewMode === 'schema'}
-			errorCount={schemaErrorCount}
-			warningCount={0}
+			errorCount={schemaOverlayCounts.errorCount}
+			warningCount={schemaOverlayCounts.warningCount}
 			onToggle={() => graphStore.toggleSchemaView()}
 		/>
 
@@ -7029,6 +7031,14 @@ async function returnFromComponentEditMode() {
 	}
 	:global(.edge.edge-schema-warning path) {
 		stroke: #ffcc66;
+	}
+	/* Increase invisible edge hit target for easier hover/click without changing visible stroke. */
+	:global(.svelte-flow__edge .svelte-flow__edge-interaction) {
+		stroke-width: 36px;
+		cursor: pointer;
+	}
+	:global(.svelte-flow__edge:hover .svelte-flow__edge-path) {
+		cursor: pointer;
 	}
 	@keyframes dashmove {
 		to {
