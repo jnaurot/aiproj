@@ -7001,7 +7001,7 @@ async function returnFromComponentEditMode() {
 	:global(.edge.edge-state-waiting path) {
 		stroke: var(--color-status-warning, #f59e0b);
 		stroke-width: 2.5;
-		stroke-dasharray: 2 6;
+		stroke-dasharray: none;
 		animation: none;
 		filter: none;
 	}
