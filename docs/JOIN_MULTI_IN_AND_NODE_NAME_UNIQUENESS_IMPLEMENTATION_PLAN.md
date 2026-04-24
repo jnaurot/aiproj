@@ -1,5 +1,15 @@
 # JOIN_MULTI_IN_AND_NODE_NAME_UNIQUENESS_IMPLEMENTATION_PLAN.md
 
+## Completion Status (2026-04-24)
+
+All implementation phases in this plan are complete in the current `main` branch with one architecture clarification:
+
+1. Runtime/schema/internal authority remains **nodeId-first**.
+2. Canonical node names are enforced and used for deterministic **display/diagnostics/UI disambiguation**.
+3. Legacy join placeholder compatibility (`upstream_left`/`upstream_right`) is migrated on frontend graph load and also supported by backend runtime fallback resolution.
+
+This preserves cross-plane correctness while keeping persisted/runtime identifiers stable.
+
 ## Goal
 Implement architecturally coherent `join` semantics where:
 

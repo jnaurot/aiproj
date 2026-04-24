@@ -151,6 +151,87 @@ export function captureComponentEditSnapshot(state: GraphState): ComponentEditSe
 	};
 }
 
+export function migrateLegacyJoinPlaceholderClauses(
+	nodes: Array<Node<PipelineNodeData>>,
+	edges: Array<Edge<PipelineEdgeData>>
+): Array<Node<PipelineNodeData>> {
+	const incomingWorkSourcesByTarget = new Map<string, string[]>();
+	for (const edge of edges ?? []) {
+		const target = String((edge as any)?.target ?? '').trim();
+		const source = String((edge as any)?.source ?? '').trim();
+		if (!target || !source) continue;
+		const mode = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+		const targetHandle = String((edge as any)?.targetHandle ?? '').trim();
+		if (mode !== 'work' || targetHandle !== 'in') continue;
+		const list = incomingWorkSourcesByTarget.get(target) ?? [];
+		if (!list.includes(source)) list.push(source);
+		incomingWorkSourcesByTarget.set(target, list);
+	}
+	for (const [target, list] of incomingWorkSourcesByTarget.entries()) {
+		list.sort((a, b) => a.localeCompare(b));
+		incomingWorkSourcesByTarget.set(target, list);
+	}
+	const leftTokens = new Set(['upstream_left', 'left']);
+	const rightTokens = new Set(['upstream_right', 'right']);
+	let changed = false;
+	const nextNodes = nodes.map((node) => {
+		const kind = String((node?.data as any)?.kind ?? '').trim().toLowerCase();
+		if (kind !== 'transform') return node;
+		const params = ((node?.data as any)?.params ?? {}) as Record<string, unknown>;
+		const op = String(params?.op ?? '').trim().toLowerCase();
+		if (op !== 'join') return node;
+		const rawJoin =
+			params?.join && typeof params.join === 'object' ? (params.join as Record<string, unknown>) : {};
+		const rawClauses = Array.isArray(rawJoin.clauses) ? (rawJoin.clauses as any[]) : [];
+		if (rawClauses.length === 0) return node;
+		const connectedSources = incomingWorkSourcesByTarget.get(String(node.id)) ?? [];
+		if (connectedSources.length < 2) return node;
+		const leftDefault = connectedSources[0];
+		const rightDefault = connectedSources[1];
+		let clauseChanged = false;
+		const nextClauses = rawClauses.map((clause) => {
+			if (!clause || typeof clause !== 'object') return clause;
+			const nextClause = { ...(clause as Record<string, unknown>) };
+			const leftRaw = String(nextClause.leftNodeId ?? '').trim();
+			const rightRaw = String(nextClause.rightNodeId ?? '').trim();
+			let nextLeft = leftRaw;
+			let nextRight = rightRaw;
+			if (leftTokens.has(leftRaw)) nextLeft = leftDefault;
+			if (rightTokens.has(rightRaw) || leftTokens.has(rightRaw)) nextRight = rightDefault;
+			if (nextLeft && nextRight && nextLeft === nextRight) {
+				const alternate = connectedSources.find((candidate) => candidate !== nextLeft);
+				if (alternate) nextRight = alternate;
+			}
+			if (nextLeft !== leftRaw) {
+				nextClause.leftNodeId = nextLeft;
+				clauseChanged = true;
+			}
+			if (nextRight !== rightRaw) {
+				nextClause.rightNodeId = nextRight;
+				clauseChanged = true;
+			}
+			return nextClause;
+		});
+		if (!clauseChanged) return node;
+		changed = true;
+		const nextParams = {
+			...params,
+			join: {
+				...rawJoin,
+				clauses: nextClauses
+			}
+		};
+		return {
+			...node,
+			data: {
+				...node.data,
+				params: nextParams
+			}
+		};
+	});
+	return changed ? nextNodes : nodes;
+}
+
 export function __hardResetGraphForTest(_state: GraphState, freshGraphId = 'graph_test_reset'): GraphState {
 	return buildHardResetState(freshGraphId);
 }
@@ -829,11 +910,12 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 		if (!canonicalized.ok) return { ok: false, reason: canonicalized.error };
 		const rechecked = pruneAndRecontractEdgesStrict(migrated.nodes, canonicalized.edges);
 		if (!rechecked.ok) return { ok: false, reason: rechecked.error };
+		const migratedJoinNodes = migrateLegacyJoinPlaceholderClauses(migrated.nodes, rechecked.edges);
 		update((s) => {
 			const nextState = withGraphMeta({
 				...s,
 				graphId: String(graphIdOverride || s.graphId),
-				nodes: migrated.nodes,
+				nodes: migratedJoinNodes,
 				edges: rechecked.edges,
 				selectedNodeId: null,
 				inspector: { ...INITIAL_INSPECTOR, uiByNodeId: s.inspector.uiByNodeId },
@@ -846,7 +928,7 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				activeRunFrom: null,
 				activeRunNodeSet: new Set<string>(),
 				nodeOutputs: {},
-				nodeBindings: ensureNormalizedBindingsForNodes(migrated.nodes as any, {}),
+				nodeBindings: ensureNormalizedBindingsForNodes(migratedJoinNodes as any, {}),
 				activeRunId: null,
 				editingContext: 'graph',
 				componentEditSession: null,
