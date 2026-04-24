@@ -72,4 +72,17 @@ describe('parseInputSchemaView', () => {
 		expect(parsed.schemaSource).toBe('sample');
 		expect(parsed.schemaState).toBe('partial');
 	});
+
+	it('preserves relation context fields for join mapping', () => {
+		const parsed = parseInputSchemaView(
+			'a5',
+			'Comp1.NodeA.in',
+			{ type: 'text' },
+			{ edgeId: 'e_1', sourceNodeId: 'n_a', sourceDisplayName: 'Comp1.NodeA', inputHandle: 'in' }
+		);
+		expect(parsed.edgeId).toBe('e_1');
+		expect(parsed.sourceNodeId).toBe('n_a');
+		expect(parsed.sourceDisplayName).toBe('Comp1.NodeA');
+		expect(parsed.inputHandle).toBe('in');
+	});
 });

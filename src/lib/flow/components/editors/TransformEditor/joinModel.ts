@@ -1,6 +1,7 @@
 import type { TransformJoinParams } from '$lib/flow/schema/transform';
 import type { NodeExecutionError } from '$lib/flow/store/graphStore';
 import type { InputSchemaView } from './inputSchema';
+import { buildJoinInputRelations } from './joinRelations';
 
 export type JoinClause = NonNullable<TransformJoinParams['clauses']>[number];
 export type JoinHow = JoinClause['how'];
@@ -56,25 +57,13 @@ export type JoinNodeColumns = {
 };
 
 export function resolveJoinNodeColumns(inputSchemas: InputSchemaView[]): JoinNodeColumns[] {
-	const baseRows = (inputSchemas ?? [])
-		.filter((s) => String(s?.sourceNodeId ?? '').trim().length > 0)
-		.map((s) => ({
-			nodeId: String(s.sourceNodeId ?? ''),
-			shortId: shortNodeId(String(s.sourceNodeId ?? '')),
-			displayName: String(s.label ?? s.sourceNodeId ?? '')
-				.split('.')
-				.slice(0, 1)
-				.join('.')
-				.trim(),
-			label: String(s.label ?? s.sourceNodeId ?? ''),
-			columns: Array.from(
-				new Set(
-					(s.columns ?? [])
-						.map((c) => String(c.name ?? '').trim())
-						.filter(Boolean)
-				)
-			).sort((a, b) => a.localeCompare(b))
-		}));
+	const baseRows = buildJoinInputRelations(inputSchemas).map((relation) => ({
+		nodeId: relation.sourceNodeId,
+		shortId: shortNodeId(relation.sourceNodeId),
+		displayName: relation.relationDisplayName,
+		label: relation.relationDisplayName,
+		columns: relation.columns.map((column) => column.name)
+	}));
 	const nameCounts = new Map<string, number>();
 	for (const row of baseRows) {
 		const key = row.displayName || row.shortId;

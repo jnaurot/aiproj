@@ -1074,10 +1074,16 @@
 					const sourceBinding = nodeBindings[e.source];
 					const artifactId = artifactIdFromBinding(sourceBinding);
 					const sourceNode = nodesById.get(e.source) as Record<string, any> | undefined;
+					const sourceDisplayName =
+						String((sourceNode?.data as any)?.meta?.canonicalName ?? '').trim() ||
+						String(sourceNode?.data?.label ?? '').trim() ||
+						String(e.source ?? '').trim();
 					return {
+						edgeId: String(e.id ?? '').trim(),
 						sourceNodeId: e.source,
+						sourceDisplayName,
 						inputHandle: String(e.targetHandle ?? 'in'),
-						label: `${String(sourceNode?.data?.label ?? e.source)}.${String(e.targetHandle ?? 'in')}`,
+						label: `${sourceDisplayName}.${String(e.targetHandle ?? 'in')}`,
 						artifactId,
 						sourceNode
 					};
@@ -1091,7 +1097,9 @@
 			const responses = await Promise.all(
 				incoming.map(async (entry) => {
 					const context = {
+						edgeId: entry.edgeId,
 						sourceNodeId: entry.sourceNodeId,
+						sourceDisplayName: entry.sourceDisplayName,
 						inputHandle: entry.inputHandle
 					};
 					if (entry.artifactId.length > 0) {

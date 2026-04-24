@@ -28,8 +28,10 @@ export type InputSchemaEnvelope = {
 
 export type InputSchemaView = {
 	artifactId: string;
+	edgeId?: string;
 	label: string;
 	sourceNodeId?: string;
+	sourceDisplayName?: string;
 	inputHandle?: string;
 	columns: InputSchemaColumn[];
 	rowCount: number | null;
@@ -62,7 +64,7 @@ export function parseInputSchemaView(
 	artifactId: string,
 	label: string,
 	payloadSchema: unknown,
-	ctx?: { sourceNodeId?: string; inputHandle?: string }
+	ctx?: { sourceNodeId?: string; sourceDisplayName?: string; inputHandle?: string; edgeId?: string }
 ): InputSchemaView {
 	const ps = (payloadSchema ?? {}) as Record<string, unknown>;
 	const looksLikeEnvelope =
@@ -81,8 +83,10 @@ export function parseInputSchemaView(
 	const rowCountRaw = (schema?.stats?.rowCount ?? ps.row_count ?? null) as number | null;
 	return {
 		artifactId,
+		edgeId: ctx?.edgeId,
 		label,
 		sourceNodeId: ctx?.sourceNodeId,
+		sourceDisplayName: ctx?.sourceDisplayName,
 		inputHandle: ctx?.inputHandle,
 		columns: schemaCols.length > 0 ? schemaCols : (fallbackCols.length > 0 ? fallbackCols : textLikeCols),
 		rowCount: typeof rowCountRaw === 'number' ? rowCountRaw : null,
