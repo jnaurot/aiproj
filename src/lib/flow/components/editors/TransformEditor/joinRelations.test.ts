@@ -59,5 +59,51 @@ describe('buildJoinInputRelations', () => {
 			{ name: 'name', type: 'string' }
 		]);
 	});
-});
 
+	it('keeps deterministic relation ordering for three incoming join inputs', () => {
+		const relations = buildJoinInputRelations([
+			schema({
+				sourceNodeId: 'n_z',
+				sourceDisplayName: 'ZNode',
+				columns: [{ name: 'id', type: 'number' }]
+			}),
+			schema({
+				sourceNodeId: 'n_m',
+				sourceDisplayName: 'MNode',
+				columns: [{ name: 'id', type: 'number' }]
+			}),
+			schema({
+				sourceNodeId: 'n_a',
+				sourceDisplayName: 'ANode',
+				columns: [{ name: 'id', type: 'number' }]
+			})
+		]);
+		expect(relations.map((relation) => relation.relationDisplayName)).toEqual([
+			'ANode',
+			'MNode',
+			'ZNode'
+		]);
+		expect(relations.map((relation) => relation.sourceNodeId)).toEqual(['n_a', 'n_m', 'n_z']);
+	});
+
+	it('keeps same local names from different scopes distinct via canonical display names', () => {
+		const relations = buildJoinInputRelations([
+			schema({
+				sourceNodeId: 'n_top_a',
+				sourceDisplayName: 'Transform_A',
+				columns: [{ name: 'id', type: 'number' }]
+			}),
+			schema({
+				sourceNodeId: 'cmp:comp_1:n_inner_a',
+				sourceDisplayName: 'Comp1.Transform_A',
+				columns: [{ name: 'id', type: 'number' }]
+			})
+		]);
+		expect(relations).toHaveLength(2);
+		expect(relations.map((relation) => relation.relationDisplayName)).toEqual([
+			'Comp1.Transform_A',
+			'Transform_A'
+		]);
+		expect(new Set(relations.map((relation) => relation.sourceNodeId)).size).toBe(2);
+	});
+});
