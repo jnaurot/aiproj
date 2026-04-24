@@ -517,7 +517,7 @@ export function buildSavePreflightDiagnostics(
 		diagnostics.push({
 			code: 'NODE_NAME_DUPLICATE',
 			path: `nodes.${duplicate.nodeIds.join(',')}.data.label`,
-			message: `Duplicate node name "${duplicate.displayName}" (case-insensitive, trimmed match).`,
+			message: `Duplicate node name "${duplicate.displayName}" in scope "${duplicate.scopeLabel || duplicate.scopeKey}" (case-insensitive, trimmed match).`,
 			severity: 'error'
 		});
 	}

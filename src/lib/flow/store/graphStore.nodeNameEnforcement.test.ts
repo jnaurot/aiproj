@@ -47,4 +47,78 @@ describe('graphStore node name enforcement', () => {
 		expect(String((result as any)?.reason ?? '')).toBe('preflight_failed');
 		expect(String((result as any)?.error ?? '')).toContain('NODE_NAME_DUPLICATE');
 	});
+
+	it('allows same local names across different levels and emits unique canonical names', () => {
+		graphStore.hardResetGraph();
+		const nodes: any[] = [
+			{
+				id: 'comp_1',
+				type: 'component',
+				position: { x: 0, y: 0 },
+				data: { kind: 'component', label: 'Comp1', params: {}, status: 'idle' }
+			},
+			{
+				id: 'n_top',
+				type: 'transform',
+				position: { x: 240, y: 0 },
+				data: { kind: 'transform', label: 'Transform_A', params: {}, status: 'idle' }
+			},
+			{
+				id: 'cmp:comp_1:n_inner',
+				type: 'transform',
+				position: { x: 480, y: 0 },
+				data: { kind: 'transform', label: 'Transform_A', params: {}, status: 'idle' }
+			}
+		];
+		graphStore.syncFromCanvas(nodes as any, []);
+		const state = get(graphStore);
+		const topCanonical = String(
+			(state.nodes.find((n) => n.id === 'n_top') as any)?.data?.meta?.canonicalName ?? ''
+		);
+		const innerCanonical = String(
+			(state.nodes.find((n) => n.id === 'cmp:comp_1:n_inner') as any)?.data?.meta?.canonicalName ?? ''
+		);
+		expect(topCanonical).toBe('Transform_A');
+		expect(innerCanonical).toBe('Comp1.Transform_A');
+		const preflight = graphStore.getSavePreflight();
+		expect(preflight.ok).toBe(true);
+	});
+
+	it('preserves canonical naming deterministically across loadGraphDocument rehydrate', () => {
+		graphStore.hardResetGraph();
+		const doc: any = {
+			nodes: [
+					{
+						id: 'comp_1',
+						type: 'component',
+						position: { x: 0, y: 0 },
+						data: { kind: 'component', label: 'Comp1', params: {}, status: 'idle' }
+					},
+					{
+						id: 'n_top',
+						type: 'transform',
+						position: { x: 240, y: 0 },
+						data: { kind: 'transform', label: 'Transform_A', params: {}, status: 'idle' }
+					},
+					{
+						id: 'cmp:comp_1:n_inner',
+						type: 'transform',
+						position: { x: 480, y: 0 },
+						data: { kind: 'transform', label: 'Transform_A', params: {}, status: 'idle' }
+					}
+				],
+			edges: []
+		};
+		const loaded = graphStore.loadGraphDocument(doc as any);
+		expect(loaded.ok).toBe(true);
+		const state = get(graphStore);
+		const topCanonical = String(
+			(state.nodes.find((n) => n.id === 'n_top') as any)?.data?.meta?.canonicalName ?? ''
+		);
+		const innerCanonical = String(
+			(state.nodes.find((n) => n.id === 'cmp:comp_1:n_inner') as any)?.data?.meta?.canonicalName ?? ''
+		);
+		expect(topCanonical).toBe('Transform_A');
+		expect(innerCanonical).toBe('Comp1.Transform_A');
+	});
 });

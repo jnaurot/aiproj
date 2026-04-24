@@ -23,6 +23,7 @@ import type { BindingPair } from './graphStore.bindings';
 import { NODE_STATUS_SUCCEEDED } from './graphStore.types';
 import { displayStatusFromBinding, computeGraphFreshness } from './runScope';
 import { recomputeSchemaPlane } from './graphStore.schemaPlane';
+import { annotateCanonicalNodeNames } from './nodeNameUniqueness';
 
 // ---------------------------------------------------------------------------
 // Module-level state (moved from graphStore.ts)
@@ -501,10 +502,14 @@ export function auditStateTransition(prev: GraphState, next: GraphState, ctx: Au
 // ---------------------------------------------------------------------------
 
 export function withGraphMeta(state: GraphState): GraphState {
-	const normalizedBindings = ensureNormalizedBindingsForNodes(state.nodes, state.nodeBindings ?? {});
-	const normalizedOutputs = pruneNodeOutputsForNodes(state.nodes, state.nodeOutputs ?? {});
+	const canonicalizedNodes = annotateCanonicalNodeNames(
+		state.nodes as Node<PipelineNodeData>[]
+	) as GraphState['nodes'];
+	const normalizedBindings = ensureNormalizedBindingsForNodes(canonicalizedNodes, state.nodeBindings ?? {});
+	const normalizedOutputs = pruneNodeOutputsForNodes(canonicalizedNodes, state.nodeOutputs ?? {});
 	const schemaPlane = recomputeSchemaPlane({
 		...state,
+		nodes: canonicalizedNodes,
 		nodeBindings: normalizedBindings,
 		nodeOutputs: normalizedOutputs
 	});
@@ -516,6 +521,7 @@ export function withGraphMeta(state: GraphState): GraphState {
 	if (freshness === 'never_run') lastRunStatus = 'never_run';
 	return {
 		...state,
+		nodes: canonicalizedNodes,
 		freshness,
 		staleNodeCount,
 		lastRunStatus,

@@ -1128,7 +1128,9 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 				typeof opts?.label === 'string' && String(opts.label).trim().length > 0
 					? String(opts.label).trim()
 					: String((node.data as any)?.label ?? '').trim();
-			const uniqueLabel = resolveUniqueNodeName(s.nodes as Node<PipelineNodeData>[], requestedLabel);
+			const uniqueLabel = resolveUniqueNodeName(s.nodes as Node<PipelineNodeData>[], requestedLabel, {
+				scopeNodeId: id
+			});
 			if (uniqueLabel) {
 				(node.data as any).label = uniqueLabel;
 			}
@@ -1775,12 +1777,13 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			return { ok: false as const, error: 'Node name cannot be empty.' };
 		}
 		const duplicateNodeId = findNodeIdByName(state.nodes as Node<PipelineNodeData>[], cleaned, {
-			excludeNodeId: nodeId
+			excludeNodeId: nodeId,
+			scopeNodeId: nodeId
 		});
 		if (duplicateNodeId) {
 			return {
 				ok: false as const,
-				error: `Node name "${cleaned}" already exists in this graph.`,
+				error: `Node name "${cleaned}" already exists in this scope.`,
 				reason: 'duplicate_name_in_scope' as const,
 				existingNodeId: duplicateNodeId
 			};
@@ -1804,12 +1807,13 @@ export function createGraphEditManager(deps: GraphEditDeps) {
 			return { ok: false as const, error: 'Node name cannot be empty.' };
 		}
 		const duplicateNodeId = findNodeIdByName(state.nodes as Node<PipelineNodeData>[], cleaned, {
-			excludeNodeId: String(opts?.excludeNodeId ?? '').trim() || null
+			excludeNodeId: String(opts?.excludeNodeId ?? '').trim() || null,
+			scopeNodeId: String(opts?.excludeNodeId ?? '').trim() || null
 		});
 		if (duplicateNodeId) {
 			return {
 				ok: false as const,
-				error: `Node name "${cleaned}" already exists in this graph.`,
+				error: `Node name "${cleaned}" already exists in this scope.`,
 				reason: 'duplicate_name_in_scope' as const,
 				existingNodeId: duplicateNodeId
 			};
