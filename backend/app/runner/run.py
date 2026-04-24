@@ -9975,18 +9975,32 @@ async def run_graph(
                     "missingEdgeIds": [],
                 }
             for handle, edge_ids in sorted(incoming_work_by_handle.items(), key=lambda item: item[0]):
-                missing_edges = [
-                    str(edge_id)
-                    for edge_id in edge_ids
-                    if max(0, int(queue_registry.depth(str(edge_id), handle) or 0)) <= 0
-                ]
-                if missing_edges:
+                # Streaming work-handle readiness is satisfied when at least one connected
+                # edge has queued work. Requiring every edge to be non-empty causes
+                # false waiting for FIFO/round-robin arbitration after one edge drains.
+                depth_by_edge: Dict[str, int] = {}
+                for edge_id in edge_ids:
+                    edge_key = str(edge_id)
+                    if not edge_key:
+                        continue
+                    depth_by_edge[edge_key] = max(
+                        0, int(queue_registry.depth(edge_key, handle) or 0)
+                    )
+                if not depth_by_edge:
                     return {
                         "ready": False,
                         "reasonCode": "WAITING_REQUIRED_INPUT",
                         "handle": str(handle),
                         "plane": "work",
-                        "missingEdgeIds": sorted(set(missing_edges)),
+                        "missingEdgeIds": [],
+                    }
+                if all(depth <= 0 for depth in depth_by_edge.values()):
+                    return {
+                        "ready": False,
+                        "reasonCode": "WAITING_REQUIRED_INPUT",
+                        "handle": str(handle),
+                        "plane": "work",
+                        "missingEdgeIds": sorted(depth_by_edge.keys()),
                     }
             incoming_control_by_handle: Dict[str, List[str]] = {}
             for info in incoming_control:
