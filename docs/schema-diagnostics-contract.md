@@ -1,45 +1,30 @@
-# Schema Diagnostics Contract (v1)
+# Schema Diagnostics Contract
 
-Shared contract file: `shared/schema_diagnostics.v1.json`
+## Join Relation Authority
 
-Current diagnostic codes:
-- `TYPE_MISMATCH`
-- `PAYLOAD_SCHEMA_MISMATCH`
+- Join relations are identified by canonical relation names, not transient runtime node IDs.
+- Canonical relation name format:
+	- top-level node: `<nodeName>`
+	- component-internal node: `<componentName>.<nodeName>`
+- Join clause column refs use `<relationName>.<columnName>`.
 
-Payload shape:
-- `code`: machine-readable diagnostic code.
-- `message`: human-readable message.
-- `edgeId`: optional edge identifier.
-- `nodeId`: optional node identifier.
-- `details`: optional structured payload (`provided_schema`, `required_schema`, etc).
-- `suggestions`: optional list of actionable next steps.
+## Authority Boundaries
 
-Frontend notes:
-- Edge diagnostics emitted by `graphStore` use this code set directly.
+- Schema plane is authoritative for schema compatibility severity.
+- Runtime is authoritative for execution success/failure.
+- Runtime diagnostics for join clause resolution should mirror schema-plane payload shape where feasible:
+	- `errorCode`
+	- `paramPath`
+	- `missingColumns`
+	- `availableColumns`
 
-Backend notes:
-- `GraphValidator` emits codes from `app.runner.schema_diagnostics`.
-- Runner tests assert emitted codes are in the shared contract.
+## Opaque Handling
 
-## Diagnostic Transport Events (v2)
+- Opaque upstream contracts are uncertainty signals.
+- Missing-field checks against opaque upstream are warnings (or lower) unless strict policy explicitly elevates.
 
-Transport events communicate diagnostic lifecycle over control/event channels, but do not own semantic authority.
+## Join Validation Invariants
 
-Events:
-- `diagnostic_raised`
-- `diagnostic_cleared`
-
-Payload fields:
-- `key`: stable identity for dedupe/clear correlation.
-- `edgeId`: associated edge id.
-- `nodeId`: optional related node id.
-- `source`: `contract_engine` (authoritative) or `schema_plane` (informational).
-- `severity`: transport severity (`info|warning|error`) for timeline display.
-- `code`: machine-readable code (`TYPE_MISMATCH`, `OPAQUE_DEPENDENCY`, etc).
-- `message`: human-readable message.
-- `details`: optional structured metadata.
-
-Authority rules:
-- Contract diagnostics (`clean|warning|error`) remain canonical for edge schema class rendering.
-- Transport events are append/update lifecycle signals and must be processed idempotently.
-- Out-of-order or replayed transport events must not override canonical semantic severity.
+- Multi-`in` join nodes consume all incoming work edges as relation candidates.
+- Relations are deterministically ordered by canonical relation name, tie-break edge ID.
+- Non-join same-handle compatibility rules remain unchanged.
