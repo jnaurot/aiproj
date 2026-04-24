@@ -1377,6 +1377,11 @@ class GraphValidator:
             tgt = e.get("target")
             if not tgt:
                 continue
+            edge_data = e.get("data") if isinstance(e.get("data"), dict) else {}
+            mode_raw = str(edge_data.get("mode") or "").strip().lower()
+            mode = mode_raw if mode_raw in {"work", "param", "control"} else normalize_edge_mode(e)
+            if mode != "work":
+                continue
             incoming_counts[tgt] = incoming_counts.get(tgt, 0) + 1
 
         for node_id, node in nodes.items():
