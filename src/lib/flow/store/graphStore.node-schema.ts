@@ -1880,6 +1880,16 @@ export function sameHandleProvidedSchemaConflict(
 		const sourceNode = byNodeId.get(String(edge.source ?? ''));
 		const targetNode = byNodeId.get(String(edge.target ?? ''));
 		if (!sourceNode || !targetNode) continue;
+		const targetKind = String((targetNode.data as any)?.kind ?? '').trim().toLowerCase();
+		const targetTransformKind = String((targetNode.data as any)?.transformKind ?? '')
+			.trim()
+			.toLowerCase();
+		const targetOp = String(((targetNode.data as any)?.params ?? {})?.op ?? '')
+			.trim()
+			.toLowerCase();
+		const isJoinTarget =
+			targetKind === 'transform' && (targetTransformKind === 'join' || targetOp === 'join');
+		if (isJoinTarget) continue;
 		const sourceHandle = String((edge as any)?.sourceHandle ?? 'out').trim() || 'out';
 		const targetHandle = String((edge as any)?.targetHandle ?? 'in').trim() || 'in';
 		const key = `${String(edge.target ?? '')}::${targetHandle}`;

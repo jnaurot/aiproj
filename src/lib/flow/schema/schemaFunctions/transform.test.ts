@@ -35,6 +35,28 @@ describe('schemaFn_transform', () => {
 		if (!result.ok) expect(result.error.code).toBe('TYPE_MISMATCH');
 	});
 
+	it('join validates clauses against nodeId-qualified multi-in inputs', () => {
+		const left = {
+			mode: 'table' as const,
+			columns: [{ name: 'id', type: 'number' as const, nullable: false, properties: {} }]
+		};
+		const right = {
+			mode: 'table' as const,
+			columns: [{ name: 'id', type: 'number' as const, nullable: false, properties: {} }]
+		};
+		const result = schemaFn_transform([left, right], {
+			op: 'join',
+			join: {
+				clauses: [{ leftNodeId: 'n_left', leftCol: 'id', rightNodeId: 'n_right', rightCol: 'id', how: 'inner' }]
+			},
+			__schemaInputRefs: [
+				{ sourceNodeId: 'n_left', targetHandle: 'in' },
+				{ sourceNodeId: 'n_right', targetHandle: 'in' }
+			]
+		} as any);
+		expect(result.ok).toBe(true);
+	});
+
 	it('aggregate builds grouped metric schema', () => {
 		const result = schemaFn_transform([baseInput], {
 			op: 'aggregate',

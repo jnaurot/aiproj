@@ -96,6 +96,32 @@ describe('schemaPropagator', () => {
 		if (state.nodeSchemas.d?.ok) expect(state.nodeSchemas.d.output.columns.map((c) => c.name)).toEqual(['a', 'b']);
 	});
 
+	it('join node receives all multi-in edges on same handle with source refs', () => {
+		registerSchemaFunction('srcA', () => ({
+			ok: true,
+			output: { mode: 'table', columns: [{ name: 'id', type: 'number', nullable: false, properties: {} }] }
+		}));
+		registerSchemaFunction('srcB', () => ({
+			ok: true,
+			output: { mode: 'table', columns: [{ name: 'id', type: 'number', nullable: false, properties: {} }] }
+		}));
+		registerSchemaFunction('transform', (inputs, params) => {
+			expect(inputs).toHaveLength(2);
+			const refs = Array.isArray((params as any)?.__schemaInputRefs) ? ((params as any).__schemaInputRefs as any[]) : [];
+			expect(refs.map((item) => String(item?.sourceNodeId ?? ''))).toEqual(['a', 'b']);
+			return { ok: true, output: { mode: 'table', columns: [] } };
+		});
+		const join = node('jn', 'transform', {
+			op: 'join',
+			join: { clauses: [{ leftNodeId: 'a', leftCol: 'id', rightNodeId: 'b', rightCol: 'id', how: 'inner' }] }
+		});
+		const state = propagateSchemas(
+			[node('a', 'srcA'), node('b', 'srcB'), join],
+			[edge('e1', 'a', 'jn', 'in'), edge('e2', 'b', 'jn', 'in')]
+		);
+		expect(state.nodeSchemas.jn?.ok).toBe(true);
+	});
+
 	it('sibling branch unaffected by schema error on other branch', () => {
 		registerSchemaFunction('src', () => ({ ok: true, output: { mode: 'table', columns: [] } }));
 		registerSchemaFunction('bad', () => ({

@@ -151,9 +151,44 @@ export function createSchemaPlaneManager(deps: Deps) {
 			if (Number.isFinite(sampleRate)) suggestions['params.sample_rate'] = sampleRate;
 		}
 		if (transformKind === 'join' && incomingSchemas.length >= 2) {
-			const left = new Set((incomingSchemas[0].columns ?? []).map((column) => String(column.name ?? '')));
-			const right = new Set((incomingSchemas[1].columns ?? []).map((column) => String(column.name ?? '')));
-			suggestions['join.availableKeys'] = [...left].filter((name) => right.has(name));
+			const schemaBySourceNodeId = new Map<string, SchemaPlaneOutput>();
+			for (const edge of incomingEdges) {
+				const edgeId = String(edge.id ?? '');
+				if (!edgeId) continue;
+				const schema = state.schemaPlane?.edgeSchemas?.[edgeId];
+				if (!schema) continue;
+				const sourceNodeId = String(edge.source ?? '').trim();
+				if (!sourceNodeId || schemaBySourceNodeId.has(sourceNodeId)) continue;
+				schemaBySourceNodeId.set(sourceNodeId, schema);
+			}
+			const joinParams =
+				(node.data as any)?.params?.join && typeof (node.data as any)?.params?.join === 'object'
+					? ((node.data as any).params.join as Record<string, unknown>)
+					: {};
+			const clauses = Array.isArray(joinParams?.clauses) ? (joinParams.clauses as Array<Record<string, unknown>>) : [];
+			const availableKeys = new Set<string>();
+			for (const clause of clauses) {
+				const leftNodeId = String(clause?.leftNodeId ?? '').trim();
+				const rightNodeId = String(clause?.rightNodeId ?? '').trim();
+				const leftSchema = leftNodeId ? schemaBySourceNodeId.get(leftNodeId) : null;
+				const rightSchema = rightNodeId ? schemaBySourceNodeId.get(rightNodeId) : null;
+				if (!leftSchema || !rightSchema) continue;
+				const left = new Set((leftSchema.columns ?? []).map((column) => String(column.name ?? '')));
+				const right = new Set((rightSchema.columns ?? []).map((column) => String(column.name ?? '')));
+				for (const key of [...left].filter((name) => right.has(name))) {
+					if (!key) continue;
+					availableKeys.add(key);
+				}
+			}
+			if (availableKeys.size === 0) {
+				const left = new Set((incomingSchemas[0].columns ?? []).map((column) => String(column.name ?? '')));
+				const right = new Set((incomingSchemas[1].columns ?? []).map((column) => String(column.name ?? '')));
+				for (const key of [...left].filter((name) => right.has(name))) {
+					if (!key) continue;
+					availableKeys.add(key);
+				}
+			}
+			suggestions['join.availableKeys'] = Array.from(availableKeys).sort((a, b) => a.localeCompare(b));
 		}
 		if (transformKind === 'aggregate') {
 			const numeric = (firstTable?.columns ?? [])

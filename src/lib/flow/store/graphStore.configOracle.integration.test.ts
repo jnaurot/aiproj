@@ -63,6 +63,60 @@ describe('graphStore schema configuration oracle integration', () => {
 		expect(hints.suggestions?.['join.availableKeys']).toEqual(['id']);
 	});
 
+	it('derives join.availableKeys from nodeId-qualified clauses on same handle', () => {
+		const state = {
+			nodes: [
+				{
+					id: 'join_node',
+					data: {
+						kind: 'transform',
+						transformKind: 'join',
+						params: {
+							op: 'join',
+							join: {
+								clauses: [
+									{
+										leftNodeId: 'left_node',
+										leftCol: 'id',
+										rightNodeId: 'right_node',
+										rightCol: 'id',
+										how: 'inner'
+									}
+								]
+							}
+						}
+					}
+				}
+			],
+			edges: [
+				{ id: 'e_left', source: 'left_node', target: 'join_node', targetHandle: 'in' },
+				{ id: 'e_right', source: 'right_node', target: 'join_node', targetHandle: 'in' }
+			],
+			schemaPlane: {
+				nodeSchemas: {},
+				edgeSchemas: {
+					e_left: {
+						mode: 'table',
+						columns: [
+							{ name: 'id', type: 'number', nullable: false, properties: {} },
+							{ name: 'left_only', type: 'string', nullable: true, properties: {} }
+						]
+					},
+					e_right: {
+						mode: 'table',
+						columns: [
+							{ name: 'id', type: 'number', nullable: false, properties: {} },
+							{ name: 'right_only', type: 'string', nullable: true, properties: {} }
+						]
+					}
+				}
+			}
+		};
+		const manager = makeManager(state);
+		const hints = manager.getConfigurationHints('join_node');
+		expect(hints.suggestions?.['join.availableKeys']).toEqual(['id']);
+	});
+
 	it('derives aggregate.numericColumns from numeric table columns', () => {
 		const state = {
 			nodes: [{ id: 'agg_node', data: { kind: 'transform', transformKind: 'aggregate' } }],

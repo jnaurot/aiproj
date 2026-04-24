@@ -24,6 +24,29 @@ function findColumn(input: SchemaPlaneOutput, name: string): SchemaPlaneColumn |
 	return (input.columns ?? []).find((column) => String(column.name) === String(name));
 }
 
+type JoinInputRef = {
+	edgeId: string;
+	sourceNodeId: string;
+	targetHandle: string;
+};
+
+function schemaInputRefs(params: Record<string, unknown>): JoinInputRef[] {
+	const raw = (params as any)?.__schemaInputRefs;
+	if (!Array.isArray(raw)) return [];
+	const out: JoinInputRef[] = [];
+	for (const item of raw) {
+		if (!item || typeof item !== 'object') continue;
+		const sourceNodeId = String((item as any)?.sourceNodeId ?? '').trim();
+		if (!sourceNodeId) continue;
+		out.push({
+			edgeId: String((item as any)?.edgeId ?? '').trim(),
+			sourceNodeId,
+			targetHandle: String((item as any)?.targetHandle ?? 'in').trim() || 'in'
+		});
+	}
+	return out;
+}
+
 function numericType(type: string): boolean {
 	return type === 'number';
 }
@@ -165,22 +188,62 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 	}
 
 	if (op === 'join') {
-		const right = inputs[1];
-		if (!right) {
-			return {
-				ok: false,
-				error: {
-					code: 'MISSING_REQUIRED_INPUT',
-					message: 'Join requires two inputs',
-					handles: ['left', 'right']
-				}
-			};
-		}
 		const join = ((params as any).join ?? {}) as Record<string, unknown>;
 		const clauses = Array.isArray(join.clauses) ? join.clauses : [];
+		const refs = schemaInputRefs(params);
+		const inputByNodeId = new Map<string, SchemaPlaneOutput>();
+		for (let i = 0; i < refs.length; i += 1) {
+			const ref = refs[i];
+			const schema = inputs[i];
+			if (!schema) continue;
+			if (!inputByNodeId.has(ref.sourceNodeId)) inputByNodeId.set(ref.sourceNodeId, schema);
+		}
+		const fallbackLeft = inputs[0];
+		const fallbackRight = inputs[1];
+		const mergeOrder: string[] = [];
 		for (const clause of clauses as any[]) {
-			const leftCol = findColumn(input, String(clause?.leftCol ?? ''));
-			const rightCol = findColumn(right, String(clause?.rightCol ?? ''));
+			const leftNodeId = String(clause?.leftNodeId ?? '').trim();
+			const rightNodeId = String(clause?.rightNodeId ?? '').trim();
+			if (leftNodeId && !mergeOrder.includes(leftNodeId)) mergeOrder.push(leftNodeId);
+			if (rightNodeId && !mergeOrder.includes(rightNodeId)) mergeOrder.push(rightNodeId);
+		}
+		for (const ref of refs) {
+			if (!mergeOrder.includes(ref.sourceNodeId)) mergeOrder.push(ref.sourceNodeId);
+		}
+		if (mergeOrder.length === 0 && refs.length === 0) {
+			// Legacy/fallback path: preserve previous positional behavior.
+			if (!fallbackLeft || !fallbackRight) {
+				return {
+					ok: false,
+					error: {
+						code: 'MISSING_REQUIRED_INPUT',
+						message: 'Join requires two inputs',
+						handles: ['left', 'right']
+					}
+				};
+			}
+		}
+		for (const clause of clauses as any[]) {
+			const leftNodeId = String(clause?.leftNodeId ?? '').trim();
+			const rightNodeId = String(clause?.rightNodeId ?? '').trim();
+			const leftInput =
+				(leftNodeId ? inputByNodeId.get(leftNodeId) : null) ??
+				fallbackLeft;
+			const rightInput =
+				(rightNodeId ? inputByNodeId.get(rightNodeId) : null) ??
+				fallbackRight;
+			if (!leftInput || !rightInput) {
+				return {
+					ok: false,
+					error: {
+						code: 'MISSING_REQUIRED_INPUT',
+						message: 'Join requires two inputs',
+						handles: ['left', 'right']
+					}
+				};
+			}
+			const leftCol = findColumn(leftInput, String(clause?.leftCol ?? ''));
+			const rightCol = findColumn(rightInput, String(clause?.rightCol ?? ''));
 			if (!leftCol || !rightCol) {
 				return {
 					ok: false,
@@ -195,13 +258,26 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 			}
 		}
 		const rightPrefix = String((join as any).right_prefix ?? '').trim();
-		const merged = cloneColumns(input.columns ?? []);
-		for (const column of right.columns ?? []) {
-			merged.push({
-				...column,
-				name: rightPrefix ? `${rightPrefix}${column.name}` : column.name,
-				properties: { ...(column.properties ?? {}) }
-			});
+		const merged: SchemaPlaneColumn[] = [];
+		const appendColumns = (schema: SchemaPlaneOutput, shouldPrefix: boolean) => {
+			for (const column of schema.columns ?? []) {
+				merged.push({
+					...column,
+					name: shouldPrefix && rightPrefix ? `${rightPrefix}${column.name}` : column.name,
+					properties: { ...(column.properties ?? {}) }
+				});
+			}
+		};
+		if (mergeOrder.length > 0) {
+			for (let i = 0; i < mergeOrder.length; i += 1) {
+				const nodeId = mergeOrder[i];
+				const schema = inputByNodeId.get(nodeId);
+				if (!schema) continue;
+				appendColumns(schema, i > 0);
+			}
+		} else {
+			appendColumns(input, false);
+			if (fallbackRight) appendColumns(fallbackRight, true);
 		}
 		return { ok: true, output: { mode: 'table', columns: merged } };
 	}

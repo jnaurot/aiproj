@@ -171,7 +171,24 @@ function computeNodeResult(
 	if (kind === 'component') return computeComponentNodeResult(node, options);
 	const fn: SchemaFunction | undefined = getSchemaFunction((node.data as any)?.kind ?? '');
 	if (!fn) return { ok: true, output: OPAQUE_SCHEMA };
+	const params = (((node.data as any)?.params ?? {}) as Record<string, unknown>) ?? {};
+	const op = String((params as any)?.op ?? (node.data as any)?.transformKind ?? '').trim().toLowerCase();
 	const ins = incomingEdges(node.id, edges);
+	if (kind === 'transform' && op === 'join') {
+		const joinInputs = ins.map((edge) => asOutput(results.get(edge.source)));
+		const joinParams: Record<string, unknown> = {
+			...params,
+			__schemaInputRefs: ins.map((edge) => ({
+				edgeId: String(edge.id ?? ''),
+				sourceNodeId: String(edge.source ?? ''),
+				targetHandle: String(edge.targetHandle ?? 'in').trim() || 'in'
+			}))
+		};
+		if (joinInputs.length === 0) {
+			return fn([], joinParams);
+		}
+		return fn(joinInputs, joinParams);
+	}
 	const handles = inputHandleOrder(node, edges);
 	const inputs: SchemaPlaneOutput[] = [];
 	for (const handle of handles) {
@@ -184,9 +201,9 @@ function computeNodeResult(
 	}
 	if (handles.length === 0 && ins.length === 0) {
 		// Source-style node.
-		return fn([], ((node.data as any)?.params ?? {}) as Record<string, unknown>);
+		return fn([], params);
 	}
-	return fn(inputs, ((node.data as any)?.params ?? {}) as Record<string, unknown>);
+	return fn(inputs, params);
 }
 
 export function buildSchemaPlaneState(
