@@ -3,6 +3,7 @@ import { schemaFn_source } from './schemaFunctions/source';
 import { schemaFn_transform } from './schemaFunctions/transform';
 import { schemaFn_audio_augment, schemaFn_audio_fallback, schemaFn_audio_source, schemaFn_spectrogram } from './schemaFunctions/audio';
 import { schemaFn_evaluation, schemaFn_ml_fallback, schemaFn_training_job } from './schemaFunctions/ml';
+import { schemaFn_llm } from './schemaFunctions/llm';
 
 const registry = new Map<string, SchemaFunction>();
 
@@ -35,7 +36,7 @@ export function registerAllBuiltinSchemaFunctions(): void {
 	registerSchemaFunction('transform', schemaFn_transform);
 	registerSchemaFunction('tool', () => ({ ok: true, output: OPAQUE_SCHEMA }));
 	registerSchemaFunction('component', () => ({ ok: true, output: OPAQUE_SCHEMA }));
-	registerSchemaFunction('llm', () => ({ ok: true, output: OPAQUE_SCHEMA }));
+	registerSchemaFunction('llm', schemaFn_llm);
 	registerSchemaFunction('model', schemaFn_ml_fallback);
 	registerSchemaFunction('audio_source', schemaFn_audio_source);
 	registerSchemaFunction('spectrogram', schemaFn_spectrogram);
