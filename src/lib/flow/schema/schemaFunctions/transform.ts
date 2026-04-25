@@ -245,6 +245,28 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 		for (const clause of clauses as any[]) {
 			const leftNodeId = String(clause?.leftNodeId ?? '').trim();
 			const rightNodeId = String(clause?.rightNodeId ?? '').trim();
+			if (refs.length > 0) {
+				if (leftNodeId && !inputByNodeId.has(leftNodeId)) {
+					return {
+						ok: false,
+						error: {
+							code: 'SHAPE_MISMATCH',
+							message: `Join clause references disconnected input node '${leftNodeId}'`,
+							handles: ['left']
+						}
+					};
+				}
+				if (rightNodeId && !inputByNodeId.has(rightNodeId)) {
+					return {
+						ok: false,
+						error: {
+							code: 'SHAPE_MISMATCH',
+							message: `Join clause references disconnected input node '${rightNodeId}'`,
+							handles: ['right']
+						}
+					};
+				}
+			}
 			const leftInput =
 				(leftNodeId ? inputByNodeId.get(leftNodeId) : null) ??
 				fallbackLeft;

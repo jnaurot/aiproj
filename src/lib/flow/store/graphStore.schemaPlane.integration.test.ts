@@ -294,6 +294,48 @@ describe('INT-03b: Derive string formula typing', () => {
 	});
 });
 
+describe('INT-03c: Join clause nodeId-edge consistency', () => {
+	it('produces SHAPE_MISMATCH when join clause references a disconnected nodeId', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('left', [{ name: 'id', type: 'number' }, { name: 'val' }]),
+				sourceDoc('right', [{ name: 'id', type: 'number' }, { name: 'desc' }], 0),
+				sourceDoc('other', [{ name: 'id', type: 'number' }], 20),
+				transformDoc(
+					'jn',
+					'join',
+					{
+						join: {
+							clauses: [
+								{
+									leftNodeId: 'left',
+									leftCol: 'id',
+									rightNodeId: 'other',
+									rightCol: 'id',
+									how: 'inner'
+								}
+							]
+						}
+					},
+					200
+				)
+			],
+			edges: [
+				edge('e1', 'left', 'jn', 'left'),
+				edge('e2', 'right', 'jn', 'right')
+			]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const joinSchema = s.schemaPlane.nodeSchemas['jn'];
+		expect(joinSchema?.ok).toBe(false);
+		if (!joinSchema?.ok) {
+			expect(joinSchema.error.code).toBe('SHAPE_MISMATCH');
+			expect(joinSchema.error.message).toContain("disconnected input node 'other'");
+		}
+	});
+});
+
 describe('INT-04: Full audio preprocessing chain', () => {
     it('produces zero errors; training job receives correct shape and normalized flag', () => {
         const loaded = graphStore.loadGraphDocument({

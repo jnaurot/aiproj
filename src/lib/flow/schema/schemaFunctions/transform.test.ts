@@ -57,6 +57,32 @@ describe('schemaFn_transform', () => {
 		expect(result.ok).toBe(true);
 	});
 
+	it('join rejects clauses referencing disconnected nodeIds', () => {
+		const left = {
+			mode: 'table' as const,
+			columns: [{ name: 'id', type: 'number' as const, nullable: false, properties: {} }]
+		};
+		const right = {
+			mode: 'table' as const,
+			columns: [{ name: 'id', type: 'number' as const, nullable: false, properties: {} }]
+		};
+		const result = schemaFn_transform([left, right], {
+			op: 'join',
+			join: {
+				clauses: [{ leftNodeId: 'n_left', leftCol: 'id', rightNodeId: 'n_ghost', rightCol: 'id', how: 'inner' }]
+			},
+			__schemaInputRefs: [
+				{ sourceNodeId: 'n_left', targetHandle: 'in' },
+				{ sourceNodeId: 'n_right', targetHandle: 'in' }
+			]
+		} as any);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.code).toBe('SHAPE_MISMATCH');
+			expect(result.error.message).toContain("disconnected input node 'n_ghost'");
+		}
+	});
+
 	it('aggregate builds grouped metric schema', () => {
 		const result = schemaFn_transform([baseInput], {
 			op: 'aggregate',
