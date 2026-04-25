@@ -51,6 +51,25 @@ function numericType(type: string): boolean {
 	return type === 'number';
 }
 
+function inferDeriveColumnType(
+	input: SchemaPlaneOutput,
+	rule: Record<string, unknown>
+): string {
+	const op = String((rule as any)?.formula?.op ?? '').trim().toLowerCase();
+	if (['add', 'sub', 'mul', 'div', 'length'].includes(op)) return 'number';
+	if (['concat', 'lower', 'upper', 'trim'].includes(op)) return 'string';
+	if (op === 'coalesce') {
+		const args = Array.isArray((rule as any)?.formula?.args) ? ((rule as any).formula.args as unknown[]) : [];
+		for (const arg of args) {
+			const colName = String((arg as any)?.column ?? '').trim();
+			if (!colName) continue;
+			const found = findColumn(input, colName);
+			if (found?.type) return String(found.type);
+		}
+	}
+	return 'unknown';
+}
+
 const passthroughOps = new Set([
 	'filter',
 	'json_filter',
@@ -136,7 +155,7 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 			if (!name) continue;
 			columns.push({
 				name,
-				type: 'number',
+				type: inferDeriveColumnType(input, rule),
 				nullable: true,
 				properties: {}
 			});

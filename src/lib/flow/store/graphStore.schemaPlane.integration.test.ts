@@ -254,6 +254,46 @@ describe('INT-03: Join with incompatible key types', () => {
     });
 });
 
+describe('INT-03b: Derive string formula typing', () => {
+	it('propagates concat/lower derived columns as string type', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('src', [{ name: 'title', type: 'string' }]),
+				transformDoc(
+					'drv',
+					'derive',
+					{
+						derive: {
+							mode: 'rules',
+							rules: [
+								{
+									name: 'title_joined',
+									formula: { op: 'concat', args: [{ column: 'title' }, ' suffix'] }
+								},
+								{
+									name: 'title_lower',
+									formula: { op: 'lower', args: [{ column: 'title' }] }
+								}
+							]
+						}
+					},
+					100
+				)
+			],
+			edges: [edge('e1', 'src', 'drv')]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const drvSchema = s.schemaPlane.nodeSchemas['drv'];
+		expect(drvSchema?.ok).toBe(true);
+		if (!drvSchema?.ok) return;
+		const joined = drvSchema.output.columns.find((column) => column.name === 'title_joined');
+		const lowered = drvSchema.output.columns.find((column) => column.name === 'title_lower');
+		expect(joined?.type).toBe('string');
+		expect(lowered?.type).toBe('string');
+	});
+});
+
 describe('INT-04: Full audio preprocessing chain', () => {
     it('produces zero errors; training job receives correct shape and normalized flag', () => {
         const loaded = graphStore.loadGraphDocument({

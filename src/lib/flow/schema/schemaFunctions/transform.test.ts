@@ -65,5 +65,38 @@ describe('schemaFn_transform', () => {
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.output.columns.map((c) => c.name)).toEqual(['id', 'sum_id']);
 	});
+
+	it('derive infers string output types for string formula ops', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'derive',
+			derive: {
+				mode: 'rules',
+				rules: [
+					{ name: 'joined_text', formula: { op: 'concat', args: [{ column: 'text' }, 'x'] } },
+					{ name: 'lower_text', formula: { op: 'lower', args: [{ column: 'text' }] } }
+				]
+			}
+		} as any);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const joined = result.output.columns.find((column) => column.name === 'joined_text');
+		const lowered = result.output.columns.find((column) => column.name === 'lower_text');
+		expect(joined?.type).toBe('string');
+		expect(lowered?.type).toBe('string');
+	});
+
+	it('derive keeps numeric output types for numeric formula ops', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'derive',
+			derive: {
+				mode: 'rules',
+				rules: [{ name: 'id_plus_one', formula: { op: 'add', args: [{ column: 'id' }, 1] } }]
+			}
+		} as any);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const derived = result.output.columns.find((column) => column.name === 'id_plus_one');
+		expect(derived?.type).toBe('number');
+	});
 });
 
