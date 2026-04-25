@@ -70,6 +70,36 @@ function inferDeriveColumnType(
 	return 'unknown';
 }
 
+function validateReferencedColumns(
+	input: SchemaPlaneOutput,
+	columns: readonly unknown[],
+	handle: string = 'in'
+):
+	| { ok: true }
+	| { ok: false; error: { code: 'SHAPE_MISMATCH'; message: string; handles: string[] } } {
+	const requested = Array.from(
+		new Set(
+			(columns ?? [])
+				.map((value) => String(value ?? '').trim())
+				.filter(Boolean)
+		)
+	);
+	if (requested.length <= 0) return { ok: true };
+	const missing = requested.filter((name) => !findColumn(input, name));
+	if (missing.length <= 0) return { ok: true };
+	return {
+		ok: false,
+		error: {
+			code: 'SHAPE_MISMATCH',
+			message:
+				missing.length === 1
+					? `Column '${missing[0]}' not found in input schema`
+					: `Columns not found in input schema: ${missing.join(', ')}`,
+			handles: [handle]
+		}
+	};
+}
+
 const passthroughOps = new Set([
 	'filter',
 	'json_filter',
@@ -113,7 +143,15 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 		};
 	}
 
-	if (passthroughOps.has(op)) return { ok: true, output: input };
+	if (passthroughOps.has(op)) {
+		const opParamsRaw = ((params as any)?.[op] ?? {}) as Record<string, unknown>;
+		const opColumns = Array.isArray((opParamsRaw as any)?.columns)
+			? (((opParamsRaw as any).columns as unknown[]) ?? [])
+			: [];
+		const validation = validateReferencedColumns(input, opColumns, 'in');
+		if (!validation.ok) return validation;
+		return { ok: true, output: input };
+	}
 
 	if (op === 'sql') {
 		const sql = ((params as any).sql ?? {}) as Record<string, unknown>;

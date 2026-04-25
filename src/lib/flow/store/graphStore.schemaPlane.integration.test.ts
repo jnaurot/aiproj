@@ -371,6 +371,35 @@ describe('INT-03d: SQL declared output schema propagation', () => {
 	});
 });
 
+describe('INT-03e: Passthrough columns validation', () => {
+	it('flags SHAPE_MISMATCH when passthrough op references missing columns', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('src', [{ name: 'id', type: 'number' }, { name: 'text', type: 'string' }]),
+				transformDoc(
+					'np',
+					'null_policy',
+					{
+						null_policy: {
+							columns: ['missing_col']
+						}
+					},
+					100
+				)
+			],
+			edges: [edge('e1', 'src', 'np')]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const npSchema = s.schemaPlane.nodeSchemas['np'];
+		expect(npSchema?.ok).toBe(false);
+		if (!npSchema?.ok) {
+			expect(npSchema.error.code).toBe('SHAPE_MISMATCH');
+			expect(npSchema.error.message).toContain("Column 'missing_col' not found in input schema");
+		}
+	});
+});
+
 describe('INT-04: Full audio preprocessing chain', () => {
     it('produces zero errors; training job receives correct shape and normalized flag', () => {
         const loaded = graphStore.loadGraphDocument({

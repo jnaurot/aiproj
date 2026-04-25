@@ -16,6 +16,27 @@ describe('schemaFn_transform', () => {
 		if (result.ok) expect(result.output.columns.map((c) => c.name)).toEqual(['id', 'text']);
 	});
 
+	it('passthrough operation validates referenced columns', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'null_policy',
+			null_policy: { columns: ['missing_col'] }
+		} as any);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error.code).toBe('SHAPE_MISMATCH');
+			expect(result.error.message).toContain("Column 'missing_col' not found in input schema");
+		}
+	});
+
+	it('passthrough operation accepts existing referenced columns', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'outlier_policy',
+			outlier_policy: { columns: ['id'] }
+		} as any);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.output.columns.map((c) => c.name)).toEqual(['id', 'text']);
+	});
+
 	it('select errors when column missing', () => {
 		const result = schemaFn_transform([baseInput], { op: 'select', select: { columns: ['missing'] } });
 		expect(result.ok).toBe(false);
