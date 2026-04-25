@@ -208,5 +208,48 @@ describe('graphStore schema-aware pre-run guard', () => {
 		expect(createRunMock).toHaveBeenCalledTimes(1);
 		expect((get(graphStore as any) as any).schemaWarningDismissCount).toBe(1);
 	});
+
+	it('does not block run for additional-properties uncertainty warnings in run path', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-additional-props-warning');
+		installSuccessfulRunMocks(graphId, 'run-additional-props-warning');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'llm_json',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'llm',
+						label: 'LLM',
+						status: 'idle',
+						params: {
+							output: {
+								mode: 'json',
+								jsonSchema: {
+									type: 'object',
+									properties: { title: { type: 'string' } },
+									additionalProperties: true
+								}
+							}
+						}
+					}
+				},
+				{
+					id: 'sel',
+					position: { x: 120, y: 0 },
+					data: {
+						kind: 'transform',
+						transformKind: 'select',
+						status: 'idle',
+						label: 'Select',
+						params: { op: 'select', select: { columns: ['candidate_required_location'] } }
+					}
+				}
+			],
+			edges: [{ id: 'e1', source: 'llm_json', target: 'sel', targetHandle: 'in', data: { exec: 'idle' } }]
+		} as any);
+		const result = await graphStore.runRemote('sel', 'from_selected_onward');
+		expect(result.ok).toBe(true);
+		expect(createRunMock).toHaveBeenCalledTimes(1);
+	});
 });
 

@@ -81,6 +81,32 @@ function transformDoc(id: string, op: string, extra: Record<string, unknown> = {
     };
 }
 
+function llmDoc(
+	id: string,
+	mode: 'text' | 'json' = 'text',
+	jsonSchema?: Record<string, unknown>,
+	x = 100
+) {
+	const output: Record<string, unknown> = { mode };
+	if (mode === 'json') output.jsonSchema = jsonSchema ?? { type: 'object', properties: {} };
+	return {
+		id,
+		type: 'node',
+		position: { x, y: 0 },
+		data: {
+			kind: 'llm',
+			label: id,
+			params: {
+				baseUrl: 'http://localhost:11434',
+				model: 'mock-model',
+				user_prompt: 'extract',
+				output
+			},
+			status: 'idle'
+		}
+	};
+}
+
 function audioSourceDoc(id: string, sampleRate = 44100) {
     return {
         id,
@@ -397,6 +423,37 @@ describe('INT-03e: Passthrough columns validation', () => {
 			expect(npSchema.error.code).toBe('SHAPE_MISMATCH');
 			expect(npSchema.error.message).toContain("Column 'missing_col' not found in input schema");
 		}
+	});
+});
+
+describe('INT-03g: additionalProperties uncertainty policy', () => {
+	it('downgrades missing-column mismatch to warning when llm json schema allows additional properties', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('src', [{ name: 'text', type: 'string' }]),
+				llmDoc(
+					'llm_extract',
+					'json',
+					{
+						type: 'object',
+						properties: {
+							title: { type: 'string' }
+						},
+						additionalProperties: true
+					},
+					100
+				),
+				transformDoc('sel', 'select', { select: { columns: ['candidate_required_location'] } }, 200)
+			],
+			edges: [
+				edge('e1', 'src', 'llm_extract'),
+				edge('e2', 'llm_extract', 'sel')
+			]
+		});
+		expect(loaded.ok).toBe(true);
+		const validation = (graphStore as any).getEdgeSchemaValidationState?.('e2');
+		expect(validation?.state).toBe('warning');
+		expect(String(validation?.code ?? '')).toBe('SHAPE_MISMATCH_ADDITIONAL_PROPERTIES');
 	});
 });
 

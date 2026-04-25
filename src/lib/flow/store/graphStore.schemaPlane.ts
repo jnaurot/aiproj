@@ -100,10 +100,19 @@ export function createSchemaPlaneManager(deps: Deps) {
 			const handles = Array.isArray(targetResult.error.handles) ? targetResult.error.handles : [];
 			if (handles.length === 0 || handles.includes(targetHandle)) {
 				const targetErrorCode = String(targetResult.error.code ?? '').trim();
+				const upstreamAllowsAdditionalProperties =
+					Boolean((edgeSchema as any)?.properties?.additional_properties) === true;
 				// If upstream is opaque, a missing-column mismatch is uncertain rather than definitive.
 				// Keep it as a warning/info-grade diagnostic at edge level.
-				if (targetErrorCode === 'SHAPE_MISMATCH' && edgeSchema?.mode === 'opaque') {
+				if (targetErrorCode === 'SHAPE_MISMATCH' && (edgeSchema?.mode === 'opaque' || upstreamAllowsAdditionalProperties)) {
 					if (opaquePolicy === 'none') return { state: 'valid' };
+					if (upstreamAllowsAdditionalProperties) {
+						return {
+							state: 'warning',
+							message: `${String(targetResult.error.message ?? 'Required field is missing in input schema')}. Upstream output allows additional properties, so this remains a warning until schema is made explicit.`,
+							code: 'SHAPE_MISMATCH_ADDITIONAL_PROPERTIES'
+						};
+					}
 					return {
 						state: 'warning',
 						message: `${String(targetResult.error.message ?? 'Required field is missing in input schema')}. Upstream is opaque, so this remains a warning until schema is made explicit.`,

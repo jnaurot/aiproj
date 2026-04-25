@@ -2856,7 +2856,9 @@ export function createRunManager(deps: RunDeps) {
 					contractSeverity === 'error' || schemaPlaneState === 'error'
 						? 'error'
 						: contractSeverity === 'warning' ||
-							  (schemaPlaneState === 'warning' && schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE')
+							  (schemaPlaneState === 'warning' &&
+									(schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE' ||
+										schemaPlaneCode === 'SHAPE_MISMATCH_ADDITIONAL_PROPERTIES'))
 							? 'warning'
 							: 'clean';
 				if (effectiveSeverity !== 'error') continue;
@@ -2881,7 +2883,27 @@ export function createRunManager(deps: RunDeps) {
 			}));
 		const edgeSchemaFindings = edgeFindings();
 		const edgeErrorNodeIds = new Set(edgeSchemaFindings.map((item) => item.nodeId));
-		const residualNodeFindings = nodeSchemaFindings.filter((item) => !edgeErrorNodeIds.has(item.nodeId));
+		const uncertaintyWarningNodeIds = new Set<string>();
+		const schemaManager = createSchemaPlaneManager({ getState: () => state });
+		for (const edge of state.edges ?? []) {
+			const edgeId = String((edge as any)?.id ?? '').trim();
+			const targetNodeId = String((edge as any)?.target ?? '').trim();
+			if (!edgeId || !targetNodeId) continue;
+			const validation = schemaManager.getEdgeValidationState(edgeId);
+			const validationCode = String(validation?.code ?? '').trim().toUpperCase();
+			if (
+				validation?.state === 'warning' &&
+				(validationCode === 'SHAPE_MISMATCH_OPAQUE' || validationCode === 'SHAPE_MISMATCH_ADDITIONAL_PROPERTIES')
+			) {
+				uncertaintyWarningNodeIds.add(targetNodeId);
+			}
+		}
+		const residualNodeFindings = nodeSchemaFindings.filter((item) => {
+			if (edgeErrorNodeIds.has(item.nodeId)) return false;
+			const code = String(item.code ?? '').trim().toUpperCase();
+			if (code === 'SHAPE_MISMATCH' && uncertaintyWarningNodeIds.has(item.nodeId)) return false;
+			return true;
+		});
 		const allErrors = dedupeFindings([...edgeSchemaFindings, ...residualNodeFindings]);
 		if (allErrors.length <= 0) return { kind: 'none' };
 		const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(state.checkpointRegistry);
