@@ -457,6 +457,60 @@ describe('INT-03g: additionalProperties uncertainty policy', () => {
 	});
 });
 
+describe('INT-03h: LLM json schema propagation', () => {
+	it('propagates llm json output properties into downstream select validation', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('src', [{ name: 'text', type: 'string' }]),
+				llmDoc(
+					'llm_extract',
+					'json',
+					{
+						type: 'object',
+						properties: {
+							user_id: { type: 'integer' },
+							category: { type: 'string' }
+						},
+						required: ['user_id'],
+						additionalProperties: false
+					},
+					100
+				),
+				transformDoc('sel', 'select', { select: { columns: ['user_id', 'category'] } }, 200)
+			],
+			edges: [
+				edge('e1', 'src', 'llm_extract'),
+				edge('e2', 'llm_extract', 'sel')
+			]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const llmSchema = s.schemaPlane.nodeSchemas['llm_extract'];
+		expect(llmSchema?.ok).toBe(true);
+		if (llmSchema?.ok) {
+			expect(llmSchema.output.mode).toBe('table');
+			expect(llmSchema.output.columns.map((column) => `${column.name}:${column.type}`)).toEqual([
+				'user_id:number',
+				'category:string'
+			]);
+		}
+		expect(s.schemaPlane.nodeSchemas['sel']?.ok).toBe(true);
+	});
+
+	it('keeps llm text mode opaque', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [sourceDoc('src', [{ name: 'text', type: 'string' }]), llmDoc('llm_text', 'text', undefined, 100)],
+			edges: [edge('e1', 'src', 'llm_text')]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const llmSchema = s.schemaPlane.nodeSchemas['llm_text'];
+		expect(llmSchema?.ok).toBe(true);
+		if (!llmSchema?.ok) return;
+		expect(llmSchema.output.mode).toBe('opaque');
+	});
+});
+
 describe('INT-04: Full audio preprocessing chain', () => {
     it('produces zero errors; training job receives correct shape and normalized flag', () => {
         const loaded = graphStore.loadGraphDocument({

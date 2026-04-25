@@ -115,10 +115,14 @@ Use existing `llm` node configuration (`params.output.mode === 'json'` + `params
 ---
 
 ## Completion Checklist
-1. Phase 1 implemented and committed.
-2. Phase 2 implemented and committed.
-3. Phase 3 implemented and committed.
-4. Final status note appended below.
+1. Phase 1 implemented and committed. [x]
+2. Phase 2 implemented and committed. [x]
+3. Phase 3 implemented and committed. [x]
+4. Final status note appended below. [x]
 
 ## Final Status
-- Pending implementation.
+- Completed on `main`.
+- Commits:
+	1. `5df7fce` - `feat(schema-plane): propagate llm json output schema as table columns`
+	2. `b70cd79` - `fix(schema-plane): downgrade missing-column errors to warning when llm schema allows additional properties`
+	3. `test(schema-plane): add llm json propagation integration and guard regressions`
