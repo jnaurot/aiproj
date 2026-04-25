@@ -94,8 +94,7 @@ const passthroughOps = new Set([
 	'inference_parity',
 	'split',
 	'quality_gate',
-	'ml_contract',
-	'sql'
+	'ml_contract'
 ]);
 
 export const schemaFn_transform: SchemaFunction = (inputs, params) => {
@@ -115,6 +114,29 @@ export const schemaFn_transform: SchemaFunction = (inputs, params) => {
 	}
 
 	if (passthroughOps.has(op)) return { ok: true, output: input };
+
+	if (op === 'sql') {
+		const sql = ((params as any).sql ?? {}) as Record<string, unknown>;
+		const declared = Array.isArray(sql.declared_output_columns)
+			? (sql.declared_output_columns as Array<Record<string, unknown>>)
+			: [];
+		if (declared.length <= 0) return { ok: true, output: input };
+		const columns: SchemaPlaneColumn[] = [];
+		for (const col of declared) {
+			const name = String(col?.name ?? '').trim();
+			if (!name) continue;
+			const type = String(col?.type ?? 'unknown').trim() || 'unknown';
+			const nullable = typeof col?.nullable === 'boolean' ? Boolean(col.nullable) : true;
+			columns.push({
+				name,
+				type,
+				nullable,
+				properties: {}
+			});
+		}
+		if (columns.length <= 0) return { ok: true, output: input };
+		return { ok: true, output: { mode: 'table', columns } };
+	}
 
 	if (op === 'select') {
 		const select = ((params as any).select ?? {}) as Record<string, unknown>;

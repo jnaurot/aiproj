@@ -336,6 +336,41 @@ describe('INT-03c: Join clause nodeId-edge consistency', () => {
 	});
 });
 
+describe('INT-03d: SQL declared output schema propagation', () => {
+	it('allows downstream select validation when SQL declares output columns', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				sourceDoc('src', [{ name: 'id', type: 'number' }, { name: 'text', type: 'string' }]),
+				transformDoc(
+					'sql1',
+					'sql',
+					{
+						sql: {
+							query: 'select id as job_id from input',
+							declared_output_columns: [{ name: 'job_id', type: 'number', nullable: false }]
+						}
+					},
+					100
+				),
+				transformDoc('sel', 'select', { select: { columns: ['job_id'] } }, 200)
+			],
+			edges: [
+				edge('e1', 'src', 'sql1'),
+				edge('e2', 'sql1', 'sel')
+			]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const sqlSchema = s.schemaPlane.nodeSchemas['sql1'];
+		expect(sqlSchema?.ok).toBe(true);
+		if (sqlSchema?.ok) {
+			expect(sqlSchema.output.columns.map((column) => column.name)).toEqual(['job_id']);
+		}
+		const selSchema = s.schemaPlane.nodeSchemas['sel'];
+		expect(selSchema?.ok).toBe(true);
+	});
+});
+
 describe('INT-04: Full audio preprocessing chain', () => {
     it('produces zero errors; training job receives correct shape and normalized flag', () => {
         const loaded = graphStore.loadGraphDocument({

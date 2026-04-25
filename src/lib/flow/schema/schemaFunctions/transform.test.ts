@@ -124,5 +124,34 @@ describe('schemaFn_transform', () => {
 		const derived = result.output.columns.find((column) => column.name === 'id_plus_one');
 		expect(derived?.type).toBe('number');
 	});
+
+	it('sql uses declared output columns when provided', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'sql',
+			sql: {
+				query: 'select id as job_id from input',
+				declared_output_columns: [
+					{ name: 'job_id', type: 'number', nullable: false },
+					{ name: 'title', type: 'string', nullable: true }
+				]
+			}
+		} as any);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.output.columns.map((column) => `${column.name}:${column.type}`)).toEqual([
+			'job_id:number',
+			'title:string'
+		]);
+	});
+
+	it('sql without declared output columns preserves passthrough schema', () => {
+		const result = schemaFn_transform([baseInput], {
+			op: 'sql',
+			sql: { query: 'select * from input' }
+		} as any);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.output.columns.map((column) => column.name)).toEqual(['id', 'text']);
+	});
 });
 

@@ -285,7 +285,8 @@ export const defaultTransformSqlParams: TransformSqlParams = {
 	query: 'SELECT * FROM input LIMIT 10',
 	max_runtime_ms: 0,
 	max_output_rows: 0,
-	safe_mode: true
+	safe_mode: true,
+	declared_output_columns: []
 };
 
 export const defaultTransformJsonToTableParams: TransformJsonToTableParams = {

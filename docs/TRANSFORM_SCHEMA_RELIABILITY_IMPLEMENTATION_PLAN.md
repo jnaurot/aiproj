@@ -142,8 +142,8 @@ Improve schema-plane correctness for transforms by:
 
 ## Completion Checklist
 
-- [ ] Phase 1 implemented, tested, committed.
-- [ ] Phase 2 implemented, tested, committed.
-- [ ] Phase 3 implemented, tested, committed.
-- [ ] Final targeted test sweep green.
-- [ ] Plan checklist fully checked and up to date.
+- [x] Phase 1 implemented, tested, committed.
+- [x] Phase 2 implemented, tested, committed.
+- [x] Phase 3 implemented, tested, committed.
+- [x] Final targeted test sweep green.
+- [x] Plan checklist fully checked and up to date.

@@ -803,6 +803,18 @@ export const TransformSqlParamsSchema = z.object({
   max_runtime_ms: z.coerce.number().int().min(0).default(0),
   max_output_rows: z.coerce.number().int().min(0).default(0),
   safe_mode: z.boolean().default(true),
+  declared_output_columns: z
+    .array(
+      z
+        .object({
+          name: z.string().min(1, "Declared output column name cannot be empty"),
+          type: z.string().min(1).optional().default("unknown"),
+          nullable: z.boolean().optional().default(true)
+        })
+        .strip()
+    )
+    .optional()
+    .default([]),
 }).strip();
 
 export const TransformJsonToTableParamsSchema = z
