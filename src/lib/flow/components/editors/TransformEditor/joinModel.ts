@@ -80,6 +80,20 @@ export function resolveJoinNodeColumns(inputSchemas: InputSchemaView[]): JoinNod
 	return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+export function displayNodeNameForJoinClause(
+	nodeId: string,
+	nodeColumns: JoinNodeColumns[],
+	nodeDisplayNamesById: Record<string, string> | null | undefined
+): string {
+	const normalizedId = String(nodeId ?? '').trim();
+	if (!normalizedId) return shortNodeId(normalizedId);
+	const row = nodeColumns.find((entry) => entry.nodeId === normalizedId);
+	if (row?.displayName) return row.displayName;
+	const mapped = String(nodeDisplayNamesById?.[normalizedId] ?? '').trim();
+	if (mapped) return mapped;
+	return shortNodeId(normalizedId);
+}
+
 export function joinMismatchColumnsFromError(err: NodeExecutionError | null): string[] {
 	if (!err) return [];
 	const path = String(err.paramPath ?? '');

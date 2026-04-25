@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveJoinNodeColumns } from './joinModel';
+import { displayNodeNameForJoinClause, resolveJoinNodeColumns } from './joinModel';
 import type { InputSchemaView } from './inputSchema';
 
 function input(overrides: Partial<InputSchemaView>): InputSchemaView {
@@ -37,5 +37,14 @@ describe('resolveJoinNodeColumns', () => {
 		expect(rows[1].displayName).toContain('Transform_A');
 		expect(rows[0].displayName).not.toBe(rows[1].displayName);
 	});
-});
 
+	it('falls back to node display-name map when relation metadata is temporarily unavailable', () => {
+		const rows = resolveJoinNodeColumns([]);
+		const display = displayNodeNameForJoinClause(
+			'n_join_upstream_1',
+			rows,
+			{ n_join_upstream_1: 'Txt->Tbl (2)' }
+		);
+		expect(display).toBe('Txt->Tbl (2)');
+	});
+});

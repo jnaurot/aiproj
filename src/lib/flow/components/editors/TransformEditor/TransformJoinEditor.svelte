@@ -8,6 +8,7 @@
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import {
 		canCommitJoin,
+		displayNodeNameForJoinClause,
 		joinMismatchColumnsFromError,
 		normalizeJoinParams,
 		resolveJoinNodeColumns,
@@ -22,6 +23,7 @@
 	export let onDraft: (patch: Partial<TransformJoinParams>) => void;
 	export let onCommit: (patch: Partial<TransformJoinParams>) => void;
 	export let inputSchemas: InputSchemaView[] = [];
+	export let nodeDisplayNamesById: Record<string, string> = {};
 	export let nodeError: NodeExecutionError | null = null;
 
 	const joinModes: JoinHow[] = supportedJoinModes();
@@ -161,8 +163,7 @@
 
 	function displayQualified(nodeId: string, col: string): string {
 		if (!nodeId || !col) return '(empty)';
-		const row = nodeColumns.find((n) => n.nodeId === nodeId);
-		const left = row?.displayName ?? shortNodeId(nodeId);
+		const left = displayNodeNameForJoinClause(nodeId, nodeColumns, nodeDisplayNamesById) || shortNodeId(nodeId);
 		return `${left}.${col}`;
 	}
 </script>

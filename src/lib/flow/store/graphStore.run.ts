@@ -2762,6 +2762,8 @@ type SchemaGuardAssessment =
 			errors: Array<{ nodeId: string; code?: string; message: string }>;
 	  };
 
+type SchemaGuardFinding = { nodeId: string; code?: string; message: string };
+
 export function createRunManager(deps: RunDeps) {
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
 	let resumeFallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2812,8 +2814,62 @@ export function createRunManager(deps: RunDeps) {
 		runFrom: string | null,
 		runMode: ActiveRunMode
 	): SchemaGuardAssessment {
+		const dedupeFindings = (items: SchemaGuardFinding[]): SchemaGuardFinding[] => {
+			const seen = new Set<string>();
+			const out: SchemaGuardFinding[] = [];
+			for (const item of items) {
+				const nodeId = String(item.nodeId ?? '').trim();
+				const code = String(item.code ?? '').trim();
+				const message = String(item.message ?? '').trim();
+				if (!nodeId || !message) continue;
+				const key = `${nodeId}|${code}|${message}`;
+				if (seen.has(key)) continue;
+				seen.add(key);
+				out.push({ nodeId, code: code || undefined, message });
+			}
+			return out;
+		};
+		const edgeFindings = (): SchemaGuardFinding[] => {
+			const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
+			const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
+			const schemaManager = createSchemaPlaneManager({ getState: () => state });
+			const out: SchemaGuardFinding[] = [];
+			for (const edge of state.edges ?? []) {
+				const edgeId = String((edge as any)?.id ?? '').trim();
+				if (!edgeId) continue;
+				const targetNodeId = String((edge as any)?.target ?? '').trim();
+				if (!targetNodeId) continue;
+				const diag = (diagnostics as Record<string, any>)[edgeId] ?? null;
+				const contractSeverity: 'clean' | 'warning' | 'error' =
+					diag?.severity === 'error' ? 'error' : diag?.severity === 'warning' ? 'warning' : 'clean';
+				const schemaValidation = schemaManager.getEdgeValidationState(edgeId);
+				const schemaPlaneState =
+					schemaValidation?.state === 'error'
+						? 'error'
+						: schemaValidation?.state === 'warning'
+							? 'warning'
+							: schemaValidation?.state === 'valid'
+								? 'valid'
+								: 'neutral';
+				const schemaPlaneCode = String(schemaValidation?.code ?? '').trim().toUpperCase();
+				const effectiveSeverity: 'clean' | 'warning' | 'error' =
+					contractSeverity === 'error' || schemaPlaneState === 'error'
+						? 'error'
+						: contractSeverity === 'warning' ||
+							  (schemaPlaneState === 'warning' && schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE')
+							? 'warning'
+							: 'clean';
+				if (effectiveSeverity !== 'error') continue;
+				const code = String(schemaValidation?.code ?? diag?.code ?? '').trim() || undefined;
+				const message =
+					String(schemaValidation?.message ?? diag?.message ?? '').trim() ||
+					'Schema mismatch in run path edge.';
+				out.push({ nodeId: targetNodeId, code, message });
+			}
+			return dedupeFindings(out);
+		};
 		const nodeSchemas = state.schemaPlane?.nodeSchemas ?? {};
-		const allErrors = Object.entries(nodeSchemas)
+		const nodeSchemaFindings = Object.entries(nodeSchemas)
 			.filter((e): e is [string, Extract<SchemaPlaneResult, { ok: false }>] => {
 				const r = e[1];
 				return !!r && r.ok === false;
@@ -2823,6 +2879,10 @@ export function createRunManager(deps: RunDeps) {
 				code: result.error.code,
 				message: result.error.message
 			}));
+		const edgeSchemaFindings = edgeFindings();
+		const edgeErrorNodeIds = new Set(edgeSchemaFindings.map((item) => item.nodeId));
+		const residualNodeFindings = nodeSchemaFindings.filter((item) => !edgeErrorNodeIds.has(item.nodeId));
+		const allErrors = dedupeFindings([...edgeSchemaFindings, ...residualNodeFindings]);
 		if (allErrors.length <= 0) return { kind: 'none' };
 		const checkpointBoundaries = getCheckpointPlanningBoundaryNodeIds(state.checkpointRegistry);
 		const plannedSet = computePlannedNodeSet(

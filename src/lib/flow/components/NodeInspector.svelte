@@ -420,6 +420,19 @@
 	}
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
+	$: joinNodeDisplayNamesById = (() => {
+		const out: Record<string, string> = {};
+		for (const node of $graphStore?.nodes ?? []) {
+			const nodeId = String((node as any)?.id ?? '').trim();
+			if (!nodeId) continue;
+			const display =
+				String(((node as any)?.data as any)?.meta?.canonicalName ?? '').trim() ||
+				String(((node as any)?.data as any)?.label ?? '').trim() ||
+				nodeId;
+			out[nodeId] = display;
+		}
+		return out;
+	})();
 	$: schemaConfigurationHints = selectedNode
 		? (((graphStore as any).getSchemaConfigurationHints?.(selectedNode.id) ??
 				{}) as Record<string, unknown>)
@@ -1914,6 +1927,7 @@
 							{params}
 							{nodeError}
 							{inputSchemas}
+							nodeDisplayNamesById={joinNodeDisplayNamesById}
 							onDraft={onJoinDraft}
 							onCommit={onJoinCommit}
 						/>
@@ -1938,6 +1952,7 @@
 					{params}
 					{nodeError}
 					{inputSchemas}
+					nodeDisplayNamesById={joinNodeDisplayNamesById}
 					onDraft={onJoinDraft}
 					onCommit={onJoinCommit}
 				/>
