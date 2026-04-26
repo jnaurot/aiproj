@@ -161,6 +161,75 @@ function computeComponentNodeResult(
 	};
 }
 
+/**
+ * Converts a ComponentTypedPrimitive field type (as stored in node.data.schema)
+ * to the schema-plane column type enum.
+ */
+function componentFieldTypeToColumnType(raw: unknown): SchemaPlaneOutput['columns'][number]['type'] {
+	const t = String(raw ?? '').trim().toLowerCase();
+	if (t === 'text' || t === 'string') return 'string';
+	if (t === 'number' || t === 'integer' || t === 'float') return 'number';
+	if (t === 'boolean' || t === 'bool') return 'boolean';
+	if (t === 'datetime' || t === 'date' || t === 'timestamp') return 'datetime';
+	if (t === 'binary' || t === 'bytes') return 'binary';
+	if (t === 'embeddings' || t === 'embedding' || t === 'tensor') return 'tensor';
+	return 'unknown';
+}
+
+/**
+ * Converts a ComponentTypedPrimitive root type to a schema-plane output mode.
+ */
+function componentTypeToMode(raw: unknown): SchemaPlaneOutput['mode'] {
+	const t = String(raw ?? '').trim().toLowerCase();
+	if (t === 'table' || t === 'json') return 'table';
+	if (t === 'text' || t === 'string') return 'text';
+	if (t === 'binary' || t === 'bytes') return 'binary';
+	if (t === 'embeddings' || t === 'embedding') return 'tensor';
+	return 'opaque';
+}
+
+/**
+ * If a node has a manually declared output schema (source === 'declared' on
+ * node.data.schema.expectedSchema), convert it to a SchemaPlaneResult and
+ * return it. Returns null when no valid declared override is present.
+ *
+ * This implements the "manual" tier of schema authority: the user explicitly
+ * asserts what the node outputs, overriding the schema function. This unblocks
+ * downstream validation when inputs are opaque or the schema function cannot
+ * determine output automatically.
+ */
+function getDeclaredOutputOverride(node: PipelineNode): SchemaPlaneResult | null {
+	const schemaEnvelope = (node.data as any)?.schema;
+	if (!schemaEnvelope || typeof schemaEnvelope !== 'object') return null;
+	const expectedSchema = (schemaEnvelope as Record<string, unknown>).expectedSchema;
+	if (!expectedSchema || typeof expectedSchema !== 'object') return null;
+	const obs = expectedSchema as Record<string, unknown>;
+	if (String(obs.source ?? '').trim() !== 'declared') return null;
+	const typedSchema = obs.typedSchema;
+	if (!typedSchema || typeof typedSchema !== 'object') return null;
+	const ts = typedSchema as Record<string, unknown>;
+	const mode = componentTypeToMode(ts.type);
+	const rawFields = Array.isArray(ts.fields) ? ts.fields : [];
+	const columns: SchemaPlaneOutput['columns'] = rawFields
+		.map((field: unknown) => {
+			if (!field || typeof field !== 'object') return null;
+			const f = field as Record<string, unknown>;
+			const name = String(f.name ?? '').trim();
+			if (!name) return null;
+			return {
+				name,
+				type: componentFieldTypeToColumnType(f.type),
+				nullable: Boolean(f.nullable ?? false),
+				properties: {}
+			};
+		})
+		.filter((col): col is NonNullable<typeof col> => col !== null);
+	return {
+		ok: true,
+		output: { mode, columns, note: 'declared' }
+	};
+}
+
 function computeNodeResult(
 	node: PipelineNode,
 	edges: PipelineEdge[],
@@ -169,6 +238,13 @@ function computeNodeResult(
 ): SchemaPlaneResult {
 	const kind = String((node.data as any)?.kind ?? '').trim().toLowerCase();
 	if (kind === 'component') return computeComponentNodeResult(node, options);
+
+	// ── Declared output override (manual tier) ──────────────────────────────
+	// When the user has explicitly saved an expected output schema
+	// (source === 'declared'), honour it in place of the schema-function result.
+	// This is the primary escape hatch for opaque-upstream situations.
+	const declaredOverride = getDeclaredOutputOverride(node);
+	if (declaredOverride) return declaredOverride;
 	const fn: SchemaFunction | undefined = getSchemaFunction((node.data as any)?.kind ?? '');
 	if (!fn) return { ok: true, output: OPAQUE_SCHEMA };
 	const params = (((node.data as any)?.params ?? {}) as Record<string, unknown>) ?? {};

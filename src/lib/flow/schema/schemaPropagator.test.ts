@@ -178,6 +178,166 @@ describe('schemaPropagator', () => {
 		}
 	});
 
+	// ── Declared output override tests ──────────────────────────────────────
+
+	it('declared output override is used instead of schema function result', () => {
+		registerSchemaFunction('transform', () => ({ ok: true, output: OPAQUE_SCHEMA }));
+		const n = node('a', 'transform');
+		(n.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: {
+					type: 'table',
+					fields: [{ name: 'score', type: 'number', nullable: false }]
+				}
+			}
+		};
+		const state = propagateSchemas([n], []);
+		expect(state.nodeSchemas.a?.ok).toBe(true);
+		if (state.nodeSchemas.a?.ok) {
+			expect(state.nodeSchemas.a.output.mode).toBe('table');
+			expect(state.nodeSchemas.a.output.columns[0]?.name).toBe('score');
+			expect(state.nodeSchemas.a.output.columns[0]?.type).toBe('number');
+		}
+	});
+
+	it('declared override unblocks downstream when upstream is opaque', () => {
+		// Mirrors the exact user scenario: source → Transform_Select (opaque input,
+		// declared output) → Model (should see declared columns, not opaque).
+		registerSchemaFunction('source', () => ({ ok: true, output: OPAQUE_SCHEMA }));
+		registerSchemaFunction('transform', (inputs) => {
+			// Schema function would normally return opaque because inputs[0] is opaque.
+			if (inputs[0]?.mode === 'opaque') return { ok: true, output: OPAQUE_SCHEMA };
+			return { ok: true, output: inputs[0] ?? OPAQUE_SCHEMA };
+		});
+		registerSchemaFunction('model', (inputs) => ({ ok: true, output: inputs[0] ?? OPAQUE_SCHEMA }));
+
+		const transformNode = node('t', 'transform');
+		(transformNode.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: {
+					type: 'table',
+					fields: [{ name: 'candidate_required_location', type: 'text', nullable: true }]
+				}
+			}
+		};
+		const state = propagateSchemas(
+			[node('src', 'source'), transformNode, node('m', 'model')],
+			[edge('e1', 'src', 't'), edge('e2', 't', 'm')]
+		);
+		// The edge from transform carries the declared columns, not opaque.
+		expect(state.edgeSchemas.e2?.mode).toBe('table');
+		expect(state.edgeSchemas.e2?.columns[0]?.name).toBe('candidate_required_location');
+		expect(state.edgeSchemas.e2?.columns[0]?.type).toBe('string');
+		// Downstream model node receives declared schema.
+		if (state.nodeSchemas.m?.ok) {
+			expect(state.nodeSchemas.m.output.mode).toBe('table');
+			expect(state.nodeSchemas.m.output.columns[0]?.name).toBe('candidate_required_location');
+		}
+	});
+
+	it('non-declared source on expectedSchema does not override schema function', () => {
+		registerSchemaFunction('transform', () => ({ ok: true, output: { mode: 'text', columns: [] } }));
+		const n = node('a', 'transform');
+		(n.data as any).schema = {
+			expectedSchema: {
+				source: 'sample',  // not 'declared' — should be ignored
+				state: 'fresh',
+				typedSchema: { type: 'table', fields: [{ name: 'x', type: 'number', nullable: false }] }
+			}
+		};
+		const state = propagateSchemas([n], []);
+		if (state.nodeSchemas.a?.ok) {
+			// Schema function result (text) wins over the non-declared observation.
+			expect(state.nodeSchemas.a.output.mode).toBe('text');
+		}
+	});
+
+	it('declared override with text mode produces text output', () => {
+		registerSchemaFunction('transform', () => ({ ok: true, output: OPAQUE_SCHEMA }));
+		const n = node('a', 'transform');
+		(n.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: { type: 'text', fields: [] }
+			}
+		};
+		const state = propagateSchemas([n], []);
+		if (state.nodeSchemas.a?.ok) {
+			expect(state.nodeSchemas.a.output.mode).toBe('text');
+		}
+	});
+
+	it('declared override nullable mapping is correct', () => {
+		registerSchemaFunction('transform', () => ({ ok: true, output: OPAQUE_SCHEMA }));
+		const n = node('a', 'transform');
+		(n.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: {
+					type: 'table',
+					fields: [
+						{ name: 'required_col', type: 'text', nullable: false },
+						{ name: 'optional_col', type: 'number', nullable: true }
+					]
+				}
+			}
+		};
+		const state = propagateSchemas([n], []);
+		if (state.nodeSchemas.a?.ok) {
+			const cols = state.nodeSchemas.a.output.columns;
+			expect(cols.find((c) => c.name === 'required_col')?.nullable).toBe(false);
+			expect(cols.find((c) => c.name === 'optional_col')?.nullable).toBe(true);
+		}
+	});
+
+	it('declared override on source node with no inputs works', () => {
+		// Source nodes have no schema function registration in this test.
+		const n = node('src', 'unregistered_source');
+		(n.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: { type: 'table', fields: [{ name: 'id', type: 'number', nullable: false }] }
+			}
+		};
+		const state = propagateSchemas([n], []);
+		if (state.nodeSchemas.src?.ok) {
+			expect(state.nodeSchemas.src.output.mode).toBe('table');
+			expect(state.nodeSchemas.src.output.columns[0]?.name).toBe('id');
+		}
+	});
+
+	it('component node declared override is ignored (component path is separate)', () => {
+		// Component nodes go through computeComponentNodeResult, not the declared
+		// override path. This test asserts the component path is unchanged.
+		registerSchemaFunction('inner', () => ({ ok: true, output: { mode: 'text', columns: [] } }));
+		const cmp = node('cmp', 'component');
+		(cmp.data as any).schema = {
+			expectedSchema: {
+				source: 'declared',
+				state: 'fresh',
+				typedSchema: { type: 'table', fields: [{ name: 'x', type: 'number', nullable: false }] }
+			}
+		};
+		const state = propagateSchemas([cmp], [], {
+			resolveComponentGraph: () => ({
+				nodes: [node('i', 'inner')],
+				edges: []
+			})
+		});
+		// Component goes through its own resolver, not declared override.
+		// Result comes from internal terminal node (text), not declared (table).
+		if (state.nodeSchemas.cmp?.ok) {
+			expect(state.nodeSchemas.cmp.output.mode).toBe('text');
+		}
+	});
+
 	it('component node carries warning metadata when internal propagation has errors', () => {
 		registerSchemaFunction('bad', () => ({
 			ok: false,
