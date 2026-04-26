@@ -35,11 +35,11 @@
 		const nodeData = sourceNode?.data as any;
 		return nodeData?.schema ?? null;
 	})();
+	$: sourceIsOpaque = !sourceSchemaRaw || String((sourceSchemaRaw as any)?.mode ?? '').trim() === 'opaque';
 	$: sourceIsEditable = (() => {
-		if (!sourceSchemaEnvelope) return false;
-		const declaredSchema = sourceSchemaEnvelope?.expectedSchema ?? sourceSchemaEnvelope?.outputSchema ?? null;
-		const src = String((declaredSchema as any)?.source ?? '').trim();
-		return src === 'declared';
+		const declaredSchema = sourceSchemaEnvelope?.expectedSchema ?? (sourceSchemaEnvelope as any)?.outputSchema ?? null;
+		if (String((declaredSchema as any)?.source ?? '').trim() === 'declared') return true;
+		return sourceIsOpaque; // Allow first-time declaration when output is opaque
 	})();
 
 	$: targetSchemaEnvelope = (() => {
@@ -68,7 +68,13 @@
 	let sourceDraft = '';
 	let targetDraft = '';
 	$: {
-		sourceDraft = sourceSchemaText;
+		// When source schema is opaque, pre-fill the editor with the target's expected input
+		// schema as a starting point (the most useful default for declaring the output).
+		if (sourceIsOpaque) {
+			sourceDraft = targetSchemaText || JSON.stringify({ type: 'table', fields: [] }, null, 2);
+		} else {
+			sourceDraft = sourceSchemaText;
+		}
 	}
 	$: {
 		targetDraft = targetSchemaText;
@@ -178,6 +184,9 @@
 				<span class="sei-role-label">What this node outputs</span>
 			</div>
 			{#if sourceIsEditable}
+				{#if sourceIsOpaque}
+					<p class="sei-declare-hint">Output schema is opaque — declare it here to unblock downstream validation.</p>
+				{/if}
 				<textarea
 					class="sei-schema-editor"
 					value={sourceDraft}
@@ -194,7 +203,7 @@
 						{applySourceResult.ok ? 'Applied' : (applySourceResult.error ?? 'Error')}
 					</div>
 				{/if}
-				<button class="sei-apply-btn" on:click={applySource}>Apply source</button>
+				<button class="sei-apply-btn" on:click={applySource}>Apply source schema</button>
 			{:else}
 				<pre class="sei-schema-readonly">{sourceSchemaText || '(no schema)'}</pre>
 				<p class="sei-readonly-label">Schema inferred from data - not editable</p>
@@ -442,6 +451,13 @@
 
 	.sei-apply-btn:hover {
 		background: #3b82f6;
+	}
+
+	.sei-declare-hint {
+		color: #fbbf24;
+		font-size: 0.6875rem;
+		font-style: italic;
+		margin: 0;
 	}
 
 	.sei-error {
