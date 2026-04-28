@@ -15,7 +15,10 @@ describe('schemaFn_source', () => {
 			}
 		});
 		expect(result.ok).toBe(true);
-		if (result.ok) expect(result.output.columns.map((c) => c.name)).toEqual(['a', 'b']);
+		if (result.ok) {
+			expect(result.output.columns.map((c) => c.name)).toEqual(['a', 'b']);
+			expect(result.output.properties?.sourceProvenance).toBe('sample');
+		}
 	});
 
 	it('derives table schema from priming.sampleSchema variant', () => {
@@ -34,6 +37,7 @@ describe('schemaFn_source', () => {
 		if (result.ok) {
 			expect(result.output.mode).toBe('table');
 			expect(result.output.columns.map((c) => `${c.name}:${c.type}`)).toEqual(['id:number', 'title:string']);
+			expect(result.output.properties?.sourceProvenance).toBe('sample');
 		}
 	});
 
@@ -54,21 +58,66 @@ describe('schemaFn_source', () => {
 				'user_id:number:false',
 				'category:string:true'
 			]);
+			expect(result.output.properties?.sourceProvenance).toBe('declared');
+		}
+	});
+
+	it('uses artifact schema when declared schema is missing', () => {
+		const result = schemaFn_source([], {
+			sourceKind: 'database',
+			introspected_schema: {
+				fields: [
+					{ name: 'id', type: 'integer', nullable: false },
+					{ name: 'text', type: 'string', nullable: true }
+				]
+			}
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.output.mode).toBe('table');
+			expect(result.output.columns.map((c) => c.name)).toEqual(['id', 'text']);
+			expect(result.output.properties?.sourceProvenance).toBe('artifact');
+		}
+	});
+
+	it('applies precedence declared > artifact > sample', () => {
+		const result = schemaFn_source([], {
+			sourceKind: 'database',
+			declared_schema: {
+				fields: [{ name: 'declared_col', type: 'string', nullable: true }]
+			},
+			introspected_schema: {
+				fields: [{ name: 'artifact_col', type: 'string', nullable: true }]
+			},
+			priming: {
+				sample_schema: {
+					fields: [{ name: 'sample_col', type: 'string', nullable: true }]
+				}
+			}
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.output.mode).toBe('table');
+			expect(result.output.columns.map((c) => c.name)).toEqual(['declared_col']);
+			expect(result.output.properties?.sourceProvenance).toBe('declared');
 		}
 	});
 
 	it('returns opaque output when no priming available', () => {
 		const result = schemaFn_source([], { sourceKind: 'file' });
 		expect(result.ok).toBe(true);
-		if (result.ok) expect(result.output.mode).toBe('opaque');
+		if (result.ok) {
+			expect(result.output.mode).toBe('opaque');
+			expect(result.output.properties?.sourceProvenance).toBe('opaque');
+		}
 	});
 
-	it('keeps database source opaque when declared schema is missing', () => {
+	it('keeps database source opaque when no declared/artifact/sample schema is available', () => {
 		const result = schemaFn_source([], { sourceKind: 'database' });
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.output.mode).toBe('opaque');
-			expect(String(result.output.note ?? '')).toContain('No declared schema');
+			expect(result.output.properties?.sourceProvenance).toBe('opaque');
 		}
 	});
 

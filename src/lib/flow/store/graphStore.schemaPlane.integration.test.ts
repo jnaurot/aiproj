@@ -280,6 +280,82 @@ describe('INT-03: Join with incompatible key types', () => {
     });
 });
 
+describe('INT-SRC-DECL-01: declared source schema precedence', () => {
+	it('uses declared schema over artifact/sample candidates', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src',
+					type: 'node',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						label: 'src',
+						params: {
+							sourceKind: 'database',
+							declared_schema: {
+								fields: [{ name: 'declared_col', type: 'string', nullable: true }]
+							},
+							introspected_schema: {
+								fields: [{ name: 'artifact_col', type: 'string', nullable: true }]
+							},
+							priming: {
+								sample_schema: {
+									fields: [{ name: 'sample_col', type: 'string', nullable: true }]
+								}
+							}
+						},
+						status: 'idle'
+					}
+				}
+			],
+			edges: []
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		const srcSchema = s.schemaPlane.nodeSchemas['src'];
+		expect(srcSchema?.ok).toBe(true);
+		if (!srcSchema?.ok) return;
+		expect(srcSchema.output.mode).toBe('table');
+		expect(srcSchema.output.columns.map((c) => c.name)).toEqual(['declared_col']);
+		expect(String((srcSchema.output.properties as any)?.sourceProvenance ?? '')).toBe('declared');
+	});
+});
+
+describe('INT-SRC-DB-01: artifact introspected schema fallback', () => {
+	it('uses artifact schema when declared schema is absent', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src',
+					type: 'node',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						label: 'src',
+						params: {
+							sourceKind: 'database',
+							introspected_schema: {
+								fields: [
+									{ name: 'id', type: 'integer', nullable: false },
+									{ name: 'category', type: 'string', nullable: true }
+								]
+							}
+						},
+						status: 'idle'
+					}
+				},
+				transformDoc('sel', 'select', { select: { columns: ['id', 'category'] } }, 100)
+			],
+			edges: [edge('e1', 'src', 'sel')]
+		});
+		expect(loaded.ok).toBe(true);
+		const s = state();
+		expect(s.schemaPlane.nodeSchemas['src']?.ok).toBe(true);
+		expect(s.schemaPlane.nodeSchemas['sel']?.ok).toBe(true);
+	});
+});
+
 describe('INT-03b: Derive string formula typing', () => {
 	it('propagates concat/lower derived columns as string type', () => {
 		const loaded = graphStore.loadGraphDocument({

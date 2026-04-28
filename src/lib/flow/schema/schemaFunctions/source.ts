@@ -28,6 +28,22 @@ function columnsFromPriming(params: Record<string, unknown>): SchemaPlaneColumn[
 		.filter((column: SchemaPlaneColumn) => column.name.length > 0);
 }
 
+function columnsFromArtifact(params: Record<string, unknown>): SchemaPlaneColumn[] {
+	const schema =
+		((params?.introspected_schema as any) ?? null) ??
+		(((params as any)?.db as any)?.introspected_schema ?? null) ??
+		(((params as any)?.db as any)?.schema ?? null);
+	const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+	return fields
+		.map((field: any) => ({
+			name: String(field?.name ?? '').trim(),
+			type: normalizeColumnType(field?.type),
+			nullable: Boolean(field?.nullable ?? true),
+			properties: {}
+		}))
+		.filter((column: SchemaPlaneColumn) => column.name.length > 0);
+}
+
 function columnsFromDeclaredSchema(params: Record<string, unknown>): SchemaPlaneColumn[] {
 	const fields = Array.isArray((params?.declared_schema as any)?.fields) ? (params.declared_schema as any).fields : [];
 	return fields
@@ -40,13 +56,21 @@ function columnsFromDeclaredSchema(params: Record<string, unknown>): SchemaPlane
 		.filter((column: SchemaPlaneColumn) => column.name.length > 0);
 }
 
-function withSourceProperties(base: SchemaPlaneOutput, params: Record<string, unknown>): SchemaPlaneOutput {
+function withSourceProperties(
+	base: SchemaPlaneOutput,
+	params: Record<string, unknown>,
+	sourceProvenance: 'declared' | 'artifact' | 'sample' | 'opaque'
+): SchemaPlaneOutput {
 	const sourceKind = String((params?.sourceKind as string) ?? '').trim().toLowerCase();
+	const common = {
+		...(base.properties ?? {}),
+		sourceProvenance
+	};
 	if (sourceKind === 'stream') {
 		return {
 			...base,
 			properties: {
-				...(base.properties ?? {}),
+				...common,
 				cardinality: 'stream',
 				consume_once: true
 			}
@@ -56,13 +80,16 @@ function withSourceProperties(base: SchemaPlaneOutput, params: Record<string, un
 		return {
 			...base,
 			properties: {
-				...(base.properties ?? {}),
+				...common,
 				cardinality: 'one',
 				consume_once: true
 			}
 		};
 	}
-	return base;
+	return {
+		...base,
+		properties: common
+	};
 }
 
 export const schemaFn_source: SchemaFunction = (inputs, params) => {
@@ -76,25 +103,25 @@ export const schemaFn_source: SchemaFunction = (inputs, params) => {
 			}
 		};
 	}
-	const sourceKind = String((params?.sourceKind as string) ?? '').trim().toLowerCase();
-	if (sourceKind === 'db' || sourceKind === 'database') {
-		const declaredColumns = columnsFromDeclaredSchema(params);
-		if (declaredColumns.length > 0) {
-			return {
-				ok: true,
-				output: withSourceProperties({ mode: 'table', columns: declaredColumns }, params)
-			};
-		}
+	const declaredColumns = columnsFromDeclaredSchema(params);
+	if (declaredColumns.length > 0) {
 		return {
 			ok: true,
-			output: withSourceProperties({ ...OPAQUE_SCHEMA, note: 'No declared schema on database source.' }, params)
+			output: withSourceProperties({ mode: 'table', columns: declaredColumns }, params, 'declared')
+		};
+	}
+	const artifactColumns = columnsFromArtifact(params);
+	if (artifactColumns.length > 0) {
+		return {
+			ok: true,
+			output: withSourceProperties({ mode: 'table', columns: artifactColumns }, params, 'artifact')
 		};
 	}
 	const primingColumns = columnsFromPriming(params);
 	if (primingColumns.length > 0) {
 		return {
 			ok: true,
-			output: withSourceProperties({ mode: 'table', columns: primingColumns }, params)
+			output: withSourceProperties({ mode: 'table', columns: primingColumns }, params, 'sample')
 		};
 	}
 	return {
@@ -102,6 +129,6 @@ export const schemaFn_source: SchemaFunction = (inputs, params) => {
 		output: withSourceProperties({
 			...OPAQUE_SCHEMA,
 			note: 'Run source node to infer schema.'
-		}, params)
+		}, params, 'opaque')
 	};
 };
