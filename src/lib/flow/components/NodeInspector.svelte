@@ -420,6 +420,55 @@
 	}
 
 	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
+	$: sourceSchemaEnvelope = isSource
+		? ((((selectedNode?.data as any)?.schema ?? {}) as Record<string, unknown>))
+		: ({} as Record<string, unknown>);
+	$: sourceSchemaObservation =
+		((sourceSchemaEnvelope?.expectedSchema as Record<string, unknown> | undefined) ??
+			(sourceSchemaEnvelope?.observedSchema as Record<string, unknown> | undefined) ??
+			(sourceSchemaEnvelope?.inferredSchema as Record<string, unknown> | undefined) ??
+			null) as Record<string, unknown> | null;
+	$: sourceSchemaState = String(sourceSchemaObservation?.state ?? 'unknown').trim().toLowerCase();
+	$: sourceSchemaUpdatedAt = String(sourceSchemaObservation?.updatedAt ?? '').trim();
+	$: sourceSchemaTypedType = String((sourceSchemaObservation as any)?.typedSchema?.type ?? 'opaque')
+		.trim()
+		.toLowerCase();
+	$: sourceSchemaProvenance = (() => {
+		const declaredFields = Array.isArray((params as any)?.declared_schema?.fields)
+			? (params as any).declared_schema.fields
+			: [];
+		if (declaredFields.length > 0) return 'declared';
+		const artifactFields = Array.isArray((params as any)?.introspected_schema?.fields)
+			? (params as any).introspected_schema.fields
+			: [];
+		if (artifactFields.length > 0) return 'artifact';
+		const sampleFields = Array.isArray((params as any)?.priming?.sample_schema?.fields)
+			? (params as any).priming.sample_schema.fields
+			: Array.isArray((params as any)?.priming?.sampleSchema?.fields)
+				? (params as any).priming.sampleSchema.fields
+				: [];
+		if (sampleFields.length > 0) return 'sample';
+		return String((sourceSchemaObservation as any)?.source ?? 'opaque').trim().toLowerCase() || 'opaque';
+	})();
+	let sourceSchemaRefreshBusy = false;
+	let sourceSchemaRefreshError = '';
+
+	async function refreshSourceSchema(): Promise<void> {
+		const nodeId = String(selectedNode?.id ?? '').trim();
+		if (!nodeId || !isSource) return;
+		sourceSchemaRefreshBusy = true;
+		sourceSchemaRefreshError = '';
+		try {
+			const result = await (graphStore as any).refreshSourceSchema?.(nodeId);
+			if (result && result.ok === false) {
+				sourceSchemaRefreshError = String(result.error ?? 'Schema refresh failed');
+			}
+		} catch (error) {
+			sourceSchemaRefreshError = error instanceof Error ? error.message : String(error);
+		} finally {
+			sourceSchemaRefreshBusy = false;
+		}
+	}
 	$: joinNodeDisplayNamesById = (() => {
 		const out: Record<string, string> = {};
 		for (const node of $graphStore?.nodes ?? []) {
@@ -1603,6 +1652,26 @@
 						</div>
 					{/each}
 				</div>
+			{/if}
+		</div>
+		<div class={`schemaAssist schemaAssist-${sourceSchemaState}`}>
+			<div class="schemaAssistHead">
+				<span>Source Schema</span>
+				<span class="schemaAssistBadge">{sourceSchemaProvenance}/{sourceSchemaState}</span>
+			</div>
+			<div class="schemaAssistHint">
+				type: {sourceSchemaTypedType}
+				{#if sourceSchemaUpdatedAt}
+					| updated: {formatUserLocalTime(sourceSchemaUpdatedAt)}
+				{/if}
+			</div>
+			<div class="assistActionRow">
+				<button type="button" class="small" on:click={refreshSourceSchema} disabled={sourceSchemaRefreshBusy}>
+					{sourceSchemaRefreshBusy ? 'Refreshing…' : 'Refresh source schema'}
+				</button>
+			</div>
+			{#if sourceSchemaRefreshError}
+				<div class="expectedSchemaError">{sourceSchemaRefreshError}</div>
 			{/if}
 		</div>
 		<div class="guidedModeRow">

@@ -466,6 +466,40 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		}
 	}
 
+	async function refreshSourceSchemaForNode(nodeId: string): Promise<{ ok: boolean; error?: string }> {
+		const st = get({ subscribe } as any) as GraphState;
+		const node = st.nodes.find((candidate) => candidate.id === nodeId);
+		if (!node) return { ok: false, error: 'Node not found' };
+		if (String((node.data as any)?.kind ?? '').trim().toLowerCase() !== 'source') {
+			return { ok: false, error: 'Schema refresh is only available for source nodes' };
+		}
+		const paramsForSubmit = committedNodeParamsForNode(st, nodeId);
+		applyLocalStaleInvalidation(nodeId, 'SOURCE_SCHEMA_REFRESH_REQUESTED');
+		try {
+			const resolved = await resolveSourceNode({
+				graphId: st.graphId,
+				graph: { version: 1, nodes: st.nodes, edges: st.edges },
+				nodeId,
+				params: paramsForSubmit
+			});
+			applySourceRehydration(nodeId, resolved);
+			return { ok: true };
+		} catch (error) {
+			update((cur) =>
+				logPush(
+					cur,
+					'warn',
+					`source schema refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+					nodeId
+				)
+			);
+			return {
+				ok: false,
+				error: error instanceof Error ? error.message : String(error)
+			};
+		}
+	}
+
 
 	function persist(state: GraphState) {
 		if (state.editingContext !== 'component') {
@@ -566,6 +600,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 					schemaOpaqueUpstreamPolicy: normalized
 				});
 			});
+		},
+		refreshSourceSchema(nodeId: string) {
+			return refreshSourceSchemaForNode(String(nodeId ?? '').trim());
 		},
 
 		// ── Schema edge inspector ─────────────────────────────────────────────
