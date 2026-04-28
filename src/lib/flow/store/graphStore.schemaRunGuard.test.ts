@@ -251,5 +251,154 @@ describe('graphStore schema-aware pre-run guard', () => {
 		expect(result.ok).toBe(true);
 		expect(createRunMock).toHaveBeenCalledTimes(1);
 	});
+
+	it('does not block join run when clauses are asserted but upstream schemas are still opaque', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-join-opaque-asserted');
+		installSuccessfulRunMocks(graphId, 'run-join-opaque-asserted');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'left_src',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						sourceKind: 'file',
+						status: 'idle',
+						label: 'Left',
+						params: {}
+					}
+				},
+				{
+					id: 'right_src',
+					position: { x: 0, y: 120 },
+					data: {
+						kind: 'source',
+						sourceKind: 'file',
+						status: 'idle',
+						label: 'Right',
+						params: {}
+					}
+				},
+				{
+					id: 'join_node',
+					position: { x: 220, y: 60 },
+					data: {
+						kind: 'transform',
+						transformKind: 'join',
+						status: 'idle',
+						label: 'Join',
+						params: {
+							op: 'join',
+							join: {
+								clauses: [
+									{
+										leftNodeId: 'left_src',
+										leftCol: 'id',
+										rightNodeId: 'right_src',
+										rightCol: 'id',
+										how: 'inner'
+									}
+								]
+							},
+							__schemaInputRefs: [
+								{
+									edgeId: 'e_left',
+									sourceNodeId: 'left_src',
+									targetHandle: 'in'
+								},
+								{
+									edgeId: 'e_right',
+									sourceNodeId: 'right_src',
+									targetHandle: 'in'
+								}
+							]
+						}
+					}
+				}
+			],
+			edges: [
+				{ id: 'e_left', source: 'left_src', target: 'join_node', targetHandle: 'in', data: { exec: 'idle' } },
+				{ id: 'e_right', source: 'right_src', target: 'join_node', targetHandle: 'in', data: { exec: 'idle' } }
+			]
+		} as any);
+		const result = await graphStore.runRemote('join_node', 'from_selected_onward');
+		expect(result.ok).toBe(true);
+		expect(createRunMock).toHaveBeenCalledTimes(1);
+		expect((get(graphStore as any) as any).runBlockedReason).toBeNull();
+	});
+
+	it('still blocks join run when required inputs are missing and no join clauses are asserted', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-join-missing-inputs');
+		installSuccessfulRunMocks(graphId, 'run-join-missing-inputs');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'left_src',
+					position: { x: 0, y: 0 },
+					data: { kind: 'source', sourceKind: 'file', status: 'idle', label: 'Left', params: {} }
+				},
+				{
+					id: 'join_node',
+					position: { x: 220, y: 60 },
+					data: {
+						kind: 'transform',
+						transformKind: 'join',
+						status: 'idle',
+						label: 'Join',
+						params: { op: 'join', join: { clauses: [] } }
+					}
+				}
+			],
+			edges: [{ id: 'e_left', source: 'left_src', target: 'join_node', targetHandle: 'in', data: { exec: 'idle' } }]
+		} as any);
+		const result = await graphStore.runRemote('join_node', 'from_selected_onward');
+		expect(result.ok).toBe(false);
+		expect((result as any).reason).toBe('schema_errors_in_run_path');
+		expect(createRunMock).toHaveBeenCalledTimes(0);
+	});
+
+	it('still blocks join run when only one asserted clause input is connected', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-join-one-asserted-input');
+		installSuccessfulRunMocks(graphId, 'run-join-one-asserted-input');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'left_src',
+					position: { x: 0, y: 0 },
+					data: { kind: 'source', sourceKind: 'file', status: 'idle', label: 'Left', params: {} }
+				},
+				{
+					id: 'join_node',
+					position: { x: 220, y: 60 },
+					data: {
+						kind: 'transform',
+						transformKind: 'join',
+						status: 'idle',
+						label: 'Join',
+						params: {
+							op: 'join',
+							join: {
+								clauses: [
+									{
+										leftNodeId: 'left_src',
+										leftCol: 'id',
+										rightNodeId: 'right_src',
+										rightCol: 'id',
+										how: 'inner'
+									}
+								]
+							},
+							__schemaInputRefs: [{ edgeId: 'e_left', sourceNodeId: 'left_src', targetHandle: 'in' }]
+						}
+					}
+				}
+			],
+			edges: [{ id: 'e_left', source: 'left_src', target: 'join_node', targetHandle: 'in', data: { exec: 'idle' } }]
+		} as any);
+		const result = await graphStore.runRemote('join_node', 'from_selected_onward');
+		expect(result.ok).toBe(false);
+		expect((result as any).reason).toBe('schema_errors_in_run_path');
+		expect(createRunMock).toHaveBeenCalledTimes(0);
+	});
 });
 

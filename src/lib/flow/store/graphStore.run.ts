@@ -2852,13 +2852,14 @@ export function createRunManager(deps: RunDeps) {
 								? 'valid'
 								: 'neutral';
 				const schemaPlaneCode = String(schemaValidation?.code ?? '').trim().toUpperCase();
-				const effectiveSeverity: 'clean' | 'warning' | 'error' =
-					contractSeverity === 'error' || schemaPlaneState === 'error'
+				const isSchemaPlaneUncertaintyWarning =
+					schemaPlaneState === 'warning' &&
+					(schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE' || schemaPlaneCode === 'SHAPE_MISMATCH_ADDITIONAL_PROPERTIES');
+				const effectiveSeverity: 'clean' | 'warning' | 'error' = isSchemaPlaneUncertaintyWarning
+					? 'warning'
+					: contractSeverity === 'error' || schemaPlaneState === 'error'
 						? 'error'
-						: contractSeverity === 'warning' ||
-							  (schemaPlaneState === 'warning' &&
-									(schemaPlaneCode === 'SHAPE_MISMATCH_OPAQUE' ||
-										schemaPlaneCode === 'SHAPE_MISMATCH_ADDITIONAL_PROPERTIES'))
+						: contractSeverity === 'warning' || schemaPlaneState === 'warning'
 							? 'warning'
 							: 'clean';
 				if (effectiveSeverity !== 'error') continue;
@@ -2866,6 +2867,39 @@ export function createRunManager(deps: RunDeps) {
 				const message =
 					String(schemaValidation?.message ?? diag?.message ?? '').trim() ||
 					'Schema mismatch in run path edge.';
+				const targetNode = (state.nodes ?? []).find(
+					(candidate) => String((candidate as any)?.id ?? '').trim() === targetNodeId
+				);
+				const targetTransformKind = String((targetNode as any)?.data?.transformKind ?? '')
+					.trim()
+					.toLowerCase();
+				const targetOp = String((targetNode as any)?.data?.params?.op ?? '')
+					.trim()
+					.toLowerCase();
+				const targetJoinClauses = Array.isArray((targetNode as any)?.data?.params?.join?.clauses)
+					? (((targetNode as any).data.params.join.clauses as unknown[]) ?? [])
+					: [];
+				const targetInputRefs = Array.isArray((targetNode as any)?.data?.params?.__schemaInputRefs)
+					? (((targetNode as any).data.params.__schemaInputRefs as unknown[]) ?? [])
+					: [];
+				const targetIncomingJoinEdges = (state.edges ?? []).filter(
+					(candidate) =>
+						String((candidate as any)?.target ?? '').trim() === targetNodeId &&
+						String((candidate as any)?.targetHandle ?? 'in')
+							.trim()
+							.toLowerCase() === 'in'
+				);
+				const targetConnectedJoinInputs = Math.max(targetInputRefs.length, targetIncomingJoinEdges.length);
+				if (
+					(targetTransformKind === 'join' || targetOp === 'join') &&
+					String(code ?? '')
+						.trim()
+						.toUpperCase() === 'MISSING_REQUIRED_INPUT' &&
+					targetJoinClauses.length > 0 &&
+					targetConnectedJoinInputs >= 2
+				) {
+					continue;
+				}
 				out.push({ nodeId: targetNodeId, code, message });
 			}
 			return dedupeFindings(out);
@@ -2902,6 +2936,38 @@ export function createRunManager(deps: RunDeps) {
 			if (edgeErrorNodeIds.has(item.nodeId)) return false;
 			const code = String(item.code ?? '').trim().toUpperCase();
 			if (code === 'SHAPE_MISMATCH' && uncertaintyWarningNodeIds.has(item.nodeId)) return false;
+			const node = (state.nodes ?? []).find((candidate) => String((candidate as any)?.id ?? '') === item.nodeId);
+			const transformKind = String((node as any)?.data?.transformKind ?? '')
+				.trim()
+				.toLowerCase();
+			const op = String((node as any)?.data?.params?.op ?? '')
+				.trim()
+				.toLowerCase();
+			const joinClauses = Array.isArray((node as any)?.data?.params?.join?.clauses)
+				? (((node as any).data.params.join.clauses as unknown[]) ?? [])
+				: [];
+			const hasJoinClauses = joinClauses.length > 0;
+			const inputRefs = Array.isArray((node as any)?.data?.params?.__schemaInputRefs)
+				? (((node as any).data.params.__schemaInputRefs as unknown[]) ?? [])
+				: [];
+			const incomingJoinWorkEdges = (state.edges ?? []).filter(
+				(edge) =>
+					String((edge as any)?.target ?? '').trim() === item.nodeId &&
+					String((edge as any)?.targetHandle ?? 'in')
+						.trim()
+						.toLowerCase() === 'in'
+			);
+			const connectedJoinInputs = Math.max(inputRefs.length, incomingJoinWorkEdges.length);
+			if (
+				(transformKind === 'join' || op === 'join') &&
+				code === 'MISSING_REQUIRED_INPUT' &&
+				hasJoinClauses &&
+				connectedJoinInputs >= 2
+			) {
+				// Join nodes can be pre-populated with asserted clauses before upstream schemas
+				// are materialized; treat this temporary shape as non-blocking uncertainty.
+				return false;
+			}
 			return true;
 		});
 		const allErrors = dedupeFindings([...edgeSchemaFindings, ...residualNodeFindings]);
@@ -3134,7 +3200,50 @@ export function createRunManager(deps: RunDeps) {
 			const allowSchemaErrors = Boolean(opts?.allowSchemaErrors ?? false);
 			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
 
-			const schemaGuard = assessSchemaGuard(s0, runFrom, effectiveRunMode);
+			const schemaGuardRaw = assessSchemaGuard(s0, runFrom, effectiveRunMode);
+			const schemaGuard: SchemaGuardAssessment =
+				schemaGuardRaw.kind !== 'in_run_path'
+					? schemaGuardRaw
+					: (() => {
+							const filtered = schemaGuardRaw.errors.filter((finding) => {
+								const nodeId = String(finding.nodeId ?? '').trim();
+								if (!nodeId) return true;
+								const node = (s0.nodes ?? []).find(
+									(candidate) => String((candidate as any)?.id ?? '').trim() === nodeId
+								);
+								const transformKind = String((node as any)?.data?.transformKind ?? '')
+									.trim()
+									.toLowerCase();
+								const op = String((node as any)?.data?.params?.op ?? '')
+									.trim()
+									.toLowerCase();
+								const code = String(finding.code ?? '').trim().toUpperCase();
+								const joinClauses = Array.isArray((node as any)?.data?.params?.join?.clauses)
+									? (((node as any).data.params.join.clauses as unknown[]) ?? [])
+									: [];
+								const inputRefs = Array.isArray((node as any)?.data?.params?.__schemaInputRefs)
+									? (((node as any).data.params.__schemaInputRefs as unknown[]) ?? [])
+									: [];
+								const incomingJoinEdges = (s0.edges ?? []).filter(
+									(edge) =>
+										String((edge as any)?.target ?? '').trim() === nodeId &&
+										String((edge as any)?.targetHandle ?? 'in')
+											.trim()
+											.toLowerCase() === 'in'
+								);
+								const connectedJoinInputs = Math.max(inputRefs.length, incomingJoinEdges.length);
+								if (
+									(transformKind === 'join' || op === 'join') &&
+									code === 'MISSING_REQUIRED_INPUT' &&
+									joinClauses.length > 0 &&
+									connectedJoinInputs >= 2
+								) {
+									return false;
+								}
+								return true;
+							});
+							return filtered.length > 0 ? { kind: 'in_run_path', errors: filtered } : { kind: 'none' };
+						})();
 			if (schemaGuard.kind === 'outside_run_path') {
 				deps.update((s) =>
 					withGraphMeta(
