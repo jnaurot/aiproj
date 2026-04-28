@@ -78,8 +78,14 @@ export const SourcePrimingSchema = z
 	})
 	.strip();
 
+const SourceSchemaRefreshPolicySchema = {
+	schema_refresh_on_param_change: z.boolean().default(true),
+	schema_refresh_on_run_start: z.boolean().default(false)
+} as const;
+
 export const SourceFileParamsSchema = z
 	.object({
+		...SourceSchemaRefreshPolicySchema,
 		snapshotId: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 		recentSnapshotIds: z.array(z.string().regex(/^[a-f0-9]{64}$/)).optional(),
 		recentSnapshots: z
@@ -197,6 +203,7 @@ export const SourceFileParamsSchema = z
 
 export const SourceDatabaseParamsSchema = z
 	.object({
+		...SourceSchemaRefreshPolicySchema,
 		connection_string: z.string().optional(),
 		connection_ref: z.string().optional(),
 		query: z.string().optional(),
@@ -266,6 +273,7 @@ export const SourceApiRateLimitSchema = z
 
 export const SourceAPIParamsSchema = z
 	.object({
+		...SourceSchemaRefreshPolicySchema,
 		url: z.string().url(),
 		method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]).default("GET"),
 		headers: z.record(z.string(), z.string()).default({}),
@@ -369,6 +377,7 @@ export const SourceAPIParamsSchema = z
 
 export const SourceObjectStoreParamsSchema = z
 	.object({
+		...SourceSchemaRefreshPolicySchema,
 		provider: z.enum(["s3", "azure_blob", "gcs"]).default("s3"),
 		object_store_mode: z.enum(["provider", "mock"]).default("provider"),
 		connection_ref: z.string().optional(),
@@ -436,6 +445,7 @@ export const SourceObjectStoreParamsSchema = z
 
 export const SourceWarehouseParamsSchema = z
 	.object({
+		...SourceSchemaRefreshPolicySchema,
 		provider: z.enum(["snowflake", "bigquery", "databricks_sql"]).default("snowflake"),
 		connection_string: z.string().optional(),
 		connection_ref: z.string().optional(),

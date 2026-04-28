@@ -394,6 +394,21 @@ describe('updateNodeParamsValidated source api map replacement', () => {
 		expect(params.json_item_path).toBe('$.jobs[]');
 		expect(params.json_item_strict).toBe(true);
 	});
+
+	it('persists source schema refresh policy toggles', () => {
+		const nodes = [sourceApiNodeWithQuery({ limit: '50' })];
+		const result = updateNodeParamsValidated(nodes, 'n_source_api', {
+			schema_refresh_on_param_change: false,
+			schema_refresh_on_run_start: true
+		});
+		expect(result.error).toBeUndefined();
+		const params = ((result.nodes.find((n) => n.id === 'n_source_api')?.data as any)?.params ?? {}) as Record<
+			string,
+			any
+		>;
+		expect(params.schema_refresh_on_param_change).toBe(false);
+		expect(params.schema_refresh_on_run_start).toBe(true);
+	});
 });
 
 describe('updateNodeParamsValidated transform dual-mode patch canonicalization', () => {

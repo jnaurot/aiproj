@@ -6,6 +6,7 @@ import type { KnownRunEvent } from '$lib/flow/types/run';
 const createRunMock = vi.fn();
 const getRunMock = vi.fn();
 const streamRunEventsMock = vi.fn();
+const resolveSourceNodeMock = vi.fn();
 
 vi.mock('$lib/flow/client/runs', async () => {
 	const actual = await vi.importActual<typeof import('$lib/flow/client/runs')>('$lib/flow/client/runs');
@@ -13,7 +14,8 @@ vi.mock('$lib/flow/client/runs', async () => {
 		...actual,
 		createRun: (...args: any[]) => createRunMock(...args),
 		getRun: (...args: any[]) => getRunMock(...args),
-		streamRunEvents: (...args: any[]) => streamRunEventsMock(...args)
+		streamRunEvents: (...args: any[]) => streamRunEventsMock(...args),
+		resolveSourceNode: (...args: any[]) => resolveSourceNodeMock(...args)
 	};
 });
 
@@ -47,6 +49,13 @@ describe('graphStore schema-aware pre-run guard', () => {
 		createRunMock.mockReset();
 		getRunMock.mockReset();
 		streamRunEventsMock.mockReset();
+		resolveSourceNodeMock.mockReset();
+		resolveSourceNodeMock.mockResolvedValue({
+			execKey: 'exec_src_refresh',
+			artifactId: 'artifact_src_refresh',
+			cacheHit: true,
+			artifact: { artifactId: 'artifact_src_refresh', mimeType: 'text/plain', payloadType: 'text' }
+		});
 		graphStore.hardResetGraph();
 		graphStore.clearHistory();
 	});
@@ -399,6 +408,45 @@ describe('graphStore schema-aware pre-run guard', () => {
 		expect(result.ok).toBe(false);
 		expect((result as any).reason).toBe('schema_errors_in_run_path');
 		expect(createRunMock).toHaveBeenCalledTimes(0);
+	});
+
+	it('run-start source schema refresh executes only for opted-in source nodes', async () => {
+		const graphId = String(get(graphStore as any)?.graphId ?? 'graph-schema-run-source-refresh');
+		installSuccessfulRunMocks(graphId, 'run-source-refresh');
+		graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src_refresh',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						sourceKind: 'file',
+						status: 'idle',
+						label: 'Refresh',
+						params: { schema_refresh_on_run_start: true }
+					}
+				},
+				{
+					id: 'src_no_refresh',
+					position: { x: 0, y: 100 },
+					data: {
+						kind: 'source',
+						sourceKind: 'file',
+						status: 'idle',
+						label: 'NoRefresh',
+						params: { schema_refresh_on_run_start: false }
+					}
+				}
+			],
+			edges: []
+		} as any);
+
+		const result = await graphStore.runRemote(null, 'from_start');
+		expect(result.ok).toBe(true);
+		expect(createRunMock.mock.calls.length).toBeGreaterThan(0);
+		expect(resolveSourceNodeMock).toHaveBeenCalledTimes(1);
+		const call = resolveSourceNodeMock.mock.calls[0]?.[0] ?? {};
+		expect(String((call as any).nodeId ?? '')).toBe('src_refresh');
 	});
 });
 

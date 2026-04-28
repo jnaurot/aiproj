@@ -3200,6 +3200,47 @@ export function createRunManager(deps: RunDeps) {
 			const allowSchemaErrors = Boolean(opts?.allowSchemaErrors ?? false);
 			const effectiveRunMode: ActiveRunMode = runMode ?? (runFrom ? 'from_selected_onward' : 'from_start');
 
+			// Optional source schema refresh at run-start.
+			// Conservative default is off; per-node opt-in via source params.
+			const sourceNodesForRunStartRefresh = (s0.nodes ?? []).filter((node) => {
+				if (String((node as any)?.data?.kind ?? '').trim().toLowerCase() !== 'source') return false;
+				const params = (((node as any)?.data?.params ?? {}) as Record<string, unknown>) ?? {};
+				return Boolean(params.schema_refresh_on_run_start ?? false);
+			});
+			if (sourceNodesForRunStartRefresh.length > 0) {
+				for (const sourceNode of sourceNodesForRunStartRefresh) {
+					const sourceNodeId = String((sourceNode as any)?.id ?? '').trim();
+					if (!sourceNodeId) continue;
+					const current = deps.getState() as GraphState;
+					const graph = { version: 1, nodes: current.nodes, edges: current.edges };
+					const paramsForSubmit = {
+						...(((sourceNode as any)?.data?.params ?? {}) as Record<string, any>)
+					};
+					try {
+						const resolved = await resolveSourceNode({
+							graphId: current.graphId,
+							graph,
+							nodeId: sourceNodeId,
+							params: paramsForSubmit
+						});
+						deps.applySourceRehydration(sourceNodeId, resolved);
+					} catch (error) {
+						deps.update((s) =>
+							withGraphMeta(
+								logPush(
+									{ ...s },
+									'warn',
+									`source schema refresh on run-start failed: ${
+										error instanceof Error ? error.message : String(error)
+									}`,
+									sourceNodeId
+								)
+							)
+						);
+					}
+				}
+			}
+
 			const schemaGuardRaw = assessSchemaGuard(s0, runFrom, effectiveRunMode);
 			const schemaGuard: SchemaGuardAssessment =
 				schemaGuardRaw.kind !== 'in_run_path'
