@@ -47,4 +47,16 @@ describe('resolveJoinNodeColumns', () => {
 		);
 		expect(display).toBe('Txt->Tbl (2)');
 	});
+
+	it('preserves canonical display names via fallback map after reset-like metadata loss', () => {
+		const rows = resolveJoinNodeColumns([]);
+		const byId = {
+			n_top: 'Txt->Tbl',
+			'n_cmp:sub:n_inner': 'CompA.Txt->Tbl'
+		};
+		const topDisplay = displayNodeNameForJoinClause('n_top', rows, byId);
+		const nestedDisplay = displayNodeNameForJoinClause('n_cmp:sub:n_inner', rows, byId);
+		expect(topDisplay).toBe('Txt->Tbl');
+		expect(nestedDisplay).toBe('CompA.Txt->Tbl');
+	});
 });
