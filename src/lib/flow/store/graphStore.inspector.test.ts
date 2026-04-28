@@ -396,6 +396,40 @@ describe('graphStore snapshot scoped commit', () => {
 		}
 	});
 
+	it('manual refreshSourceSchema rehydrates source binding', async () => {
+		const nodeId = setupSourceNode();
+		let resolveCalls = 0;
+		const fetchSpy = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/runs/resolve/source')) {
+				resolveCalls += 1;
+				return new Response(
+					JSON.stringify({
+						graphId: 'graph_test',
+						nodeId,
+						execKey: 'exec_manual',
+						artifactId: 'artifact_manual',
+						cacheHit: true,
+						artifact: { artifactId: 'artifact_manual', mimeType: 'text/plain', payloadType: 'text' }
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		};
+		try {
+			const result = await (graphStore as any).refreshSourceSchema(nodeId);
+			expect(result?.ok).toBe(true);
+			expect(resolveCalls).toBe(1);
+			const state = get(graphStore);
+			expect(state.nodeBindings[nodeId]?.current?.artifactId).toBe('artifact_manual');
+			expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('succeeded');
+		} finally {
+			(globalThis as any).fetch = fetchSpy;
+		}
+	});
+
 	it('kind switch lifecycle: stale hides cache pill, next run decision controls pill appearance', () => {
 		const nodeId = 'n_source';
 		const runId = 'run-kind-switch';

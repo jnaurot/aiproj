@@ -413,11 +413,15 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		const isSourceFile =
 			String((afterNode as any)?.data?.kind ?? '') === 'source' &&
 			String((afterNode as any)?.data?.sourceKind ?? 'file') === 'file';
+		const isSourceNode = String((afterNode as any)?.data?.kind ?? '').trim().toLowerCase() === 'source';
+		const sourceRefreshOnParamChange = Boolean(
+			((afterNode as any)?.data?.params as Record<string, unknown> | undefined)?.schema_refresh_on_param_change ?? true
+		);
 
 		// Even when no active backend run handle exists, keep local UI and previews honest.
 		if (!st.activeRunId) {
 			applyLocalStaleInvalidation(nodeId);
-			if (isSourceFile) {
+			if (isSourceNode && sourceRefreshOnParamChange) {
 				try {
 					const resolved = await resolveSourceNode({
 						graphId: st.graphId,
@@ -446,7 +450,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 				source: 'hydrate_snapshot',
 				snapshotNodeIds: new Set(Object.keys(snap.nodeBindings ?? {}))
 			});
-			if (isSourceFile) {
+			if (isSourceNode && sourceRefreshOnParamChange) {
 				try {
 					const resolved = await resolveSourceNode({
 						graphId: st.graphId,
@@ -473,7 +477,7 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		if (String((node.data as any)?.kind ?? '').trim().toLowerCase() !== 'source') {
 			return { ok: false, error: 'Schema refresh is only available for source nodes' };
 		}
-		const paramsForSubmit = committedNodeParamsForNode(st, nodeId);
+		const paramsForSubmit = { ...((((node.data as any)?.params ?? {}) as Record<string, any>)) };
 		applyLocalStaleInvalidation(nodeId, 'SOURCE_SCHEMA_REFRESH_REQUESTED');
 		try {
 			const resolved = await resolveSourceNode({

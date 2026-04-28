@@ -56,6 +56,41 @@ function columnsFromDeclaredSchema(params: Record<string, unknown>): SchemaPlane
 		.filter((column: SchemaPlaneColumn) => column.name.length > 0);
 }
 
+function columnsFromDeclaredJsonSchema(params: Record<string, unknown>): SchemaPlaneColumn[] {
+	const schema =
+		((params?.declared_json_schema as any) ?? null) ??
+		((params?.declaredJsonSchema as any) ?? null);
+	const properties =
+		schema && typeof schema === 'object' && (schema as any).properties && typeof (schema as any).properties === 'object'
+			? ((schema as any).properties as Record<string, any>)
+			: {};
+	const required = Array.isArray((schema as any)?.required)
+		? new Set(
+				((schema as any).required as unknown[])
+					.map((value) => String(value ?? '').trim())
+					.filter((value) => value.length > 0)
+			)
+		: new Set<string>();
+	const columns: SchemaPlaneColumn[] = [];
+	for (const [nameRaw, propertySchema] of Object.entries(properties)) {
+		const name = String(nameRaw ?? '').trim();
+		if (!name) continue;
+		let type: SchemaPlaneColumn['type'] = 'unknown';
+		const propertyTypeRaw = String((propertySchema as any)?.type ?? '').trim().toLowerCase();
+		if (propertyTypeRaw === 'string') type = 'string';
+		else if (propertyTypeRaw === 'number' || propertyTypeRaw === 'integer') type = 'number';
+		else if (propertyTypeRaw === 'boolean') type = 'boolean';
+		else if (propertyTypeRaw === 'array' || propertyTypeRaw === 'object') type = 'unknown';
+		columns.push({
+			name,
+			type,
+			nullable: !required.has(name),
+			properties: {}
+		});
+	}
+	return columns;
+}
+
 function withSourceProperties(
 	base: SchemaPlaneOutput,
 	params: Record<string, unknown>,
@@ -103,7 +138,11 @@ export const schemaFn_source: SchemaFunction = (inputs, params) => {
 			}
 		};
 	}
-	const declaredColumns = columnsFromDeclaredSchema(params);
+	const declaredColumns = (() => {
+		const typedFields = columnsFromDeclaredSchema(params);
+		if (typedFields.length > 0) return typedFields;
+		return columnsFromDeclaredJsonSchema(params);
+	})();
 	if (declaredColumns.length > 0) {
 		return {
 			ok: true,

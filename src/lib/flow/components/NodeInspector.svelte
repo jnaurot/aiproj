@@ -433,6 +433,10 @@
 	$: sourceSchemaTypedType = String((sourceSchemaObservation as any)?.typedSchema?.type ?? 'opaque')
 		.trim()
 		.toLowerCase();
+	$: sourceBinding = selectedNode ? (($graphStore.nodeBindings?.[selectedNode.id] ?? null) as Record<string, unknown> | null) : null;
+	$: sourceStaleReason = String((sourceBinding as any)?.staleReason ?? '').trim();
+	$: sourceRefreshOnParamChange = Boolean((params as any)?.schema_refresh_on_param_change ?? true);
+	$: sourceRefreshOnRunStart = Boolean((params as any)?.schema_refresh_on_run_start ?? false);
 	$: sourceSchemaProvenance = (() => {
 		const declaredFields = Array.isArray((params as any)?.declared_schema?.fields)
 			? (params as any).declared_schema.fields
@@ -1664,6 +1668,37 @@
 				{#if sourceSchemaUpdatedAt}
 					| updated: {formatUserLocalTime(sourceSchemaUpdatedAt)}
 				{/if}
+			</div>
+			{#if sourceSchemaState === 'stale' || sourceStaleReason}
+				<div class="schemaAssistHint">stale reason: {sourceStaleReason || 'SOURCE_CONFIG_CHANGED'}</div>
+			{/if}
+			<div class="assistActionRow">
+				<label class="guidedToggle">
+					<input
+						type="checkbox"
+						checked={sourceRefreshOnParamChange}
+						on:change={(event) => {
+							const checked = (event.currentTarget as HTMLInputElement).checked;
+							onDraft({ schema_refresh_on_param_change: checked } as any);
+							onCommit({ schema_refresh_on_param_change: checked } as any);
+						}}
+					/>
+					<span>refresh on source config change</span>
+				</label>
+			</div>
+			<div class="assistActionRow">
+				<label class="guidedToggle">
+					<input
+						type="checkbox"
+						checked={sourceRefreshOnRunStart}
+						on:change={(event) => {
+							const checked = (event.currentTarget as HTMLInputElement).checked;
+							onDraft({ schema_refresh_on_run_start: checked } as any);
+							onCommit({ schema_refresh_on_run_start: checked } as any);
+						}}
+					/>
+					<span>refresh on run start (opt-in)</span>
+				</label>
 			</div>
 			<div class="assistActionRow">
 				<button type="button" class="small" on:click={refreshSourceSchema} disabled={sourceSchemaRefreshBusy}>

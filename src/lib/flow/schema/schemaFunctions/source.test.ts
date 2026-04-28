@@ -62,6 +62,31 @@ describe('schemaFn_source', () => {
 		}
 	});
 
+	it('maps declared JSON Schema properties to table columns', () => {
+		const result = schemaFn_source([], {
+			sourceKind: 'api',
+			declared_json_schema: {
+				type: 'object',
+				properties: {
+					user_id: { type: 'integer' },
+					category: { type: 'string' },
+					active: { type: 'boolean' }
+				},
+				required: ['user_id']
+			}
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.output.mode).toBe('table');
+			expect(result.output.columns.map((c) => `${c.name}:${c.type}:${c.nullable}`)).toEqual([
+				'user_id:number:false',
+				'category:string:true',
+				'active:boolean:true'
+			]);
+			expect(result.output.properties?.sourceProvenance).toBe('declared');
+		}
+	});
+
 	it('uses artifact schema when declared schema is missing', () => {
 		const result = schemaFn_source([], {
 			sourceKind: 'database',

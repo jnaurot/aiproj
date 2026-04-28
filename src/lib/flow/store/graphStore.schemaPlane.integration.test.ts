@@ -356,6 +356,97 @@ describe('INT-SRC-DB-01: artifact introspected schema fallback', () => {
 	});
 });
 
+describe('INT-SRC-DB-02: introspected schema change updates downstream validation', () => {
+	it('invalidates/refreshes schema after query-introspection style column change', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src',
+					type: 'node',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						label: 'src',
+						params: {
+							sourceKind: 'database',
+							introspected_schema: { fields: [{ name: 'id', type: 'integer', nullable: false }] }
+						},
+						status: 'idle'
+					}
+				},
+				transformDoc('sel', 'select', { select: { columns: ['id'] } }, 100)
+			],
+			edges: [edge('e1', 'src', 'sel')]
+		});
+		expect(loaded.ok).toBe(true);
+		expect(state().schemaPlane.nodeSchemas['sel']?.ok).toBe(true);
+		graphStore.updateNodeConfig('src', {
+			params: {
+				sourceKind: 'database',
+				introspected_schema: { fields: [{ name: 'user_id', type: 'integer', nullable: false }] }
+			}
+		} as any);
+		const after = state();
+		const selSchema = after.schemaPlane.nodeSchemas['sel'];
+		expect(selSchema?.ok).toBe(false);
+		if (!selSchema?.ok) {
+			expect(selSchema.error.code).toBe('SHAPE_MISMATCH');
+		}
+	});
+});
+
+describe('INT-SRC-DECL-03: clearing declared schema falls back to artifact/sample', () => {
+	it('uses artifact schema once declared schema is cleared', () => {
+		const loaded = graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src',
+					type: 'node',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						label: 'src',
+						params: {
+							sourceKind: 'database',
+							declared_schema: { fields: [{ name: 'declared_col', type: 'string', nullable: true }] },
+							introspected_schema: { fields: [{ name: 'artifact_col', type: 'string', nullable: true }] }
+						},
+						status: 'idle'
+					}
+				}
+			],
+			edges: []
+		});
+		expect(loaded.ok).toBe(true);
+		let srcSchema = state().schemaPlane.nodeSchemas['src'];
+		expect(srcSchema?.ok).toBe(true);
+		if (srcSchema?.ok) expect(srcSchema.output.columns.map((c) => c.name)).toEqual(['declared_col']);
+		const reloaded = graphStore.loadGraphDocument({
+			nodes: [
+				{
+					id: 'src',
+					type: 'node',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'source',
+						label: 'src',
+						params: {
+							sourceKind: 'database',
+							introspected_schema: { fields: [{ name: 'artifact_col', type: 'string', nullable: true }] }
+						},
+						status: 'idle'
+					}
+				}
+			],
+			edges: []
+		});
+		expect(reloaded.ok).toBe(true);
+		srcSchema = state().schemaPlane.nodeSchemas['src'];
+		expect(srcSchema?.ok).toBe(true);
+		if (srcSchema?.ok) expect(srcSchema.output.columns.map((c) => c.name)).toEqual(['artifact_col']);
+	});
+});
+
 describe('INT-03b: Derive string formula typing', () => {
 	it('propagates concat/lower derived columns as string type', () => {
 		const loaded = graphStore.loadGraphDocument({
