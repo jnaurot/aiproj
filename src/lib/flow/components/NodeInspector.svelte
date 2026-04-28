@@ -2330,71 +2330,6 @@
 				{/each}
 			</div>
 		</div>
-		<div class="guidedAssistCard">
-			<div class="guidedAssistHead">Why Not Running</div>
-			<div class="guidedAssistList">
-				{#if nodeBlockedStatus}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistLabel">
-							{String((nodeBlockedStatus as any)?.reasonCode ?? 'NO_READY_WORK')}
-						</div>
-						<div class="guidedAssistDesc">
-							handle {String((nodeBlockedStatus as any)?.handle ?? '-')} | plane {String((nodeBlockedStatus as any)?.plane ?? '-')}
-						</div>
-						{#if Array.isArray((nodeBlockedStatus as any)?.missingEdgeIds) && ((nodeBlockedStatus as any)?.missingEdgeIds as any[]).length > 0}
-							<div class="guidedAssistDesc">
-								missing edges {(((nodeBlockedStatus as any)?.missingEdgeIds as any[]) ?? []).map((item) => String(item)).join(', ')}
-							</div>
-						{/if}
-						{#if Array.isArray((nodeBlockedStatus as any)?.waitingOnNodeIds) && ((nodeBlockedStatus as any)?.waitingOnNodeIds as any[]).length > 0}
-							<div class="guidedAssistDesc">
-								waiting nodes {(((nodeBlockedStatus as any)?.waitingOnNodeIds as any[]) ?? []).map((item) => String(item)).join(', ')}
-							</div>
-						{/if}
-					</div>
-				{:else}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistDesc">No blocked reason recorded for this node in the current run.</div>
-					</div>
-				{/if}
-			</div>
-		</div>
-		<div class="guidedAssistCard">
-			<div class="guidedAssistHead">Scheduler Snapshot</div>
-			<div class="guidedAssistList">
-				{#if schedulerSnapshot}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistLabel">
-							stalled {String(Boolean((schedulerSnapshot as any)?.stalled))}
-						</div>
-						<div class="guidedAssistDesc">
-							ready {String((schedulerSnapshot as any)?.readyCount ?? 0)} | inflight {String((schedulerSnapshot as any)?.inflightCount ?? 0)} | pending {String((schedulerSnapshot as any)?.pendingQueueDepth ?? 0)} | runnable {String((schedulerSnapshot as any)?.runnableNodeCount ?? 0)}
-						</div>
-					</div>
-				{:else}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistDesc">No scheduler snapshot received yet.</div>
-					</div>
-				{/if}
-			</div>
-		</div>
-		<div class="guidedAssistCard">
-			<div class="guidedAssistHead">LLM Lease</div>
-			<div class="guidedAssistList">
-				{#if llmLeaseStatus}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistLabel">state {String((llmLeaseStatus as any)?.state ?? 'released')}</div>
-						<div class="guidedAssistDesc">
-							holder {String((llmLeaseStatus as any)?.holderNodeId ?? '(none)')} | queue {String((llmLeaseStatus as any)?.waitQueueLength ?? 0)} | actor {String((llmLeaseStatus as any)?.nodeId ?? '-')}
-						</div>
-					</div>
-				{:else}
-					<div class="guidedAssistItem">
-						<div class="guidedAssistDesc">No LLM lease telemetry received yet.</div>
-					</div>
-				{/if}
-			</div>
-		</div>
 		{#if nodeQueuePortStats.length > 0}
 			<div class="guidedAssistCard">
 				<div class="guidedAssistHead">Queue Port Status</div>
@@ -2417,32 +2352,6 @@
 							</div>
 						</div>
 					{/each}
-				</div>
-			</div>
-		{/if}
-		{#if runScopedQueueSummary}
-			<div class="guidedAssistCard">
-				<div class="guidedAssistHead">Run-Scoped Queue Metrics</div>
-				<div class="guidedAssistList">
-					<div class="guidedAssistItem">
-						<div class="guidedAssistLabel">run {runScopedQueueSummary.runId || '-'}</div>
-						<div class="guidedAssistDesc">
-							scope {runScopedQueueSummary.scope} | enq {runScopedQueueSummary.enq} | deq {runScopedQueueSummary.deq} | accepted {runScopedQueueSummary.accepted} | rejected {runScopedQueueSummary.rejected}
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
-		{#if aggregateQueueSummary}
-			<div class="guidedAssistCard">
-				<div class="guidedAssistHead">Aggregate Queue Diagnostics</div>
-				<div class="guidedAssistList">
-					<div class="guidedAssistItem">
-						<div class="guidedAssistLabel">events {aggregateQueueSummary.events}</div>
-						<div class="guidedAssistDesc">
-							enq {aggregateQueueSummary.enq} | deq {aggregateQueueSummary.deq} | accepted {aggregateQueueSummary.accepted} | rejected {aggregateQueueSummary.rejected}
-						</div>
-					</div>
 				</div>
 			</div>
 		{/if}
