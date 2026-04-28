@@ -2,16 +2,25 @@
 	import type { Node } from '@xyflow/svelte';
 	import type { PipelineNodeData } from '$lib/flow/types';
 	import type { TransformSqlParams } from '$lib/flow/schema/transform';
+	import type { InputSchemaView } from './inputSchema';
 	import Section from '$lib/flow/components/ui/Section.svelte';
 	import Field from '$lib/flow/components/ui/Field.svelte';
 	import Input from '$lib/flow/components/ui/Input.svelte';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
+	import {
+		insertQuotedColumnReference,
+		sqlAvailableColumns,
+		summarizeSchemaAssist,
+		unknownSqlReferences
+	} from './sqlAssistModel';
 
 	type Dialect = NonNullable<TransformSqlParams['dialect']>;
 
 	export let selectedNode: Node<PipelineNodeData>;
 	export let params: Partial<TransformSqlParams>;
 	export let onDraft: (patch: Partial<TransformSqlParams>) => void;
+	export let inputColumns: string[] = [];
+	export let inputSchemas: InputSchemaView[] = [];
 
 	const defaults: TransformSqlParams = {
 		dialect: 'duckdb',
@@ -32,15 +41,37 @@
 	$: maxRuntimeMs = Number.isFinite(Number(params?.max_runtime_ms)) ? Number(params?.max_runtime_ms) : defaults.max_runtime_ms;
 	$: maxOutputRows = Number.isFinite(Number(params?.max_output_rows)) ? Number(params?.max_output_rows) : defaults.max_output_rows;
 	$: safeMode = typeof params?.safe_mode === 'boolean' ? params.safe_mode : defaults.safe_mode;
+	$: availableColumns = sqlAvailableColumns(inputColumns, inputSchemas);
+	$: unknownRefs = unknownSqlReferences(query, availableColumns);
+	$: schemaAssist = summarizeSchemaAssist(inputSchemas);
 
 	function insertSnippet(snippet: string): void {
 		const merged = query.trimEnd().length > 0 ? `${query.trimEnd()}\n\n${snippet}` : snippet;
 		onDraft({ query: merged });
 	}
+
+	function insertColumnName(columnName: string): void {
+		onDraft({ query: insertQuotedColumnReference(query, columnName) });
+	}
 </script>
 
 <Section title="SQL Query">
 	<div class="hint">Write SQL against <code>input</code>.</div>
+	<div class="schemaAssist">
+		<div class="schemaAssistHead">
+			<span>Schema Assist</span>
+			<span class="schemaAssistBadge">{schemaAssist.source}/{schemaAssist.state}</span>
+		</div>
+		{#if availableColumns.length > 0}
+			<div class="schemaCols">
+				{#each availableColumns as col}
+					<button class="chipBtn" type="button" on:click={() => insertColumnName(col)}>{col}</button>
+				{/each}
+			</div>
+		{:else}
+			<div class="hint">Schema unavailable (run upstream) to populate column names.</div>
+		{/if}
+	</div>
 
 	<Field label="dialect">
 		<ThemedSelect
@@ -128,9 +159,53 @@
 		<div class="subTitle">Preview</div>
 		<pre>{query}</pre>
 	</div>
+	{#if unknownRefs.length > 0}
+		<div class="warn">Unknown referenced columns: {unknownRefs.join(', ')}</div>
+	{/if}
 </Section>
 
 <style>
+	.schemaAssist {
+		margin-top: 6px;
+		border: 1px solid rgba(255, 255, 255, 0.16);
+		border-radius: 10px;
+		padding: 8px;
+		display: grid;
+		gap: 6px;
+	}
+
+	.schemaAssistHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		font-size: 12px;
+		font-weight: 600;
+	}
+
+	.schemaAssistBadge {
+		font-size: 11px;
+		padding: 2px 7px;
+		border: 1px solid rgba(255, 255, 255, 0.22);
+		border-radius: 999px;
+		opacity: 0.9;
+	}
+
+	.schemaCols {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+	}
+
+	.chipBtn {
+		padding: 4px 8px;
+		font-size: 11px;
+		border-radius: 8px;
+		border: 1px solid rgba(255, 255, 255, 0.16);
+		background: rgba(255, 255, 255, 0.04);
+		color: inherit;
+		cursor: pointer;
+	}
+
 	.stack {
 		display: flex;
 		flex-direction: column;
@@ -147,6 +222,12 @@
 		font-size: 12px;
 		opacity: 0.75;
 		margin-top: 6px;
+	}
+
+	.warn {
+		font-size: 12px;
+		margin-top: 8px;
+		color: #fca5a5;
 	}
 
 	.actions {
