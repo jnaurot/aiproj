@@ -248,6 +248,32 @@ export type RunMonitorTransitionRow = {
 export type RunMonitorFilter = 'all' | 'blocked' | 'waiting' | 'stalled';
 export type RunMonitorSort = 'pending_desc' | 'pending_asc' | 'depth_desc' | 'depth_asc' | 'label_asc';
 export type RunMonitorEdgeFilter = 'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full';
+export type MonitorGroupKey = 'active' | 'waiting' | 'pending' | 'done';
+
+export type MonitorNodeGroup = {
+	key: MonitorGroupKey;
+	label: string;
+	rows: RunMonitorNodeRow[];
+	totalCount: number;
+	runningCount: number;
+	throttledCount: number;
+	waitingCount: number;
+	pausedCount: number;
+	notStartedCount: number;
+	completedCount: number;
+	failedCount: number;
+	canceledCount: number;
+};
+
+export type MonitorGroupedNodes = {
+	groups: MonitorNodeGroup[];
+	totalNodeCount: number;
+	hasFailures: boolean;
+	activeGroupIndex: number;
+	waitingGroupIndex: number;
+	pendingGroupIndex: number;
+	doneGroupIndex: number;
+};
 
 type RunMonitorProjectionInput = {
 	nodes: Node<PipelineNodeData & Record<string, unknown>>[];
@@ -483,8 +509,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			!blockedReasonCode &&
 			(lifecycle === 'waiting' || lifecycle === 'blocked' || pendingInputCount > 0) &&
 			!isLlmHolder;
-		const effectiveBlockedCodeForCurrent =
-			blockedReasonCode || (canUseSchedulerBlockedReason ? schedulerBlockedReasonCode : '');
+		const effectiveBlockedCodeForCurrent = isLlmHolder
+			? ''
+			: blockedReasonCode || (canUseSchedulerBlockedReason ? schedulerBlockedReasonCode : '');
 		const blockerCode =
 			blockerCodeFromReason(effectiveBlockedCodeForCurrent) ??
 			(isLlmWaiting ? 'LEASE_UNAVAILABLE' : null);
@@ -700,6 +727,147 @@ export function filterAndSortRunMonitorNodes(
 		);
 	});
 	return withIndex.map((entry) => entry.row);
+}
+
+export function classifyNodeToGroup(row: RunMonitorNodeRow): MonitorGroupKey {
+	const lifecycle = String(row?.lifecycle ?? '').trim().toLowerCase();
+	const phase = String(row?.phase ?? '').trim().toUpperCase();
+	if (lifecycle === 'completed' || lifecycle === 'failed' || lifecycle === 'canceled' || lifecycle === 'skipped') {
+		return 'done';
+	}
+	if (row?.isLlmHolder || row?.isLlmWaiting || Number(row?.inflight ?? 0) > 0) {
+		return 'active';
+	}
+	if (lifecycle === 'running' || lifecycle === 'active') return 'active';
+	if (
+		phase === 'AWAITING_DISPATCH' ||
+		phase === 'AWAITING_LEASE' ||
+		phase === 'AWAITING_PROVIDER_RESPONSE' ||
+		phase === 'POSTPROCESSING' ||
+		phase === 'WRITING_OUTPUT'
+	) {
+		return 'active';
+	}
+	if (lifecycle === 'waiting' || lifecycle === 'blocked' || lifecycle === 'paused') return 'waiting';
+	if (row?.isBlocked || row?.isWaiting) return 'waiting';
+	if (phase === 'AWAITING_INPUT') return 'waiting';
+	return 'pending';
+}
+
+function emptyNodeGroup(key: MonitorGroupKey, label: string): MonitorNodeGroup {
+	return {
+		key,
+		label,
+		rows: [],
+		totalCount: 0,
+		runningCount: 0,
+		throttledCount: 0,
+		waitingCount: 0,
+		pausedCount: 0,
+		notStartedCount: 0,
+		completedCount: 0,
+		failedCount: 0,
+		canceledCount: 0
+	};
+}
+
+function summarizeGroup(rows: RunMonitorNodeRow[], key: MonitorGroupKey, label: string): MonitorNodeGroup {
+	const group = emptyNodeGroup(key, label);
+	group.rows = rows;
+	group.totalCount = rows.length;
+	for (const row of rows) {
+		const lifecycle = String(row.lifecycle ?? '').trim().toLowerCase();
+		if (key === 'active') {
+			if (Number(row.inflight ?? 0) > 0 || row.isLlmHolder) group.runningCount += 1;
+			if (String(row.phase ?? '').trim().toUpperCase() === 'AWAITING_DISPATCH' && row.blocker) {
+				group.throttledCount += 1;
+			}
+		}
+		if (key === 'waiting') {
+			if (lifecycle === 'paused') group.pausedCount += 1;
+			else group.waitingCount += 1;
+		}
+		if (key === 'pending') {
+			group.notStartedCount += 1;
+		}
+		if (key === 'done') {
+			if (lifecycle === 'failed') group.failedCount += 1;
+			else if (lifecycle === 'canceled') group.canceledCount += 1;
+			else group.completedCount += 1;
+		}
+	}
+	return group;
+}
+
+export function groupMonitorNodeRows(
+	rows: RunMonitorNodeRow[],
+	filter: RunMonitorFilter,
+	sort: RunMonitorSort,
+	globalStalled: boolean
+): MonitorGroupedNodes {
+	const allRows = Array.isArray(rows) ? rows : [];
+	const activeRows: RunMonitorNodeRow[] = [];
+	const waitingRows: RunMonitorNodeRow[] = [];
+	const pendingRows: RunMonitorNodeRow[] = [];
+	const doneRows: RunMonitorNodeRow[] = [];
+	for (const row of allRows) {
+		const groupKey = classifyNodeToGroup(row);
+		if (groupKey === 'active') activeRows.push(row);
+		else if (groupKey === 'waiting') waitingRows.push(row);
+		else if (groupKey === 'pending') pendingRows.push(row);
+		else doneRows.push(row);
+	}
+	const active = summarizeGroup(
+		filterAndSortRunMonitorNodes(activeRows, filter, sort, globalStalled),
+		'active',
+		'Active'
+	);
+	const waiting = summarizeGroup(
+		filterAndSortRunMonitorNodes(waitingRows, filter, sort, globalStalled),
+		'waiting',
+		'Waiting'
+	);
+	const pending = summarizeGroup(
+		filterAndSortRunMonitorNodes(pendingRows, filter, sort, globalStalled),
+		'pending',
+		'Pending'
+	);
+	const done = summarizeGroup(filterAndSortRunMonitorNodes(doneRows, filter, sort, globalStalled), 'done', 'Done');
+	const groups: MonitorNodeGroup[] = [active, waiting, pending, done];
+	return {
+		groups,
+		totalNodeCount: groups.reduce((sum, group) => sum + group.totalCount, 0),
+		hasFailures: groups.some((group) => group.failedCount > 0),
+		activeGroupIndex: 0,
+		waitingGroupIndex: 1,
+		pendingGroupIndex: 2,
+		doneGroupIndex: 3
+	};
+}
+
+export function headerSummary(group: MonitorNodeGroup): string {
+	if (!group || group.totalCount <= 0) return '0';
+	if (group.key === 'active') {
+		const parts: string[] = [];
+		if (group.runningCount > 0) parts.push(`${group.runningCount} running`);
+		if (group.throttledCount > 0) parts.push(`${group.throttledCount} throttled`);
+		return parts.join(' | ') || `${group.totalCount} active`;
+	}
+	if (group.key === 'waiting') {
+		const parts: string[] = [];
+		const waitingOnly = Math.max(0, group.waitingCount);
+		if (waitingOnly > 0) parts.push(`${waitingOnly} waiting`);
+		if (group.pausedCount > 0) parts.push(`${group.pausedCount} paused`);
+		return parts.join(' | ') || `${group.totalCount} waiting`;
+	}
+	if (group.key === 'pending') {
+		return `${group.totalCount} not started`;
+	}
+	const parts: string[] = [];
+	if (group.completedCount > 0) parts.push(`${group.completedCount} completed`);
+	if (group.failedCount > 0) parts.push(`${group.failedCount} failed !`);
+	if (group.canceledCount > 0) parts.push(`${group.canceledCount} canceled`);
+	return parts.join(' | ') || `${group.totalCount} done`;
 }
 
 export function preferredMonitorEdgeFocusNodeId(sourceNodeId: string, targetNodeId: string): string {

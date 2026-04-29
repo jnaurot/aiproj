@@ -178,6 +178,39 @@ describe('Monitor Phase/Blocker Contract - Phase 2 Hygiene', () => {
 		expect(rows[0]?.blocker).toBeNull();
 	});
 
+	it('INT-MON-HYGIENE-02b: lease-holder ignores stale blockedByNode cap reason once running', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [node('n_model', 'ResumeBuilder')],
+			edges: [],
+			nodeBindings: { n_model: { status: 'running' } },
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_model',
+							readyWork: true,
+							inflight: 1,
+							pendingInputCount: 0,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:node'
+						}
+					]
+				},
+				blockedByNode: {
+					n_model: {
+						nodeId: 'n_model',
+						reasonCode: 'MAX_INFLIGHT_REACHED:node',
+						updatedAt: '2026-04-29T10:00:00.000Z'
+					}
+				},
+				llmLease: { state: 'acquired', holderNodeId: 'n_model', waitingNodeIds: [] }
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.phase).toBe('AWAITING_PROVIDER_RESPONSE');
+		expect(rows[0]?.blocker).toBeNull();
+		expect(rows[0]?.displayReason).toBe('llm-hold');
+	});
+
 	it('INT-MON-HYGIENE-03: completed node keeps terminal phase and no current blocker', () => {
 		const rows = buildRunMonitorNodeRows({
 			nodes: [node('n_done', 'Join', 'transform')],

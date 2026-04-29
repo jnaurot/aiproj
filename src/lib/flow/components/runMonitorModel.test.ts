@@ -6,6 +6,9 @@ import {
 	edgeStatusesForFilter,
 	filterRunMonitorEdgeRows,
 	filterAndSortRunMonitorNodes,
+	classifyNodeToGroup,
+	groupMonitorNodeRows,
+	headerSummary,
 	preferredMonitorEdgeFocusNodeId
 } from './runMonitorModel';
 
@@ -481,5 +484,113 @@ describe('runMonitorModel', () => {
 		expect(filterRunMonitorEdgeRows(rows as any, ['running']).map((row) => row.edgeId)).toEqual(['e_running']);
 		expect(filterRunMonitorEdgeRows(rows as any, ['done']).map((row) => row.edgeId)).toEqual(['e_done']);
 		expect(filterRunMonitorEdgeRows(rows as any, ['blocked']).map((row) => row.edgeId)).toEqual(['e_done']);
+	});
+});
+
+describe('runMonitorModel grouping', () => {
+	const mkRow = (overrides: Partial<any> = {}) =>
+		({
+			nodeId: 'n',
+			label: 'N',
+			status: 'idle',
+			lifecycle: 'idle',
+			execution: 'inactive',
+			freshness: 'unknown',
+			consumeMode: 'once',
+			acceptedCount: 0,
+			rejectedCount: 0,
+			totalProcessed: 0,
+			pendingInputCount: 0,
+			inflight: 0,
+			inboundDepth: 0,
+			readyWork: false,
+			blockedReasonCode: null,
+			blockedHandle: null,
+			blockedPlane: null,
+			updatedAt: null,
+			terminalReasonCode: null,
+			isBlocked: false,
+			isWaiting: false,
+			isLlmHolder: false,
+			isLlmWaiting: false,
+			phase: null,
+			phaseSince: null,
+			blocker: null,
+			lastBlocker: null,
+			blockerHistory: [],
+			displayReason: '',
+			...overrides
+		}) as any;
+
+	it('classifies nodes by lifecycle and lease priority', () => {
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'running' }))).toBe('active');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'waiting' }))).toBe('waiting');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'idle' }))).toBe('pending');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'completed' }))).toBe('done');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'failed' }))).toBe('done');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'paused' }))).toBe('waiting');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'stale' }))).toBe('pending');
+		expect(classifyNodeToGroup(mkRow({ lifecycle: 'waiting', isLlmHolder: true }))).toBe('active');
+	});
+
+	it('returns exactly four ordered groups with deterministic totals', () => {
+		const grouped = groupMonitorNodeRows(
+			[
+				mkRow({ nodeId: 'a', label: 'A', lifecycle: 'running', inflight: 1, isLlmHolder: true }),
+				mkRow({ nodeId: 'b', label: 'B', lifecycle: 'waiting', isBlocked: true }),
+				mkRow({ nodeId: 'c', label: 'C', lifecycle: 'idle' }),
+				mkRow({ nodeId: 'd', label: 'D', lifecycle: 'failed' })
+			],
+			'all',
+			'depth_desc',
+			false
+		);
+		expect(grouped.groups.map((group) => group.key)).toEqual(['active', 'waiting', 'pending', 'done']);
+		expect(grouped.totalNodeCount).toBe(4);
+		expect(grouped.groups.reduce((sum, group) => sum + group.totalCount, 0)).toBe(4);
+		expect(grouped.hasFailures).toBe(true);
+		expect(grouped.groups[3]?.failedCount).toBe(1);
+		expect(grouped.groups[0]?.runningCount).toBe(1);
+	});
+
+	it('builds header summaries and never emits blank', () => {
+		const active = groupMonitorNodeRows(
+			[
+				mkRow({ lifecycle: 'running', inflight: 1, isLlmHolder: true, label: 'run' }),
+				mkRow({
+					lifecycle: 'running',
+					phase: 'AWAITING_DISPATCH',
+					blocker: { code: 'MAX_INFLIGHT_REACHED:node' },
+					label: 'throttled'
+				})
+			],
+			'all',
+			'depth_desc',
+			false
+		).groups[0];
+		expect(headerSummary(active!)).toContain('running');
+		expect(headerSummary(active!)).toContain('throttled');
+		const emptyPending = groupMonitorNodeRows([], 'all', 'depth_desc', false).groups[2];
+		expect(headerSummary(emptyPending!)).toBe('0');
+	});
+
+	it('REG-GRP-TRANS-ONE-TICK: reclassifies not-started -> active -> done across sequential ticks', () => {
+		const base = mkRow({ nodeId: 'n_seq', label: 'SeqNode', lifecycle: 'idle', inflight: 0 });
+		const tick1 = groupMonitorNodeRows([base], 'all', 'depth_desc', false);
+		expect(tick1.groups[2]?.rows.map((row) => row.nodeId)).toEqual(['n_seq']);
+		const tick2 = groupMonitorNodeRows(
+			[{ ...base, lifecycle: 'running', inflight: 1, phase: 'AWAITING_PROVIDER_RESPONSE', isLlmHolder: true }],
+			'all',
+			'depth_desc',
+			false
+		);
+		expect(tick2.groups[0]?.rows.map((row) => row.nodeId)).toEqual(['n_seq']);
+		const tick3 = groupMonitorNodeRows(
+			[{ ...base, lifecycle: 'completed', execution: 'finished', inflight: 0, phase: 'TERMINAL' }],
+			'all',
+			'depth_desc',
+			false
+		);
+		expect(tick3.groups[3]?.rows.map((row) => row.nodeId)).toEqual(['n_seq']);
 	});
 });
