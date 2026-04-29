@@ -121,9 +121,10 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		buildRunMonitorAdaptiveDecisionRows,
 		buildRunMonitorEdgeRows,
 		buildRunMonitorNodeRows,
+		groupMonitorNodeRows,
+		headerSummary as runMonitorHeaderSummary,
 		buildRunMonitorTransitionRows,
 		filterRunMonitorAdaptiveDecisionRows,
-		filterAndSortRunMonitorNodes,
 		filterRunMonitorEdgeRows,
 		filterRunMonitorTransitionRows,
 		pickRunMonitorRegressionPairFromHistory,
@@ -136,6 +137,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorAdaptiveModeFilter,
 		type RunMonitorAdaptiveSeverityFilter,
 		type RunMonitorFilter,
+		type MonitorNodeGroup,
 		type RunMonitorRegressionPair,
 		type RunMonitorSort,
 		type RunMonitorTransitionFilter,
@@ -420,6 +422,8 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorResizeActive = false;
 	let runMonitorResizeStartX = 0;
 	let runMonitorResizeStartWidth = 380;
+	const RUN_MONITOR_MIN_WIDTH = 300;
+	const RUN_MONITOR_MAX_WIDTH_FALLBACK = 1200;
 	let runMonitorNodesWeight = 1;
 	let runMonitorEdgesWeight = 1;
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
@@ -479,9 +483,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	];
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	let runMonitorNodeStatusOptions: string[] = [];
-	let runMonitorNodeRowsSorted: ReturnType<typeof buildRunMonitorNodeRows> = [];
-	let runMonitorNodeRowsStatusFiltered: ReturnType<typeof buildRunMonitorNodeRows> = [];
-	let runMonitorNodeRowsVisible: ReturnType<typeof buildRunMonitorNodeRows> = [];
+	let runMonitorNodeGroupsVisible: MonitorNodeGroup[] = [];
+	let runMonitorGroupCollapsed: Record<'active' | 'waiting' | 'pending' | 'done', boolean> = {
+		active: false,
+		waiting: false,
+		pending: true,
+		done: true
+	};
 	let runMonitorEdgeRowsVisible: ReturnType<typeof buildRunMonitorEdgeRows> = [];
 	type RunMonitorSplitPair = 'nodes_edges';
 	let activeRunMonitorSplit: RunMonitorSplitPair | null = null;
@@ -1105,12 +1113,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any,
 		runStatus: ($graphStore.runStatus ?? 'idle') as any
 	});
-	$: runMonitorNodeRowsSorted = filterAndSortRunMonitorNodes(
-		runMonitorNodeRows,
-		runMonitorNodeFilter,
-		runMonitorNodeSort,
-		runMonitorGlobalStalled
-	);
 	$: runMonitorNodeStatusOptions = Array.from(
 		new Set(
 			runMonitorNodeRows
@@ -1118,13 +1120,45 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				.filter((value) => value.length > 0)
 		)
 	).sort((left, right) => left.localeCompare(right));
-	$: runMonitorNodeRowsStatusFiltered =
-		runMonitorNodeStatusFilters.length === 0
-			? runMonitorNodeRowsSorted
-			: runMonitorNodeRowsSorted.filter((row) =>
-					runMonitorNodeStatusFilters.includes(String(row.lifecycle ?? '').trim())
-				);
-	$: runMonitorNodeRowsVisible = runMonitorNodeRowsStatusFiltered.slice(0, 40);
+	$: {
+		const grouped = groupMonitorNodeRows(
+			runMonitorNodeRows,
+			runMonitorNodeFilter,
+			runMonitorNodeSort,
+			runMonitorGlobalStalled
+		);
+		runMonitorNodeGroupsVisible = grouped.groups.map((group) => {
+			const statusFilteredRows =
+				runMonitorNodeStatusFilters.length === 0
+					? group.rows
+					: group.rows.filter((row) =>
+							runMonitorNodeStatusFilters.includes(String(row.lifecycle ?? '').trim())
+						);
+			const limitedRows = statusFilteredRows.slice(0, 40);
+			const completedCount = limitedRows.filter((row) => row.lifecycle === 'completed' || row.lifecycle === 'skipped').length;
+			const failedCount = limitedRows.filter((row) => row.lifecycle === 'failed').length;
+			const canceledCount = limitedRows.filter((row) => row.lifecycle === 'canceled').length;
+			const runningCount = limitedRows.filter((row) => Number(row.inflight ?? 0) > 0 || row.isLlmHolder).length;
+			const throttledCount = limitedRows.filter(
+				(row) => String(row.phase ?? '').trim().toUpperCase() === 'AWAITING_DISPATCH' && Boolean(row.blocker)
+			).length;
+			const waitingCount = limitedRows.filter((row) => row.lifecycle === 'waiting' || row.lifecycle === 'blocked').length;
+			const pausedCount = limitedRows.filter((row) => row.lifecycle === 'paused').length;
+			return {
+				...group,
+				rows: limitedRows,
+				totalCount: limitedRows.length,
+				completedCount,
+				failedCount,
+				canceledCount,
+				runningCount,
+				throttledCount,
+				waitingCount,
+				pausedCount,
+				notStartedCount: limitedRows.length
+			};
+		});
+	}
 	$: runMonitorNodeLifecycleById = new Map(
 		runMonitorNodeRows.map((row) => [String(row.nodeId ?? '').trim(), String(row.lifecycle ?? '').trim().toLowerCase()])
 	);
@@ -1151,6 +1185,16 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		0,
 		40
 	);
+	$: {
+		const activeCount = runMonitorNodeGroupsVisible.find((group) => group.key === 'active')?.totalCount ?? 0;
+		const doneCount = runMonitorNodeGroupsVisible.find((group) => group.key === 'done')?.totalCount ?? 0;
+		if (activeCount === 0 && doneCount > 0 && !runMonitorGroupCollapsed.active) {
+			runMonitorGroupCollapsed = { ...runMonitorGroupCollapsed, active: true };
+		}
+		if (($graphStore.runStatus ?? 'idle') !== 'running' && doneCount > 0 && runMonitorGroupCollapsed.done) {
+			runMonitorGroupCollapsed = { ...runMonitorGroupCollapsed, done: false };
+		}
+	}
 	$: runMonitorAdaptiveDecisionRowsLive = buildRunMonitorAdaptiveDecisionRows(
 		($graphStore.queueRuntime ?? {}) as any
 	);
@@ -4167,6 +4211,17 @@ async function returnFromComponentEditMode() {
 		return `flow.runMonitor.adaptiveOverride.${graphId || 'default'}`;
 	}
 
+	function clampRunMonitorSlideoutWidth(width: number): number {
+		const requested = Number(width);
+		const finite = Number.isFinite(requested) ? requested : runMonitorSlideoutWidth;
+		if (typeof window === 'undefined') {
+			return Math.min(RUN_MONITOR_MAX_WIDTH_FALLBACK, Math.max(RUN_MONITOR_MIN_WIDTH, finite));
+		}
+		const viewportMax = Math.max(RUN_MONITOR_MIN_WIDTH, window.innerWidth - 220);
+		const maxWidth = Math.min(RUN_MONITOR_MAX_WIDTH_FALLBACK, viewportMax);
+		return Math.min(maxWidth, Math.max(RUN_MONITOR_MIN_WIDTH, finite));
+	}
+
 	function inspectorSidebarWidthStorageKey(graphId: string): string {
 		return `flow.inspector.width.${graphId || 'default'}`;
 	}
@@ -4181,7 +4236,7 @@ async function returnFromComponentEditMode() {
 			}
 			const widthRaw = Number(sessionStorage.getItem(runMonitorWidthStorageKey(gid)));
 			if (Number.isFinite(widthRaw)) {
-				runMonitorSlideoutWidth = Math.min(720, Math.max(300, widthRaw));
+				runMonitorSlideoutWidth = clampRunMonitorSlideoutWidth(widthRaw);
 			}
 			const tableRatioRaw = Number(sessionStorage.getItem(runMonitorTableSplitStorageKey(gid)));
 			if (Number.isFinite(tableRatioRaw) && tableRatioRaw > 0.1 && tableRatioRaw < 0.9) {
@@ -4284,6 +4339,13 @@ async function returnFromComponentEditMode() {
 		runMonitorEdgeStatusFilters = [...runMonitorEdgeStatusFilters, status];
 	}
 
+	function toggleRunMonitorGroupCollapse(groupKey: 'active' | 'waiting' | 'pending' | 'done'): void {
+		runMonitorGroupCollapsed = {
+			...runMonitorGroupCollapsed,
+			[groupKey]: !runMonitorGroupCollapsed[groupKey]
+		};
+	}
+
 	function beginRunMonitorResize(event: PointerEvent): void {
 		runMonitorResizeActive = true;
 		runMonitorResizeStartX = Number(event.clientX || 0);
@@ -4319,7 +4381,7 @@ async function returnFromComponentEditMode() {
 		if (!runMonitorResizeActive) return;
 		const dx = Number(event.clientX || 0) - runMonitorResizeStartX;
 		const next = runMonitorResizeStartWidth - dx;
-		runMonitorSlideoutWidth = Math.min(720, Math.max(300, next));
+		runMonitorSlideoutWidth = clampRunMonitorSlideoutWidth(next);
 	}
 
 	function endRunMonitorResize(): void {
@@ -5952,55 +6014,84 @@ async function returnFromComponentEditMode() {
 									{#if runMonitorTab === 'live'}
 									<div class="runMonitorTablesSplit">
 										<div class="runMonitorTablesPane" style={`flex:${runMonitorNodesWeight} 1 0;`} bind:this={runMonitorNodesPaneEl}>
-											{#if runMonitorNodeRowsVisible.length === 0}
+											{#if runMonitorNodeGroupsVisible.every((group) => group.totalCount === 0)}
 												<div class="envProfileEmpty">No monitor rows for current filter.</div>
 											{:else}
-												<div class="runMonitorNodeTable" role="table" aria-label="Run monitor nodes">
-													<div class="runMonitorNodeHead" role="row">
-														<span>node</span>
-														<span>status</span>
-														<span>exec</span>
-														<span>phase</span>
-														<span>blocker</span>
-														<span>last blocker</span>
-														<span>mode</span>
-														<span>processed</span>
-														<span>pending</span>
-														<span>depth</span>
-													</div>
-													{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
-														<button
-															type="button"
-															class="runMonitorNodeRow"
-															role="row"
-															on:click={() => focusNodeFromMonitor(row.nodeId)}
-															title={`Focus ${row.label}`}
-														>
-															<span class="runMonitorNodeName">{row.label}</span>
-															<span>
-																{row.lifecycle === 'running' && row.blocker ? 'queued' : row.lifecycle}
-																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
-															</span>
-															<span>{row.execution}</span>
-															<span>{row.phase || '-'}</span>
-															<span
-																class={row.blocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
-																title={row.blocker ? "Current blocker: what's preventing progress right now" : ''}
-															>{row.blocker?.code || '-'}</span>
-															<span
-																class={row.lastBlocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
-																title={row.lastBlocker ? 'Last blocker: most recent blocker that cleared' : ''}
-															>{row.lastBlocker?.code || '-'}</span>
-															<span>{row.consumeMode === 'single_item' ? 'single' : row.consumeMode}</span>
-															<span>
-																{row.totalProcessed}
-																{#if row.rejectedCount > 0}
-																	<span class="mono"> ({row.acceptedCount}/{row.rejectedCount})</span>
-																{/if}
-															</span>
-															<span>{row.pendingInputCount}</span>
-															<span>{row.inboundDepth}</span>
-														</button>
+												<div class="runMonitorNodeGroups" role="table" aria-label="Run monitor nodes">
+													{#each runMonitorNodeGroupsVisible as group (`group-${group.key}`)}
+														<section class="runMonitorGroupSection" data-group={group.key}>
+															<button
+																type="button"
+																class="runMonitorGroupHeader"
+																on:click={() => toggleRunMonitorGroupCollapse(group.key)}
+																title={`Toggle ${group.label}`}
+															>
+																<span class="runMonitorGroupHeading">
+																	<span class="sectionToggleIcon" aria-hidden="true">{runMonitorGroupCollapsed[group.key] ? '▸' : '▾'}</span>
+																	<strong>{group.label}</strong>
+																	<span class="monitorCountPill">{group.totalCount}</span>
+																</span>
+																<span class="runMonitorGroupSummary">
+																	{runMonitorHeaderSummary(group)}
+																</span>
+															</button>
+															{#if !runMonitorGroupCollapsed[group.key]}
+																<div class="runMonitorNodeTable" role="group" aria-label={`${group.label} nodes`}>
+																	<div class="runMonitorNodeHead" role="row">
+																		<span>node</span>
+																		<span>status</span>
+																		<span>exec</span>
+																		<span>phase</span>
+																		<span>blocker</span>
+																		<span>last blocker</span>
+																		<span>mode</span>
+																		<span>processed</span>
+																		<span>pending</span>
+																		<span>depth</span>
+																	</div>
+																	{#if group.rows.length === 0}
+																		<div class="envProfileEmpty">No {group.label.toLowerCase()} nodes.</div>
+																	{:else}
+																		{#each group.rows as row (`${group.key}-${row.nodeId}`)}
+																			<button
+																				type="button"
+																				class={`runMonitorNodeRow ${row.lifecycle === 'failed' ? 'runMonitorNodeRowFailed' : ''}`}
+																				role="row"
+																				on:click={() => focusNodeFromMonitor(row.nodeId)}
+																				title={`Focus ${row.label}`}
+																			>
+																				<span class="runMonitorNodeName">
+																					{#if row.lifecycle === 'failed'}! {/if}{row.label}
+																				</span>
+																				<span>
+																					{row.lifecycle === 'running' && row.blocker ? 'queued' : row.lifecycle}
+																					{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
+																				</span>
+																				<span>{row.execution}</span>
+																				<span>{row.phase || '-'}</span>
+																				<span
+																					class={row.blocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
+																					title={row.blocker ? "Current blocker: what's preventing progress right now" : ''}
+																				>{row.blocker?.code || '-'}</span>
+																				<span
+																					class={row.lastBlocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
+																					title={row.lastBlocker ? 'Last blocker: most recent blocker that cleared' : ''}
+																				>{row.lastBlocker?.code || '-'}</span>
+																				<span>{row.consumeMode === 'single_item' ? 'single' : row.consumeMode}</span>
+																				<span>
+																					{row.totalProcessed}
+																					{#if row.rejectedCount > 0}
+																						<span class="mono"> ({row.acceptedCount}/{row.rejectedCount})</span>
+																					{/if}
+																				</span>
+																				<span>{row.pendingInputCount}</span>
+																				<span>{row.inboundDepth}</span>
+																			</button>
+																		{/each}
+																	{/if}
+																</div>
+															{/if}
+														</section>
 													{/each}
 												</div>
 											{/if}
@@ -7911,6 +8002,47 @@ async function returnFromComponentEditMode() {
 		margin-top: 8px;
 	}
 
+	.runMonitorNodeGroups {
+		margin-top: 8px;
+		display: grid;
+		gap: 8px;
+		overflow: auto;
+		padding-right: 2px;
+	}
+
+	.runMonitorGroupSection {
+		border: 1px solid var(--color-control-border, #1c2335);
+		border-radius: 8px;
+		padding: 6px;
+		background: color-mix(in srgb, var(--color-control-option-bg, #0c1220) 86%, #000 14%);
+	}
+
+	.runMonitorGroupHeader {
+		width: 100%;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		border: 1px solid var(--color-control-border, #273047);
+		border-radius: 8px;
+		background: var(--color-control-bg, #0c1220);
+		color: var(--color-control-text, #dbe7ff);
+		padding: 6px 8px;
+		text-align: left;
+	}
+
+	.runMonitorGroupHeading {
+		display: inline-flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.runMonitorGroupSummary {
+		font-size: 12px;
+		color: var(--color-control-text-muted, #9aa4b2);
+		transition: opacity 180ms ease;
+	}
+
 	.runMonitorHistoryTable {
 		margin-top: 8px;
 		display: grid;
@@ -7932,7 +8064,7 @@ async function returnFromComponentEditMode() {
 	.runMonitorNodeTable .runMonitorNodeRow,
 	.runMonitorHistoryTable .runMonitorNodeHead,
 	.runMonitorHistoryTable .runMonitorNodeRow {
-		grid-template-columns: 1.2fr 0.8fr 0.65fr 0.6fr 0.8fr 0.6fr 0.6fr 1.25fr;
+		grid-template-columns: 1.2fr 0.8fr 0.65fr 0.8fr 0.9fr 0.9fr 0.6fr 1fr 0.55fr 0.55fr;
 	}
 
 	.runMonitorHistoryTable .runMonitorNodeHead,
@@ -7978,6 +8110,11 @@ async function returnFromComponentEditMode() {
 	.runMonitorNodeRow-highlighted {
 		border-color: rgba(99, 160, 255, 0.78);
 		box-shadow: inset 0 0 0 1px rgba(99, 160, 255, 0.32);
+	}
+
+	.runMonitorNodeRowFailed {
+		border-left: 3px solid rgba(239, 68, 68, 0.95);
+		background: color-mix(in srgb, var(--color-control-option-bg, #0c1220) 82%, rgba(239, 68, 68, 0.26) 18%);
 	}
 
 	.adaptiveSeverity {
