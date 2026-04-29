@@ -470,7 +470,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			inflight,
 			pendingInputCount,
 			readyWork: Boolean(schedulerRow?.readyWork ?? false),
-			blockedReasonCode: blockedReasonCode || schedulerRow?.lastBlockedReasonCode || ''
+			blockedReasonCode
 		});
 		const nodeCounter = runtimeNodeCounters.get(nodeId);
 		const acceptedCount = Math.max(0, Number(nodeCounter?.accepted ?? 0));
@@ -478,8 +478,15 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const isLlmWaiting =
 			llmWaitingNodeIds.has(nodeId) || (llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId);
 		const isLlmHolder = llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId;
+		const schedulerBlockedReasonCode = String(schedulerRow?.lastBlockedReasonCode ?? '').trim();
+		const canUseSchedulerBlockedReason =
+			!blockedReasonCode &&
+			(lifecycle === 'waiting' || lifecycle === 'blocked' || pendingInputCount > 0) &&
+			!isLlmHolder;
+		const effectiveBlockedCodeForCurrent =
+			blockedReasonCode || (canUseSchedulerBlockedReason ? schedulerBlockedReasonCode : '');
 		const blockerCode =
-			blockerCodeFromReason(blockedReasonCode || schedulerRow?.lastBlockedReasonCode || '') ??
+			blockerCodeFromReason(effectiveBlockedCodeForCurrent) ??
 			(isLlmWaiting ? 'LEASE_UNAVAILABLE' : null);
 		const blocker: MonitorBlocker | null = blockerCode
 			? {
@@ -490,7 +497,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 					since: String(blockedRow.updatedAt ?? snapshot?.updatedAt ?? '').trim() || undefined
 			  }
 			: null;
-		const lastBlockerCode = blockerCodeFromReason(String(schedulerRow?.lastBlockedReasonCode ?? '').trim());
+		const lastBlockerCode = blockerCodeFromReason(schedulerBlockedReasonCode);
 		const lastBlocker: MonitorLastBlocker | null =
 			!blocker && lastBlockerCode
 				? {
@@ -530,7 +537,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 
 		// Priority: blocked reason > llm-wait > llm-hold > stale (when idle/waiting) > ""
 		// Never emit the literal "-" — an empty string means "nothing to explain".
-		const effectiveBlockedCode = blockedReasonCode || schedulerRow?.lastBlockedReasonCode || '';
+		const effectiveBlockedCode = effectiveBlockedCodeForCurrent;
 		let displayReason = '';
 		if (effectiveBlockedCode) {
 			displayReason = effectiveBlockedCode;
@@ -541,8 +548,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		} else if (
 			projection.freshness === 'stale' &&
 			lifecycle !== 'running' &&
-			lifecycle !== 'succeeded' &&
-			lifecycle !== 'failed'
+			lifecycle !== 'failed' &&
+			lifecycle !== 'canceled' &&
+			lifecycle !== 'skipped'
 		) {
 			displayReason = 'stale';
 		}

@@ -55,7 +55,7 @@ describe('Monitor Phase/Blocker Contract - Phase 0 Baseline', () => {
 		expect(rows[0]?.displayReason).toBe('WAITING_REQUIRED_INPUT');
 	});
 
-	it.fails('target: completed node should not retain transient inflight cap as current reason', () => {
+	it('target: completed node should not retain transient inflight cap as current reason', () => {
 		const rows = buildRunMonitorNodeRows({
 			nodes: [node('n_done', 'ResumeBuilder')],
 			edges: [],
@@ -96,7 +96,7 @@ describe('Monitor Phase/Blocker Contract - Phase 0 Target (Expected Fail)', () =
 			queueRuntime: {
 				schedulerSnapshot: {
 					perNode: [
-						{ nodeId: 'n_wait', readyWork: false, inflight: 0, pendingInputCount: 0, lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model' }
+						{ nodeId: 'n_wait', readyWork: false, inflight: 0, pendingInputCount: 1, lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model' }
 					]
 				}
 			},
@@ -106,3 +106,100 @@ describe('Monitor Phase/Blocker Contract - Phase 0 Target (Expected Fail)', () =
 		expect((rows[0] as any).displayReason).toBe('MAX_INFLIGHT_REACHED:model');
 	});
 });
+
+describe('Monitor Phase/Blocker Contract - Phase 2 Hygiene', () => {
+	it('INT-MON-HYGIENE-01: repeated inflight-cap reason does not overwrite current blocker semantics after clear', () => {
+		const waitingRows = buildRunMonitorNodeRows({
+			nodes: [node('n_model', 'ResumeBuilder')],
+			edges: [],
+			nodeBindings: { n_model: { status: 'running' } },
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_model',
+							readyWork: false,
+							inflight: 0,
+							pendingInputCount: 1,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model'
+						}
+					]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(waitingRows[0]?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:model');
+
+		const runningRows = buildRunMonitorNodeRows({
+			nodes: [node('n_model', 'ResumeBuilder')],
+			edges: [],
+			nodeBindings: { n_model: { status: 'running' } },
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_model',
+							readyWork: true,
+							inflight: 1,
+							pendingInputCount: 0,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model'
+						}
+					]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(runningRows[0]?.blocker).toBeNull();
+		expect(runningRows[0]?.lastBlocker?.code).toBe('MAX_INFLIGHT_REACHED:model');
+	});
+
+	it('INT-MON-HYGIENE-02: lease-holder running state prefers provider-response phase and clears current blocker', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [node('n_model', 'Model_ScoreJob')],
+			edges: [],
+			nodeBindings: { n_model: { status: 'running' } },
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_model',
+							readyWork: true,
+							inflight: 1,
+							pendingInputCount: 0,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model'
+						}
+					]
+				},
+				llmLease: { state: 'acquired', holderNodeId: 'n_model', waitingNodeIds: [] }
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.phase).toBe('AWAITING_PROVIDER_RESPONSE');
+		expect(rows[0]?.blocker).toBeNull();
+	});
+
+	it('INT-MON-HYGIENE-03: completed node keeps terminal phase and no current blocker', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [node('n_done', 'Join', 'transform')],
+			edges: [],
+			nodeBindings: { n_done: { status: 'succeeded' } },
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_done',
+							readyWork: false,
+							inflight: 0,
+							pendingInputCount: 0,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:model'
+						}
+					]
+				}
+			}
+		});
+		expect(rows[0]?.phase).toBe('TERMINAL');
+		expect(rows[0]?.blocker).toBeNull();
+		expect(rows[0]?.displayReason).toBe('');
+	});
+});
+
