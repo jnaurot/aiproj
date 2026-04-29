@@ -2756,13 +2756,13 @@ export type RunDeps = {
 
 type SchemaGuardAssessment =
 	| { kind: 'none' }
-	| { kind: 'outside_run_path'; count: number }
+	| { kind: 'outside_run_path'; counts: { errors: number; warnings: number } }
 	| {
 			kind: 'in_run_path';
-			errors: Array<{ nodeId: string; code?: string; message: string }>;
+			errors: Array<{ nodeId: string; code?: string; message: string; severity: 'error' | 'warning' }>;
 	  };
 
-type SchemaGuardFinding = { nodeId: string; code?: string; message: string };
+type SchemaGuardFinding = { nodeId: string; code?: string; message: string; severity: 'error' | 'warning' };
 
 export function createRunManager(deps: RunDeps) {
 	let activeRunStreamHandle: { runId: string; close: () => void } | null = null;
@@ -2814,21 +2814,22 @@ export function createRunManager(deps: RunDeps) {
 		runFrom: string | null,
 		runMode: ActiveRunMode
 	): SchemaGuardAssessment {
-		const dedupeFindings = (items: SchemaGuardFinding[]): SchemaGuardFinding[] => {
-			const seen = new Set<string>();
-			const out: SchemaGuardFinding[] = [];
-			for (const item of items) {
-				const nodeId = String(item.nodeId ?? '').trim();
-				const code = String(item.code ?? '').trim();
-				const message = String(item.message ?? '').trim();
-				if (!nodeId || !message) continue;
-				const key = `${nodeId}|${code}|${message}`;
-				if (seen.has(key)) continue;
-				seen.add(key);
-				out.push({ nodeId, code: code || undefined, message });
-			}
-			return out;
-		};
+			const dedupeFindings = (items: SchemaGuardFinding[]): SchemaGuardFinding[] => {
+				const seen = new Set<string>();
+				const out: SchemaGuardFinding[] = [];
+				for (const item of items) {
+					const nodeId = String(item.nodeId ?? '').trim();
+					const code = String(item.code ?? '').trim();
+					const message = String(item.message ?? '').trim();
+					const severity: 'error' | 'warning' = item.severity === 'warning' ? 'warning' : 'error';
+					if (!nodeId || !message) continue;
+					const key = `${nodeId}|${code}|${message}|${severity}`;
+					if (seen.has(key)) continue;
+					seen.add(key);
+					out.push({ nodeId, code: code || undefined, message, severity });
+				}
+				return out;
+			};
 		const edgeFindings = (): SchemaGuardFinding[] => {
 			const constraints = computeEdgeSchemaConstraintsInternal(state.nodes as any, state.edges as any);
 			const diagnostics = computeEdgeSchemaDiagnosticsInternal(constraints as any);
@@ -2900,21 +2901,22 @@ export function createRunManager(deps: RunDeps) {
 				) {
 					continue;
 				}
-				out.push({ nodeId: targetNodeId, code, message });
-			}
-			return dedupeFindings(out);
-		};
+					out.push({ nodeId: targetNodeId, code, message, severity: 'error' });
+				}
+				return dedupeFindings(out);
+			};
 		const nodeSchemas = state.schemaPlane?.nodeSchemas ?? {};
 		const nodeSchemaFindings = Object.entries(nodeSchemas)
 			.filter((e): e is [string, Extract<SchemaPlaneResult, { ok: false }>] => {
 				const r = e[1];
 				return !!r && r.ok === false;
 			})
-			.map(([nodeId, result]) => ({
-				nodeId,
-				code: result.error.code,
-				message: result.error.message
-			}));
+				.map(([nodeId, result]) => ({
+					nodeId,
+					code: result.error.code,
+					message: result.error.message,
+					severity: 'error' as const
+				}));
 		const edgeSchemaFindings = edgeFindings();
 		const edgeErrorNodeIds = new Set(edgeSchemaFindings.map((item) => item.nodeId));
 		const uncertaintyWarningNodeIds = new Set<string>();
@@ -2981,9 +2983,17 @@ export function createRunManager(deps: RunDeps) {
 			checkpointBoundaries
 		);
 		const inPath = allErrors.filter((item) => plannedSet.has(item.nodeId));
-		if (inPath.length <= 0) return { kind: 'outside_run_path', count: allErrors.length };
-		return { kind: 'in_run_path', errors: inPath };
-	}
+			if (inPath.length <= 0) {
+				let errors = 0;
+				let warnings = 0;
+				for (const finding of allErrors) {
+					if (finding.severity === 'warning') warnings += 1;
+					else errors += 1;
+				}
+				return { kind: 'outside_run_path', counts: { errors, warnings } };
+			}
+			return { kind: 'in_run_path', errors: inPath };
+		}
 
 	function clearResumeFallbackPollTimer(): void {
 		if (!resumeFallbackPollTimer) return;
@@ -3286,18 +3296,37 @@ export function createRunManager(deps: RunDeps) {
 							return filtered.length > 0 ? { kind: 'in_run_path', errors: filtered } : { kind: 'none' };
 						})();
 			if (schemaGuard.kind === 'outside_run_path') {
+				const outsideErrors = Number(schemaGuard.counts?.errors ?? 0);
+				const outsideWarnings = Number(schemaGuard.counts?.warnings ?? 0);
+				const parts: string[] = [];
+				if (outsideErrors > 0) parts.push(`${outsideErrors} error${outsideErrors === 1 ? '' : 's'}`);
+				if (outsideWarnings > 0) parts.push(`${outsideWarnings} warning${outsideWarnings === 1 ? '' : 's'}`);
+				const summary = parts.length > 0 ? parts.join(', ') : '0 issues';
 				deps.update((s) =>
 					withGraphMeta(
 						logPush(
 							{ ...s },
 							'warn',
-							`Schema warning: ${schemaGuard.count} schema error${schemaGuard.count === 1 ? '' : 's'} exist outside the active run path.`
+							`Schema warning: ${summary} exist outside the active run path.`
 						)
 					)
 				);
 			}
 			if (schemaGuard.kind === 'in_run_path' && !allowSchemaErrors && s0.schemaWarningDismissCount < 3) {
-				const message = `Schema validation found ${schemaGuard.errors.length} issue${schemaGuard.errors.length === 1 ? '' : 's'} in the active run path.`;
+				const counts = schemaGuard.errors.reduce(
+					(acc, item) => {
+						if (item.severity === 'warning') acc.warnings += 1;
+						else acc.errors += 1;
+						return acc;
+					},
+					{ errors: 0, warnings: 0 }
+				);
+				const message =
+					counts.errors > 0 && counts.warnings > 0
+						? `Schema validation found ${counts.errors} error${counts.errors === 1 ? '' : 's'} and ${counts.warnings} warning${counts.warnings === 1 ? '' : 's'} in the active run path.`
+						: counts.errors > 0
+							? `Schema validation found ${counts.errors} error${counts.errors === 1 ? '' : 's'} in the active run path.`
+							: `Schema validation found ${counts.warnings} warning${counts.warnings === 1 ? '' : 's'} in the active run path.`;
 				deps.update((s) =>
 					withGraphMeta(
 						logPush(

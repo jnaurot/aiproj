@@ -69,12 +69,12 @@ export type RunBlockedReason =
 			componentNodeIds: string[];
 			message: string;
 	  }
-	| {
-			type: 'schema_errors_in_run_path';
-			nodeIds: string[];
-			message: string;
-			errors?: Array<{ nodeId: string; code?: string; message: string }>;
-	  };
+		| {
+				type: 'schema_errors_in_run_path';
+				nodeIds: string[];
+				message: string;
+				errors?: Array<{ nodeId: string; code?: string; message: string; severity?: 'error' | 'warning' }>;
+		  };
 
 export type GraphViewMode = 'execution' | 'schema';
 export type SchemaOpaqueUpstreamPolicy = 'warn' | 'none';

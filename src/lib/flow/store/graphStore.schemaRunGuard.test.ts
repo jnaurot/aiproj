@@ -94,8 +94,13 @@ describe('graphStore schema-aware pre-run guard', () => {
 		const result = await graphStore.runRemote(null, 'from_start');
 		expect(result.ok).toBe(false);
 		expect((result as any).reason).toBe('schema_errors_in_run_path');
+		expect(String((result as any).message ?? '')).toContain('error');
 		expect(createRunMock).toHaveBeenCalledTimes(0);
 		expect((get(graphStore as any) as any).runBlockedReason?.type).toBe('schema_errors_in_run_path');
+		expect(String((get(graphStore as any) as any).runBlockedReason?.message ?? '')).toContain('error');
+		const blockedErrors = (((get(graphStore as any) as any).runBlockedReason?.errors ?? []) as Array<any>);
+		expect(blockedErrors.length).toBeGreaterThan(0);
+		expect(blockedErrors.every((entry) => String(entry.severity ?? 'error') === 'error')).toBe(true);
 	});
 
 	it('proceeds when schema errors are outside selected run path', async () => {
