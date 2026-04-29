@@ -41,6 +41,8 @@ describe('graphStore llm_lease projection', () => {
 		expect((next as any)?.queueRuntime?.llmLease?.state).toBe('released');
 		expect((next as any)?.queueRuntime?.llmLease?.holderNodeId).toBeNull();
 		expect((next as any)?.queueRuntime?.llmLease?.waitQueueLength).toBe(1);
+		const logLines = ((next as any)?.logs ?? []).map((entry: any) => String(entry?.message ?? ''));
+		expect(logLines.some((line: string) => line.includes('[monitor-phase] phase=AWAITING_PROVIDER_RESPONSE'))).toBe(true);
+		expect(logLines.some((line: string) => line.includes('[monitor-phase] phase=AWAITING_DISPATCH'))).toBe(true);
 	});
 });
-

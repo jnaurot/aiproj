@@ -203,3 +203,33 @@ describe('Monitor Phase/Blocker Contract - Phase 2 Hygiene', () => {
 	});
 });
 
+describe('Monitor Phase/Blocker Contract - Phase 4 Cap Attribution', () => {
+	it('maps cap source qualifiers into canonical blocker codes', () => {
+		const makeRow = (reasonCode: string) =>
+			buildRunMonitorNodeRows({
+				nodes: [node('n_model', 'Model_ScoreJob')],
+				edges: [],
+				nodeBindings: { n_model: { status: 'running' } },
+				queueRuntime: {
+					schedulerSnapshot: {
+						perNode: [
+							{
+								nodeId: 'n_model',
+								readyWork: false,
+								inflight: 0,
+								pendingInputCount: 1,
+								lastBlockedReasonCode: reasonCode
+							}
+						]
+					}
+				},
+				runStatus: 'running'
+			})[0];
+
+		expect(makeRow('MAX_INFLIGHT_REACHED:global')?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:global');
+		expect(makeRow('MAX_INFLIGHT_REACHED:provider')?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:provider');
+		expect(makeRow('MAX_INFLIGHT_REACHED:model')?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:model');
+		expect(makeRow('MAX_INFLIGHT_REACHED:node')?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:node');
+	});
+});
+

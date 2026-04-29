@@ -1317,9 +1317,11 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
 					? { ...(state.queueRuntime.blockedByNode as Record<string, unknown>) }
 					: {};
+			const hadBlockedMarker = Object.prototype.hasOwnProperty.call(blockedByNode, evt.nodeId);
 			if (Object.prototype.hasOwnProperty.call(blockedByNode, evt.nodeId)) {
 				delete (blockedByNode as Record<string, unknown>)[evt.nodeId];
 			}
+			const markerSuffix = hadBlockedMarker ? ' [monitor-blocker] action=cleared' : '';
 			return withGraphMeta(
 				logPush(
 					{
@@ -1332,7 +1334,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 						}
 					},
 					'info',
-					'Node started',
+					`Node started${markerSuffix}`,
 					evt.nodeId
 				)
 			);
@@ -1812,7 +1814,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			return logPush(
 				nextState,
 				'info',
-				`[blocked] node=${nodeId} reason=${reasonCode}${handle ? ` handle=${handle}` : ''}`,
+				`[blocked] node=${nodeId} reason=${reasonCode}${handle ? ` handle=${handle}` : ''} [monitor-blocker] action=set code=${reasonCode}`,
 				nodeId
 			);
 		}
@@ -2195,7 +2197,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 			return logPush(
 				nextState,
 				'info',
-				`[llm-lease] state=${leaseState} holder=${holderNodeId ?? '(none)'} queue=${waitQueueLength}`,
+				`[llm-lease] state=${leaseState} holder=${holderNodeId ?? '(none)'} queue=${waitQueueLength} [monitor-phase] phase=${leaseState === 'acquired' ? 'AWAITING_PROVIDER_RESPONSE' : leaseState === 'waiting' ? 'AWAITING_LEASE' : 'AWAITING_DISPATCH'}`,
 				nodeId || undefined
 			);
 		}
