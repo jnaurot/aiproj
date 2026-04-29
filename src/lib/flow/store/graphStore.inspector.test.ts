@@ -430,6 +430,89 @@ describe('graphStore snapshot scoped commit', () => {
 		}
 	});
 
+	it('param change with schema_refresh_on_param_change=true triggers source schema refresh', async () => {
+		const nodeId = setupSourceNode();
+		let resolveCalls = 0;
+		const fetchSpy = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/runs/resolve/source')) {
+				resolveCalls += 1;
+				return new Response(
+					JSON.stringify({
+						graphId: 'graph_test',
+						nodeId,
+						execKey: 'exec_param_on',
+						artifactId: 'artifact_param_on',
+						cacheHit: true,
+						artifact: { artifactId: 'artifact_param_on', mimeType: 'text/plain', payloadType: 'text' }
+					}),
+					{ status: 200 }
+				);
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		};
+		try {
+			const result = await (graphStore as any).commitInspectorImmediate({
+				schema_refresh_on_param_change: true,
+				delimiter: ';'
+			});
+			expect(result?.ok).toBe(true);
+			expect(resolveCalls).toBe(1);
+			const state = get(graphStore);
+			expect(state.nodeBindings[nodeId]?.current?.artifactId).toBe('artifact_param_on');
+			expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('succeeded');
+		} finally {
+			(globalThis as any).fetch = fetchSpy;
+		}
+	});
+
+	it('param change with schema_refresh_on_param_change=false marks stale without refreshing', async () => {
+		const nodeId = setupSourceNode();
+		let resolveCalls = 0;
+		const fetchSpy = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/runs/resolve/source')) {
+				resolveCalls += 1;
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		};
+		try {
+			const result = await (graphStore as any).commitInspectorImmediate({
+				schema_refresh_on_param_change: false,
+				delimiter: '|'
+			});
+			expect(result?.ok).toBe(true);
+			expect(resolveCalls).toBe(0);
+			const state = get(graphStore);
+			expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('stale');
+			expect(state.nodeBindings[nodeId]?.current?.artifactId ?? null).toBeNull();
+		} finally {
+			(globalThis as any).fetch = fetchSpy;
+		}
+	});
+
+	it('refreshSourceSchema failure keeps node stale and does not throw', async () => {
+		const nodeId = setupSourceNode();
+		const fetchSpy = globalThis.fetch;
+		(globalThis as any).fetch = async (input: RequestInfo | URL) => {
+			const url = String(input);
+			if (url.includes('/api/runs/resolve/source')) {
+				return new Response(JSON.stringify({ error: 'down' }), { status: 500 });
+			}
+			return new Response(JSON.stringify({}), { status: 200 });
+		};
+		try {
+			const result = await (graphStore as any).refreshSourceSchema(nodeId);
+			expect(result?.ok).toBe(false);
+			const state = get(graphStore);
+			expect(displayStatusFromBinding(state.nodeBindings[nodeId])).toBe('stale');
+		} finally {
+			(globalThis as any).fetch = fetchSpy;
+		}
+	});
+
 	it('kind switch lifecycle: stale hides cache pill, next run decision controls pill appearance', () => {
 		const nodeId = 'n_source';
 		const runId = 'run-kind-switch';
