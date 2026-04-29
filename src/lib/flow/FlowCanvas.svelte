@@ -5960,11 +5960,13 @@ async function returnFromComponentEditMode() {
 														<span>node</span>
 														<span>status</span>
 														<span>exec</span>
+														<span>phase</span>
+														<span>blocker</span>
+														<span>last blocker</span>
 														<span>mode</span>
 														<span>processed</span>
 														<span>pending</span>
 														<span>depth</span>
-														<span>reason</span>
 													</div>
 													{#each runMonitorNodeRowsVisible as row (`${row.nodeId}`)}
 														<button
@@ -5976,10 +5978,19 @@ async function returnFromComponentEditMode() {
 														>
 															<span class="runMonitorNodeName">{row.label}</span>
 															<span>
-																{row.lifecycle}
+																{row.lifecycle === 'running' && row.blocker ? 'queued' : row.lifecycle}
 																{#if row.freshness === 'stale'} <span class="mono">(stale)</span>{/if}
 															</span>
 															<span>{row.execution}</span>
+															<span>{row.phase || '-'}</span>
+															<span
+																class={row.blocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
+																title={row.blocker ? "Current blocker: what's preventing progress right now" : ''}
+															>{row.blocker?.code || '-'}</span>
+															<span
+																class={row.lastBlocker ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}
+																title={row.lastBlocker ? 'Last blocker: most recent blocker that cleared' : ''}
+															>{row.lastBlocker?.code || '-'}</span>
 															<span>{row.consumeMode === 'single_item' ? 'single' : row.consumeMode}</span>
 															<span>
 																{row.totalProcessed}
@@ -5989,7 +6000,6 @@ async function returnFromComponentEditMode() {
 															</span>
 															<span>{row.pendingInputCount}</span>
 															<span>{row.inboundDepth}</span>
-															<span class={row.displayReason ? 'runMonitorReason runMonitorReasonActive' : 'runMonitorReason'}>{row.displayReason}</span>
 														</button>
 													{/each}
 												</div>
