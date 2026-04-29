@@ -74,7 +74,7 @@ describe('Monitor Phase/Blocker Contract - Phase 0 Baseline', () => {
 });
 
 describe('Monitor Phase/Blocker Contract - Phase 0 Target (Expected Fail)', () => {
-	it.fails('target: running node should expose phase and not overload reason as blocker', () => {
+	it('target: running node should expose phase and not overload reason as blocker', () => {
 		const rows = buildRunMonitorNodeRows({
 			nodes: [node('n_model', 'Model_ScoreJob')],
 			edges: [],
@@ -88,7 +88,7 @@ describe('Monitor Phase/Blocker Contract - Phase 0 Target (Expected Fail)', () =
 		expect((rows[0] as any).blocker).toBeNull();
 	});
 
-	it.fails('target: waiting node should expose blocker object and legacy reason as derived fallback', () => {
+	it('target: waiting node should expose blocker object and legacy reason as derived fallback', () => {
 		const rows = buildRunMonitorNodeRows({
 			nodes: [node('n_wait', 'ResumeBuilder')],
 			edges: [],

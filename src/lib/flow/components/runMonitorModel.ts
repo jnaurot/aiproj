@@ -60,8 +60,58 @@ type BlockedByNode = Record<
 		handle?: string;
 		plane?: 'work' | 'param' | 'control';
 		updatedAt?: string;
+		history?: Array<{ code?: string; at?: string; action?: 'set' | 'cleared' }>;
 	}
 >;
+
+
+export const BLOCKER_HISTORY_MAX = 10 as const;
+
+export type PhaseCode =
+	| 'AWAITING_INPUT'
+	| 'AWAITING_DISPATCH'
+	| 'AWAITING_LEASE'
+	| 'AWAITING_PROVIDER_RESPONSE'
+	| 'POSTPROCESSING'
+	| 'WRITING_OUTPUT'
+	| 'TERMINAL';
+
+export type BlockerCode =
+	| 'MAX_INFLIGHT_REACHED:global'
+	| 'MAX_INFLIGHT_REACHED:provider'
+	| 'MAX_INFLIGHT_REACHED:model'
+	| 'MAX_INFLIGHT_REACHED:node'
+	| 'WAITING_REQUIRED_INPUT'
+	| 'DEPENDENCY_NOT_READY'
+	| 'LEASE_UNAVAILABLE';
+
+export type BlockerDetail = {
+	source?: 'global' | 'provider' | 'model' | 'node';
+	limit?: number;
+	inflight?: number;
+	holderNodeId?: string;
+	provider?: string;
+	model?: string;
+	queueDepth?: number;
+};
+
+export type MonitorBlocker = {
+	code: BlockerCode;
+	detail?: BlockerDetail;
+	since?: string;
+};
+
+export type MonitorLastBlocker = {
+	code: BlockerCode;
+	detail?: BlockerDetail;
+	clearedAt?: string;
+};
+
+export type MonitorBlockerHistoryEntry = {
+	code: string;
+	at: string;
+	action: 'set' | 'cleared';
+};
 
 export type RunMonitorNodeRow = {
 	nodeId: string;
@@ -87,6 +137,11 @@ export type RunMonitorNodeRow = {
 	isWaiting: boolean;
 	isLlmHolder: boolean;
 	isLlmWaiting: boolean;
+	phase: PhaseCode | null;
+	phaseSince: string | null;
+	blocker: MonitorBlocker | null;
+	lastBlocker: MonitorLastBlocker | null;
+	blockerHistory: MonitorBlockerHistoryEntry[];
 	/** Human-visible reason why this node is not making progress. Empty string
 	 *  when the node is running or done — never the literal string "-". */
 	displayReason: string;
@@ -328,6 +383,44 @@ function buildInboundDepthByNode(
 	return out;
 }
 
+function normalizeMaxInflightSource(raw: string): BlockerCode {
+	const source = raw.trim().toLowerCase();
+	if (source === 'global') return 'MAX_INFLIGHT_REACHED:global';
+	if (source === 'provider') return 'MAX_INFLIGHT_REACHED:provider';
+	if (source === 'model') return 'MAX_INFLIGHT_REACHED:model';
+	return 'MAX_INFLIGHT_REACHED:node';
+}
+
+function blockerCodeFromReason(reasonCodeRaw: string): BlockerCode | null {
+	const reasonCode = reasonCodeRaw.trim();
+	if (!reasonCode) return null;
+	if (reasonCode.startsWith('MAX_INFLIGHT_REACHED:')) return normalizeMaxInflightSource(reasonCode.split(':', 2)[1] ?? 'node');
+	if (reasonCode === 'MAX_INFLIGHT_REACHED') return 'MAX_INFLIGHT_REACHED:node';
+	if (reasonCode === 'WAITING_REQUIRED_INPUT') return 'WAITING_REQUIRED_INPUT';
+	if (reasonCode === 'DEPENDENCY_NOT_READY') return 'DEPENDENCY_NOT_READY';
+	if (reasonCode === 'LEASE_UNAVAILABLE') return 'LEASE_UNAVAILABLE';
+	if (reasonCode.startsWith('WAITING_REQUIRED_') || reasonCode.startsWith('HANDLE_INPUT_')) return 'WAITING_REQUIRED_INPUT';
+	return null;
+}
+
+function phaseFromContext(input: {
+	lifecycle: NodeLifecycleStatus;
+	isLlmHolder: boolean;
+	isLlmWaiting: boolean;
+	hasBlocker: boolean;
+	readyWork: boolean;
+	pendingInputCount: number;
+}): PhaseCode | null {
+	if (input.lifecycle === 'completed' || input.lifecycle === 'failed' || input.lifecycle === 'canceled' || input.lifecycle === 'skipped') {
+		return 'TERMINAL';
+	}
+	if (input.isLlmHolder) return 'AWAITING_PROVIDER_RESPONSE';
+	if (input.isLlmWaiting) return 'AWAITING_LEASE';
+	if (input.pendingInputCount > 0 || input.lifecycle === 'waiting') return 'AWAITING_INPUT';
+	if (input.hasBlocker || input.readyWork || input.lifecycle === 'running') return 'AWAITING_DISPATCH';
+	return null;
+}
+
 export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMonitorNodeRow[] {
 	const nodes = input?.nodes ?? [];
 	const nodeBindings = asRecord(input?.nodeBindings);
@@ -385,6 +478,55 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const isLlmWaiting =
 			llmWaitingNodeIds.has(nodeId) || (llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId);
 		const isLlmHolder = llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId;
+		const blockerCode =
+			blockerCodeFromReason(blockedReasonCode || schedulerRow?.lastBlockedReasonCode || '') ??
+			(isLlmWaiting ? 'LEASE_UNAVAILABLE' : null);
+		const blocker: MonitorBlocker | null = blockerCode
+			? {
+					code: blockerCode,
+					detail: blockerCode.startsWith('MAX_INFLIGHT_REACHED:')
+						? { source: blockerCode.split(':', 2)[1] as BlockerDetail['source'] }
+						: undefined,
+					since: String(blockedRow.updatedAt ?? snapshot?.updatedAt ?? '').trim() || undefined
+			  }
+			: null;
+		const lastBlockerCode = blockerCodeFromReason(String(schedulerRow?.lastBlockedReasonCode ?? '').trim());
+		const lastBlocker: MonitorLastBlocker | null =
+			!blocker && lastBlockerCode
+				? {
+						code: lastBlockerCode,
+						detail: lastBlockerCode.startsWith('MAX_INFLIGHT_REACHED:')
+							? { source: lastBlockerCode.split(':', 2)[1] as BlockerDetail['source'] }
+							: undefined,
+						clearedAt: String(snapshot?.updatedAt ?? '').trim() || undefined
+				  }
+				: null;
+		const phase = phaseFromContext({
+			lifecycle,
+			isLlmHolder,
+			isLlmWaiting,
+			hasBlocker: Boolean(blocker),
+			readyWork: Boolean(schedulerRow?.readyWork ?? false),
+			pendingInputCount
+		});
+		const phaseSince = String(blockedRow.updatedAt ?? snapshot?.updatedAt ?? '').trim() || null;
+		const blockerHistory = (() => {
+			const historyRaw = asArray<Record<string, unknown>>((blockedRow as any)?.history);
+			if (historyRaw.length > 0) {
+				return historyRaw
+					.map((entry) => ({
+						code: String(entry.code ?? '').trim(),
+						at: String(entry.at ?? '').trim(),
+						action: String(entry.action ?? '').trim() === 'cleared' ? 'cleared' : 'set'
+					}))
+					.filter((entry) => entry.code && entry.at)
+					.slice(-BLOCKER_HISTORY_MAX) as MonitorBlockerHistoryEntry[];
+			}
+			const synthetic: MonitorBlockerHistoryEntry[] = [];
+			if (blocker?.code) synthetic.push({ code: blocker.code, at: blocker.since ?? new Date().toISOString(), action: 'set' });
+			if (lastBlocker?.code) synthetic.push({ code: lastBlocker.code, at: lastBlocker.clearedAt ?? new Date().toISOString(), action: 'cleared' });
+			return synthetic.slice(-BLOCKER_HISTORY_MAX);
+		})();
 
 		// Priority: blocked reason > llm-wait > llm-hold > stale (when idle/waiting) > ""
 		// Never emit the literal "-" — an empty string means "nothing to explain".
@@ -429,6 +571,11 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			isWaiting: pendingInputCount > 0 && inflight === 0,
 			isLlmHolder,
 			isLlmWaiting,
+			phase,
+			phaseSince,
+			blocker,
+			lastBlocker,
+			blockerHistory,
 			displayReason
 		};
 	});
@@ -983,3 +1130,4 @@ export function filterRunMonitorTransitionRows(
 		return true;
 	});
 }
+
