@@ -49,9 +49,6 @@ _SUPPORTED_ENV_SPECS: List[EnvVarSpec] = [
 	EnvVarSpec("RUNNER_MAX_SOURCE", "Max concurrent source nodes.", "2", category="scheduler"),
 	EnvVarSpec("RUNNER_MAX_TRANSFORM", "Max concurrent transform nodes.", "2", category="scheduler"),
 	EnvVarSpec("RUNNER_MAX_MODEL", "Max concurrent model/llm nodes.", "2", category="scheduler"),
-	EnvVarSpec("RUNNER_MAX_LLM", "Legacy alias for RUNNER_MAX_MODEL.", "2", category="scheduler"),
-	EnvVarSpec("RUN_MAX_LLM", "Compatibility alias for RUNNER_MAX_MODEL (deprecated).", "", category="scheduler"),
-	EnvVarSpec("TUNNER_MAX_MODEL", "Compatibility typo alias for RUNNER_MAX_MODEL (deprecated).", "", category="scheduler"),
 	EnvVarSpec("RUNNER_MAX_TOOL", "Max concurrent tool nodes.", "2", category="scheduler"),
 	EnvVarSpec(
 		"CONTROL_PLANE_V1",

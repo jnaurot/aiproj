@@ -57,7 +57,7 @@ async def test_scheduler_runs_more_than_one_node_concurrently(monkeypatch) -> No
 	monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
 	monkeypatch.setenv("RUNNER_MAX_CONCURRENCY", "2")
 	monkeypatch.setenv("RUNNER_MAX_TOOL", "2")
-	monkeypatch.setenv("RUNNER_MAX_LLM", "1")
+	monkeypatch.setenv("RUNNER_MAX_MODEL", "1")
 	monkeypatch.setenv("RUNNER_MAX_SOURCE", "1")
 	monkeypatch.setenv("RUNNER_MAX_TRANSFORM", "1")
 

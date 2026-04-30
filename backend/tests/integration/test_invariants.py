@@ -295,7 +295,7 @@ async def test_scheduler_caps_enforced_and_fail_fast_per_level(monkeypatch, tmp_
     monkeypatch.setattr(run_mod, "exec_llm", _fake_exec_llm)
     monkeypatch.setattr(run_mod, "exec_tool", _fake_exec_tool)
     monkeypatch.setenv("RUNNER_MAX_CONCURRENCY", "2")
-    monkeypatch.setenv("RUNNER_MAX_LLM", "1")
+    monkeypatch.setenv("RUNNER_MAX_MODEL", "1")
     monkeypatch.setenv("RUNNER_MAX_TOOL", "1")
     monkeypatch.setenv("RUNNER_MAX_SOURCE", "1")
     monkeypatch.setenv("RUNNER_MAX_TRANSFORM", "1")

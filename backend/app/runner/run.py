@@ -2832,12 +2832,7 @@ def _read_positive_int_env(name: str, minimum: int = 1) -> Optional[int]:
 
 def _resolve_max_model_cap() -> Tuple[int, str, List[str]]:
     notes: List[str] = []
-    precedence = [
-        ("RUNNER_MAX_MODEL", "RUNNER_MAX_MODEL"),
-        ("RUNNER_MAX_LLM", "RUNNER_MAX_LLM"),
-        ("RUN_MAX_LLM", "RUN_MAX_LLM"),
-        ("TUNNER_MAX_MODEL", "TUNNER_MAX_MODEL"),
-    ]
+    precedence = [("RUNNER_MAX_MODEL", "RUNNER_MAX_MODEL")]
     for env_name, source_name in precedence:
         raw = str(get_env(env_name, "") or "").strip()
         if not raw:
@@ -2850,8 +2845,6 @@ def _resolve_max_model_cap() -> Tuple[int, str, List[str]]:
         if parsed < 1:
             notes.append(f"ignored non-positive {env_name}={raw!r}")
             continue
-        if source_name in {"RUNNER_MAX_LLM", "RUN_MAX_LLM", "TUNNER_MAX_MODEL"}:
-            notes.append(f"using compatibility alias {source_name}; prefer RUNNER_MAX_MODEL")
         return parsed, source_name, notes
     return 2, "default", notes
 
