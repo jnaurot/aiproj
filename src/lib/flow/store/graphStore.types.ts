@@ -128,6 +128,10 @@ export type NodeBindingInfo = {
 	isUpToDate?: boolean;
 	cacheValid?: boolean;
 	staleReason?: string | null;
+	// Timestamp of the most recent node_finished within the current run.
+	// Used by node_started to distinguish legitimate multi-item re-starts
+	// (start.at > lastFinishedAt) from stale/out-of-order events (start.at ≤ lastFinishedAt).
+	lastFinishedAt?: string | null;
 };
 
 export type NormalizedNodeBinding = NodeBindingInfo & {
@@ -138,6 +142,7 @@ export type NormalizedNodeBinding = NodeBindingInfo & {
 	staleReason: string | null;
 	current: BindingPair;
 	last: BindingPair;
+	lastFinishedAt: string | null;
 };
 
 // ---------------------------------------------------------------------------

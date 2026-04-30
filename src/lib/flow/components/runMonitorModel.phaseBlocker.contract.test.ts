@@ -234,6 +234,84 @@ describe('Monitor Phase/Blocker Contract - Phase 2 Hygiene', () => {
 		expect(rows[0]?.blocker).toBeNull();
 		expect(rows[0]?.displayReason).toBe('');
 	});
+
+	it('REG-MON-LEASE-01: activeNodeIds supports concurrent lease holders without misclassifying as lease-waiting', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [node('n_a', 'Model_A'), node('n_b', 'Model_B'), node('n_c', 'Model_C')],
+			edges: [],
+			nodeBindings: {
+				n_a: { status: 'running' },
+				n_b: { status: 'running' },
+				n_c: { status: 'running' }
+			},
+			queueRuntime: {
+				llmLease: {
+					state: 'waiting',
+					holderNodeId: 'n_a',
+					activeNodeIds: ['n_a', 'n_b'],
+					nodeId: 'n_c',
+					waitingNodeIds: ['n_c']
+				},
+				schedulerSnapshot: {
+					perNode: [
+						{ nodeId: 'n_a', readyWork: true, inflight: 1, pendingInputCount: 0 },
+						{ nodeId: 'n_b', readyWork: true, inflight: 1, pendingInputCount: 0 },
+						{
+							nodeId: 'n_c',
+							readyWork: false,
+							inflight: 0,
+							pendingInputCount: 1,
+							lastBlockedReasonCode: 'MAX_INFLIGHT_REACHED:global'
+						}
+					]
+				}
+			},
+			runStatus: 'running'
+		});
+		const a = rows.find((row) => row.nodeId === 'n_a');
+		const b = rows.find((row) => row.nodeId === 'n_b');
+		const c = rows.find((row) => row.nodeId === 'n_c');
+		expect(a?.isLlmHolder).toBe(true);
+		expect(a?.isLlmWaiting).toBe(false);
+		expect(a?.phase).toBe('AWAITING_PROVIDER_RESPONSE');
+		expect(a?.blocker).toBeNull();
+		expect(b?.isLlmHolder).toBe(true);
+		expect(b?.isLlmWaiting).toBe(false);
+		expect(b?.phase).toBe('AWAITING_PROVIDER_RESPONSE');
+		expect(b?.blocker).toBeNull();
+		expect(c?.isLlmHolder).toBe(false);
+		expect(c?.isLlmWaiting).toBe(true);
+		expect(c?.phase).toBe('AWAITING_LEASE');
+		expect(c?.blocker?.code).toBe('MAX_INFLIGHT_REACHED:global');
+	});
+
+	it('REG-MON-LEASE-02: idle/inactive node ignores stale lease telemetry and does not project as active', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [node('n_idle', 'LetterBuilder')],
+			edges: [],
+			nodeBindings: {
+				n_idle: { status: 'idle' }
+			},
+			queueRuntime: {
+				llmLease: {
+					state: 'acquired',
+					holderNodeId: 'n_idle',
+					activeNodeIds: ['n_idle'],
+					waitingNodeIds: []
+				},
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_idle', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.lifecycle).toBe('idle');
+		expect(rows[0]?.execution).toBe('inactive');
+		expect(rows[0]?.isLlmHolder).toBe(false);
+		expect(rows[0]?.isLlmWaiting).toBe(false);
+		expect(rows[0]?.phase).toBeNull();
+		expect(rows[0]?.blocker).toBeNull();
+	});
 });
 
 describe('Monitor Phase/Blocker Contract - Phase 4 Cap Attribution', () => {

@@ -78,7 +78,8 @@ describe('runMonitorModel', () => {
 					waitQueueLength: 1,
 					waitingNodeIds: ['n_letter']
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 
 		const modelRow = rows.find((row) => row.nodeId === 'n_model');
@@ -94,7 +95,7 @@ describe('runMonitorModel', () => {
 		expect(letterRow?.isBlocked).toBe(true);
 		expect(letterRow?.blockedReasonCode).toBe('WAITING_REQUIRED_PARAM');
 		expect(letterRow?.isWaiting).toBe(true);
-		expect(letterRow?.isLlmWaiting).toBe(true);
+		expect(letterRow?.isLlmWaiting).toBe(false);
 		expect(letterRow?.inboundDepth).toBe(4);
 		expect(letterRow?.freshness).toBe('stale');
 		expect(letterRow?.terminalReasonCode).toBe(null);

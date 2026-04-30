@@ -42,8 +42,13 @@ def evaluate_runtime_invariants(
 		violations.append(
 			InvariantViolation(
 				code="RUN_TERMINAL_HAS_ACTIVE_NODES",
+				# Severity is "warn" not "error": zombie tasks from non-cancellable
+				# async operations (e.g. Ollama HTTP calls) may still be inflight for
+				# a brief window after a fatal run is terminated.  This is a transient
+				# state, not a data-corruption invariant, so it must not be raised as
+				# an error or trigger strict-mode failures.
 				message="Run is terminal while one or more nodes are still active.",
-				severity="error",
+				severity="warn",
 				node_ids=active_nodes,
 			)
 		)

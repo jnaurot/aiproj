@@ -424,7 +424,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorResizeStartWidth = 380;
 	const RUN_MONITOR_MIN_WIDTH = 300;
 	const RUN_MONITOR_MAX_WIDTH_FALLBACK = 1200;
-	let runMonitorNodesWeight = 1;
+	let runMonitorNodesWeight = 2;
 	let runMonitorEdgesWeight = 1;
 	let runMonitorNodesPaneEl: HTMLElement | null = null;
 	let runMonitorEdgesPaneEl: HTMLElement | null = null;
@@ -8041,6 +8041,22 @@ async function returnFromComponentEditMode() {
 		font-size: 12px;
 		color: var(--color-control-text-muted, #9aa4b2);
 		transition: opacity 180ms ease;
+	}
+
+	.runMonitorGroupSection .runMonitorNodeTable {
+		margin-top: 6px;
+		overflow: visible;
+		height: auto;
+		max-height: none;
+		flex: 0 0 auto;
+	}
+
+	/* Grouped monitor sections are already visually segmented; sticky per-section
+	   headers can overlap neighboring groups while scrolling. Keep them static. */
+	.runMonitorGroupSection .runMonitorNodeHead {
+		position: static;
+		top: auto;
+		box-shadow: none;
 	}
 
 	.runMonitorHistoryTable {

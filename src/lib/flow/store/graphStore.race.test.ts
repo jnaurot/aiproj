@@ -271,6 +271,11 @@ describe('graphStore races', () => {
 	});
 
 	it('node_finished before node_started does not regress succeeded node to running', () => {
+		// Models the out-of-order event race: the backend emitted node_started at T=09
+		// and node_finished at T=12 (cache hit, fast path), but the frontend received
+		// them out of order — node_finished arrived first, then the delayed node_started.
+		// The delayed start's at timestamp (T=09) is BEFORE the finish (T=12),
+		// so the timestamp guard correctly identifies it as stale and drops it.
 		const runId = 'run-1';
 		let state = makeState(runId);
 		state = apply(
@@ -318,9 +323,10 @@ describe('graphStore races', () => {
 		expect(beforeStart.staleReason).toBeNull();
 		expect(state.nodeOutputs.n_transform.preview).toBe('finish-first-preview');
 
+		// Delayed node_started: at=T09 (before the finish at T12) → stale → dropped
 		const next = apply(
 			state,
-			{ type: 'node_started', runId, at: '2026-03-01T00:00:13Z', nodeId: 'n_transform' },
+			{ type: 'node_started', runId, at: '2026-03-01T00:00:09Z', nodeId: 'n_transform' },
 			runId
 		);
 		const afterStart = b(next, 'n_transform');
@@ -374,9 +380,12 @@ describe('graphStore races', () => {
 	});
 
 	it('finish then late start then duplicate finish remains succeeded and pair-stable', () => {
+		// Delayed node_started arrives after node_finished (same item, out-of-order).
+		// lateStartAt is BEFORE firstFinishAt: represents when the backend emitted the
+		// start event, which arrived at the frontend after node_finished due to ordering.
 		const runId = 'run-1';
 		const firstFinishAt = '2026-03-01T00:00:18Z';
-		const lateStartAt = '2026-03-01T00:00:19Z';
+		const lateStartAt = '2026-03-01T00:00:17Z';   // emitted before finish — arrives late
 		const secondFinishAt = '2026-03-01T00:00:20Z';
 
 		let state = makeState(runId);
@@ -599,6 +608,44 @@ describe('graphStore races', () => {
 		expect(state.nodeOutputs.n_transform?.preview).toBeUndefined();
 		expect(state.nodeBindings.n_transform.last.execKey).toBe('ek-transform-last');
 		expect(state.nodeBindings.n_transform.last.artifactId).toBe('art-transform-last');
+	});
+
+	it('multi-item re-start: node_started after node_finished for a later item correctly sets running', () => {
+		// A model node in "single" mode processes 3 items sequentially within one run.
+		// Each item produces node_started → node_finished (succeeded) → node_started → ...
+		// The second and third node_started events must NOT be dropped (they are legitimate
+		// re-starts with at timestamps strictly AFTER the previous node_finished).
+		const runId = 'run-multi';
+		let state = makeState(runId);
+
+		// Item 1: start → finish
+		state = apply(state, { type: 'node_started', runId, at: '2026-03-01T00:00:00Z', nodeId: 'n_transform' }, runId);
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('running');
+
+		state = apply(state, {
+			type: 'node_finished', runId, at: '2026-03-01T00:00:30Z',
+			nodeId: 'n_transform', status: 'succeeded'
+		}, runId);
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('succeeded');
+		expect(b(state, 'n_transform').lastFinishedAt).toBe('2026-03-01T00:00:30Z');
+
+		// Item 2: start (at > lastFinishedAt) → must transition back to running
+		state = apply(state, { type: 'node_started', runId, at: '2026-03-01T00:00:31Z', nodeId: 'n_transform' }, runId);
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('running');
+
+		state = apply(state, {
+			type: 'node_finished', runId, at: '2026-03-01T00:01:05Z',
+			nodeId: 'n_transform', status: 'succeeded'
+		}, runId);
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('succeeded');
+
+		// Item 3: start (at > lastFinishedAt) → must transition back to running again
+		state = apply(state, { type: 'node_started', runId, at: '2026-03-01T00:01:06Z', nodeId: 'n_transform' }, runId);
+		expect(displayStatusFromBinding(b(state, 'n_transform'))).toBe('running');
+
+		// Stale/duplicate start for item 1 (at < lastFinishedAt) → must be dropped
+		const stale = apply(state, { type: 'node_started', runId, at: '2026-03-01T00:00:00Z', nodeId: 'n_transform' }, runId);
+		expect(displayStatusFromBinding(b(stale, 'n_transform'))).toBe('running'); // unchanged
 	});
 });
 

@@ -190,6 +190,7 @@ export function _normalizeBinding(binding: NodeBindingInfo | undefined, nodeId?:
 		cacheValid: Boolean(b.cacheValid ?? false),
 		currentRunId: (b.currentRunId ?? null) as string | null,
 		staleReason: (b.staleReason ?? null) as string | null,
+		lastFinishedAt: (b.lastFinishedAt ?? null) as string | null,
 		current: {
 			execKey: current.execKey ?? null,
 			artifactId: current.artifactId ?? null

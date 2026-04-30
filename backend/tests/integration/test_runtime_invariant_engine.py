@@ -75,3 +75,44 @@ async def test_runtime_emits_control_plane_invariant_violations(monkeypatch):
 	}
 	assert "CONTROL_SIGNAL_SEQ_NON_MONOTONIC" in codes
 	assert "NODE_TERMINAL_WITH_INFLIGHT" in codes
+
+
+@pytest.mark.asyncio
+async def test_runtime_terminal_active_nodes_warn_only_and_no_strict_raise(monkeypatch, caplog):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	monkeypatch.setenv("RUNTIME_INVARIANTS_STRICT", "1")
+	rt = RuntimeManager()
+	run_id = "run-terminal-active-warn"
+	handle = rt.create_run(run_id)
+	handle.status = "failed"
+	handle.node_status["n1"] = "running"
+
+	rt._run_invariants(handle, trigger="test_terminal_warn_only")
+	await asyncio.sleep(0)
+
+	events = await rt.list_run_events(run_id, after_id=0, limit=500)
+	violations = [e for e in events if str(e.get("type") or "") == "state_invariant_violation"]
+	assert violations
+	payload = violations[-1].get("payload") if isinstance(violations[-1].get("payload"), dict) else {}
+	assert payload.get("code") == "RUN_TERMINAL_HAS_ACTIVE_NODES"
+
+	warn_messages = [record.message for record in caplog.records if record.levelname == "WARNING"]
+	error_messages = [record.message for record in caplog.records if record.levelname == "ERROR"]
+	assert any("RUN_TERMINAL_HAS_ACTIVE_NODES" in message for message in warn_messages)
+	assert not any("RUN_TERMINAL_HAS_ACTIVE_NODES" in message for message in error_messages)
+
+
+@pytest.mark.asyncio
+async def test_runtime_strict_still_raises_for_non_transient_invariant(monkeypatch):
+	monkeypatch.setenv("ARTIFACT_STORE", "memory")
+	monkeypatch.setenv("RUNTIME_INVARIANTS_STRICT", "1")
+	rt = RuntimeManager()
+	run_id = "run-paused-active-strict"
+	handle = rt.create_run(run_id)
+	handle.status = "paused"
+	handle.node_status["n1"] = "running"
+
+	with pytest.raises(RuntimeError) as excinfo:
+		rt._run_invariants(handle, trigger="test_strict_non_transient")
+
+	assert "RUN_PAUSED_HAS_ACTIVE_NODES" in str(excinfo.value)

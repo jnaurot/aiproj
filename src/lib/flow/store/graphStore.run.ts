@@ -1292,11 +1292,15 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 		case 'node_started': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
 			const prevBinding = _normalizeBinding(state.nodeBindings?.[evt.nodeId], evt.nodeId);
-			if (
-				prevBinding.currentRunId === (evt.runId ?? runId) &&
-				(prevBinding.status.startsWith('succeeded') || prevBinding.isUpToDate === true)
-			) {
-				return state;
+			// Timestamp guard: drop node_started events that predate the most recent
+			// node_finished for this node within the same run. This handles the race
+			// condition where node_finished (cache hit / fast path) arrives before a
+			// delayed node_started — without blocking the legitimate multi-item case
+			// where a node starts a second item after finishing the first (start.at > lastFinishedAt).
+			const startAt = String(evt.at ?? '').trim();
+			const lastFinishedAt = String(prevBinding.lastFinishedAt ?? '').trim();
+			if (startAt && lastFinishedAt && startAt <= lastFinishedAt) {
+				return state; // stale/out-of-order: this start predates the last finish
 			}
 			const nodeBindings = {
 				...state.nodeBindings,
@@ -1994,7 +1998,28 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
 							? ((evt as any).controlPlaneEdgeState as Record<string, unknown>)
-							: state.queueRuntime?.controlPlaneEdgeState) ?? {}
+							: state.queueRuntime?.controlPlaneEdgeState) ?? {},
+					// Fields not carried by queue_metrics — preserve from previous state
+					// to prevent silent resets on every metrics tick.
+					softFailByNode:
+						(state.queueRuntime?.softFailByNode &&
+						typeof state.queueRuntime.softFailByNode === 'object'
+							? state.queueRuntime.softFailByNode
+							: {}) ?? {},
+					schemaDiagnosticSignals:
+						(state.queueRuntime?.schemaDiagnosticSignals &&
+						typeof state.queueRuntime.schemaDiagnosticSignals === 'object'
+							? state.queueRuntime.schemaDiagnosticSignals
+							: {}) ?? {},
+					diagnosticCounters:
+						(state.queueRuntime?.diagnosticCounters &&
+						typeof state.queueRuntime.diagnosticCounters === 'object'
+							? state.queueRuntime.diagnosticCounters
+							: {}) ?? {},
+					appliedControlSeq: Math.max(
+						0,
+						Number((state.queueRuntime as any)?.appliedControlSeq ?? 0)
+					)
 				}
 			};
 			return logPush(
@@ -2042,6 +2067,37 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				typeof state.queueRuntime.currentRunSummary === 'object'
 					? state.queueRuntime.currentRunSummary
 					: null) ?? null;
+			// ── Sweep stale MAX_INFLIGHT_REACHED blockers ─────────────────────────
+			// The scheduler snapshot is the authoritative source of inflight counts.
+			// If nothing is globally inflight (inflightCount === 0), no node can be
+			// legitimately blocked by an inflight cap — clear all such entries.
+			// Also clear per-node entries where the scheduler confirms the node has
+			// no inflight work and no ready work queued (truly idle, not just capped).
+			const perNodeById = new Map(perNode.map((n) => [n.nodeId, n]));
+			const prevBlockedByNode =
+				state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
+					? { ...(state.queueRuntime.blockedByNode as Record<string, unknown>) }
+					: {};
+			const clearedInflightBlockers: string[] = [];
+			for (const [nodeId, entry] of Object.entries(prevBlockedByNode)) {
+				const reasonCode = String((entry as Record<string, unknown>)?.reasonCode ?? '');
+				if (!reasonCode.startsWith('MAX_INFLIGHT_REACHED')) continue;
+				const perNodeEntry = perNodeById.get(nodeId);
+				// Nothing is globally inflight → cap cannot be reached by any node
+				const globallyIdle = inflightCount === 0;
+				// Scheduler confirms this node has no active or queued work
+				const nodeDefinitelyIdle =
+					perNodeEntry !== undefined &&
+					perNodeEntry.inflight === 0 &&
+					!perNodeEntry.readyWork;
+				// Node absent from snapshot + nothing running globally → stale entry
+				const absentAndIdle = perNodeEntry === undefined && inflightCount === 0;
+				if (globallyIdle || nodeDefinitelyIdle || absentAndIdle) {
+					delete (prevBlockedByNode as Record<string, unknown>)[nodeId];
+					clearedInflightBlockers.push(nodeId);
+				}
+			}
+			// ─────────────────────────────────────────────────────────────────────
 			const nextState = {
 				...state,
 				queueRuntime: {
@@ -2065,6 +2121,7 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 						perNode,
 						updatedAt: String((evt as any)?.at ?? '')
 					},
+					blockedByNode: prevBlockedByNode as any,
 					controlPlaneEdgeState:
 						((evt as any)?.controlPlaneEdgeState &&
 						typeof (evt as any).controlPlaneEdgeState === 'object'
@@ -2073,10 +2130,14 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					appliedControlSeq: nextAppliedControlSeq
 				}
 			};
+			const staleSweepSuffix =
+				clearedInflightBlockers.length > 0
+					? ` [monitor-blocker] action=swept_stale_inflight count=${clearedInflightBlockers.length} nodes=${clearedInflightBlockers.join(',')}`
+					: '';
 			return logPush(
 				nextState,
 				stalled ? 'warn' : 'info',
-				`[scheduler-snapshot] ready=${readyCount} inflight=${inflightCount} pending=${pendingQueueDepth} runnable=${runnableNodeCount} stalled=${String(stalled).toLowerCase()}`
+				`[scheduler-snapshot] ready=${readyCount} inflight=${inflightCount} pending=${pendingQueueDepth} runnable=${runnableNodeCount} stalled=${String(stalled).toLowerCase()}${staleSweepSuffix}`
 			);
 		}
 		case 'scheduler_adaptive_decision': {
@@ -2178,11 +2239,37 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				activeNodeIds.clear();
 			}
 			const nodes = applyLlmHolderToNodes(state.nodes, activeNodeIds);
+			// ── Sweep stale LEASE_UNAVAILABLE blockers ────────────────────────────
+			// Each llm_lease event carries the authoritative current wait queue.
+			// Any node that was blocked with LEASE_UNAVAILABLE but is no longer in
+			// the wait queue has either acquired the lease (node_started will clear
+			// its own entry) or left the queue for another reason — either way its
+			// LEASE_UNAVAILABLE marker is stale and must be cleared.
+			// Additionally, if no one holds the lease (activeNodeIds is now empty),
+			// LEASE_UNAVAILABLE cannot be a valid blocker for any node.
+			const waitingSet = new Set(waitingNodeIds);
+			const leaseFullyIdle = activeNodeIds.size === 0;
+			const leaseBlockedByNode =
+				state.queueRuntime?.blockedByNode && typeof state.queueRuntime.blockedByNode === 'object'
+					? { ...(state.queueRuntime.blockedByNode as Record<string, unknown>) }
+					: {};
+			const clearedLeaseBlockers: string[] = [];
+			for (const [blockedNodeId, entry] of Object.entries(leaseBlockedByNode)) {
+				const reasonCode = String((entry as Record<string, unknown>)?.reasonCode ?? '');
+				if (reasonCode !== 'LEASE_UNAVAILABLE') continue;
+				// Clear if lease is fully idle OR this node is no longer in the wait queue
+				if (leaseFullyIdle || !waitingSet.has(blockedNodeId)) {
+					delete (leaseBlockedByNode as Record<string, unknown>)[blockedNodeId];
+					clearedLeaseBlockers.push(blockedNodeId);
+				}
+			}
+			// ─────────────────────────────────────────────────────────────────────
 			const nextState = {
 				...state,
 				nodes,
 				queueRuntime: {
 					...(state.queueRuntime ?? {}),
+					blockedByNode: leaseBlockedByNode as any,
 					llmLease: {
 						state: leaseState as 'waiting' | 'acquired' | 'released',
 						nodeId: nodeId || undefined,
@@ -2194,10 +2281,14 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					}
 				}
 			};
+			const leaseSweepSuffix =
+				clearedLeaseBlockers.length > 0
+					? ` [monitor-blocker] action=swept_stale_lease count=${clearedLeaseBlockers.length} nodes=${clearedLeaseBlockers.join(',')}`
+					: '';
 			return logPush(
 				nextState,
 				'info',
-				`[llm-lease] state=${leaseState} holder=${holderNodeId ?? '(none)'} queue=${waitQueueLength} [monitor-phase] phase=${leaseState === 'acquired' ? 'AWAITING_PROVIDER_RESPONSE' : leaseState === 'waiting' ? 'AWAITING_LEASE' : 'AWAITING_DISPATCH'}`,
+				`[llm-lease] state=${leaseState} holder=${holderNodeId ?? '(none)'} queue=${waitQueueLength} [monitor-phase] phase=${leaseState === 'acquired' ? 'AWAITING_PROVIDER_RESPONSE' : leaseState === 'waiting' ? 'AWAITING_LEASE' : 'AWAITING_DISPATCH'}${leaseSweepSuffix}`,
 				nodeId || undefined
 			);
 		}
@@ -2346,7 +2437,11 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				isUpToDate: succeeded ? true : false,
 				cacheValid: succeeded ? true : false,
 				staleReason: succeeded ? null : prevBinding.staleReason,
-				checkpointable: succeeded && !state.checkpointRegistry?.[evt.nodeId]
+				checkpointable: succeeded && !state.checkpointRegistry?.[evt.nodeId],
+				// Record finish time so node_started can distinguish a legitimate
+				// multi-item re-start (start.at > lastFinishedAt) from a stale
+				// out-of-order event (start.at ≤ lastFinishedAt).
+				lastFinishedAt: String(evt.at ?? '').trim() || null
 			};
 			if (succeeded) {
 				const current = _pairFromLegacy(nextBinding, 'current');

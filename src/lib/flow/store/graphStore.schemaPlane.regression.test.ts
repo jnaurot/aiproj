@@ -400,7 +400,7 @@ describe('REG-16: returnFromComponentEditSession triggers re-propagation', () =>
 // ─── REG-17 to REG-20: Performance Regression ─────────────────────────────
 
 describe('REG-17: Schema propagation < 5ms for 50-node graph', () => {
-    it('propagateSchemas completes in under 5ms for 50 nodes', () => {
+    it('propagateSchemas median runtime stays under 5ms for 50 nodes', () => {
         registerAllBuiltinSchemaFunctions();
 
         // Build a 50-node linear chain: source → 49 filter transforms
@@ -438,11 +438,19 @@ describe('REG-17: Schema propagation < 5ms for 50-node graph', () => {
             edges.push({ id: `e${i}`, source: `n${i - 1}`, target: `n${i}`, data: { exec: 'idle' } });
         }
 
-        const start = performance.now();
+        // Warmup to avoid one-time JIT/initialization noise.
         propagateSchemas(nodes as any, edges as any);
-        const elapsed = performance.now() - start;
 
-        expect(elapsed).toBeLessThan(5);
+        const samples: number[] = [];
+        for (let i = 0; i < 7; i++) {
+            const start = performance.now();
+            propagateSchemas(nodes as any, edges as any);
+            samples.push(performance.now() - start);
+        }
+        const sorted = [...samples].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
+
+        expect(median).toBeLessThan(5);
     });
 });
 

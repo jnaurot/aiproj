@@ -237,18 +237,32 @@ class RuntimeManager:
                 "trigger": str(trigger),
                 "at": datetime_from_ts(time.time()),
             }
-            logger.error(
-                "STATE_INVARIANT_VIOLATION run_id=%s code=%s trigger=%s nodes=%s",
-                handle.run_id,
-                violation.code,
-                trigger,
-                ",".join(violation.node_ids),
-            )
+            # RUN_TERMINAL_HAS_ACTIVE_NODES is a transient/expected condition when
+            # non-cancellable async tasks (e.g. Ollama HTTP calls) outlive a fatal
+            # run termination by a brief window.  Log at warning, not error, and
+            # never trigger strict-mode failures for this code.
+            is_transient = violation.code == "RUN_TERMINAL_HAS_ACTIVE_NODES"
+            if is_transient:
+                logger.warning(
+                    "STATE_INVARIANT_VIOLATION run_id=%s code=%s trigger=%s nodes=%s",
+                    handle.run_id,
+                    violation.code,
+                    trigger,
+                    ",".join(violation.node_ids),
+                )
+            else:
+                logger.error(
+                    "STATE_INVARIANT_VIOLATION run_id=%s code=%s trigger=%s nodes=%s",
+                    handle.run_id,
+                    violation.code,
+                    trigger,
+                    ",".join(violation.node_ids),
+                )
             try:
                 asyncio.create_task(handle.bus.emit(payload))
             except Exception:
                 logger.exception("failed_to_emit_state_invariant_violation")
-            if strict:
+            if strict and not is_transient:
                 raise RuntimeError(
                     f"STATE_INVARIANT_VIOLATION run_id={handle.run_id} code={violation.code} trigger={trigger}"
                 )
@@ -2324,7 +2338,17 @@ class RuntimeManager:
         if t == "node_blocked":
             nid = ev.get("nodeId")
             if nid:
-                self._set_node_status(handle, nid, "blocked", reason="event:node_blocked")
+                current_status = str(handle.node_status.get(nid) or "idle").strip().lower()
+                # node_blocked from the scheduler means "can't queue more work for
+                # this node right now" (e.g. MAX_INFLIGHT_REACHED).  When the node
+                # is already executing (running / active), this is a queue-level
+                # signal only — the in-flight execution WILL complete and emit
+                # node_finished.  If we let running → blocked happen here, the state
+                # machine is left in "blocked" when node_finished arrives, which
+                # causes an illegal blocked → succeeded_up_to_date violation.
+                # Only apply the blocked transition when the node is not executing.
+                if current_status not in {"running", "active"}:
+                    self._set_node_status(handle, nid, "blocked", reason="event:node_blocked")
             return
 
         if t == "node_paused":

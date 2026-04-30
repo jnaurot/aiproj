@@ -114,7 +114,8 @@ describe('displayReason: llm-waiting node', () => {
 					waitQueueLength: 1,
 					waitingNodeIds: ['n_waiter']
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 		const waiter = rows.find((r) => r.nodeId === 'n_waiter');
 		expect(waiter?.displayReason).toBe('llm-wait');
@@ -134,12 +135,14 @@ describe('displayReason: llm-holder node', () => {
 			},
 			queueRuntime: {
 				llmLease: {
-					state: 'active',
+					state: 'acquired',
 					holderNodeId: 'n_holder',
+					activeNodeIds: ['n_holder'],
 					waitQueueLength: 0,
 					waitingNodeIds: []
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 		const holder = rows.find((r) => r.nodeId === 'n_holder');
 		const other = rows.find((r) => r.nodeId === 'n_other');
@@ -228,9 +231,10 @@ describe('displayReason: priority ordering', () => {
 		expect(rows[0]?.displayReason).toBe('WAITING_REQUIRED_PARAM');
 	});
 
-	it('llm-wait beats llm-hold', () => {
-		// A node that is simultaneously in the wait queue AND holds a stale lease
-		// (edge case) — llm-wait wins because it better describes user-visible state.
+	it('llm-hold takes priority when node is in activeNodeIds even if also in waitingNodeIds', () => {
+		// isLlmHolder and isLlmWaiting are mutually exclusive — holder wins.
+		// A node present in activeNodeIds is classified as holder regardless of
+		// whether it also appears in waitingNodeIds.
 		const rows = buildRunMonitorNodeRows({
 			nodes: [node('n1', 'Edge')],
 			edges: [],
@@ -239,14 +243,17 @@ describe('displayReason: priority ordering', () => {
 				llmLease: {
 					state: 'waiting',
 					nodeId: 'n1',
-					holderNodeId: 'n1',    // same node holds and waits (unusual but valid)
+					holderNodeId: 'n1',
+					activeNodeIds: ['n1'],
 					waitQueueLength: 1,
 					waitingNodeIds: ['n1']
 				}
-			}
+			},
+			runStatus: 'running'
 		});
-		expect(rows[0]?.isLlmWaiting).toBe(true);
-		expect(rows[0]?.displayReason).toBe('llm-wait');
+		expect(rows[0]?.isLlmHolder).toBe(true);
+		expect(rows[0]?.isLlmWaiting).toBe(false);  // mutually exclusive with isLlmHolder
+		expect(rows[0]?.displayReason).toBe('llm-hold');
 	});
 
 	it('llm-hold beats stale', () => {
@@ -255,13 +262,18 @@ describe('displayReason: priority ordering', () => {
 			edges: [],
 			nodeBindings: { n1: { status: 'stale' } },
 			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n1', readyWork: true, inflight: 1, pendingInputCount: 0 }]
+				},
 				llmLease: {
-					state: 'active',
+					state: 'acquired',
 					holderNodeId: 'n1',
+					activeNodeIds: ['n1'],
 					waitQueueLength: 0,
 					waitingNodeIds: []
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 		expect(rows[0]?.displayReason).toBe('llm-hold');
 	});
@@ -317,7 +329,8 @@ describe('displayReason: lifecycle integration', () => {
 					waitQueueLength: 1,
 					waitingNodeIds: ['n1']
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 		expect(waitingRows[0]?.displayReason).toBe('llm-wait');
 
@@ -402,10 +415,17 @@ describe('displayReason: regression — existing flags unchanged', () => {
 					state: 'waiting',
 					nodeId: 'n_letter',
 					holderNodeId: 'n_model',
+					activeNodeIds: ['n_model'],
 					waitQueueLength: 1,
 					waitingNodeIds: ['n_letter']
+				},
+				schedulerSnapshot: {
+					perNode: [
+						{ nodeId: 'n_letter', readyWork: false, inflight: 1, pendingInputCount: 0 }
+					]
 				}
-			}
+			},
+			runStatus: 'running'
 		});
 		const model = rows.find((r) => r.nodeId === 'n_model')!;
 		const letter = rows.find((r) => r.nodeId === 'n_letter')!;

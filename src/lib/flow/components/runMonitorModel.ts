@@ -37,6 +37,7 @@ type LlmLease = {
 	state?: unknown;
 	nodeId?: unknown;
 	holderNodeId?: unknown;
+	activeNodeIds?: unknown;
 	waitQueueLength?: unknown;
 	waitingNodeIds?: unknown;
 };
@@ -462,6 +463,12 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 
 	const llmState = String(llmLease?.state ?? '').trim().toLowerCase();
 	const llmHolderNodeId = String(llmLease?.holderNodeId ?? '').trim();
+	const runIsActive = (input?.runStatus ?? 'idle') === 'running';
+	const llmActiveNodeIds = new Set(
+		asArray<unknown>(llmLease?.activeNodeIds)
+			.map((value) => String(value ?? '').trim())
+			.filter(Boolean)
+	);
 	const llmActorNodeId = String(llmLease?.nodeId ?? '').trim();
 	const llmWaitingNodeIds = new Set(
 		asArray<unknown>(llmLease?.waitingNodeIds)
@@ -501,12 +508,22 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const nodeCounter = runtimeNodeCounters.get(nodeId);
 		const acceptedCount = Math.max(0, Number(nodeCounter?.accepted ?? 0));
 		const rejectedCount = Math.max(0, Number(nodeCounter?.rejected ?? 0));
+		const canReflectLeaseTelemetry =
+			runIsActive &&
+			(projection.execution === 'running' || projection.lifecycle === 'running' || inflight > 0);
+		const isLlmHolder =
+			canReflectLeaseTelemetry &&
+			nodeId.length > 0 &&
+			(llmActiveNodeIds.has(nodeId) || (llmState !== 'released' && llmHolderNodeId === nodeId));
 		const isLlmWaiting =
-			llmWaitingNodeIds.has(nodeId) || (llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId);
-		const isLlmHolder = llmState !== 'released' && nodeId.length > 0 && llmHolderNodeId === nodeId;
+			canReflectLeaseTelemetry &&
+			!isLlmHolder &&
+			(llmWaitingNodeIds.has(nodeId) ||
+				(llmState === 'waiting' && nodeId.length > 0 && llmActorNodeId === nodeId));
 		const schedulerBlockedReasonCode = String(schedulerRow?.lastBlockedReasonCode ?? '').trim();
 		const canUseSchedulerBlockedReason =
 			!blockedReasonCode &&
+			inflight === 0 &&
 			(lifecycle === 'waiting' || lifecycle === 'blocked' || pendingInputCount > 0) &&
 			!isLlmHolder;
 		const effectiveBlockedCodeForCurrent = isLlmHolder
@@ -521,7 +538,10 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 					detail: blockerCode.startsWith('MAX_INFLIGHT_REACHED:')
 						? { source: blockerCode.split(':', 2)[1] as BlockerDetail['source'] }
 						: undefined,
-					since: String(blockedRow.updatedAt ?? snapshot?.updatedAt ?? '').trim() || undefined
+					// Use only the per-node blockedRow timestamp — never the shared
+					// scheduler snapshot timestamp, which would reset all unblocked nodes
+					// simultaneously on every scheduler tick (Issue 2).
+					since: String(blockedRow.updatedAt ?? '').trim() || undefined
 			  }
 			: null;
 		const lastBlockerCode = blockerCodeFromReason(schedulerBlockedReasonCode);
@@ -532,7 +552,12 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 						detail: lastBlockerCode.startsWith('MAX_INFLIGHT_REACHED:')
 							? { source: lastBlockerCode.split(':', 2)[1] as BlockerDetail['source'] }
 							: undefined,
-						clearedAt: String(snapshot?.updatedAt ?? '').trim() || undefined
+						// clearedAt must NOT use snapshot?.updatedAt — that global clock
+						// updates on every scheduler tick and makes every previously-blocked
+						// node appear to have just cleared (Issue 3).
+						// blockedRow.updatedAt is absent once the entry is deleted, so we
+						// leave clearedAt undefined when a precise timestamp is unavailable.
+						clearedAt: String(blockedRow.updatedAt ?? '').trim() || undefined
 				  }
 				: null;
 		const phase = phaseFromContext({
@@ -543,7 +568,17 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			readyWork: Boolean(schedulerRow?.readyWork ?? false),
 			pendingInputCount
 		});
-		const phaseSince = String(blockedRow.updatedAt ?? snapshot?.updatedAt ?? '').trim() || null;
+		// phaseSince: use the most precise available per-node timestamp.
+		// For LLM phases use the lease event timestamp; for blocked phases use the
+		// blocked-entry timestamp. Never fall back to snapshot?.updatedAt — that is
+		// a shared global clock that would reset all nodes simultaneously (Issue 2).
+		const phaseSince = (() => {
+			if (blockedRow.updatedAt) return String(blockedRow.updatedAt).trim() || null;
+			if (isLlmHolder || isLlmWaiting) {
+				return String((llmLease as any)?.updatedAt ?? '').trim() || null;
+			}
+			return null;
+		})();
 		const blockerHistory = (() => {
 			const historyRaw = asArray<Record<string, unknown>>((blockedRow as any)?.history);
 			if (historyRaw.length > 0) {
@@ -597,12 +632,18 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			inflight,
 			inboundDepth: Math.max(0, Number(inboundDepthByNode.get(nodeId) ?? 0)),
 			readyWork: Boolean(schedulerRow?.readyWork ?? false),
-			blockedReasonCode: blockedReasonCode || schedulerRow?.lastBlockedReasonCode || null,
+			// Use effectiveBlockedCodeForCurrent (not the raw blockedByNode entry) so
+			// that scheduler-only reasons (e.g. WAITING_REQUIRED_PARAM carried solely in
+			// schedulerSnapshot.perNode[].lastBlockedReasonCode) are surfaced when the
+			// node is genuinely waiting.  canUseSchedulerBlockedReason already guards
+			// against Issue 5 (running nodes): it requires inflight === 0 and a matching
+			// lifecycle/pendingInputCount, so inflight > 0 nodes are never affected.
+			blockedReasonCode: effectiveBlockedCodeForCurrent || null,
 			blockedHandle: blockedHandle || null,
 			blockedPlane,
 			updatedAt: String(blockedRow.updatedAt ?? '').trim() || null,
 			terminalReasonCode: terminalReasonCode || null,
-			isBlocked: Boolean(blockedReasonCode),
+			isBlocked: Boolean(effectiveBlockedCodeForCurrent),
 			isWaiting: pendingInputCount > 0 && inflight === 0,
 			isLlmHolder,
 			isLlmWaiting,
