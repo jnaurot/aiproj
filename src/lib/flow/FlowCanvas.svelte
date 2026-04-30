@@ -146,6 +146,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 	} from '$lib/flow/components/runMonitorModel';
 	import { resolveEdgeVisualClass, computeEdgeVisualClass } from '$lib/flow/edgeVisualState';
 	import { buildSchemaTooltip, resolveSchemaClassForView, summarizeSchemaOverlayCounts } from '$lib/flow/edgeSchemaAuthority';
+	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
 	import { buildRunLogFilterPredicate } from '$lib/flow/components/runLogFilterExpression';
 	import { formatUserLocalTime } from '$lib/flow/components/localTime';
 
@@ -277,6 +278,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const targetNodeId = String((e as any)?.target ?? '').trim();
 		const sourceLifecycle = String(runMonitorNodeLifecycleById.get(sourceNodeId) ?? '').trim().toLowerCase();
 		const targetLifecycle = String(runMonitorNodeLifecycleById.get(targetNodeId) ?? '').trim().toLowerCase();
+		const targetFreshness = String(runMonitorNodeFreshnessById.get(targetNodeId) ?? 'unknown').trim().toLowerCase();
 		const monitorFlags = runMonitorEdgeFlagsById.get(edgeId) ?? {
 			waiting: false,
 			blocked: false,
@@ -289,6 +291,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			edgeExec,
 			sourceLifecycle,
 			targetLifecycle,
+			targetFreshness,
 			waiting: monitorFlags.waiting,
 			blocked: monitorFlags.blocked,
 			full: monitorFlags.full
@@ -306,7 +309,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 			class: `edge edge-${e.data?.exec ?? 'idle'} ${visualClass} ${schemaClass} ${linkKindClass}`.trim(),
 			title
 		};
-	}))(runMonitorNodeLifecycleById, runMonitorEdgeFlagsById, $graphStore.viewMode);
+	}))(runMonitorNodeLifecycleById, runMonitorNodeFreshnessById, runMonitorEdgeFlagsById, $graphStore.viewMode);
 
 	function applyCanvasSelection(
 		seedNodes: Node<PipelineNodeData>[],
@@ -1161,6 +1164,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 	$: runMonitorNodeLifecycleById = new Map(
 		runMonitorNodeRows.map((row) => [String(row.nodeId ?? '').trim(), String(row.lifecycle ?? '').trim().toLowerCase()])
+	);
+	$: runMonitorNodeFreshnessById = new Map(
+		Object.entries(($graphStore.nodeBindings ?? {}) as Record<string, unknown>).map(([nodeId, binding]) => {
+			const projection = statusProjectionFromBinding((binding ?? null) as any);
+			return [String(nodeId ?? '').trim(), String(projection.freshness ?? 'unknown').trim().toLowerCase()];
+		})
 	);
 	$: runMonitorEdgeRows = buildRunMonitorEdgeRows({
 		nodes: ($graphStore.nodes ?? []) as any,

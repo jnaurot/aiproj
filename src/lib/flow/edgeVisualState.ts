@@ -3,6 +3,7 @@ export type EdgeVisualStateInput = {
 	edgeExec: string;
 	sourceLifecycle: string;
 	targetLifecycle: string;
+	targetFreshness?: 'unknown' | 'fresh' | 'stale' | string;
 	waiting: boolean;
 	blocked: boolean;
 	full: boolean;
@@ -26,6 +27,7 @@ export function resolveEdgeVisualClass(input: EdgeVisualStateInput):
 	const edgeExec = String(input.edgeExec ?? '').trim().toLowerCase();
 	const sourceLifecycle = String(input.sourceLifecycle ?? '').trim().toLowerCase();
 	const targetLifecycle = String(input.targetLifecycle ?? '').trim().toLowerCase();
+	const targetFreshness = String(input.targetFreshness ?? 'unknown').trim().toLowerCase();
 	const waiting = Boolean(input.waiting);
 	const blocked = Boolean(input.blocked);
 	const full = Boolean(input.full);
@@ -36,7 +38,7 @@ export function resolveEdgeVisualClass(input: EdgeVisualStateInput):
 	if (edgeExec === 'active') {
 		return 'edge-state-running';
 	}
-	if (sourceLifecycle === 'completed' && targetLifecycle === 'completed') {
+	if (sourceLifecycle === 'completed' && targetLifecycle === 'completed' && targetFreshness !== 'stale') {
 		return 'edge-state-settled';
 	}
 	if (blocked || full) {

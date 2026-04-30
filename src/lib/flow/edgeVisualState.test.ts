@@ -34,11 +34,27 @@ describe('edge visual state resolver', () => {
 				edgeExec: 'idle',
 				sourceLifecycle: 'completed',
 				targetLifecycle: 'completed',
+				targetFreshness: 'fresh',
 				waiting: true,
 				blocked: false,
 				full: false
 			})
 		).toBe('edge-state-settled');
+	});
+
+	it('does not settle completed endpoints when target is stale', () => {
+		expect(
+			resolveEdgeVisualClass({
+				edgeMode: 'work',
+				edgeExec: 'idle',
+				sourceLifecycle: 'completed',
+				targetLifecycle: 'completed',
+				targetFreshness: 'stale',
+				waiting: false,
+				blocked: false,
+				full: false
+			})
+		).toBe('edge-state-inactive');
 	});
 
 	it('treats blocked/full as blocked when not settled/running', () => {
@@ -148,9 +164,44 @@ describe('computeEdgeVisualClass — execution view delegates to resolveEdgeVisu
 				viewMode: 'execution',
 				schemaClass: '',
 				sourceLifecycle: 'completed',
-				targetLifecycle: 'completed'
+				targetLifecycle: 'completed',
+				targetFreshness: 'fresh'
 			})
 		).toBe('edge-state-settled');
+	});
+
+	it('stale completed target in execution view → edge-state-inactive', () => {
+		expect(
+			computeEdgeVisualClass({
+				...execBase,
+				viewMode: 'execution',
+				schemaClass: '',
+				sourceLifecycle: 'completed',
+				targetLifecycle: 'completed',
+				targetFreshness: 'stale'
+			})
+		).toBe('edge-state-inactive');
+	});
+
+	it('mixed fan-out keeps stale branch inactive while sibling branch is running', () => {
+		const runningBranch = computeEdgeVisualClass({
+			...execBase,
+			viewMode: 'execution',
+			schemaClass: '',
+			edgeExec: 'active',
+			sourceLifecycle: 'completed',
+			targetLifecycle: 'running'
+		});
+		const staleBranch = computeEdgeVisualClass({
+			...execBase,
+			viewMode: 'execution',
+			schemaClass: '',
+			sourceLifecycle: 'completed',
+			targetLifecycle: 'completed',
+			targetFreshness: 'stale'
+		});
+		expect(runningBranch).toBe('edge-state-running');
+		expect(staleBranch).toBe('edge-state-inactive');
 	});
 
 	it('schema error class is present but execution view ignores schema → uses exec logic', () => {
