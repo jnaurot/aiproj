@@ -186,3 +186,4 @@ def test_env_vars_rejects_invalid_key(monkeypatch, tmp_path):
 		assert res.status_code == 422, res.text
 		detail = res.json().get("detail") or {}
 		assert detail.get("code") == "ENV_VARS_UPDATE_FAILED"
+
