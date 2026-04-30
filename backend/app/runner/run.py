@@ -2893,6 +2893,38 @@ def _normalize_control_plane_mode(raw: Any) -> str:
     return "enforce"
 
 
+def _format_wait_check_log_line(
+    *,
+    node_id: str,
+    reason: str,
+    queued_any: bool,
+    inflight_count: int,
+    all_upstream_closed: bool,
+    upstream_total: int,
+    upstream_closed: int,
+    pending_input_count: int,
+    ready_work: bool,
+    lease_active: bool,
+) -> str:
+    return (
+        "[wait-check] "
+        f"node={str(node_id)} "
+        f"reason={str(reason)} "
+        f"queued_any={1 if bool(queued_any) else 0} "
+        f"inflight={max(0, int(inflight_count or 0))} "
+        f"all_upstream_closed={1 if bool(all_upstream_closed) else 0} "
+        f"upstream_total={max(0, int(upstream_total or 0))} "
+        f"upstream_closed={max(0, int(upstream_closed or 0))} "
+        f"pending_input={max(0, int(pending_input_count or 0))} "
+        f"ready_work={1 if bool(ready_work) else 0} "
+        f"lease_active={1 if bool(lease_active) else 0}"
+    )
+
+
+def __format_wait_check_log_line_for_test(**kwargs: Any) -> str:
+    return _format_wait_check_log_line(**kwargs)
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -9115,6 +9147,7 @@ async def run_graph(
         warning_first_emitted_keys: set[str] = set()
         warning_counters: Dict[str, Dict[str, Any]] = {}
         blocked_state_by_node: Dict[str, Dict[str, Any]] = {}
+        wait_check_waiting_nodes: set[str] = set()
         control_gate_state_by_node: Dict[str, Dict[str, Any]] = {}
         node_terminal_emitted: set[str] = set()
         node_terminal_reason_by_node: Dict[str, str] = {}
@@ -10051,6 +10084,46 @@ async def run_graph(
             if previous == signature:
                 return
             blocked_state_by_node[node_id] = signature
+            node_key = str(node_id or "").strip()
+            if node_key and node_key not in wait_check_waiting_nodes:
+                wait_check_waiting_nodes.add(node_key)
+                incoming_work = _incoming_work_edge_infos(node_key)
+                queued_any = False
+                upstream_total = 0
+                upstream_closed = 0
+                for info in incoming_work:
+                    edge_id = str(info.get("edgeId") or "").strip()
+                    handle_name = str(info.get("inputHandle") or "in").strip() or "in"
+                    if edge_id:
+                        upstream_total += 1
+                        state = edge_control_state_by_edge_id.get(edge_id) or {}
+                        if bool(state.get("closed")):
+                            upstream_closed += 1
+                        if int(queue_registry.depth(edge_id, handle_name) or 0) > 0:
+                            queued_any = True
+                pending_input_count = int(_pending_work_depth_by_node(streaming_only=True).get(node_key, 0))
+                ready_work = bool(_node_ready_probe(node_key).get("ready", False))
+                await _emit(
+                    {
+                        "type": "log",
+                        "runId": run_id,
+                        "at": iso_now(),
+                        "level": "debug",
+                        "message": _format_wait_check_log_line(
+                            node_id=node_key,
+                            reason=reason,
+                            queued_any=queued_any,
+                            inflight_count=int(node_inflight_counts.get(node_key, 0)),
+                            all_upstream_closed=(upstream_total > 0 and upstream_closed >= upstream_total),
+                            upstream_total=upstream_total,
+                            upstream_closed=upstream_closed,
+                            pending_input_count=pending_input_count,
+                            ready_work=ready_work,
+                            lease_active=bool(node_key in active_llm_lease_nodes),
+                        ),
+                        "nodeId": node_key,
+                    }
+                )
             evt: Dict[str, Any] = {
                 "type": "node_blocked",
                 "schema_version": 1,
@@ -10131,7 +10204,9 @@ async def run_graph(
             await _emit(evt)
 
         async def _clear_node_blocked(node_id: str) -> None:
-            blocked_state_by_node.pop(str(node_id), None)
+            node_key = str(node_id)
+            blocked_state_by_node.pop(node_key, None)
+            wait_check_waiting_nodes.discard(node_key)
 
         async def _emit_scheduler_snapshot(*, stalled: bool = False) -> None:
             pending_by_node = _pending_work_depth_by_node(streaming_only=True)
