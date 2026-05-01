@@ -10073,6 +10073,54 @@ async def run_graph(
                 plane_norm = ""
             missing = sorted({str(edge_id).strip() for edge_id in (missing_edge_ids or []) if str(edge_id).strip()})
             waiting = sorted({str(waiting_id).strip() for waiting_id in (waiting_node_ids or []) if str(waiting_id).strip()})
+            node_key = str(node_id or "").strip()
+            if reason == "WAITING_REQUIRED_INPUT" and node_key and missing:
+                reconciled_edges: List[str] = []
+                for edge_id in missing:
+                    edge_key = str(edge_id or "").strip()
+                    if not edge_key:
+                        continue
+                    edge_obj = edges.get(edge_key) or {}
+                    source_node_id = str(edge_obj.get("source") or "").strip()
+                    target_handle = str(edge_obj.get("targetHandle") or "in").strip() or "in"
+                    edge_state = edge_control_state_by_edge_id.get(edge_key) or {}
+                    already_closed = bool(edge_state.get("closed"))
+                    if already_closed:
+                        continue
+                    if not source_node_id or source_node_id not in node_terminal_emitted:
+                        continue
+                    if int(node_inflight_counts.get(source_node_id, 0)) > 0:
+                        continue
+                    if int(queue_registry.depth(edge_key, target_handle) or 0) > 0:
+                        continue
+                    await _emit(
+                        {
+                            "type": "control_signal",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "signal": "upstream_closed",
+                            "edgeId": edge_key,
+                        }
+                    )
+                    reconciled_edges.append(edge_key)
+                if reconciled_edges:
+                    await _emit(
+                        {
+                            "type": "log",
+                            "runId": run_id,
+                            "at": iso_now(),
+                            "level": "debug",
+                            "message": (
+                                "[wait-reconcile] "
+                                f"node={node_key} action=closed_synthesized edges={','.join(sorted(reconciled_edges))}"
+                            ),
+                            "nodeId": node_key,
+                        }
+                    )
+                    await _maybe_emit_node_terminal(node_key, "completed")
+                    if node_key in node_terminal_emitted:
+                        await _clear_node_blocked(node_key)
+                        return
             signature = {
                 "reasonCode": reason,
                 "handle": handle_norm,
@@ -10084,7 +10132,6 @@ async def run_graph(
             if previous == signature:
                 return
             blocked_state_by_node[node_id] = signature
-            node_key = str(node_id or "").strip()
             if node_key and node_key not in wait_check_waiting_nodes:
                 wait_check_waiting_nodes.add(node_key)
                 incoming_work = _incoming_work_edge_infos(node_key)

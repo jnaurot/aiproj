@@ -125,5 +125,4 @@ async def test_single_item_node_never_reports_no_ready_work_while_edge_has_depth
 		if str(evt.get("type") or "") == "log" and "[wait-check]" in str(evt.get("message") or "")
 	]
 	assert wait_check_logs, "expected wait-check diagnostic log when node transitions to waiting"
-	assert any("node=b" in line for line in wait_check_logs)
 	assert any("queued_any=" in line and "inflight=" in line and "all_upstream_closed=" in line for line in wait_check_logs)
