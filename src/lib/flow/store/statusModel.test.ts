@@ -128,7 +128,8 @@ describe('reconcileLifecycleForActiveRun', () => {
 				runStatus: 'running',
 				inflight: 0,
 				pendingInputCount: 0,
-				readyWork: false
+				readyWork: false,
+				isTerminalized: false
 			})
 		).toBe('waiting');
 		expect(
@@ -138,9 +139,35 @@ describe('reconcileLifecycleForActiveRun', () => {
 				runStatus: 'resuming',
 				inflight: 0,
 				pendingInputCount: 0,
-				readyWork: false
+				readyWork: false,
+				isTerminalized: false
 			})
 		).toBe('waiting');
+	});
+
+	it('keeps single/batch completed nodes terminal when control-plane marks terminalized', () => {
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'single_item',
+				runStatus: 'running',
+				inflight: 0,
+				pendingInputCount: 0,
+				readyWork: false,
+				isTerminalized: true
+			})
+		).toBe('completed');
+		expect(
+			reconcileLifecycleForActiveRun({
+				lifecycle: 'completed',
+				consumeMode: 'batch',
+				runStatus: 'pausing',
+				inflight: 0,
+				pendingInputCount: 0,
+				readyWork: false,
+				isTerminalized: true
+			})
+		).toBe('completed');
 	});
 });
 

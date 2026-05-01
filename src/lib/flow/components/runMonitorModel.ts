@@ -484,6 +484,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 		const controlNodeState = asRecord(controlPlaneNodeState[nodeId]);
 		const blockedReasonCode = String(blockedRow.reasonCode ?? '').trim();
 		const terminalReasonCode = String(controlNodeState.terminalReasonCode ?? '').trim();
+		const isTerminalized = terminalReasonCode.length > 0;
 		const blockedHandle = String(blockedRow.handle ?? '').trim();
 		const blockedPlaneRaw = String(blockedRow.plane ?? '').trim().toLowerCase();
 		const blockedPlane =
@@ -503,7 +504,8 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			inflight,
 			pendingInputCount,
 			readyWork: Boolean(schedulerRow?.readyWork ?? false),
-			blockedReasonCode
+			blockedReasonCode,
+			isTerminalized
 		});
 		const nodeCounter = runtimeNodeCounters.get(nodeId);
 		const acceptedCount = Math.max(0, Number(nodeCounter?.accepted ?? 0));
@@ -526,7 +528,9 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			inflight === 0 &&
 			(lifecycle === 'waiting' || lifecycle === 'blocked' || pendingInputCount > 0) &&
 			!isLlmHolder;
-		const effectiveBlockedCodeForCurrent = isLlmHolder
+		const effectiveBlockedCodeForCurrent = isTerminalized
+			? ''
+			: isLlmHolder
 			? ''
 			: blockedReasonCode || (canUseSchedulerBlockedReason ? schedulerBlockedReasonCode : '');
 		const blockerCode =

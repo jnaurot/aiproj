@@ -214,6 +214,7 @@ export function reconcileLifecycleForActiveRun(input: {
 	pendingInputCount: number;
 	readyWork: boolean;
 	blockedReasonCode?: string | null;
+	isTerminalized?: boolean;
 }): NodeLifecycleStatus {
 	const lifecycle = input.lifecycle;
 	const consumeMode = input.consumeMode;
@@ -222,9 +223,11 @@ export function reconcileLifecycleForActiveRun(input: {
 	const pendingInputCount = Math.max(0, Number(input.pendingInputCount ?? 0));
 	const readyWork = Boolean(input.readyWork);
 	const blockedReasonCode = String(input.blockedReasonCode ?? '').trim();
+	const isTerminalized = Boolean(input.isTerminalized);
 	const isActiveRun = runStatus === 'running' || runStatus === 'pausing' || runStatus === 'resuming';
 
 	if (!isActiveRun) return lifecycle;
+	if (isTerminalized) return lifecycle;
 	if (lifecycle === 'failed' || lifecycle === 'canceled' || lifecycle === 'skipped') return lifecycle;
 	if (inflight > 0 || lifecycle === 'running') return 'running';
 

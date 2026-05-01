@@ -386,6 +386,58 @@ describe('runMonitorModel', () => {
 		expect(rows[0]?.lifecycle).toBe('waiting');
 	});
 
+	it('keeps single-item nodes completed when terminal control-plane truth is present', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_single',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'model',
+						label: 'Model_ScoreJob',
+						processingPolicy: { consume_mode: 'single_item' },
+						params: {}
+					}
+				} as any
+			],
+			edges: [],
+			nodeBindings: {
+				n_single: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_single', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				},
+				controlPlaneNodeState: {
+					n_single: {
+						nodeId: 'n_single',
+						lastSignal: 'node_terminal',
+						terminalReasonCode: 'completed'
+					}
+				},
+				blockedByNode: {
+					n_single: {
+						nodeId: 'n_single',
+						reasonCode: 'WAITING_REQUIRED_INPUT',
+						handle: 'in',
+						plane: 'work'
+					}
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.lifecycle).toBe('completed');
+		expect(rows[0]?.phase).toBe('TERMINAL');
+		expect(rows[0]?.isWaiting).toBe(false);
+		expect(rows[0]?.blockedReasonCode).toBeNull();
+		expect(rows[0]?.blocker).toBeNull();
+		const grouped = groupMonitorNodeRows(rows);
+		expect(grouped.waitingGroupIndex).toBeGreaterThanOrEqual(0);
+		expect(grouped.groups[grouped.waitingGroupIndex]?.rows.some((row) => row.nodeId === 'n_single')).toBe(false);
+		expect(grouped.doneGroupIndex).toBeGreaterThanOrEqual(0);
+		expect(grouped.groups[grouped.doneGroupIndex]?.rows.some((row) => row.nodeId === 'n_single')).toBe(true);
+	});
+
 	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {
 		expect(
 			edgeStatusesForFilter({
