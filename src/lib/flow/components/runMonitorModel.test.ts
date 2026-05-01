@@ -512,8 +512,50 @@ describe('runMonitorModel', () => {
 			},
 			runStatus: 'running'
 		});
-		expect(rows[0]?.lifecycle).toBe('idle');
-		expect(rows[0]?.statusParityMismatch).toBe(false);
+		const row = rows.find((candidate) => candidate.nodeId === 'n_down');
+		expect(row?.lifecycle).toBe('waiting');
+		expect(row?.statusParityMismatch).toBe(false);
+	});
+
+	it('flags parity mismatch when single-item node is waiting with no work and immediate inbound edge is closed', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_up',
+					position: { x: 0, y: 0 },
+					data: { kind: 'transform', label: 'Upstream', params: {} }
+				} as any,
+				{
+					id: 'n_down',
+					position: { x: 0, y: 0 },
+					data: { kind: 'model', label: 'Downstream', processingPolicy: { consume_mode: 'single_item' }, params: {} }
+				} as any
+			],
+			edges: [
+				{
+					id: 'e_work',
+					source: 'n_up',
+					target: 'n_down',
+					targetHandle: 'in',
+					data: { mode: 'work' }
+				} as any
+			],
+			nodeBindings: {
+				n_down: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_down', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				},
+				controlPlaneEdgeState: {
+					e_work: { edgeId: 'e_work', open: false, closed: true, depth: 0, blocked: false, lastSeq: 11 }
+				}
+			},
+			runStatus: 'running'
+		});
+		const row = rows.find((candidate) => candidate.nodeId === 'n_down');
+		expect(row?.lifecycle).toBe('waiting');
+		expect(row?.statusParityMismatch).toBe(true);
 	});
 
 	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {
