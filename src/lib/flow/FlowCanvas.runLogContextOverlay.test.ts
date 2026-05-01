@@ -21,5 +21,6 @@ describe('FlowCanvas run log context overlay wiring', () => {
 		expect(text.includes('Log Context')).toBe(true);
 		expect(text.includes('closeRunLogContextOverlay')).toBe(true);
 		expect(text.includes('RUN_LOG_CONTEXT_RADIUS = 50')).toBe(true);
+		expect(text.includes("scrollIntoView({ block: 'center' })")).toBe(true);
 	});
 });

@@ -398,6 +398,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runLogContextRows: any[] = [];
 	let runLogContextAnchorId = '';
 	let runLogContextAnchorMeta = '';
+	let runLogContextListEl: HTMLDivElement | null = null;
 	const RUN_LOG_CONTEXT_RADIUS = 50;
 	let canUndo = false;
 	let canRedo = false;
@@ -1136,6 +1137,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		const nodeLabel = nodeId ? `${nodeName ? `${nodeName} ` : ''}${nodeId}` : '-';
 		runLogContextAnchorMeta = `ts=${String((entry as any)?.ts ?? '-')} | node=${nodeLabel} | run=${runId || '-'}`;
 		runLogContextOverlayOpen = true;
+		void tick().then(() => {
+			const anchor = runLogContextListEl?.querySelector('.log.is-anchor') as HTMLElement | null;
+			anchor?.scrollIntoView({ block: 'center' });
+		});
 	}
 
 	function maybeOpenRunLogContext(event: MouseEvent, entry: any): void {
@@ -6169,7 +6174,7 @@ async function returnFromComponentEditMode() {
 						<button type="button" class="tabBtn" on:click={closeRunLogContextOverlay} aria-label="Close log context">Close</button>
 					</div>
 					<div class="runLogContextMeta mono">{runLogContextAnchorMeta}</div>
-					<div class="runLogContextList">
+					<div class="runLogContextList" bind:this={runLogContextListEl}>
 						{#each runLogContextRows as row (row.id)}
 							<div class={`log ${row.level} ${String(row.id ?? '') === runLogContextAnchorId ? 'is-anchor' : ''}`}>
 								<span class="ts">{row.ts}</span>
