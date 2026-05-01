@@ -1128,25 +1128,14 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 				nodeBindings,
 				nodeOutputs,
 				queueRuntime: {
-					...(state.queueRuntime ?? {}),
-					metrics: {},
-					nodeMetrics: {},
-					runtimeItemMetrics: {},
-					runScoped: undefined,
-					schedulerSnapshot: undefined,
-					llmLease: undefined,
-					adaptiveDecisions: [],
-					currentRunSummary: {
-						runId: String(evt.runId ?? runId),
-						maxPendingQueueDepth: 0,
-						hadStalledSnapshot: false,
-						blockedEvents: 0
-					},
-					blockedByNode: {},
-					softFailByNode: {},
-					controlPlaneEdgeState: {},
-					controlPlaneNodeState: {},
-					appliedControlSeq: 0
+					...resetQueueRuntimeForFreshProjection(
+						(state.queueRuntime ?? {}) as NonNullable<GraphState['queueRuntime']>,
+						{
+							runId: String(evt.runId ?? runId),
+							includeCurrentRunSummary: true
+						}
+					),
+					adaptiveDecisions: []
 				}
 			};
 			let nextState = withGraphMeta(
@@ -2790,6 +2779,45 @@ export function resetEdgesExec(edges: Edge<PipelineEdgeData>[]): Edge<PipelineEd
 	return edges.map((e) => ({ ...e, data: { ...e.data, exec: 'idle' as EdgeExec } }));
 }
 
+function resetQueueRuntimeForFreshProjection(
+	prevQueueRuntime: NonNullable<GraphState['queueRuntime']>,
+	options?: {
+		runId?: string;
+		includeCurrentRunSummary?: boolean;
+	}
+): NonNullable<GraphState['queueRuntime']> {
+	const runId = String(options?.runId ?? '').trim();
+	return {
+		...prevQueueRuntime,
+		metrics: {},
+		nodeMetrics: {},
+		runtimeItemMetrics: {},
+		runScoped: undefined,
+		schedulerSnapshot: undefined,
+		llmLease: undefined,
+		currentRunSummary:
+			options?.includeCurrentRunSummary === true
+				? {
+						runId,
+						maxPendingQueueDepth: 0,
+						hadStalledSnapshot: false,
+						blockedEvents: 0
+					}
+				: undefined,
+		blockedByNode: {},
+		softFailByNode: {},
+		controlPlaneEdgeState: {},
+		controlPlaneNodeState: {},
+		controlGatesByNode: {},
+		handleStates: {},
+		handleTimeline: [],
+		handleSatisfaction: {},
+		paramControlWarnings: {},
+		warningSummary: {},
+		appliedControlSeq: 0
+	};
+}
+
 export function resetRunUiState(state: GraphState): GraphState {
 	const edges = resetEdgesExec(state.edges);
 	const nodes = applyLlmHolderToNodes(state.nodes, null);
@@ -2826,6 +2854,9 @@ export function resetRunUiState(state: GraphState): GraphState {
 		nodes,
 		edges,
 		nodeBindings,
+		queueRuntime: resetQueueRuntimeForFreshProjection((state.queueRuntime ?? {}) as NonNullable<GraphState['queueRuntime']>, {
+			includeCurrentRunSummary: false
+		}),
 		logs: [],
 		runStatus: RUN_IDLE,
 		activeRunId: null,

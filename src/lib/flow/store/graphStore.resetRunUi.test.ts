@@ -265,6 +265,36 @@ describe('graphStore resetRunUiState', () => {
 			activeRunFrom: 'n2',
 			activeRunNodeSet: new Set<string>(['n2']),
 			nodeOutputs: { n1: { preview: 'kept' } },
+			queueRuntime: {
+				schedulerSnapshot: { stalled: true, perNode: [{ nodeId: 'n1', readyWork: true, inflight: 1, pendingInputCount: 0 }] },
+				llmLease: { state: 'acquired', holderNodeId: 'n1', activeNodeIds: ['n1'] },
+				blockedByNode: {
+					n2: { nodeId: 'n2', reasonCode: 'WAITING_REQUIRED_INPUT', updatedAt: '2026-01-01T00:00:00.000Z' }
+				},
+				controlPlaneNodeState: {
+					n1: { nodeId: 'n1', lastSignal: 'node_active', terminalReasonCode: null, updatedAt: '2026-01-01T00:00:00.000Z' }
+				},
+				controlPlaneEdgeState: {
+					e_work: { edgeId: 'e_work', closed: false, depth: 1, updatedAt: '2026-01-01T00:00:00.000Z' }
+				},
+				controlGatesByNode: {
+					n2: { nodeId: 'n2', waitingForInput: true }
+				},
+				handleStates: {
+					'n2:in': { state: 'blocked' }
+				},
+				handleTimeline: [{ at: '2026-01-01T00:00:00.000Z', nodeId: 'n2', handle: 'in', state: 'blocked' }],
+				handleSatisfaction: {
+					'n2:in': { state: 'waiting' }
+				},
+				paramControlWarnings: {
+					'n2:in': { code: 'WAITING_REQUIRED_INPUT' }
+				},
+				warningSummary: {
+					w1: { count: 1 }
+				},
+				appliedControlSeq: 42
+			} as any,
 			nodeBindings: {
 				n1: __normalizeBindingForTest(
 					{
@@ -300,6 +330,19 @@ describe('graphStore resetRunUiState', () => {
 		expect(Boolean(node1?.data?.meta?.llmAllocated)).toBe(false);
 		expect(next.selectedNodeId).toBe('n2');
 		expect(next.nodeOutputs.n1).toBeTruthy();
+		expect((next as any)?.queueRuntime?.schedulerSnapshot).toBeUndefined();
+		expect((next as any)?.queueRuntime?.llmLease).toBeUndefined();
+		expect(Object.keys((next as any)?.queueRuntime?.blockedByNode ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.controlPlaneNodeState ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.controlPlaneEdgeState ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.controlGatesByNode ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.handleStates ?? {})).toHaveLength(0);
+		expect(Array.isArray((next as any)?.queueRuntime?.handleTimeline)).toBe(true);
+		expect(((next as any)?.queueRuntime?.handleTimeline ?? []) as any[]).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.handleSatisfaction ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.paramControlWarnings ?? {})).toHaveLength(0);
+		expect(Object.keys((next as any)?.queueRuntime?.warningSummary ?? {})).toHaveLength(0);
+		expect(Number((next as any)?.queueRuntime?.appliedControlSeq ?? -1)).toBe(0);
 	});
 });
 
