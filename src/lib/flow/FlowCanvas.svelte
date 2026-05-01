@@ -418,7 +418,6 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorNodeFilter: RunMonitorFilter = 'all';
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
 	let runMonitorTab: 'live' | 'advisor' | 'diagnostics' | 'history' | 'checkpoints' = 'live';
-	let runMonitorAdvisorEnabled = false;
 	let runAdvisory: AdvisoryItem[] = [];
 	let runMonitorNodeStatusFilters: string[] = [];
 	let runMonitorEdgeStatusFilters: Array<
@@ -1121,13 +1120,11 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any,
 		runStatus: ($graphStore.runStatus ?? 'idle') as any
 	});
-	$: runAdvisory = runMonitorAdvisorEnabled
-		? buildRunAdvisory({
-				runStatus: ($graphStore.runStatus ?? 'idle') as any,
-				rows: runMonitorNodeRows as any,
-				logs: ($graphStore.logs ?? []) as any
-			})
-		: [];
+	$: runAdvisory = buildRunAdvisory({
+		runStatus: ($graphStore.runStatus ?? 'idle') as any,
+		rows: runMonitorNodeRows as any,
+		logs: ($graphStore.logs ?? []) as any
+	});
 	$: runMonitorNodeStatusOptions = Array.from(
 		new Set(
 			runMonitorNodeRows
@@ -6167,18 +6164,6 @@ async function returnFromComponentEditMode() {
 											adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
 											| env={runMonitorAdaptiveEnvMode}
 											| effective={runMonitorAdaptiveEffectiveMode}
-										</div>
-										<div class="monitorToolbar">
-											<label class="monitorField monitorFieldCheckbox">
-												<input
-													type="checkbox"
-													bind:checked={runMonitorAdvisorEnabled}
-													on:change={() => {
-														if (!runMonitorAdvisorEnabled && runMonitorTab === 'advisor') runMonitorTab = 'live';
-													}}
-												/>
-												<span>Advisor enabled</span>
-											</label>
 										</div>
 										<div class="monitorToolbar">
 											<label class="monitorField">
