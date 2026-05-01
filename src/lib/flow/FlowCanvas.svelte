@@ -393,6 +393,12 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runLogFilter = '';
 	let runLogSeverityFilter: 'all' | 'info' | 'warn' | 'error' | 'debug' = 'all';
 	let runLogFilterPredicate: (text: string) => boolean = () => true;
+	let runLogSelectionArmed = false;
+	let runLogContextOverlayOpen = false;
+	let runLogContextRows: any[] = [];
+	let runLogContextAnchorId = '';
+	let runLogContextAnchorMeta = '';
+	const RUN_LOG_CONTEXT_RADIUS = 50;
 	let canUndo = false;
 	let canRedo = false;
 	let envProfiles: EnvProfileStatus[] = [];
@@ -996,6 +1002,59 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		return runLogFilterPredicate(parts.join(' '));
 	});
 
+	function beginRunLogSelection(event: MouseEvent): void {
+		if (event.ctrlKey || event.metaKey) {
+			runLogSelectionArmed = false;
+			return;
+		}
+		runLogSelectionArmed = true;
+	}
+
+	function applyRunLogSelectionFilter(event: MouseEvent): void {
+		if (!runLogSelectionArmed) return;
+		runLogSelectionArmed = false;
+		if (event.ctrlKey || event.metaKey) return;
+		const selection = window.getSelection();
+		const selected = String(selection?.toString() ?? '').trim();
+		if (!selected) return;
+		if (!scrollElement) return;
+		const anchorNode = selection?.anchorNode ?? null;
+		const focusNode = selection?.focusNode ?? null;
+		const inLogs =
+			!!anchorNode &&
+			!!focusNode &&
+			scrollElement.contains(anchorNode.nodeType === Node.TEXT_NODE ? anchorNode.parentNode : anchorNode) &&
+			scrollElement.contains(focusNode.nodeType === Node.TEXT_NODE ? focusNode.parentNode : focusNode);
+		if (!inLogs) return;
+		runLogFilter = selected;
+	}
+
+	function runLogInteraction(node: HTMLDivElement) {
+		const onMouseDown = (event: MouseEvent): void => beginRunLogSelection(event);
+		const onMouseUp = (event: MouseEvent): void => applyRunLogSelectionFilter(event);
+		const onMouseDownContext = (event: MouseEvent): void => {
+			if (!event.ctrlKey && !event.metaKey) return;
+			const target = event.target as HTMLElement | null;
+			const rowEl = target?.closest('.log[data-log-id]') as HTMLElement | null;
+			if (!rowEl) return;
+			const logId = String(rowEl.dataset.logId ?? '').trim();
+			if (!logId) return;
+			const entry = filteredLogs.find((item: any) => String((item as any)?.id ?? '').trim() === logId);
+			if (!entry) return;
+			maybeOpenRunLogContext(event, entry);
+		};
+		node.addEventListener('mousedown', onMouseDown);
+		node.addEventListener('mouseup', onMouseUp);
+		node.addEventListener('mousedown', onMouseDownContext);
+		return {
+			destroy() {
+				node.removeEventListener('mousedown', onMouseDown);
+				node.removeEventListener('mouseup', onMouseUp);
+				node.removeEventListener('mousedown', onMouseDownContext);
+			}
+		};
+	}
+
 	function nodeToken(input: string): string {
 		const stripped = String(input ?? '').replace(/[^A-Za-z0-9]+/g, '').trim();
 		if (stripped.length > 0) return stripped.slice(0, 5);
@@ -1052,6 +1111,39 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 
 	function runLogArtifactId(entry: { message?: string }): string | null {
 		return artifactIdFromLogMessage(String(entry.message ?? ''));
+	}
+
+	function closeRunLogContextOverlay(): void {
+		runLogContextOverlayOpen = false;
+		runLogContextRows = [];
+		runLogContextAnchorId = '';
+		runLogContextAnchorMeta = '';
+	}
+
+	function openRunLogContextOverlay(entry: any): void {
+		const allLogs = Array.isArray($graphStore.logs) ? $graphStore.logs : [];
+		const anchorId = String((entry as any)?.id ?? '').trim();
+		if (!anchorId || allLogs.length === 0) return;
+		const anchorIndex = allLogs.findIndex((row: any) => String((row as any)?.id ?? '').trim() === anchorId);
+		if (anchorIndex < 0) return;
+		const start = Math.max(0, anchorIndex - RUN_LOG_CONTEXT_RADIUS);
+		const end = Math.min(allLogs.length, anchorIndex + RUN_LOG_CONTEXT_RADIUS + 1);
+		runLogContextRows = allLogs.slice(start, end);
+		runLogContextAnchorId = anchorId;
+		const nodeId = String((entry as any)?.nodeId ?? '').trim();
+		const nodeName = nodeId ? String(nodeLabelById.get(nodeId) ?? '').trim() : '';
+		const runId = String((entry as any)?.runId ?? '').trim();
+		const nodeLabel = nodeId ? `${nodeName ? `${nodeName} ` : ''}${nodeId}` : '-';
+		runLogContextAnchorMeta = `ts=${String((entry as any)?.ts ?? '-')} | node=${nodeLabel} | run=${runId || '-'}`;
+		runLogContextOverlayOpen = true;
+	}
+
+	function maybeOpenRunLogContext(event: MouseEvent, entry: any): void {
+		if (!event.ctrlKey && !event.metaKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		runLogSelectionArmed = false;
+		openRunLogContextOverlay(entry);
 	}
 
 	const runLogGraphIdByRunId = new Map<string, string>();
@@ -3493,6 +3585,11 @@ async function returnFromComponentEditMode() {
 			event.preventDefault();
 			if (isUndo) graphStore.undo();
 			if (isRedo) graphStore.redo();
+			return;
+		}
+		if (runLogContextOverlayOpen && event.key === 'Escape') {
+			event.preventDefault();
+			closeRunLogContextOverlay();
 			return;
 		}
 		if (commandPaletteOpen && event.key === 'Escape') {
@@ -6004,9 +6101,16 @@ async function returnFromComponentEditMode() {
 						{/each}
 					</div>
 				{/if}
-				<div class="logs" bind:this={scrollElement} on:scroll={handleRunLogScroll}>
+				<div
+					class="logs"
+					role="log"
+					aria-label="Run logs list"
+					bind:this={scrollElement}
+					use:runLogInteraction
+					on:scroll={handleRunLogScroll}
+				>
 					{#each filteredLogs as l (l.id)}
-						<div class={`log ${l.level}`}>
+						<div class={`log ${l.level}`} data-log-id={String((l as any)?.id ?? '')}>
 							<span class="ts">{l.ts}</span>
 							<span class="msg">
 								{#if l.componentPath?.length}
@@ -6023,6 +6127,7 @@ async function returnFromComponentEditMode() {
 									<button
 										type="button"
 										class="logArtifactBtn"
+										on:click|stopPropagation
 										on:click={() => {
 											const artifactId = runLogArtifactId(l);
 											if (artifactId) void openArtifactFromRunLog(artifactId, String((l as any)?.runId ?? ''));
@@ -6037,6 +6142,52 @@ async function returnFromComponentEditMode() {
 				</div>
 			{/if}
 		</div>
+		{#if runLogContextOverlayOpen}
+			<div
+				class="runLogContextOverlayBackdrop"
+				role="button"
+				tabindex="0"
+				aria-label="Close log context"
+				on:mousedown={closeRunLogContextOverlay}
+				on:keydown={(event) => {
+					if (event.key === 'Enter' || event.key === ' ') {
+						event.preventDefault();
+						closeRunLogContextOverlay();
+					}
+				}}
+			>
+				<div
+					class="runLogContextOverlay"
+					role="dialog"
+					aria-modal="true"
+					aria-label="Log Context"
+					tabindex="-1"
+					on:mousedown|stopPropagation
+				>
+					<div class="runLogContextHead">
+						<strong>Log Context</strong>
+						<button type="button" class="tabBtn" on:click={closeRunLogContextOverlay} aria-label="Close log context">Close</button>
+					</div>
+					<div class="runLogContextMeta mono">{runLogContextAnchorMeta}</div>
+					<div class="runLogContextList">
+						{#each runLogContextRows as row (row.id)}
+							<div class={`log ${row.level} ${String(row.id ?? '') === runLogContextAnchorId ? 'is-anchor' : ''}`}>
+								<span class="ts">{row.ts}</span>
+								<span class="msg">
+									{#if row.nodeId}
+										<span class="nid">[{row.nodeId}{runLogNodeName(row) ? ` | ${runLogNodeName(row)}` : ''}]</span>
+									{/if}
+									{#if runLogEdgeTag(row)}
+										<span class="nid">[edge: {runLogEdgeTag(row)}]</span>
+									{/if}
+									{row.message}
+								</span>
+							</div>
+						{/each}
+					</div>
+				</div>
+			</div>
+		{/if}
 		</aside>
 		{#if runMonitorSlideoutOpen}
 			<aside class="runMonitorSlideout" style={`width:${runMonitorSlideoutWidth}px;`}>
@@ -8987,6 +9138,56 @@ async function returnFromComponentEditMode() {
 		min-height: 0;
 		overflow: auto;
 		margin-top: 10px;
+	}
+
+	.runLogContextOverlayBackdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: grid;
+		place-items: center;
+		z-index: 1000;
+	}
+
+	.runLogContextOverlay {
+		width: min(1100px, 92vw);
+		height: min(72vh, 760px);
+		background: #0f1115;
+		border: 1px solid #27314a;
+		border-radius: 12px;
+		padding: 10px;
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.runLogContextHead {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.runLogContextMeta {
+		font-size: 12px;
+		opacity: 0.8;
+	}
+
+	.runLogContextList {
+		flex: 1;
+		min-height: 0;
+		overflow: auto;
+		border: 1px solid #1f2430;
+		border-radius: 10px;
+		padding: 8px;
+		background: #0b0d11;
+	}
+
+	.log.is-anchor {
+		background: rgba(75, 140, 255, 0.15);
+		border-radius: 6px;
+		padding-left: 6px;
+		padding-right: 6px;
 	}
 
 	.log {
