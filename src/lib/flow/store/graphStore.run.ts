@@ -3144,7 +3144,21 @@ export function createRunManager(deps: RunDeps) {
 
 		let settled = false;
 		let terminalReconciling = false;
+		let lastEventType: string = '';
 		let subHandle: { close: () => void } | null = null;
+		const isTerminalStatus = (statusRaw: unknown): boolean => {
+			const status = String(statusRaw ?? '').trim().toLowerCase();
+			return status === 'succeeded' || status === 'failed' || status === 'canceled' || status === 'paused';
+		};
+		const classifyStreamClose = (): 'expected' | 'unexpected' => {
+			if (lastEventType === 'run_paused' || lastEventType === 'run_finished') return 'expected';
+			const cur = deps.getState() as GraphState;
+			if (String(cur.activeRunId ?? '').trim() !== rid) return 'expected';
+			if (isTerminalStatus(cur.runStatus)) return 'expected';
+			const status = String(cur.runStatus ?? '').trim().toLowerCase();
+			if (status === 'pausing' || status === 'resuming') return 'expected';
+			return 'unexpected';
+		};
 		const settle = () => {
 			if (settled) return;
 			settled = true;
@@ -3215,12 +3229,24 @@ export function createRunManager(deps: RunDeps) {
 		subHandle = streamRunEvents(
 			rid,
 			(evt: KnownRunEvent) => {
+				lastEventType = String((evt as any)?.type ?? '').trim();
 				batcher.push(evt);
 			},
 			() => {
 				if (settled) return;
 				batcher.flush();
-				deps.update((s) => withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; reconciling run status')));
+				const closeClass = classifyStreamClose();
+				deps.update((s) =>
+					withGraphMeta(
+						logPush(
+							{ ...s },
+							closeClass === 'expected' ? 'info' : 'warn',
+							closeClass === 'expected'
+								? 'Event stream closed; reconciling run status'
+								: 'Event stream closed unexpectedly; reconciling run status'
+						)
+					)
+				);
 				void getRun(rid)
 					.then((snap) => {
 						const latest = deps.getState() as GraphState;
@@ -3665,10 +3691,24 @@ export function createRunManager(deps: RunDeps) {
 				}
 
 				await new Promise<void>((resolve) => {
-					let subHandle: { close: () => void } | null = null;
-					let settled = false;
-					let terminalReconciling = false;
-					const settle = () => {
+				let subHandle: { close: () => void } | null = null;
+				let settled = false;
+				let terminalReconciling = false;
+				let lastEventType = '';
+				const isTerminalStatus = (statusRaw: unknown): boolean => {
+					const status = String(statusRaw ?? '').trim().toLowerCase();
+					return status === 'succeeded' || status === 'failed' || status === 'canceled' || status === 'paused';
+				};
+				const classifyStreamClose = (): 'expected' | 'unexpected' => {
+					if (lastEventType === 'run_paused' || lastEventType === 'run_finished') return 'expected';
+					const cur = deps.getState() as GraphState;
+					if (String(cur.activeRunId ?? '').trim() !== runId) return 'expected';
+					if (isTerminalStatus(cur.runStatus)) return 'expected';
+					const status = String(cur.runStatus ?? '').trim().toLowerCase();
+					if (status === 'pausing' || status === 'resuming') return 'expected';
+					return 'unexpected';
+				};
+				const settle = () => {
 						if (settled) return;
 						settled = true;
 						if (activeRunStreamHandle?.runId === runId) {
@@ -3744,6 +3784,7 @@ export function createRunManager(deps: RunDeps) {
 					subHandle = streamRunEvents(
 						runId,
 						(evt: KnownRunEvent) => {
+							lastEventType = String((evt as any)?.type ?? '').trim();
 							batcher.push(evt);
 						},
 						() => {
@@ -3759,8 +3800,17 @@ export function createRunManager(deps: RunDeps) {
 								return;
 							}
 							batcher.flush();
+							const closeClass = classifyStreamClose();
 							deps.update((s) =>
-								withGraphMeta(logPush({ ...s }, 'warn', 'Event stream error; reconciling run status'))
+								withGraphMeta(
+									logPush(
+										{ ...s },
+										closeClass === 'expected' ? 'info' : 'warn',
+										closeClass === 'expected'
+											? 'Event stream closed; reconciling run status'
+											: 'Event stream closed unexpectedly; reconciling run status'
+									)
+								)
 							);
 							void getRun(runId)
 								.then((snap) => {

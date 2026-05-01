@@ -94,9 +94,15 @@ describe('graphStore resume stream disconnect regression', () => {
 		expect(getRunMock).toHaveBeenCalled();
 		expect(
 			(state.logs as Array<{ message: string }>).some((log) =>
-				String(log.message).includes('Event stream error; reconciling run status')
+				String(log.message).includes('Event stream closed;') &&
+				String(log.message).includes('reconciling run status')
 			)
 		).toBe(true);
+		expect(
+			(state.logs as Array<{ message: string }>).some((log) =>
+				String(log.message).includes('Event stream closed unexpectedly; reconciling run status')
+			)
+		).toBe(false);
 		expect(
 			(state.logs as Array<{ message: string }>).some((log) =>
 				String(log.message).includes('Run finished via polling (succeeded)')
@@ -183,4 +189,5 @@ describe('graphStore resume stream disconnect regression', () => {
 		expect(state.runStatus).toBe('paused');
 		expect(String(state.nodeBindings?.[nodeId]?.status ?? '')).toBe('succeeded_up_to_date');
 	});
+
 });
