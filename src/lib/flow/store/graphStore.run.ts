@@ -2333,23 +2333,71 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 					}
 				};
 			}
-			const softFailMatch = message.match(/\[scheduler\]\s+soft-fail skip node=([^\s]+).*items=(\d+)/i);
+			const nodeId = String(evt.nodeId ?? '').trim();
+			const debugContextByNode =
+				((memoStatePatched.queueRuntime as any)?.debugContextByNode &&
+				typeof (memoStatePatched.queueRuntime as any).debugContextByNode === 'object'
+					? ((memoStatePatched.queueRuntime as any).debugContextByNode as Record<string, any>)
+					: {}) ?? {};
+			let nextDebugContextByNode = debugContextByNode;
+			let nextMessage = message;
+			const itemIndexMatch = message.match(/LLM\s+work-item\s+input:.*\bindex=(\d+)/i);
+			if (nodeId && itemIndexMatch) {
+				nextDebugContextByNode = {
+					...debugContextByNode,
+					[nodeId]: {
+						...(debugContextByNode[nodeId] ?? {}),
+						lastWorkItemIndex: Number(itemIndexMatch[1]),
+						lastUpdatedAt: String((evt as any)?.at ?? '')
+					}
+				};
+			}
+			const isExecutionFailureLine = evt.level === 'error' && /\bMODEL_EXECUTION_FAILED\b/i.test(message);
+			if (nodeId && isExecutionFailureLine) {
+				const prevCtx = nextDebugContextByNode[nodeId] ?? debugContextByNode[nodeId] ?? {};
+				const failureSeq = Math.max(0, Number(prevCtx.failureSeq ?? 0)) + 1;
+				const hasItemIndex = Number.isFinite(Number(prevCtx.lastWorkItemIndex));
+				const itemIndex = hasItemIndex ? Number(prevCtx.lastWorkItemIndex) : null;
+				nextDebugContextByNode = {
+					...nextDebugContextByNode,
+					[nodeId]: {
+						...prevCtx,
+						failureSeq,
+						lastFailureAt: String((evt as any)?.at ?? '')
+					}
+				};
+				const suffix = hasItemIndex
+					? `[debug] failure_seq=${failureSeq} item_index=${itemIndex}`
+					: `[debug] failure_seq=${failureSeq} item_index=unknown`;
+				nextMessage = `${message} ${suffix}`;
+			}
+			if (nextDebugContextByNode !== debugContextByNode) {
+				memoStatePatched = {
+					...memoStatePatched,
+					queueRuntime: {
+						...(memoStatePatched.queueRuntime ?? {}),
+						debugContextByNode: nextDebugContextByNode
+					}
+				} as GraphState;
+			}
+
+			const softFailMatch = nextMessage.match(/\[scheduler\]\s+soft-fail skip node=([^\s]+).*items=(\d+)/i);
 			if (softFailMatch) {
-				const nodeId = String(evt.nodeId ?? softFailMatch[1] ?? '').trim();
+				const softFailNodeId = String(evt.nodeId ?? softFailMatch[1] ?? '').trim();
 				const itemsRejected = Math.max(1, Number(softFailMatch[2] ?? 1));
 				const previous =
 					(memoStatePatched.queueRuntime?.softFailByNode &&
 					typeof memoStatePatched.queueRuntime.softFailByNode === 'object'
 						? memoStatePatched.queueRuntime.softFailByNode
 						: {}) ?? {};
-				const prevNode = previous[nodeId] ?? { count: 0, itemsRejected: 0 };
+				const prevNode = previous[softFailNodeId] ?? { count: 0, itemsRejected: 0 };
 				const nextState = {
 					...memoStatePatched,
 					queueRuntime: {
 						...(memoStatePatched.queueRuntime ?? {}),
 						softFailByNode: {
 							...previous,
-							[nodeId]: {
+							[softFailNodeId]: {
 								count: Number(prevNode.count ?? 0) + 1,
 								itemsRejected: Number(prevNode.itemsRejected ?? 0) + itemsRejected,
 								lastAt: String((evt as any)?.at ?? '')
@@ -2357,9 +2405,9 @@ export function reduceRunEventState(state: GraphState, evt: KnownRunEvent, runId
 						}
 					}
 				};
-				return logPush(nextState, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
+				return logPush(nextState, evt.level, nextMessage, evt.nodeId, (evt as any).componentPath, edgeId);
 			}
-			return logPush(memoStatePatched, evt.level, message, evt.nodeId, (evt as any).componentPath, edgeId);
+			return logPush(memoStatePatched, evt.level, nextMessage, evt.nodeId, (evt as any).componentPath, edgeId);
 		}
 		case 'node_finished': {
 			if (!canApplyNodeEvent(state, evt.nodeId, evt.runId)) return state;
