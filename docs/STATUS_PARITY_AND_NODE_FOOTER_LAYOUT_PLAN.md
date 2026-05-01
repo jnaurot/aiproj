@@ -198,3 +198,12 @@ so streaming nodes that have terminalized remain terminal on all surfaces.
 Also includes node footer layout hardening and focused regression/integration tests
 for parity and non-regression.
 ```
+
+---
+
+## Status Truth Contract (Post-Fix)
+
+1. **Terminal precedence**: if control-plane marks node terminalized, UI lifecycle is terminal on all surfaces.
+2. **Parity requirement**: node card lifecycle and Run Monitor lifecycle must agree for the same node snapshot.
+3. **Streaming compatibility**: non-terminal streaming nodes may appear waiting between items during active runs.
+4. **No contradictory blocker**: terminal lifecycle must not present an active waiting blocker.

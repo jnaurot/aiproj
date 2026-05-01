@@ -431,11 +431,41 @@ describe('runMonitorModel', () => {
 		expect(rows[0]?.isWaiting).toBe(false);
 		expect(rows[0]?.blockedReasonCode).toBeNull();
 		expect(rows[0]?.blocker).toBeNull();
+		expect(rows[0]?.statusParityMismatch).toBe(false);
 		const grouped = groupMonitorNodeRows(rows);
 		expect(grouped.waitingGroupIndex).toBeGreaterThanOrEqual(0);
 		expect(grouped.groups[grouped.waitingGroupIndex]?.rows.some((row) => row.nodeId === 'n_single')).toBe(false);
 		expect(grouped.doneGroupIndex).toBeGreaterThanOrEqual(0);
 		expect(grouped.groups[grouped.doneGroupIndex]?.rows.some((row) => row.nodeId === 'n_single')).toBe(true);
+	});
+
+	it('flags parity mismatch when binding lifecycle and run lifecycle diverge', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_single',
+					position: { x: 0, y: 0 },
+					data: {
+						kind: 'model',
+						label: 'Model_ScoreJob',
+						processingPolicy: { consume_mode: 'single_item' },
+						params: {}
+					}
+				} as any
+			],
+			edges: [],
+			nodeBindings: {
+				n_single: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_single', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.lifecycle).toBe('waiting');
+		expect(rows[0]?.statusParityMismatch).toBe(true);
 	});
 
 	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {

@@ -1123,6 +1123,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				.filter((value) => value.length > 0)
 		)
 	).sort((left, right) => left.localeCompare(right));
+	$: runMonitorStatusParityMismatchCount = runMonitorNodeRows.filter((row) => Boolean((row as any).statusParityMismatch)).length;
 	$: {
 		const grouped = groupMonitorNodeRows(
 			runMonitorNodeRows,
@@ -5941,6 +5942,9 @@ async function returnFromComponentEditMode() {
 									{#if runMonitorTab === 'live'}
 										<div class="envPanelSummary">
 											nodes {runMonitorNodeRows.length} | edges {runMonitorEdgeRows.length} | blocked {runMonitorBlockedCount} | waiting {runMonitorWaitingCount} | stalled {String(runMonitorGlobalStalled)}
+										</div>
+										<div class="envPanelSummary">
+											status parity mismatches={runMonitorStatusParityMismatchCount}
 										</div>
 										<div class="envPanelSummary">
 											active leases={runMonitorNodeRows.filter((row) => row.isLlmHolder).length}

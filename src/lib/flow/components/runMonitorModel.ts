@@ -146,7 +146,19 @@ export type RunMonitorNodeRow = {
 	/** Human-visible reason why this node is not making progress. Empty string
 	 *  when the node is running or done — never the literal string "-". */
 	displayReason: string;
+	statusParityMismatch: boolean;
 };
+
+function lifecycleFromDisplayStatus(statusRaw: string): NodeLifecycleStatus {
+	const status = String(statusRaw ?? '').trim().toLowerCase();
+	if (status === 'running') return 'running';
+	if (status === 'busy') return 'waiting';
+	if (status === 'failed') return 'failed';
+	if (status === 'canceled') return 'canceled';
+	if (status === 'skipped') return 'skipped';
+	if (status === 'succeeded' || status === 'stale') return 'completed';
+	return 'idle';
+}
 
 export type RunMonitorEdgeRow = {
 	edgeId: string;
@@ -621,6 +633,13 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			displayReason = 'stale';
 		}
 
+		const bindingDisplayStatus = displayStatusFromBinding(nodeBindings[nodeId] as any);
+		const bindingLifecycle = lifecycleFromDisplayStatus(bindingDisplayStatus);
+		const statusParityMismatch =
+			(bindingLifecycle === 'completed' && lifecycle === 'waiting') ||
+			(bindingLifecycle === 'waiting' && lifecycle === 'completed') ||
+			(bindingLifecycle === 'running' && lifecycle !== 'running');
+
 		return {
 			nodeId,
 			label: nodeLabel(node),
@@ -656,7 +675,8 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			blocker,
 			lastBlocker,
 			blockerHistory,
-			displayReason
+			displayReason,
+			statusParityMismatch
 		};
 	});
 }
