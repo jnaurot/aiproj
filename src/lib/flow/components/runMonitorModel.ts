@@ -462,16 +462,18 @@ function phaseFromContext(input: {
 
 export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMonitorNodeRow[] {
 	const nodes = input?.nodes ?? [];
+	const edges = input?.edges ?? [];
 	const nodeBindings = asRecord(input?.nodeBindings);
 	const queueRuntime = asRecord(input?.queueRuntime);
 	const snapshot = asRecord(queueRuntime.schedulerSnapshot) as SchedulerSnapshot;
 	const blockedByNode = asRecord(queueRuntime.blockedByNode) as BlockedByNode;
 	const controlPlaneNodeState = asRecord(queueRuntime.controlPlaneNodeState) as ControlPlaneNodeState;
+	const controlPlaneEdgeState = asRecord(queueRuntime.controlPlaneEdgeState);
 	const llmLease = asRecord(queueRuntime.llmLease) as LlmLease;
 	const runtimeNodeCounters = parseRuntimeNodeCounters(queueRuntime);
 	const perNodeMap = parseSchedulerPerNode(snapshot);
 	const edgeMetrics = asRecord(asRecord(queueRuntime.metrics).edges);
-	const inboundDepthByNode = buildInboundDepthByNode(input?.edges ?? [], edgeMetrics);
+	const inboundDepthByNode = buildInboundDepthByNode(edges, edgeMetrics);
 
 	const llmState = String(llmLease?.state ?? '').trim().toLowerCase();
 	const llmHolderNodeId = String(llmLease?.holderNodeId ?? '').trim();
@@ -635,8 +637,28 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 
 		const bindingDisplayStatus = displayStatusFromBinding(nodeBindings[nodeId] as any);
 		const bindingLifecycle = lifecycleFromDisplayStatus(bindingDisplayStatus);
+		const inboundWorkEdges = edges.filter((edge) => {
+			const targetId = String(edge?.target ?? '').trim();
+			if (targetId !== nodeId) return false;
+			const mode = String((edge.data as any)?.mode ?? 'work').trim().toLowerCase();
+			return mode === 'work';
+		});
+		const allImmediateInboundWorkEdgesClosed =
+			inboundWorkEdges.length === 0 ||
+			inboundWorkEdges.every((edge) => {
+				const edgeId = String(edge?.id ?? '').trim();
+				if (!edgeId) return false;
+				const controlState = asRecord(controlPlaneEdgeState[edgeId]);
+				return Boolean(controlState.closed);
+			});
+		const terminalEligibleWaitingState =
+			lifecycle === 'waiting' &&
+			pendingInputCount === 0 &&
+			inflight === 0 &&
+			!isLlmHolder &&
+			allImmediateInboundWorkEdgesClosed;
 		const statusParityMismatch =
-			(bindingLifecycle === 'completed' && lifecycle === 'waiting') ||
+			(bindingLifecycle === 'completed' && terminalEligibleWaitingState) ||
 			(bindingLifecycle === 'waiting' && lifecycle === 'completed') ||
 			(bindingLifecycle === 'running' && lifecycle !== 'running');
 

@@ -4,7 +4,7 @@
 	export let items: AdvisoryItem[] = [];
 	export let onNodeClick: ((nodeId: string) => void) | null = null;
 
-	const expanded = new Set<string>();
+	let expanded = new Set<string>();
 
 	function toggle(id: string): void {
 		if (expanded.has(id)) expanded.delete(id);

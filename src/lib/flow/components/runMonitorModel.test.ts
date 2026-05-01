@@ -468,6 +468,54 @@ describe('runMonitorModel', () => {
 		expect(rows[0]?.statusParityMismatch).toBe(true);
 	});
 
+	it('does not flag completed binding as mismatch while immediate upstream work edge is still open', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_up',
+					position: { x: 0, y: 0 },
+					data: { kind: 'transform', label: 'Upstream', params: {} }
+				} as any,
+				{
+					id: 'n_down',
+					position: { x: 0, y: 0 },
+					data: { kind: 'model', label: 'Downstream', processingPolicy: { consume_mode: 'single_item' }, params: {} }
+				} as any
+			],
+			edges: [
+				{
+					id: 'e_work',
+					source: 'n_up',
+					target: 'n_down',
+					targetHandle: 'in',
+					data: { mode: 'work' }
+				} as any
+			],
+			nodeBindings: {
+				n_down: { status: 'succeeded' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_down', readyWork: false, inflight: 0, pendingInputCount: 1 }]
+				},
+				blockedByNode: {
+					n_down: {
+						nodeId: 'n_down',
+						reasonCode: 'WAITING_REQUIRED_INPUT',
+						handle: 'in',
+						plane: 'work'
+					}
+				},
+				controlPlaneEdgeState: {
+					e_work: { edgeId: 'e_work', open: true, closed: false, depth: 0, blocked: false, lastSeq: 10 }
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows[0]?.lifecycle).toBe('idle');
+		expect(rows[0]?.statusParityMismatch).toBe(false);
+	});
+
 	it('maps edge lifecycle to filter statuses with active alias compatibility', () => {
 		expect(
 			edgeStatusesForFilter({

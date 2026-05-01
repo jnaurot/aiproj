@@ -491,6 +491,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	let runMonitorNodeStatusOptions: string[] = [];
 	let runMonitorNodeGroupsVisible: MonitorNodeGroup[] = [];
+	let runMonitorStatusParityLogSignature = '';
 	let runMonitorGroupCollapsed: Record<'active' | 'waiting' | 'pending' | 'done', boolean> = {
 		active: false,
 		waiting: false,
@@ -1135,6 +1136,140 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		)
 	).sort((left, right) => left.localeCompare(right));
 	$: runMonitorStatusParityMismatchCount = runMonitorNodeRows.filter((row) => Boolean((row as any).statusParityMismatch)).length;
+	$: {
+		const mismatches = runMonitorNodeRows.filter((row) => Boolean((row as any).statusParityMismatch));
+		if (mismatches.length === 0) {
+			runMonitorStatusParityLogSignature = '';
+		} else {
+			const runId = String($graphStore.activeRunId ?? '');
+			const signature = `${runId}|${mismatches
+				.map((row) => {
+					const nodeId = String(row.nodeId ?? '').trim();
+					const inboundWorkEdges = (($graphStore.edges ?? []) as any[]).filter((edge) => {
+						const targetId = String((edge as any)?.target ?? '').trim();
+						if (targetId !== nodeId) return false;
+						const mode = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+						return mode === 'work';
+					});
+					const controlEdgeState = (($graphStore.queueRuntime as any)?.controlPlaneEdgeState ?? {}) as Record<string, any>;
+					let upstreamWorkClosed = 0;
+					let upstreamWorkOpen = 0;
+					let upstreamWorkUnknown = 0;
+					for (const edge of inboundWorkEdges) {
+						const edgeId = String((edge as any)?.id ?? '').trim();
+						const edgeState = controlEdgeState[edgeId];
+						if (!edgeState || typeof edgeState !== 'object') {
+							upstreamWorkUnknown += 1;
+							continue;
+						}
+						if (Boolean((edgeState as any).closed)) upstreamWorkClosed += 1;
+						else if (Boolean((edgeState as any).open)) upstreamWorkOpen += 1;
+						else upstreamWorkUnknown += 1;
+					}
+					const blockedByNode = (($graphStore.queueRuntime as any)?.blockedByNode ?? {}) as Record<string, any>;
+					const blockedEntry = blockedByNode[nodeId] ?? null;
+					const missingEdgeIds = Array.isArray((blockedEntry as any)?.missingEdgeIds)
+						? (((blockedEntry as any).missingEdgeIds as unknown[])
+								.map((value) => String(value ?? '').trim())
+								.filter((value) => value.length > 0) as string[])
+						: [];
+					const paritySeverity =
+						Number(row.pendingInputCount ?? 0) === 0 &&
+						Number(row.inflight ?? 0) === 0 &&
+						Number(row.inboundDepth ?? 0) > 0
+							? 'info'
+							: 'warn';
+					return [
+						nodeId,
+						String(row.status ?? '').trim(),
+						String(row.lifecycle ?? '').trim(),
+						String(row.execution ?? '').trim(),
+						String(row.freshness ?? '').trim(),
+						String(row.phase ?? '').trim(),
+						String(row.blockedReasonCode ?? '').trim(),
+						Number(row.pendingInputCount ?? 0),
+						Number(row.inflight ?? 0),
+						Number(row.inboundDepth ?? 0),
+						row.readyWork ? 1 : 0,
+						String(row.terminalReasonCode ?? '').trim(),
+						String(row.displayReason ?? '').trim(),
+						paritySeverity,
+						inboundWorkEdges.length,
+						upstreamWorkClosed,
+						upstreamWorkOpen,
+						upstreamWorkUnknown,
+						missingEdgeIds.join(',')
+					].join('|');
+				})
+				.sort()
+				.join(';')}`;
+			if (signature !== runMonitorStatusParityLogSignature) {
+				for (const row of mismatches) {
+					const nodeId = String(row.nodeId ?? '').trim();
+					const inboundWorkEdges = (($graphStore.edges ?? []) as any[]).filter((edge) => {
+						const targetId = String((edge as any)?.target ?? '').trim();
+						if (targetId !== nodeId) return false;
+						const mode = String(((edge as any)?.data?.mode ?? 'work')).trim().toLowerCase();
+						return mode === 'work';
+					});
+					const controlEdgeState = (($graphStore.queueRuntime as any)?.controlPlaneEdgeState ?? {}) as Record<string, any>;
+					let upstreamWorkClosed = 0;
+					let upstreamWorkOpen = 0;
+					let upstreamWorkUnknown = 0;
+					for (const edge of inboundWorkEdges) {
+						const edgeId = String((edge as any)?.id ?? '').trim();
+						const edgeState = controlEdgeState[edgeId];
+						if (!edgeState || typeof edgeState !== 'object') {
+							upstreamWorkUnknown += 1;
+							continue;
+						}
+						if (Boolean((edgeState as any).closed)) upstreamWorkClosed += 1;
+						else if (Boolean((edgeState as any).open)) upstreamWorkOpen += 1;
+						else upstreamWorkUnknown += 1;
+					}
+					const blockedByNode = (($graphStore.queueRuntime as any)?.blockedByNode ?? {}) as Record<string, any>;
+					const blockedEntry = blockedByNode[nodeId] ?? null;
+					const missingEdgeIds = Array.isArray((blockedEntry as any)?.missingEdgeIds)
+						? (((blockedEntry as any).missingEdgeIds as unknown[])
+								.map((value) => String(value ?? '').trim())
+								.filter((value) => value.length > 0) as string[])
+						: [];
+					const paritySeverity =
+						Number(row.pendingInputCount ?? 0) === 0 &&
+						Number(row.inflight ?? 0) === 0 &&
+						Number(row.inboundDepth ?? 0) > 0
+							? 'info'
+							: 'warn';
+					const parityTag = paritySeverity === 'info' ? 'status-parity-info' : 'status-parity-warning';
+					const line =
+						`[${parityTag}] ` +
+						`run_id=${runId || '-'} ` +
+						`node=${String(row.nodeId ?? '').trim()} ` +
+						`label=${JSON.stringify(String(row.label ?? '').trim())} ` +
+						`binding_status=${String(row.status ?? '').trim()} ` +
+						`lifecycle=${String(row.lifecycle ?? '').trim()} ` +
+						`execution=${String(row.execution ?? '').trim()} ` +
+						`freshness=${String(row.freshness ?? '').trim()} ` +
+						`phase=${String(row.phase ?? '-').trim() || '-'} ` +
+						`blocked=${String(row.blockedReasonCode ?? '-').trim() || '-'} ` +
+						`pending=${Number(row.pendingInputCount ?? 0)} ` +
+						`inflight=${Number(row.inflight ?? 0)} ` +
+						`depth=${Number(row.inboundDepth ?? 0)} ` +
+						`upstream_work_total=${inboundWorkEdges.length} ` +
+						`upstream_work_closed=${upstreamWorkClosed} ` +
+						`upstream_work_open=${upstreamWorkOpen} ` +
+						`upstream_work_unknown=${upstreamWorkUnknown} ` +
+						`blocked_missing_edges=${missingEdgeIds.length} ` +
+						`blocked_missing_edge_ids=${JSON.stringify(missingEdgeIds)} ` +
+						`ready=${row.readyWork ? 1 : 0} ` +
+						`terminal_reason=${String(row.terminalReasonCode ?? '-').trim() || '-'} ` +
+						`display_reason=${JSON.stringify(String(row.displayReason ?? '').trim() || '-')}`;
+					graphStore.appendRunLog(paritySeverity, line, nodeId);
+				}
+				runMonitorStatusParityLogSignature = signature;
+			}
+		}
+	}
 	$: {
 		const grouped = groupMonitorNodeRows(
 			runMonitorNodeRows,

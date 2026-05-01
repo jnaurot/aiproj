@@ -566,6 +566,9 @@ function applyBackendAffectedStale(affectedNodeIds: string[], rootNodeId: string
 		subscribe,
 		...history.actions,
 		...inspector.actions,
+		appendRunLog(level: LogLevel, message: string, nodeId?: string, edgeId?: string) {
+			update((s) => logPush(s, level, String(message ?? ''), nodeId, undefined, edgeId));
+		},
 		setPauseResumeTraceLoggingEnabled(enabled: boolean) {
 			__setPauseResumeTraceEnabledForTestFromRun(enabled);
 		},
