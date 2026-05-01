@@ -99,4 +99,90 @@ describe('BaseNode footer status during pause snapshot merge', () => {
 		expect(rendered.body).toContain('completed');
 		expect(rendered.body).not.toContain('completed (stale)');
 	});
+
+	it('keeps terminalized streaming nodes completed during active run', async () => {
+		const runningTerminalized: GraphState = {
+			...makeState(),
+			runStatus: 'running',
+			nodes: [
+				{
+					id: 'n_component',
+					data: {
+						kind: 'component',
+						label: 'Component',
+						meta: {},
+						processingPolicy: { consume_mode: 'single_item' }
+					}
+				}
+			] as any,
+			nodeBindings: {
+				n_component: {
+					graphId: 'graph-ui-pause',
+					status: 'succeeded_up_to_date',
+					lastArtifactId: 'art-new',
+					lastRunId: 'run-1',
+					lastExecKey: 'exec-new',
+					currentExecKey: 'exec-new',
+					currentArtifactId: 'art-new',
+					currentRunId: 'run-1',
+					isUpToDate: true,
+					cacheValid: true,
+					staleReason: null
+				} as any
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [
+						{
+							nodeId: 'n_component',
+							readyWork: false,
+							inflight: 0,
+							pendingInputCount: 0,
+							lastBlockedReasonCode: 'WAITING_REQUIRED_INPUT'
+						}
+					]
+				},
+				controlPlaneNodeState: {
+					n_component: {
+						nodeId: 'n_component',
+						lastSignal: 'node_terminal',
+						terminalReasonCode: 'completed'
+					}
+				}
+			} as any
+		};
+
+		const mockedStoreModule = (await import('$lib/flow/store/graphStore')) as any;
+		mockedStoreModule.__setGraphStoreMockStateForTest(runningTerminalized);
+		const { default: BaseNode } = await import('./BaseNode.svelte');
+		const rendered = render(BaseNode as any, {
+			props: {
+				id: 'n_component',
+				data: {
+					kind: 'component',
+					label: 'Component',
+					meta: {},
+					processingPolicy: { consume_mode: 'single_item' }
+				}
+			}
+		});
+
+		expect(rendered.body).toContain('completed');
+		expect(rendered.body).not.toContain('waiting');
+	});
+
+	it('renders status and mode badges on dedicated footer rows', async () => {
+		const mockedStoreModule = (await import('$lib/flow/store/graphStore')) as any;
+		mockedStoreModule.__setGraphStoreMockStateForTest(makeState());
+		const { default: BaseNode } = await import('./BaseNode.svelte');
+		const rendered = render(BaseNode as any, {
+			props: {
+				id: 'n_component',
+				data: { kind: 'component', label: 'Component', meta: {} }
+			}
+		});
+
+		expect(rendered.body).toContain('footerStatusRow');
+		expect(rendered.body).toContain('footerMetaRow');
+	});
 });

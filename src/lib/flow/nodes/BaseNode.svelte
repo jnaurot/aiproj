@@ -53,10 +53,14 @@ import MemoIndicator from './MemoIndicator.svelte';
 		? (($graphStore as any).queueRuntime.schedulerSnapshot.perNode as Array<Record<string, unknown>>)
 		: [];
 	$: schedulerRow = schedulerRows.find((row) => String(row?.nodeId ?? '') === String(id)) ?? {};
+	$: blockedByNodeRow = (($graphStore as any)?.queueRuntime?.blockedByNode?.[id] ?? {}) as Record<string, unknown>;
+	$: controlNodeStateRow = (($graphStore as any)?.queueRuntime?.controlPlaneNodeState?.[id] ?? {}) as Record<string, unknown>;
 	$: pendingInputCount = Math.max(0, Number((schedulerRow as any)?.pendingInputCount ?? 0));
 	$: inflightCount = Math.max(0, Number((schedulerRow as any)?.inflight ?? 0));
 	$: readyWork = Boolean((schedulerRow as any)?.readyWork ?? false);
-	$: blockedReasonCode = String((schedulerRow as any)?.lastBlockedReasonCode ?? '').trim();
+	$: blockedReasonCode = String((blockedByNodeRow as any)?.reasonCode ?? (schedulerRow as any)?.lastBlockedReasonCode ?? '').trim();
+	$: terminalReasonCode = String((controlNodeStateRow as any)?.terminalReasonCode ?? '').trim();
+	$: isTerminalized = terminalReasonCode.length > 0;
 	$: activeRunLifecycle = reconcileLifecycleForActiveRun({
 		lifecycle: statusProjection.lifecycle,
 		consumeMode,
@@ -64,7 +68,8 @@ import MemoIndicator from './MemoIndicator.svelte';
 		inflight: inflightCount,
 		pendingInputCount,
 		readyWork,
-		blockedReasonCode
+		blockedReasonCode,
+		isTerminalized
 	});
 	$: effectiveLifecycle = reconcileModelLeaseLifecycle({
 		lifecycle: activeRunLifecycle,
@@ -297,11 +302,11 @@ import MemoIndicator from './MemoIndicator.svelte';
 	<slot />
 
 	<div class="footer">
-		<div class="footerLeft">
+		<div class="footerStatusRow">
 			<span class="status">{lifecycleLabel}{freshnessHint}</span>
 			<MemoIndicator {memoState} />
 		</div>
-		<div class="footerRight">
+		<div class="footerMetaRow">
 			<span class="modeBadge mono" title={`mode=${executionBadge.mode}`}>
 				{executionBadge.label} {executionBadge.detail}
 			</span>
@@ -387,27 +392,28 @@ import MemoIndicator from './MemoIndicator.svelte';
 		font-size: 12px;
 		opacity: 0.85;
 		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 8px;
+		flex-direction: column;
+		align-items: stretch;
+		gap: 6px;
 	}
 
-	.footerLeft {
-		display: inline-flex;
+	.footerStatusRow {
+		display: flex;
 		align-items: center;
+		justify-content: flex-start;
 		gap: 6px;
 		min-width: 0;
+		flex-wrap: wrap;
 	}
 
-	.footerRight {
+	.footerMetaRow {
 		min-width: 0;
 		text-align: right;
-		opacity: 0.85;
-		display: inline-flex;
+		display: flex;
 		align-items: center;
+		justify-content: flex-end;
 		gap: 6px;
 		flex-wrap: wrap;
-		justify-content: flex-end;
 	}
 
 	.modeBadge {
