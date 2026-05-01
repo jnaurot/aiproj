@@ -53,11 +53,26 @@ describe('buildRunAdvisory', () => {
 		expect(hit?.nodeIds).toContain('c1');
 	});
 
-	it('emits waiting-without-work advisory for zero pending zero inflight waiting nodes', () => {
+	it('does not emit waiting-without-work advisory when immediate upstream edges are not all closed', () => {
 		const items = buildRunAdvisory({
 			runStatus: 'running',
 			rows: [row({ nodeId: 'n_wait' })],
-			logs: [],
+			logs: [
+				'[status-parity-info] node=n_wait upstream_work_total=1 upstream_work_closed=0 upstream_work_open=1 upstream_work_unknown=0'
+			],
+			now: '2026-01-01T00:00:00.000Z'
+		});
+		const hit = items.find((item) => item.ruleId === 'WAITING_WITHOUT_WORK');
+		expect(hit).toBeFalsy();
+	});
+
+	it('emits waiting-without-work advisory when immediate upstream edges are all closed', () => {
+		const items = buildRunAdvisory({
+			runStatus: 'running',
+			rows: [row({ nodeId: 'n_wait' })],
+			logs: [
+				'[status-parity-warning] node=n_wait upstream_work_total=1 upstream_work_closed=1 upstream_work_open=0 upstream_work_unknown=0'
+			],
 			now: '2026-01-01T00:00:00.000Z'
 		});
 		const hit = items.find((item) => item.ruleId === 'WAITING_WITHOUT_WORK');

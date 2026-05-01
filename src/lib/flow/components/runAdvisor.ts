@@ -24,6 +24,13 @@ export type RunAdvisoryInput = {
 	now?: string;
 };
 
+type ParityClosureSnapshot = {
+	upstreamTotal: number;
+	upstreamClosed: number;
+	upstreamOpen: number;
+	upstreamUnknown: number;
+};
+
 function normalizeLogLine(entry: unknown): string {
 	if (typeof entry === 'string') return entry;
 	if (!entry || typeof entry !== 'object') return '';
@@ -46,6 +53,18 @@ function hashEvidence(lines: string[]): string {
 	return hash.toString(16);
 }
 
+function parseKeyNumber(line: string, key: string): number | null {
+	const match = line.match(new RegExp(`${key}=(-?\\d+)`));
+	if (!match) return null;
+	const value = Number(match[1]);
+	return Number.isFinite(value) ? value : null;
+}
+
+function parseKeyString(line: string, key: string): string {
+	const match = line.match(new RegExp(`${key}=([^\\s]+)`));
+	return match ? String(match[1] ?? '').trim() : '';
+}
+
 function makeItem(ruleId: string, partial: Omit<AdvisoryItem, 'id' | 'ruleId' | 'createdAt'>, now: string): AdvisoryItem {
 	const nodeIds = [...new Set(partial.nodeIds.map((id) => String(id ?? '').trim()).filter(Boolean))].sort();
 	const evidence = [...new Set(partial.evidence.map((line) => String(line ?? '').trim()).filter(Boolean))];
@@ -65,6 +84,19 @@ export function buildRunAdvisory(input: RunAdvisoryInput): AdvisoryItem[] {
 	const rows = Array.isArray(input.rows) ? input.rows : [];
 	const logs = (Array.isArray(input.logs) ? input.logs : []).map(normalizeLogLine).filter(Boolean);
 	const items: AdvisoryItem[] = [];
+	const parityByNode = new Map<string, ParityClosureSnapshot>();
+
+	for (const line of logs) {
+		if (!line.includes('[status-parity-')) continue;
+		const nodeId = parseKeyString(line, 'node');
+		if (!nodeId) continue;
+		const upstreamTotal = parseKeyNumber(line, 'upstream_work_total');
+		const upstreamClosed = parseKeyNumber(line, 'upstream_work_closed');
+		const upstreamOpen = parseKeyNumber(line, 'upstream_work_open');
+		const upstreamUnknown = parseKeyNumber(line, 'upstream_work_unknown');
+		if (upstreamTotal == null || upstreamClosed == null || upstreamOpen == null || upstreamUnknown == null) continue;
+		parityByNode.set(nodeId, { upstreamTotal, upstreamClosed, upstreamOpen, upstreamUnknown });
+	}
 
 	const add = (ruleId: string, partial: Omit<AdvisoryItem, 'id' | 'ruleId' | 'createdAt'>): void => {
 		items.push(makeItem(ruleId, partial, now));
@@ -101,22 +133,32 @@ export function buildRunAdvisory(input: RunAdvisoryInput): AdvisoryItem[] {
 			String(row.terminalReasonCode ?? '').trim().length === 0 &&
 			String(row.blockedReasonCode ?? '').trim().toUpperCase() === 'WAITING_REQUIRED_INPUT'
 		) {
-			add('WAITING_WITHOUT_WORK', {
-				severity: 'warning',
-				title: 'Node is waiting with no queued/inflight work',
-				nodeIds: [row.nodeId],
-				evidence: [
-					`node=${row.nodeId} lifecycle=${row.lifecycle} pending=${row.pendingInputCount} inflight=${row.inflight} blocker=${row.blockedReasonCode}`
-				],
-				explanation:
-					'The node is waiting for required input but currently has no queued work. This can indicate missing upstream closure or unmet required input gate.',
-				actions: [
-					'Check upstream node completion and input edge closure for this handle.',
-					'Inspect required input handles and processing policy expectations.',
-					'Review recent control-plane events for upstream_closed and node_terminal.'
-				],
-				confidence: 'medium'
-			});
+			const closure = parityByNode.get(String(row.nodeId ?? '').trim());
+			const allImmediateUpstreamClosed = Boolean(
+				closure &&
+				closure.upstreamTotal >= 0 &&
+				closure.upstreamClosed === closure.upstreamTotal &&
+				closure.upstreamOpen === 0
+			);
+			if (allImmediateUpstreamClosed) {
+				add('WAITING_WITHOUT_WORK', {
+					severity: 'warning',
+					title: 'Node is waiting with no queued/inflight work',
+					nodeIds: [row.nodeId],
+					evidence: [
+						`node=${row.nodeId} lifecycle=${row.lifecycle} pending=${row.pendingInputCount} inflight=${row.inflight} blocker=${row.blockedReasonCode}`,
+						`upstream_work_total=${closure?.upstreamTotal ?? -1} upstream_work_closed=${closure?.upstreamClosed ?? -1} upstream_work_open=${closure?.upstreamOpen ?? -1} upstream_work_unknown=${closure?.upstreamUnknown ?? -1}`
+					],
+					explanation:
+						'The node is waiting for required input with no queued/inflight work, and all immediate upstream work edges are already closed. This suggests a terminalization gap.',
+					actions: [
+						'Check control-plane node_terminal sequencing for this node.',
+						'Inspect blockedByNode and scheduler snapshot transitions around this node.',
+						'Review recent upstream_closed and node_terminal control events.'
+					],
+					confidence: 'high'
+				});
+			}
 		}
 	}
 
