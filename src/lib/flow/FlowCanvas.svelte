@@ -391,6 +391,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let commandFilter = '';
 	let commandFilterInput: HTMLInputElement | null = null;
 	let runLogFilter = '';
+	let runLogSeverityFilter: 'all' | 'info' | 'warn' | 'error' | 'debug' = 'all';
 	let runLogFilterPredicate: (text: string) => boolean = () => true;
 	let canUndo = false;
 	let canRedo = false;
@@ -490,6 +491,7 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runMonitorTrendNodeOptions: Array<{ id: string; label: string }> = [];
 	let runMonitorNodeStatusOptions: string[] = [];
 	let runMonitorNodeGroupsVisible: MonitorNodeGroup[] = [];
+	let runMonitorNodeLabelById: Record<string, string> = {};
 	let runMonitorStatusParityLogSignature = '';
 	let runMonitorGroupCollapsed: Record<'active' | 'waiting' | 'pending' | 'done', boolean> = {
 		active: false,
@@ -977,6 +979,10 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 				componentEditEntryCheckpointSnapshotKey !== currentCheckpointSnapshotKey));
 	$: runLogFilterPredicate = buildRunLogFilterPredicate(runLogFilter);
 	$: filteredLogs = ($graphStore.logs ?? []).filter((entry) => {
+		const level = String((entry as any)?.level ?? 'info')
+			.trim()
+			.toLowerCase();
+		if (runLogSeverityFilter !== 'all' && level !== runLogSeverityFilter) return false;
 		const nodeName = String(nodeLabelById.get(String(entry.nodeId ?? '')) ?? '');
 		const edgeTag = runLogEdgeTag(entry);
 		const parts = [
@@ -1308,6 +1314,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	}
 	$: runMonitorNodeLifecycleById = new Map(
 		runMonitorNodeRows.map((row) => [String(row.nodeId ?? '').trim(), String(row.lifecycle ?? '').trim().toLowerCase()])
+	);
+	$: runMonitorNodeLabelById = Object.fromEntries(
+		runMonitorNodeRows.map((row) => [String(row.nodeId ?? '').trim(), String(row.label ?? '').trim()])
 	);
 	$: runMonitorNodeFreshnessById = new Map(
 		Object.entries(($graphStore.nodeBindings ?? {}) as Record<string, unknown>).map(([nodeId, binding]) => {
@@ -5953,6 +5962,7 @@ async function returnFromComponentEditMode() {
 		>
 			<div class="sectionHeadTitle">
 				<h3>Run Logs</h3>
+				<span class="runLogsCount">Logs: {filteredLogs.length}</span>
 				<button
 					type="button"
 					class="tabBtn sectionToggle"
@@ -5963,12 +5973,22 @@ async function returnFromComponentEditMode() {
 				</button>
 			</div>
 			{#if !runLogsCollapsed}
-				<input
-					class="logFilterInput"
-					placeholder="Filter logs..."
-					aria-label="Filter run logs"
-					bind:value={runLogFilter}
-				/>
+				<div class="logFilterRow">
+					<input
+						class="logFilterInput"
+						placeholder="Filter logs..."
+						aria-label="Filter run logs"
+						bind:value={runLogFilter}
+					/>
+					<select class="logSeveritySelect" aria-label="Filter run logs by severity" bind:value={runLogSeverityFilter}>
+						<option value="all">All</option>
+						<option value="error">Error</option>
+						<option value="warn">Warn</option>
+						<option value="info">Info</option>
+						<option value="debug">Debug</option>
+					</select>
+					<button type="button" class="tabBtn logFilterClearBtn" on:click={() => (runLogFilter = '')}>Clear</button>
+				</div>
 				{#if warningSummaryRows.length > 0}
 					<div class="runWarningSummary" aria-live="polite">
 						<div class="runWarningSummaryHead">
@@ -6157,6 +6177,7 @@ async function returnFromComponentEditMode() {
 										</div>
 										<RunAdvisoryPanel
 											items={runAdvisory}
+											nodeLabels={runMonitorNodeLabelById}
 											onNodeClick={(nodeId: string) => graphStore.selectNode(String(nodeId ?? '').trim())}
 										/>
 									{:else if runMonitorTab === 'diagnostics'}
@@ -8073,6 +8094,12 @@ async function returnFromComponentEditMode() {
 		gap: 8px;
 	}
 
+	.runLogsCount {
+		margin-left: auto;
+		font-size: 12px;
+		opacity: 0.8;
+	}
+
 	.sectionHead {
 		justify-content: space-between;
 	}
@@ -8899,6 +8926,34 @@ async function returnFromComponentEditMode() {
 		border-radius: 8px;
 		font-size: 12px;
 		margin-top: 8px;
+	}
+
+	.logFilterRow {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin-top: 8px;
+	}
+
+	.logFilterRow .logFilterInput {
+		margin-top: 0;
+		flex: 1 1 auto;
+	}
+
+	.logFilterClearBtn {
+		flex: 0 0 auto;
+		padding: 6px 10px;
+	}
+
+	.logSeveritySelect {
+		flex: 0 0 auto;
+		min-width: 92px;
+		padding: 6px 8px;
+		border-radius: 8px;
+		border: 1px solid var(--color-control-border, #2a3655);
+		background: var(--color-control-bg, #0c1220);
+		color: var(--color-control-text, #dbe7ff);
+		font-size: 12px;
 	}
 
 	.runWarningSummary {

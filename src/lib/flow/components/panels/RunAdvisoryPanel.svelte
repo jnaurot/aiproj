@@ -1,8 +1,9 @@
 <script lang="ts">
 	import type { AdvisoryItem } from '$lib/flow/components/runAdvisor';
 
-	export let items: AdvisoryItem[] = [];
-	export let onNodeClick: ((nodeId: string) => void) | null = null;
+export let items: AdvisoryItem[] = [];
+export let onNodeClick: ((nodeId: string) => void) | null = null;
+export let nodeLabels: Record<string, string> = {};
 
 	let expanded = new Set<string>();
 
@@ -40,7 +41,9 @@
 						{#if item.nodeIds.length > 0}
 							<div class="advisorNodes">
 								{#each item.nodeIds as nodeId (`${item.id}:${nodeId}`)}
-									<button type="button" class="advisorNodeChip mono" on:click={() => handleNodeClick(nodeId)}>{nodeId}</button>
+									<button type="button" class="advisorNodeChip mono" on:click={() => handleNodeClick(nodeId)}
+										>{(nodeLabels[nodeId] ?? nodeId) + ' ' + nodeId}</button
+									>
 								{/each}
 							</div>
 						{/if}
