@@ -26,6 +26,7 @@
 	import CheckpointRegistryPanel, {
 		type CheckpointPanelRow
 	} from '$lib/flow/components/panels/CheckpointRegistryPanel.svelte';
+	import RunAdvisoryPanel from '$lib/flow/components/panels/RunAdvisoryPanel.svelte';
 	import { buildCheckpointPanelRows } from '$lib/flow/components/panels/buildCheckpointPanelRows';
 	import ThemedSelect, { type ThemedSelectOption } from '$lib/flow/components/ui/ThemedSelect.svelte';
 	import TogglePill from '$lib/flow/components/ui/TogglePill.svelte';
@@ -144,6 +145,7 @@ import type { NodeDocExplanationMode, NodeDocTrainingMode } from '$lib/flow/sche
 		type RunMonitorTransitionRow,
 		type RunMonitorTrendSparkline
 	} from '$lib/flow/components/runMonitorModel';
+	import { buildRunAdvisory, type AdvisoryItem } from '$lib/flow/components/runAdvisor';
 	import { resolveEdgeVisualClass, computeEdgeVisualClass } from '$lib/flow/edgeVisualState';
 	import { buildSchemaTooltip, resolveSchemaClassForView, summarizeSchemaOverlayCounts } from '$lib/flow/edgeSchemaAuthority';
 	import { statusProjectionFromBinding } from '$lib/flow/store/runScope';
@@ -415,7 +417,9 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 	let runLogsCollapsed = false;
 	let runMonitorNodeFilter: RunMonitorFilter = 'all';
 	let runMonitorNodeSort: RunMonitorSort = 'depth_desc';
-	let runMonitorTab: 'live' | 'diagnostics' | 'history' | 'checkpoints' = 'live';
+	let runMonitorTab: 'live' | 'advisor' | 'diagnostics' | 'history' | 'checkpoints' = 'live';
+	let runMonitorAdvisorEnabled = false;
+	let runAdvisory: AdvisoryItem[] = [];
 	let runMonitorNodeStatusFilters: string[] = [];
 	let runMonitorEdgeStatusFilters: Array<
 		'inactive' | 'waiting' | 'running' | 'done' | 'active' | 'blocked' | 'full'
@@ -1116,6 +1120,13 @@ let inspectorPane: HTMLElement | null = null; // HTMLAsideElement type often isn
 		queueRuntime: ($graphStore.queueRuntime ?? {}) as any,
 		runStatus: ($graphStore.runStatus ?? 'idle') as any
 	});
+	$: runAdvisory = runMonitorAdvisorEnabled
+		? buildRunAdvisory({
+				runStatus: ($graphStore.runStatus ?? 'idle') as any,
+				rows: runMonitorNodeRows as any,
+				logs: ($graphStore.logs ?? []) as any
+			})
+		: [];
 	$: runMonitorNodeStatusOptions = Array.from(
 		new Set(
 			runMonitorNodeRows
@@ -5901,6 +5912,15 @@ async function returnFromComponentEditMode() {
 										</button>
 										<button
 											type="button"
+											class={`pill pinBtn ${runMonitorTab === 'advisor' ? 'is-active' : ''}`}
+											role="tab"
+											aria-selected={runMonitorTab === 'advisor'}
+											on:click={() => (runMonitorTab = 'advisor')}
+										>
+											Advisor
+										</button>
+										<button
+											type="button"
 											class={`pill pinBtn ${runMonitorTab === 'diagnostics' ? 'is-active' : ''}`}
 											role="tab"
 											aria-selected={runMonitorTab === 'diagnostics'}
@@ -5999,11 +6019,31 @@ async function returnFromComponentEditMode() {
 												</button>
 											{/each}
 										</div>
+									{:else if runMonitorTab === 'advisor'}
+										<div class="envPanelSummary">
+											read-only guidance based on run monitor rows + recent logs
+										</div>
+										<RunAdvisoryPanel
+											items={runAdvisory}
+											onNodeClick={(nodeId: string) => graphStore.selectNode(String(nodeId ?? '').trim())}
+										/>
 									{:else if runMonitorTab === 'diagnostics'}
 										<div class="envPanelSummary">
 											adaptive override={runMonitorAdaptiveModeOverride === 'default' ? 'env default' : runMonitorAdaptiveModeOverride}
 											| env={runMonitorAdaptiveEnvMode}
 											| effective={runMonitorAdaptiveEffectiveMode}
+										</div>
+										<div class="monitorToolbar">
+											<label class="monitorField monitorFieldCheckbox">
+												<input
+													type="checkbox"
+													bind:checked={runMonitorAdvisorEnabled}
+													on:change={() => {
+														if (!runMonitorAdvisorEnabled && runMonitorTab === 'advisor') runMonitorTab = 'live';
+													}}
+												/>
+												<span>Advisor enabled</span>
+											</label>
 										</div>
 										<div class="monitorToolbar">
 											<label class="monitorField">
