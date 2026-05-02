@@ -9,6 +9,7 @@
 		"preview": "vite preview",
 		"test": "vitest run",
 		"test:smoke:frontend": "npm run test -- src/lib/flow/store/graphStore.race.test.ts src/lib/flow/store/graphStore.runScope.test.ts && npm run build",
+		"check:node-status-contract": "node scripts/check-node-status-contract.mjs",
 		"check:css-ownership": "node scripts/check-css-ownership.mjs",
 		"prepare": "svelte-kit sync || echo ''",
 		"lint": "prettier --check .",
