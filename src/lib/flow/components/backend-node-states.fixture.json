@@ -1,0 +1,11 @@
+[
+	"idle",
+	"running",
+	"active",
+	"blocked",
+	"paused",
+	"succeeded_up_to_date",
+	"failed",
+	"canceled",
+	"stale"
+]
