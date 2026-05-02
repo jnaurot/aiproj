@@ -13,6 +13,32 @@ import {
 } from './runMonitorModel';
 
 describe('runMonitorModel', () => {
+	it('projects succeeded_up_to_date through single authoritative status projection path', () => {
+		const rows = buildRunMonitorNodeRows({
+			nodes: [
+				{
+					id: 'n_done',
+					position: { x: 0, y: 0 },
+					data: { kind: 'model', label: 'Model_ScoreJob', params: {} }
+				} as any
+			],
+			edges: [],
+			nodeBindings: {
+				n_done: { status: 'succeeded_up_to_date' }
+			},
+			queueRuntime: {
+				schedulerSnapshot: {
+					perNode: [{ nodeId: 'n_done', readyWork: false, inflight: 0, pendingInputCount: 0 }]
+				}
+			},
+			runStatus: 'running'
+		});
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.lifecycle).toBe('completed');
+		expect(rows[0]?.status).toBe('succeeded');
+		expect(rows[0]?.execution).toBe('finished');
+	});
+
 	it('builds node rows from scheduler, blocked, and llm lease telemetry', () => {
 		const rows = buildRunMonitorNodeRows({
 			nodes: [

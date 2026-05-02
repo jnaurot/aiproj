@@ -1,7 +1,6 @@
 import type { Edge, Node } from '@xyflow/svelte';
 
 import type { PipelineEdgeData, PipelineNodeData } from '$lib/flow/types';
-import { displayStatusFromBinding } from '$lib/flow/store/runScope';
 import {
 	projectEdgeStatus,
 	projectNodeStatus,
@@ -148,17 +147,6 @@ export type RunMonitorNodeRow = {
 	displayReason: string;
 	statusParityMismatch: boolean;
 };
-
-function lifecycleFromDisplayStatus(statusRaw: string): NodeLifecycleStatus {
-	const status = String(statusRaw ?? '').trim().toLowerCase();
-	if (status === 'running') return 'running';
-	if (status === 'busy') return 'waiting';
-	if (status === 'failed') return 'failed';
-	if (status === 'canceled') return 'canceled';
-	if (status === 'skipped') return 'skipped';
-	if (status === 'succeeded' || status === 'stale') return 'completed';
-	return 'idle';
-}
 
 export type RunMonitorEdgeRow = {
 	edgeId: string;
@@ -635,8 +623,7 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			displayReason = 'stale';
 		}
 
-		const bindingDisplayStatus = displayStatusFromBinding(nodeBindings[nodeId] as any);
-		const bindingLifecycle = lifecycleFromDisplayStatus(bindingDisplayStatus);
+		const projectedLifecycle = projection.lifecycle;
 		const inboundWorkEdges = edges.filter((edge) => {
 			const targetId = String(edge?.target ?? '').trim();
 			if (targetId !== nodeId) return false;
@@ -658,14 +645,14 @@ export function buildRunMonitorNodeRows(input: RunMonitorProjectionInput): RunMo
 			!isLlmHolder &&
 			allImmediateInboundWorkEdgesClosed;
 		const statusParityMismatch =
-			(bindingLifecycle === 'completed' && terminalEligibleWaitingState) ||
-			(bindingLifecycle === 'waiting' && lifecycle === 'completed') ||
-			(bindingLifecycle === 'running' && lifecycle !== 'running');
+			(projectedLifecycle === 'completed' && terminalEligibleWaitingState) ||
+			(projectedLifecycle === 'waiting' && lifecycle === 'completed') ||
+			(projectedLifecycle === 'running' && lifecycle !== 'running');
 
 		return {
 			nodeId,
 			label: nodeLabel(node),
-			status: displayStatusFromBinding(nodeBindings[nodeId] as any),
+			status: projection.display,
 			lifecycle,
 			execution: projection.execution,
 			freshness: projection.freshness,
