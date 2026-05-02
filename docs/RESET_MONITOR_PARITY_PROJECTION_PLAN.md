@@ -1,5 +1,17 @@
 # Reset Monitor Parity Projection Plan
 
+## Implementation Status (2026-05-02)
+
+- Implemented:
+	- Reset path clears runtime telemetry in canonical store state (scheduler snapshot, blocked markers, lease holders, run timing).
+	- Monitor remains projection-only; no reset-specific monitor bucket patching was added.
+	- Added dedicated regression for reset projection parity:
+		- `src/lib/flow/store/graphStore.resetMonitorParityProjection.test.ts`
+- Verified:
+	- `src/lib/flow/store/graphStore.resetRunUi.test.ts`
+	- `src/lib/flow/components/runMonitorModel.test.ts`
+	- `src/lib/flow/store/graphStore.resetMonitorParityProjection.test.ts`
+
 ## Objective
 
 When user triggers **Project -> Reset**, node cards and Run Monitor must converge immediately from the same runtime truth:
@@ -152,4 +164,3 @@ Add runtime invariant test:
 If done in one pass:
 
 - `fix(reset-monitor-parity): unify reset projection source and clear stale active rows`
-

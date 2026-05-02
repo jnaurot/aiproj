@@ -1,5 +1,15 @@
 # Stream Close Classification Plan (Pause/Finish vs Real Transport Error)
 
+## Implementation Status (2026-05-02)
+
+- Implemented:
+	- Unified close classification path for expected/manual vs unexpected/transport stream closure.
+	- Expected pause/finish close now logs as informational close+reconcile wording (not error wording).
+	- Unexpected/transport close still logs warning-level closure wording and keeps reconciliation.
+- Verified:
+	- Store/component regression suite covering run monitor and reset semantics remains green.
+	- Manual run-log behavior confirms expected close messaging during pause/terminal transitions.
+
 ## Objective
 
 Avoid noisy/misleading log lines like:
@@ -177,4 +187,3 @@ Guarded by existing debug/trace toggle if available.
 If done in one pass:
 
 - `fix(stream-close): classify expected pause/finish closure and keep reconcile without error noise`
-

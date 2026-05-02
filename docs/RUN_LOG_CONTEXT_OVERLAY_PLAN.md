@@ -1,5 +1,15 @@
 # Run Logs: Selection Filter + Ctrl-Click Time Context Overlay Plan
 
+## Implementation Status (2026-05-02)
+
+- Implemented:
+	- Selection-to-filter (`mousedown/select/mouseup`) in run logs without changing existing filter-expression semantics.
+	- Ctrl/Cmd-click context overlay with surrounding event window, close button, and Escape-to-close.
+	- Context overlay opens centered on the clicked log row and keeps main log filtering behavior separate.
+- Verified:
+	- FlowCanvas run-log interaction tests pass (selection filter + context overlay behavior).
+	- Overlay interaction remains non-destructive to main log filtering/search state.
+
 ## Goal
 
 Add two low-noise interactions in Run Logs:
@@ -199,4 +209,3 @@ Keep styles simple and aligned with current dark theme.
 	- Render only context window, not entire log stream.
 - **Interaction confusion**
 	- Add small tooltip/help text: “Select text to filter. Ctrl+Click for context.”
-
